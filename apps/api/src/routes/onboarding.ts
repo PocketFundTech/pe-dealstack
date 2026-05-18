@@ -182,7 +182,7 @@ router.get('/status', async (req: Request, res: Response) => {
 
     res.json(status);
   } catch (error: any) {
-    console.error('[Onboarding] Failed to get status:', error.message);
+    log.error('Onboarding: failed to get status', { error: error.message });
     res.json(DEFAULT_STATUS);
   }
 });
@@ -225,7 +225,7 @@ router.post('/complete-step', async (req: Request, res: Response) => {
 
     res.json({ success: true, status });
   } catch (error: any) {
-    console.error('[Onboarding] Failed to complete step:', error.message);
+    log.error('Onboarding: failed to complete step', { error: error.message });
     res.status(500).json({ error: 'Failed to update onboarding status' });
   }
 });
@@ -251,7 +251,7 @@ router.post('/welcome-shown', async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('[Onboarding] Failed to mark welcome shown:', error.message);
+    log.error('Onboarding: failed to mark welcome shown', { error: error.message });
     res.status(500).json({ error: 'Failed to update' });
   }
 });
@@ -277,7 +277,7 @@ router.post('/dismiss', async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('[Onboarding] Failed to dismiss:', error.message);
+    log.error('Onboarding: failed to dismiss', { error: error.message });
     res.status(500).json({ error: 'Failed to update' });
   }
 });
