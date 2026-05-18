@@ -280,3 +280,92 @@ describe('DELETE /api/memos/:id/sections/:sectionId — F-8 cross-memo bind', ()
     expect(deleteFilterCols).toContain('memo-A');
   });
 });
+
+describe('POST /api/memos/:id/sections/reorder — F-9 cross-memo bind', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
+  });
+
+  it('does not update sections from a different memo', async () => {
+    // Records every (sectionId, memoId-filter-or-null) that .update() was called with
+    const updateAttempts: { sectionId: string; memoIdFilter: string | null }[] = [];
+
+    const VALID_ID = '11111111-1111-1111-1111-111111111111';
+    const STRANGER_ID = '22222222-2222-2222-2222-222222222222';
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Memo') {
+        return makeMemoSelect({ memoExists: true, orgId: 'org-A' });
+      }
+      if (table === 'MemoSection') {
+        return {
+          select: () => ({
+            eq: (col: string, val: any) => {
+              // Pre-fetch valid section IDs for the memo (no .order()).
+              if (col === 'memoId' && val === 'memo-A') {
+                // Make this thenable for `await` AND chainable via .order()
+                // for the post-reorder full fetch.
+                const result = {
+                  then: (resolve: any) =>
+                    resolve({ data: [{ id: VALID_ID }], error: null }),
+                  order: () => Promise.resolve({ data: [{ id: VALID_ID, sortOrder: 5 }], error: null }),
+                };
+                return result;
+              }
+              return { single: async () => ({ data: null, error: { code: 'PGRST116' } }) };
+            },
+          }),
+          update: () => ({
+            eq: (col: string, val: any) => {
+              if (col !== 'id') {
+                // Should not happen — first filter is always 'id'
+                return { eq: async () => ({ error: null }) };
+              }
+              const sectionId = val;
+              // Default to "no memoId filter applied" — the buggy code only
+              // chains .eq('id', sid) once and returns a resolvable.
+              let memoIdFilter: string | null = null;
+              const after: any = {
+                eq: async (col2: string, val2: any) => {
+                  if (col2 === 'memoId') memoIdFilter = val2;
+                  updateAttempts.push({ sectionId, memoIdFilter });
+                  return { error: null };
+                },
+                then: (resolve: any) => {
+                  // Buggy code path: await supabase.update().eq('id', ...)
+                  updateAttempts.push({ sectionId, memoIdFilter });
+                  resolve({ error: null });
+                },
+              };
+              return after;
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app)
+      .post('/api/memos/memo-A/sections/reorder')
+      .send({
+        sections: [
+          { id: VALID_ID, sortOrder: 5 },
+          { id: STRANGER_ID, sortOrder: 6 },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    // Every recorded update attempt must (a) have a memoId filter AND
+    // (b) target a sectionId that the verified memo actually owns.
+    expect(updateAttempts.length).toBeGreaterThan(0);
+    for (const attempt of updateAttempts) {
+      expect(attempt.memoIdFilter).toBe('memo-A');
+      expect(attempt.sectionId).toBe(VALID_ID);
+    }
+    // The stranger ID must not have been touched at all.
+    const strangerHits = updateAttempts.filter((a) => a.sectionId === STRANGER_ID);
+    expect(strangerHits).toEqual([]);
+  });
+});

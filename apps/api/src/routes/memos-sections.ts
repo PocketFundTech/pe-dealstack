@@ -221,13 +221,28 @@ router.post('/:id/sections/reorder', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-9: bind each sectionId to this memo. Without this, a caller could
+    // scramble the sort order of any memo's sections by passing arbitrary
+    // section IDs. Both the explicit memoId filter on each update AND the
+    // pre-fetched ID intersection give defense in depth — the intersect
+    // turns cross-memo IDs into a no-op rather than a row miss inside a
+    // Promise.all swarm.
+    const { data: validSections } = await supabase
+      .from('MemoSection')
+      .select('id')
+      .eq('memoId', id);
+    const validIds = new Set((validSections || []).map((s: any) => s.id));
+
     // Update each section's sortOrder
-    const updates = validation.data.sections.map(({ id: sectionId, sortOrder }) =>
-      supabase
-        .from('MemoSection')
-        .update({ sortOrder })
-        .eq('id', sectionId)
-    );
+    const updates = validation.data.sections
+      .filter(({ id: sectionId }) => validIds.has(sectionId))
+      .map(({ id: sectionId, sortOrder }) =>
+        supabase
+          .from('MemoSection')
+          .update({ sortOrder })
+          .eq('id', sectionId)
+          .eq('memoId', id)
+      );
 
     await Promise.all(updates);
 
