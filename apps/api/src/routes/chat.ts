@@ -13,11 +13,11 @@ const router = Router();
 const createConversationSchema = z.object({
   dealId: z.string().uuid().optional(),
   userId: z.string().uuid(),
-  title: z.string().optional(),
+  title: z.string().max(500).optional(),
 });
 
 const sendMessageSchema = z.object({
-  content: z.string().min(1),
+  content: z.string().min(1).max(10_000),
   userId: z.string().uuid(),
 });
 

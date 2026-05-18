@@ -15,8 +15,11 @@ const subRouter = Router();
 // ─── Validation Schema ───────────────────────────────────────
 
 const textIngestSchema = z.object({
-  text: z.string().min(50, 'Text must be at least 50 characters'),
-  sourceName: z.string().optional(),
+  text: z
+    .string()
+    .min(50, 'Text must be at least 50 characters')
+    .max(500_000, 'Text must be at most 500,000 characters'),
+  sourceName: z.string().max(500).optional(),
   sourceType: z.enum(['email', 'note', 'slack', 'whatsapp', 'other']).optional(),
   dealId: z.string().uuid().optional(),
 });

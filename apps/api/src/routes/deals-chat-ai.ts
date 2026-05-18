@@ -3,6 +3,7 @@
 // fetching instead of stuffing everything into the system prompt.
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
@@ -12,6 +13,24 @@ import { runDealChatAgent } from '../services/agents/dealChatAgent/index.js';
 import { generateFallbackResponse } from '../services/chatHelpers.js';
 
 const router = Router();
+
+// ─── Input caps (Task 4.4) ────────────────────────────────────────
+// User-supplied text flows into LangGraph context. Cap message length,
+// number of history items, and per-item content length so a 1MB
+// submission can't burn OpenAI tokens or exceed the model context window.
+const chatRequestSchema = z.object({
+  message: z.string().min(1).max(10_000),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().max(10_000),
+      })
+    )
+    .max(50)
+    .optional()
+    .default([]),
+});
 
 // ─── Financial Markdown Table Builder ────────────────────────────────
 // Transforms raw FinancialStatement rows into LLM-optimized Markdown
@@ -84,11 +103,15 @@ router.post('/:dealId/chat', async (req, res) => {
 
   try {
     const { dealId } = req.params;
-    const { message, history = [] } = req.body;
 
-    if (!message || typeof message !== 'string') {
-      return res.status(400).json({ error: 'Message is required' });
+    const parsed = chatRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Invalid input',
+        details: parsed.error.errors,
+      });
     }
+    const { message, history } = parsed.data;
 
     // Verify deal belongs to user's org before any data access
     const orgId = getOrgId(req);

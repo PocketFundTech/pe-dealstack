@@ -21,7 +21,7 @@ const generateSectionSchema = z.object({
 });
 
 const chatMessageSchema = z.object({
-  content: z.string().min(1),
+  content: z.string().min(1).max(10_000),
   sectionId: z.string().uuid().optional(),
   activeSectionId: z.string().uuid().optional(),
 });

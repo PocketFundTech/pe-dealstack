@@ -18,8 +18,8 @@ const subRouter = Router();
 // ─── Website URL Research (Multi-Page Scraping) ──────────────
 
 const urlResearchSchema = z.object({
-  url: z.string().url('Must be a valid URL'),
-  companyName: z.string().optional(),
+  url: z.string().url('Must be a valid URL').max(2048),
+  companyName: z.string().max(500).optional(),
   autoCreateDeal: z.boolean().optional().default(true),
   dealId: z.string().uuid().optional(),
 });
