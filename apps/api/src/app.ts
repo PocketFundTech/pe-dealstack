@@ -179,6 +179,16 @@ app.use('/api/memos/*/sections/*/generate', aiLimiter);
 // budget allows ~$300 of OpenAI spend in 15 minutes from one user.
 // See: REMEDIATION_ROADMAP.md Phase 4 Task 4.1, CONCERNS.md §1.7
 app.use('/api/deals/*/chat', aiLimiter);
+// Task 4.1b: remaining LangGraph / multi-call LLM endpoints surfaced by
+// the Task 4.1 audit. Each fans out into expensive agent or trackedChat
+// completions; the 10/min cap matches deal-chat.
+app.use('/api/deals/*/generate-thesis', aiLimiter);       // trackedChatCompletion
+app.use('/api/deals/*/analyze-risks', aiLimiter);          // trackedChatCompletion
+app.use('/api/deals/*/financials/extract', aiLimiter);     // runFinancialAgent
+app.use('/api/documents/*/extract-financials', aiLimiter); // runFinancialAgent
+app.use('/api/portfolio/chat', aiLimiter);                 // createReactAgent
+app.use('/api/conversations/*/messages', aiLimiter);       // trackedChatCompletion
+app.use('/api/onboarding/enrich-firm', aiLimiter);         // runFirmResearch (defence-in-depth; has its own 3/hr/org cap)
 app.use('/api/ingest', writeLimiter);
 
 app.use(express.json({ limit: '50mb' }));

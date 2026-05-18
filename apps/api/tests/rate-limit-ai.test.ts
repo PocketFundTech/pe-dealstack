@@ -128,17 +128,117 @@ describe('src/app.ts limiter mount inspection', () => {
    * but the supertest above still passes (because supertest is
    * exercising a parallel mini app).
    */
-  it('app.ts mounts aiLimiter on the deal chat path', async () => {
+  let appSource: string;
+  let appAiSource: string;
+
+  beforeEach(async () => {
     const fs = await import('node:fs/promises');
     const path = await import('node:path');
-    const appTsPath = path.resolve(__dirname, '../src/app.ts');
-    const source = await fs.readFile(appTsPath, 'utf-8');
+    appSource = await fs.readFile(path.resolve(__dirname, '../src/app.ts'), 'utf-8');
+    appAiSource = await fs.readFile(path.resolve(__dirname, '../src/app-ai.ts'), 'utf-8');
+  });
 
+  it('app.ts mounts aiLimiter on the deal chat path', () => {
     // Match the deals chat path mount in any of the common forms:
     //   app.use('/api/deals/*/chat', aiLimiter)
     //   app.use('/api/deals/:dealId/chat', aiLimiter)
     const dealsChatMount =
       /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*chat['"`]\s*,\s*aiLimiter\s*\)/;
-    expect(source).toMatch(dealsChatMount);
+    expect(appSource).toMatch(dealsChatMount);
+  });
+
+  // ─── Phase 4 Task 4.1b regression checks ─────────────────────────
+  // Each of the following endpoints invokes a LangGraph agent or a
+  // multi-call LLM workflow and must be bound by the 10/min aiLimiter.
+  // If any of these regex matches fail, someone removed the limiter
+  // mount from app.ts (or app-ai.ts) — re-add it.
+
+  it('app.ts mounts aiLimiter on /api/deals/*/generate-thesis', () => {
+    expect(appSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*generate-thesis['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app.ts mounts aiLimiter on /api/deals/*/analyze-risks', () => {
+    expect(appSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*analyze-risks['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app.ts mounts aiLimiter on /api/deals/*/financials/extract', () => {
+    expect(appSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*financials\/extract['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app.ts mounts aiLimiter on /api/documents/*/extract-financials', () => {
+    expect(appSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/documents\/[^'"`]*extract-financials['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app.ts mounts aiLimiter on /api/portfolio/chat', () => {
+    expect(appSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/portfolio\/chat['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app.ts mounts aiLimiter on /api/conversations/*/messages', () => {
+    expect(appSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/conversations\/[^'"`]*messages['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app.ts mounts aiLimiter on /api/onboarding/enrich-firm', () => {
+    expect(appSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/onboarding\/enrich-firm['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  // ─── Mirror checks in app-ai.ts (AI serverless bundle) ───────────
+  // AI routes also ship in the AI-specific Vercel function; every mount
+  // in app.ts must also exist in app-ai.ts or the limiter is bypassed
+  // when the AI bundle handles the request.
+
+  it('app-ai.ts mounts aiLimiter on /api/deals/*/generate-thesis', () => {
+    expect(appAiSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*generate-thesis['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app-ai.ts mounts aiLimiter on /api/deals/*/analyze-risks', () => {
+    expect(appAiSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*analyze-risks['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app-ai.ts mounts aiLimiter on /api/deals/*/financials/extract', () => {
+    expect(appAiSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*financials\/extract['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app-ai.ts mounts aiLimiter on /api/documents/*/extract-financials', () => {
+    expect(appAiSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/documents\/[^'"`]*extract-financials['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app-ai.ts mounts aiLimiter on /api/portfolio/chat', () => {
+    expect(appAiSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/portfolio\/chat['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app-ai.ts mounts aiLimiter on /api/conversations/*/messages', () => {
+    expect(appAiSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/conversations\/[^'"`]*messages['"`]\s*,\s*aiLimiter\s*\)/
+    );
+  });
+
+  it('app-ai.ts mounts aiLimiter on /api/onboarding/enrich-firm', () => {
+    expect(appAiSource).toMatch(
+      /app\.use\(\s*['"`]\/api\/onboarding\/enrich-firm['"`]\s*,\s*aiLimiter\s*\)/
+    );
   });
 });
