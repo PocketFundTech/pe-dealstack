@@ -28,6 +28,40 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
     };
   }
   const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+
+  // Recursion limit — agent looped past its cap. 429 so the caller can
+  // distinguish a runaway loop from a transient timeout.
+  if (
+    lower.includes('recursion limit') ||
+    lower.includes('graphrecursionerror') ||
+    lower.includes('graph_recursion_limit') ||
+    // LangGraph attaches lc_error_code on the Error instance.
+    (err as { lc_error_code?: string })?.lc_error_code === 'GRAPH_RECURSION_LIMIT'
+  ) {
+    return {
+      statusCode: 429,
+      userMessage: classifyAIError(msg),
+      code: 'AI_RECURSION_LIMIT',
+    };
+  }
+
+  // Timeout / abort — 504 so callers can retry.
+  if (
+    lower.includes('timed out') ||
+    lower.includes('timeout') ||
+    lower.includes('etimedout') ||
+    lower.includes('econnaborted') ||
+    lower.includes('aborterror') ||
+    (err as { name?: string })?.name === 'AbortError'
+  ) {
+    return {
+      statusCode: 504,
+      userMessage: classifyAIError(msg),
+      code: 'AI_TIMEOUT',
+    };
+  }
+
   return {
     statusCode: 500,
     userMessage: classifyAIError(msg),
@@ -55,8 +89,14 @@ export function classifyAIError(errorMsg: string): string {
     return 'AI rate limit reached — too many requests. Please wait a moment and try again.';
   }
 
-  if (msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnaborted')) {
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('etimedout') || msg.includes('econnaborted') || msg.includes('aborterror') || msg.includes('aborted')) {
     return 'AI request timed out. Try a shorter question or try again shortly.';
+  }
+
+  // LangGraph recursion limit — the ReAct agent looped past its cap.
+  // Surfaces as either GraphRecursionError or lc_error_code GRAPH_RECURSION_LIMIT.
+  if (msg.includes('recursion limit') || msg.includes('graphrecursionerror') || msg.includes('graph_recursion_limit')) {
+    return 'AI got stuck in a tool loop. Please rephrase your question or try again.';
   }
 
   if (msg.includes('model_not_found') || msg.includes('does not exist') || msg.includes('model not found')) {

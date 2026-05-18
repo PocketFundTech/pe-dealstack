@@ -12,6 +12,22 @@ import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
 import { classifyAIError } from '../../../utils/aiErrors.js';
 
+// ─── Bounds ──────────────────────────────────────────────────────────
+// Hard limits on agent execution. Without these, a malformed tool output
+// can loop the ReAct agent up to LangGraph's default 25 iterations
+// (each making an OpenAI call), and slow OpenAI responses can hang
+// past Vercel's 30s function limit while billing continues.
+//
+// Refs: .planning/REMEDIATION_ROADMAP.md Phase 4 Task 4.2
+// Refs: .planning/codebase/CONCERNS.md §3.5, §7.2
+const AGENT_RECURSION_LIMIT = 10;
+const DEFAULT_AGENT_TIMEOUT_MS = 30_000;
+// Allow tests to shorten the timeout; production reads the default.
+function getAgentTimeoutMs(): number {
+  const override = Number(process.env.DEAL_CHAT_AGENT_TIMEOUT_MS);
+  return Number.isFinite(override) && override > 0 ? override : DEFAULT_AGENT_TIMEOUT_MS;
+}
+
 const DEAL_AGENT_SYSTEM_PROMPT = `You are DealOS AI, an expert Private Equity investment analyst assistant.
 
 Your role is to help investment professionals analyze deals by:
@@ -158,7 +174,36 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
       messageCount: messages.length,
     });
 
-    const result = await agent.invoke({ messages });
+    // ─── Bounded invocation ────────────────────────────────────────
+    // 1. recursionLimit caps the ReAct loop at 10 iterations (default 25).
+    // 2. AbortController + Promise.race enforces a hard 30s timeout. The
+    //    signal is passed through to OpenAI so the in-flight HTTP request
+    //    is actually cancelled, not just abandoned.
+    const timeoutMs = getAgentTimeoutMs();
+    const abortController = new AbortController();
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        abortController.abort();
+        reject(new Error(`Deal chat agent timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    let result: any;
+    try {
+      result = await Promise.race([
+        agent.invoke(
+          { messages },
+          {
+            recursionLimit: AGENT_RECURSION_LIMIT,
+            signal: abortController.signal,
+          }
+        ),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
 
     // Extract the final AI response
     const aiMessages = result.messages.filter(
