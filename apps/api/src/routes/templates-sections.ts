@@ -121,10 +121,23 @@ router.patch('/:id/sections/:sectionId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-11: bind sectionId to template. Without this, a caller could pass
+    // their own templateId (passes org gate) plus another firm's sectionId
+    // and overwrite that section — e.g. inject a malicious aiPrompt that
+    // runs the next time the target firm regenerates the template.
+    const { data: existing } = await supabase
+      .from('MemoTemplateSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('templateId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { data: section, error } = await supabase
       .from('MemoTemplateSection')
       .update(validation.data)
       .eq('id', sectionId)
+      .eq('templateId', id)
       .select()
       .single();
 
