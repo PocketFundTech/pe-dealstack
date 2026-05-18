@@ -4,6 +4,7 @@ import { log } from './utils/logger.js';
 import { OPENROUTER_BASE_URL, OPENROUTER_HEADERS, isOpenRouterEnabled } from './utils/aiModels.js';
 import { recordUsageEvent } from './services/usage/trackedLLM.js';
 import { enforceUserGate, UserBlockedError } from './services/usage/enforcement.js';
+import { withCircuitBreaker } from './services/aiCircuitBreaker.js';
 
 export { UserBlockedError } from './services/usage/enforcement.js';
 
@@ -125,7 +126,9 @@ export async function trackedChatCompletion(
   await enforceUserGate(operation, model, provider);
   const start = Date.now();
   try {
-    const response: any = await openai.chat.completions.create(params as any, options);
+    const response: any = await withCircuitBreaker(provider, () =>
+      openai!.chat.completions.create(params as any, options),
+    );
     const promptTokens = response?.usage?.prompt_tokens ?? 0;
     const completionTokens = response?.usage?.completion_tokens ?? 0;
     await recordUsageEvent({
@@ -169,7 +172,9 @@ export async function trackedDirectChatCompletion(
   await enforceUserGate(operation, model, 'openai');
   const start = Date.now();
   try {
-    const response: any = await openaiDirect.chat.completions.create(params as any, options);
+    const response: any = await withCircuitBreaker('openai', () =>
+      openaiDirect!.chat.completions.create(params as any, options),
+    );
     const promptTokens = response?.usage?.prompt_tokens ?? 0;
     const completionTokens = response?.usage?.completion_tokens ?? 0;
     await recordUsageEvent({
@@ -214,7 +219,9 @@ export async function trackedDirectResponsesCreate(
   await enforceUserGate(operation, model, 'openai');
   const start = Date.now();
   try {
-    const response: any = await (openaiDirect as any).responses.create(params, options);
+    const response: any = await withCircuitBreaker('openai', () =>
+      (openaiDirect as any).responses.create(params, options),
+    );
     const promptTokens = response?.usage?.input_tokens ?? 0;
     const completionTokens = response?.usage?.output_tokens ?? 0;
     await recordUsageEvent({
