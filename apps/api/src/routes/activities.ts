@@ -171,6 +171,24 @@ router.post('/deals/:dealId/activities', async (req, res) => {
 router.get('/activities/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const orgId = getOrgId(req);
+
+    // Resolve the activity's dealId first, then verify the deal belongs to caller's org.
+    // Returns 404 (not 403) to prevent enumeration of activity ids across tenants.
+    const { data: activityRef, error: refError } = await supabase
+      .from('Activity')
+      .select('id, dealId')
+      .eq('id', id)
+      .single();
+
+    if (refError || !activityRef?.dealId) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
+
+    const dealAccess = await verifyDealAccess(activityRef.dealId, orgId);
+    if (!dealAccess) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
 
     const { data, error } = await supabase
       .from('Activity')
