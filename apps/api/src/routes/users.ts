@@ -308,7 +308,23 @@ router.get('/:id/deals', async (req: Request, res: Response, next: NextFunction)
 router.get('/:id/notifications', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
+    const orgId = getOrgId(req);
     const params = userNotificationsQuerySchema.parse(req.query);
+
+    // Verify the target user belongs to the caller's org before reading their
+    // notifications. The dedicated /api/notifications endpoint already does
+    // this; this route was the back door. Return 404 (not 403) to match the
+    // same-org-only enumeration semantics used by /api/users/:id.
+    const { data: targetUser, error: userErr } = await supabase
+      .from('User')
+      .select('id')
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .single();
+
+    if (userErr || !targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     let query = supabase
       .from('Notification')
