@@ -242,3 +242,80 @@ describe('DELETE /api/templates/:id/sections/:sectionId — F-12 cross-template 
     expect(deleteTemplateIdFilter).toBe('template-A');
   });
 });
+
+describe('POST /api/templates/:id/sections/reorder — F-13 cross-template bind', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
+  });
+
+  it('does not update sections from a different template', async () => {
+    const updateAttempts: { sectionId: string; templateIdFilter: string | null }[] = [];
+
+    const VALID_ID = '33333333-3333-3333-3333-333333333333';
+    const STRANGER_ID = '44444444-4444-4444-4444-444444444444';
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'MemoTemplate') {
+        return makeTemplateSelect({ exists: true });
+      }
+      if (table === 'MemoTemplateSection') {
+        return {
+          select: () => ({
+            eq: (col: string, val: any) => {
+              if (col === 'templateId' && val === 'template-A') {
+                const result = {
+                  then: (resolve: any) =>
+                    resolve({ data: [{ id: VALID_ID }], error: null }),
+                  order: () => Promise.resolve({ data: [{ id: VALID_ID, sortOrder: 5 }], error: null }),
+                };
+                return result;
+              }
+              return { single: async () => ({ data: null, error: { code: 'PGRST116' } }) };
+            },
+          }),
+          update: () => ({
+            eq: (col: string, val: any) => {
+              if (col !== 'id') {
+                return { eq: async () => ({ error: null }) };
+              }
+              const sectionId = val;
+              let templateIdFilter: string | null = null;
+              return {
+                eq: async (col2: string, val2: any) => {
+                  if (col2 === 'templateId') templateIdFilter = val2;
+                  updateAttempts.push({ sectionId, templateIdFilter });
+                  return { error: null };
+                },
+                then: (resolve: any) => {
+                  updateAttempts.push({ sectionId, templateIdFilter });
+                  resolve({ error: null });
+                },
+              };
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app)
+      .post('/api/templates/template-A/sections/reorder')
+      .send({
+        sections: [
+          { id: VALID_ID, sortOrder: 5 },
+          { id: STRANGER_ID, sortOrder: 6 },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(updateAttempts.length).toBeGreaterThan(0);
+    for (const attempt of updateAttempts) {
+      expect(attempt.templateIdFilter).toBe('template-A');
+      expect(attempt.sectionId).toBe(VALID_ID);
+    }
+    const strangerHits = updateAttempts.filter((a) => a.sectionId === STRANGER_ID);
+    expect(strangerHits).toEqual([]);
+  });
+});

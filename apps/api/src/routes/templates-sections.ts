@@ -201,13 +201,25 @@ router.post('/:id/sections/reorder', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-13: bind each sectionId to this template. Without this, a caller
+    // could reorder any template's sections. Pre-fetch valid IDs and
+    // intersect; additionally chain .eq('templateId', id) on each update.
+    const { data: validSections } = await supabase
+      .from('MemoTemplateSection')
+      .select('id')
+      .eq('templateId', id);
+    const validIds = new Set((validSections || []).map((s: any) => s.id));
+
     // Update each section's sortOrder
-    const updates = validation.data.sections.map(({ id: sectionId, sortOrder }) =>
-      supabase
-        .from('MemoTemplateSection')
-        .update({ sortOrder })
-        .eq('id', sectionId)
-    );
+    const updates = validation.data.sections
+      .filter(({ id: sectionId }) => validIds.has(sectionId))
+      .map(({ id: sectionId, sortOrder }) =>
+        supabase
+          .from('MemoTemplateSection')
+          .update({ sortOrder })
+          .eq('id', sectionId)
+          .eq('templateId', id)
+      );
 
     await Promise.all(updates);
 
