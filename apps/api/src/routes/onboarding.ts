@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { runFirmResearch, runDeepResearch } from '../services/agents/firmResearchAgent/index.js';
+import { markStaleDeepResearchAsFailed } from '../services/agents/firmResearchAgent/deepResearchProgress.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { extractNameFromDomain } from '../utils/urlHelpers.js';
@@ -402,7 +403,11 @@ router.get('/research-status', async (req: Request, res: Response) => {
       .single();
 
     const settings = (org?.settings || {}) as Record<string, any>;
-    const deepResearch = settings.deepResearch;
+    // Self-heal stale 'running' rows: if the background task was killed
+    // mid-flight by the Vercel serverless timeout, the status is stuck on
+    // 'running' forever. Treat anything older than 5 minutes as failed so the
+    // frontend stops polling. Persists the change back to the org row.
+    const deepResearch = await markStaleDeepResearchAsFailed(orgId, settings);
 
     if (!deepResearch) {
       return res.json({ phase: 1, status: 'complete', newInsightsCount: 0 });
@@ -413,6 +418,7 @@ router.get('/research-status', async (req: Request, res: Response) => {
       status: deepResearch.status,
       newInsightsCount: deepResearch.insightsFound || 0,
       completedAt: deepResearch.completedAt || null,
+      error: deepResearch.status === 'failed' ? deepResearch.error : undefined,
     });
   } catch (error: any) {
     log.error('Research status check failed', { error: error.message });
