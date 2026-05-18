@@ -10,6 +10,13 @@ import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
 import { classifyAIError } from '../../../utils/aiErrors.js';
+import { runWithAgentBounds } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// Chat ReAct agent — tool calls + a final reply. 60s gives the user a
+// reasonable interactive ceiling; recursionLimit 10 caps tool-call loops.
+const MEMO_CHAT_TIMEOUT_MS = 60_000;
+const MEMO_CHAT_RECURSION_LIMIT = 10;
 
 // ─── Re-exports ───────────────────────────────────────────────────────────────
 
@@ -104,9 +111,17 @@ export async function runMemoChatAgent(input: MemoChatInput): Promise<MemoChatRe
       messageCount: messages.length,
     });
 
-    // ── Invoke ───────────────────────────────────────────────────────────────
+    // ── Invoke (bounded) ─────────────────────────────────────────────────────
 
-    const result = await agent.invoke({ messages });
+    const result: any = await runWithAgentBounds(
+      (config) => agent.invoke({ messages }, config),
+      {
+        timeoutMs: MEMO_CHAT_TIMEOUT_MS,
+        recursionLimit: MEMO_CHAT_RECURSION_LIMIT,
+        envVar: 'MEMO_CHAT_AGENT_TIMEOUT_MS',
+        label: 'Memo chat agent',
+      },
+    );
 
     // ── Extract final AI response ─────────────────────────────────────────────
 

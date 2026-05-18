@@ -25,6 +25,13 @@ import {
   reviewNode,
   routeAfterValidation,
 } from './nodes.js';
+import { runWithAgentBounds } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// 5-node enrichment DAG with one conditional branch. 30s covers the
+// typical CRM search + LLM synthesis; recursionLimit 10 caps loops.
+const ENRICHMENT_TIMEOUT_MS = 30_000;
+const ENRICHMENT_RECURSION_LIMIT = 10;
 
 export type { EnrichmentInput, EnrichmentResult } from './state.js';
 import type { EnrichmentInput, EnrichmentResult } from './state.js';
@@ -63,26 +70,38 @@ export async function runContactEnrichment(input: EnrichmentInput): Promise<Enri
 
   log.info('Running contact enrichment agent', { contactId: input.contactId, name: `${input.firstName} ${input.lastName}` });
 
-  const result = await compiledGraph.invoke({
-    contactId: input.contactId,
-    organizationId: input.organizationId,
-    firstName: input.firstName,
-    lastName: input.lastName,
-    email: input.email || null,
-    company: input.company || null,
-    title: input.title || null,
-    crmContext: '',
-    emailAnalysis: {},
-    linkedDeals: [],
-    documentMentions: [],
-    enrichedData: {},
-    confidence: 0,
-    sources: [],
-    status: 'pending',
-    error: null,
-    needsReview: false,
-    steps: [],
-  });
+  const result: any = await runWithAgentBounds(
+    (config) =>
+      compiledGraph.invoke(
+        {
+          contactId: input.contactId,
+          organizationId: input.organizationId,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          email: input.email || null,
+          company: input.company || null,
+          title: input.title || null,
+          crmContext: '',
+          emailAnalysis: {},
+          linkedDeals: [],
+          documentMentions: [],
+          enrichedData: {},
+          confidence: 0,
+          sources: [],
+          status: 'pending',
+          error: null,
+          needsReview: false,
+          steps: [],
+        },
+        config,
+      ),
+    {
+      timeoutMs: ENRICHMENT_TIMEOUT_MS,
+      recursionLimit: ENRICHMENT_RECURSION_LIMIT,
+      envVar: 'CONTACT_ENRICHMENT_TIMEOUT_MS',
+      label: 'Contact enrichment agent',
+    },
+  );
 
   return {
     status: result.status as any,

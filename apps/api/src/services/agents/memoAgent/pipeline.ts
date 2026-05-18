@@ -12,6 +12,13 @@ import {
 import { getChatModel, isLLMAvailable } from '../../llm.js';
 import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { log } from '../../../utils/logger.js';
+import { resolveTimeoutMs } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// Each section is a single LLM call (not a multi-step agent). Cap each
+// at 30s via AbortSignal so a stuck OpenAI request can't pin a worker
+// past Vercel's function limit while billing continues.
+const SECTION_TIMEOUT_MS = 30_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -140,10 +147,30 @@ export async function generateSection(
 
     const userPrompt = `${sectionPrompt}\n\n---\n\n## Deal Context\n\n${contextText}${formatInstruction}`;
 
-    const response = await model.invoke([
-      new SystemMessage(MEMO_SYSTEM_PROMPT),
-      new HumanMessage(userPrompt),
-    ]);
+    // Bound the LLM call. Direct model.invoke() has no recursionLimit
+    // concept (it's a single call), but AbortSignal + Promise.race still
+    // protects against hung HTTP requests to OpenAI.
+    const timeoutMs = resolveTimeoutMs(SECTION_TIMEOUT_MS, 'MEMO_SECTION_TIMEOUT_MS');
+    const abortController = new AbortController();
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        abortController.abort();
+        reject(new Error(`Memo section ${sectionType} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    let response: any;
+    try {
+      response = await Promise.race([
+        model.invoke(
+          [new SystemMessage(MEMO_SYSTEM_PROMPT), new HumanMessage(userPrompt)],
+          { signal: abortController.signal },
+        ),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
 
     const rawText =
       typeof response.content === 'string'

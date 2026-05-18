@@ -2,6 +2,7 @@
 import { getFirmResearchGraph } from './graph.js';
 import { FirmProfile, PersonProfile } from './state.js';
 import { log } from '../../../utils/logger.js';
+import { runWithAgentBounds } from '../agentBounds.js';
 
 export interface FirmResearchInput {
   websiteUrl: string;
@@ -20,7 +21,10 @@ export interface FirmResearchResult {
   error: string | null;
 }
 
-const AGENT_TIMEOUT_MS = 120000; // 2 minutes — Apify actors need startup time
+// 2 minutes — Apify actors (Google Search, LinkedIn scrape) need startup time.
+// recursionLimit 15 covers the 6-node DAG with retries.
+const AGENT_TIMEOUT_MS = 120_000;
+const AGENT_RECURSION_LIMIT = 15;
 
 // Best-effort concurrency lock — works for single-instance (local dev, single Vercel instance).
 // Does NOT prevent concurrent runs across multiple serverless instances.
@@ -53,20 +57,26 @@ export async function runFirmResearch(input: FirmResearchInput): Promise<FirmRes
 
     const graph = getFirmResearchGraph();
 
-    // Run with agent-level timeout
-    const resultPromise = graph.invoke({
-      websiteUrl: input.websiteUrl,
-      linkedinUrl: input.linkedinUrl,
-      firmName: input.firmName,
-      userId: input.userId,
-      organizationId: input.organizationId,
-    });
-
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Agent timed out after 60s')), AGENT_TIMEOUT_MS)
-    );
-
-    const result = await Promise.race([resultPromise, timeoutPromise]) as any;
+    // Run with bounded recursion + AbortSignal-backed timeout.
+    const result = await runWithAgentBounds(
+      (config) =>
+        graph.invoke(
+          {
+            websiteUrl: input.websiteUrl,
+            linkedinUrl: input.linkedinUrl,
+            firmName: input.firmName,
+            userId: input.userId,
+            organizationId: input.organizationId,
+          },
+          config,
+        ),
+      {
+        timeoutMs: AGENT_TIMEOUT_MS,
+        recursionLimit: AGENT_RECURSION_LIMIT,
+        envVar: 'FIRM_RESEARCH_AGENT_TIMEOUT_MS',
+        label: 'Firm research agent',
+      },
+    ) as any;
 
     const duration = Date.now() - startTime;
     log.info('Firm research agent complete', {

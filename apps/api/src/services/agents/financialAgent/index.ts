@@ -23,6 +23,17 @@ import { log } from '../../../utils/logger.js';
 import type { FileType, FinancialAgentStateType } from './state.js';
 import type { ReconcileResult } from './nodes/crossVerifyNode.js';
 import { DEFAULT_MAX_RETRIES } from './config.js';
+import { runWithAgentBounds } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// Multi-pass extraction (extract → verify → cross-verify → validate →
+// self-correct → store) can legitimately take 60-90s on large CIMs.
+// 120s budget leaves headroom; recursionLimit 25 covers worst-case
+// (3 self-correct retries × ~7 hops each).
+//
+// Refs: .planning/REMEDIATION_ROADMAP.md Phase 4 Task 4.3
+const FINANCIAL_AGENT_TIMEOUT_MS = 120_000;
+const FINANCIAL_AGENT_RECURSION_LIMIT = 25;
 
 // ─── Input Types ─────────────────────────────────────────────
 
@@ -70,16 +81,28 @@ export async function runFinancialAgent(
   try {
     const graph = getFinancialAgentGraph();
 
-    const finalState = await graph.invoke({
-      dealId: input.dealId,
-      documentId: input.documentId ?? null,
-      fileBuffer: input.fileBuffer,
-      fileName: input.fileName,
-      fileType: input.fileType,
-      organizationId: input.organizationId ?? null,
-      maxRetries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
-      skipVerify: false,
-    });
+    const finalState: any = await runWithAgentBounds(
+      (config) =>
+        graph.invoke(
+          {
+            dealId: input.dealId,
+            documentId: input.documentId ?? null,
+            fileBuffer: input.fileBuffer,
+            fileName: input.fileName,
+            fileType: input.fileType,
+            organizationId: input.organizationId ?? null,
+            maxRetries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
+            skipVerify: false,
+          },
+          config,
+        ),
+      {
+        timeoutMs: FINANCIAL_AGENT_TIMEOUT_MS,
+        recursionLimit: FINANCIAL_AGENT_RECURSION_LIMIT,
+        envVar: 'FINANCIAL_AGENT_TIMEOUT_MS',
+        label: 'Financial agent',
+      },
+    );
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 

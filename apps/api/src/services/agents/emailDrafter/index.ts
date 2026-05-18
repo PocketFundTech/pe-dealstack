@@ -9,6 +9,13 @@ import { z } from 'zod';
 import { supabase } from '../../../supabase.js';
 import { log } from '../../../utils/logger.js';
 import { TOPIC_GUARDRAILS, CONTEXT_ANCHORING } from '../guardrails.js';
+import { runWithAgentBounds } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// 4 sequential LLM calls (draft → tone → compliance → finalize). 30s
+// covers all four; recursionLimit 10 is conservative for a fixed DAG.
+const EMAIL_DRAFTER_TIMEOUT_MS = 30_000;
+const EMAIL_DRAFTER_RECURSION_LIMIT = 10;
 
 // ─── State Schema ──────────────────────────────────────────────────
 
@@ -265,25 +272,37 @@ export async function generateEmailDraft(input: EmailDraftInput): Promise<EmailD
   log.info('Generating email draft', { purpose: input.purpose, dealId: input.dealId });
 
   try {
-    const result = await compiledGraph.invoke({
-      organizationId: input.organizationId,
-      dealId: input.dealId || null,
-      contactId: input.contactId || null,
-      purpose: input.purpose,
-      context,
-      templateId: input.templateId || null,
-      tone: input.tone || 'professional',
-      draft: '',
-      subject: '',
-      toneScore: 0,
-      toneNotes: [],
-      complianceIssues: [],
-      isCompliant: true,
-      finalDraft: '',
-      suggestions: [],
-      status: 'pending',
-      error: null,
-    });
+    const result: any = await runWithAgentBounds(
+      (config) =>
+        compiledGraph.invoke(
+          {
+            organizationId: input.organizationId,
+            dealId: input.dealId || null,
+            contactId: input.contactId || null,
+            purpose: input.purpose,
+            context,
+            templateId: input.templateId || null,
+            tone: input.tone || 'professional',
+            draft: '',
+            subject: '',
+            toneScore: 0,
+            toneNotes: [],
+            complianceIssues: [],
+            isCompliant: true,
+            finalDraft: '',
+            suggestions: [],
+            status: 'pending',
+            error: null,
+          },
+          config,
+        ),
+      {
+        timeoutMs: EMAIL_DRAFTER_TIMEOUT_MS,
+        recursionLimit: EMAIL_DRAFTER_RECURSION_LIMIT,
+        envVar: 'EMAIL_DRAFTER_TIMEOUT_MS',
+        label: 'Email drafter agent',
+      },
+    );
 
     return {
       status: result.status as any,
