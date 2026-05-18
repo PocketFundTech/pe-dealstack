@@ -259,9 +259,8 @@ router.delete('/:id', requirePermission(PERMISSIONS.DEAL_DELETE), async (req, re
     const { data: folders } = await supabase.from('Folder').select('id').eq('dealId', id);
     if (folders && folders.length > 0) {
       const folderIds = folders.map(f => f.id);
-      for (const fId of folderIds) {
-        await supabase.from('FolderInsight').delete().eq('folderId', fId);
-      }
+      // Batched .in() delete — was a per-folder loop (N+1 round-trips).
+      await supabase.from('FolderInsight').delete().in('folderId', folderIds);
     }
 
     await supabase.from('Folder').delete().eq('dealId', id);
@@ -272,9 +271,9 @@ router.delete('/:id', requirePermission(PERMISSIONS.DEAL_DELETE), async (req, re
 
     const { data: memos } = await supabase.from('Memo').select('id').eq('dealId', id);
     if (memos && memos.length > 0) {
-      for (const m of memos) {
-        await supabase.from('MemoSection').delete().eq('memoId', m.id);
-      }
+      const memoIds = memos.map(m => m.id);
+      // Batched .in() delete — was a per-memo loop (N+1 round-trips).
+      await supabase.from('MemoSection').delete().in('memoId', memoIds);
     }
     await supabase.from('Memo').delete().eq('dealId', id);
     await supabase.from('Notification').delete().eq('dealId', id);
