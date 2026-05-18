@@ -125,6 +125,16 @@ export const FinancialAgentState = Annotation.Root({
     reducer: (_prev, next) => next,
     default: () => false,
   }),
+  /** Bypass the extraction cache and re-run extraction even on cache hit */
+  forceExtraction: Annotation<boolean>({
+    reducer: (_prev, next) => next,
+    default: () => false,
+  }),
+  /** True when the extracted state was served from the FinancialExtractionCache */
+  fromCache: Annotation<boolean>({
+    reducer: (_prev, next) => next,
+    default: () => false,
+  }),
   failedChecks: Annotation<FailedCheck[]>({
     reducer: (_prev, next) => next,
     default: () => [],

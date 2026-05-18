@@ -21,6 +21,12 @@ import { log } from '../../../../utils/logger.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { ExtractionSource, AgentStep } from '../state.js';
 import { CHUNK_THRESHOLD, MAX_CHUNK_SIZE, MAX_CHUNKS, MIN_TEXT_LENGTH } from '../config.js';
+import {
+  getCachedExtraction,
+  putCachedExtraction,
+  hashContent,
+  type CachedExtractionResult,
+} from '../extractionCache.js';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -41,7 +47,7 @@ export async function extractNode(
   state: FinancialAgentStateType,
 ): Promise<Partial<FinancialAgentStateType>> {
   const steps: AgentStep[] = [];
-  const { fileBuffer, fileName, fileType } = state;
+  const { fileBuffer, fileName, fileType, forceExtraction } = state;
 
   if (!fileBuffer || fileBuffer.length === 0) {
     return {
@@ -52,6 +58,40 @@ export async function extractNode(
   }
 
   steps.push(step('extract', `Received ${fileName} (${fileType}, ${(fileBuffer.length / 1024).toFixed(0)}KB)`));
+
+  // ── Cache check (Task 4.9) ──────────────────────────────────
+  // Hash the file buffer so the same bytes — re-uploaded as a new document
+  // or re-extracted via the route — hit the cache regardless of which
+  // extraction layer (Excel/LlamaParse/pdf-parse/Vision) succeeded.
+  const contentHash = hashContent(fileBuffer);
+
+  if (!forceExtraction) {
+    const cached = await getCachedExtraction({ contentHash });
+    if (cached) {
+      steps.push(step('extract', `Cache hit — skipping LLM extraction (saved ~$0.75-$1.50)`));
+      return {
+        rawText: cached.rawText,
+        extractionSource: cached.extractionSource,
+        classification: cached.classification,
+        statements: cached.statements,
+        overallConfidence: cached.overallConfidence,
+        warnings: cached.warnings,
+        fromCache: true,
+        status: 'validating',
+        steps,
+      };
+    }
+  } else {
+    steps.push(step('extract', 'forceExtraction=true — bypassing extraction cache'));
+  }
+
+  /** Persist a successful extraction to the cache (best-effort). */
+  const cacheResult = (payload: CachedExtractionResult): void => {
+    if (!payload.classification || payload.statements.length === 0) return;
+    void putCachedExtraction({ contentHash }, payload).catch(() => {
+      // Errors already logged inside putCachedExtraction; swallow here.
+    });
+  };
 
   try {
     // ── Excel Path ─────────────────────────────────────────────
@@ -87,6 +127,15 @@ export async function extractNode(
       const totalPeriods = classification.statements.reduce((sum, s) => sum + s.periods.length, 0);
       steps.push(step('extract', `Found: ${stmtTypes} (${totalPeriods} periods, confidence ${classification.overallConfidence}%)`));
 
+      cacheResult({
+        rawText: excelText,
+        extractionSource: 'gpt4o',
+        classification,
+        statements: classification.statements,
+        overallConfidence: classification.overallConfidence,
+        warnings: classification.warnings,
+      });
+
       return {
         rawText: excelText,
         extractionSource: 'gpt4o',
@@ -94,6 +143,7 @@ export async function extractNode(
         statements: classification.statements,
         overallConfidence: classification.overallConfidence,
         warnings: classification.warnings,
+        fromCache: false,
         status: 'validating',
         steps,
       };
@@ -138,6 +188,15 @@ export async function extractNode(
             const totalPeriods = llamaClassification.statements.reduce((sum, s) => sum + s.periods.length, 0);
             steps.push(step('extract', `Found: ${stmtTypes} (${totalPeriods} periods, confidence ${llamaClassification.overallConfidence}%)`));
 
+            cacheResult({
+              rawText: llamaResult.text,
+              extractionSource: 'gpt4o',
+              classification: llamaClassification,
+              statements: llamaClassification.statements,
+              overallConfidence: llamaClassification.overallConfidence,
+              warnings: llamaClassification.warnings,
+            });
+
             return {
               rawText: llamaResult.text,
               extractionSource: 'gpt4o',
@@ -145,6 +204,7 @@ export async function extractNode(
               statements: llamaClassification.statements,
               overallConfidence: llamaClassification.overallConfidence,
               warnings: llamaClassification.warnings,
+              fromCache: false,
               status: 'validating',
               steps,
             };
@@ -204,6 +264,15 @@ export async function extractNode(
         const totalPeriods = classification.statements.reduce((sum, s) => sum + s.periods.length, 0);
         steps.push(step('extract', `Found: ${stmtTypes} (${totalPeriods} periods, confidence ${classification.overallConfidence}%)`));
 
+        cacheResult({
+          rawText: pdfText,
+          extractionSource: 'gpt4o',
+          classification,
+          statements: classification.statements,
+          overallConfidence: classification.overallConfidence,
+          warnings: classification.warnings,
+        });
+
         return {
           rawText: pdfText,
           extractionSource: 'gpt4o',
@@ -211,6 +280,7 @@ export async function extractNode(
           statements: classification.statements,
           overallConfidence: classification.overallConfidence,
           warnings: classification.warnings,
+          fromCache: false,
           status: 'validating',
           steps,
         };
@@ -246,6 +316,15 @@ export async function extractNode(
     const totalPeriods = visionClassification.statements.reduce((sum, s) => sum + s.periods.length, 0);
     steps.push(step('extract', `Vision found: ${stmtTypes} (${totalPeriods} periods, confidence ${visionClassification.overallConfidence}%)`));
 
+    cacheResult({
+      rawText: '',
+      extractionSource: 'vision',
+      classification: visionClassification,
+      statements: visionClassification.statements,
+      overallConfidence: visionClassification.overallConfidence,
+      warnings: visionClassification.warnings,
+    });
+
     return {
       rawText: '',
       extractionSource: 'vision',
@@ -253,6 +332,7 @@ export async function extractNode(
       statements: visionClassification.statements,
       overallConfidence: visionClassification.overallConfidence,
       warnings: visionClassification.warnings,
+      fromCache: false,
       status: 'validating',
       steps,
     };

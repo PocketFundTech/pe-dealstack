@@ -176,6 +176,11 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
       });
     }
 
+    const forceExtraction =
+      req.query.force === 'true' ||
+      req.query.force === '1' ||
+      req.body?.force === true;
+
     let agentResult;
     try {
       agentResult = await runFinancialAgent({
@@ -185,6 +190,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         fileName: doc.name ?? 'document',
         fileType: detectFileType(doc.mimeType, doc.name),
         organizationId: orgId,
+        forceExtraction,
       });
     } finally {
       releaseExtractionSlot(orgId);
@@ -194,6 +200,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
       success: agentResult.status === 'completed',
       documentUsed: { id: doc.id, name: doc.name },
       extractionMethod: agentResult.extractionSource,
+      fromCache: agentResult.fromCache,
       result: {
         statementsStored: agentResult.statementIds.length,
         periodsStored: agentResult.periodsStored,
@@ -211,6 +218,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         steps: agentResult.steps,
         error: agentResult.error,
         crossVerifyResult: agentResult.crossVerifyResult || null,
+        fromCache: agentResult.fromCache,
       },
     });
   } catch (err: any) {
@@ -304,6 +312,11 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
       });
     }
 
+    const forceExtraction =
+      req.query.force === 'true' ||
+      req.query.force === '1' ||
+      req.body?.force === true;
+
     let agentResult;
     try {
       agentResult = await runFinancialAgent({
@@ -313,6 +326,7 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
         fileName: doc.name ?? 'document',
         fileType: detectFileType(doc.mimeType, doc.name),
         organizationId: orgId,
+        forceExtraction,
       });
     } finally {
       releaseExtractionSlot(orgId);
@@ -323,6 +337,7 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
       documentUsed: { id: doc.id, name: doc.name },
       dealId: doc.dealId,
       extractionMethod: agentResult.extractionSource,
+      fromCache: agentResult.fromCache,
       result: {
         statementsStored: agentResult.statementIds.length,
         periodsStored: agentResult.periodsStored,
@@ -337,6 +352,7 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
         validationResult: agentResult.validationResult,
         steps: agentResult.steps,
         error: agentResult.error,
+        fromCache: agentResult.fromCache,
         crossVerifyResult: agentResult.crossVerifyResult || null,
       },
     });

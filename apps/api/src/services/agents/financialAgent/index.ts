@@ -46,6 +46,8 @@ export interface FinancialAgentInput {
   organizationId?: string | null;
   /** Max self-correction retries (default 3) */
   maxRetries?: number;
+  /** Bypass the FinancialExtractionCache and re-run LLM extraction even on hit */
+  forceExtraction?: boolean;
 }
 
 export interface FinancialAgentResult {
@@ -61,6 +63,8 @@ export interface FinancialAgentResult {
   error: string | null;
   steps: FinancialAgentStateType['steps'];
   crossVerifyResult: ReconcileResult | null;
+  /** True if the extracted classification was served from the cache */
+  fromCache: boolean;
 }
 
 // ─── Run Agent ───────────────────────────────────────────────
@@ -93,6 +97,7 @@ export async function runFinancialAgent(
             organizationId: input.organizationId ?? null,
             maxRetries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
             skipVerify: false,
+            forceExtraction: input.forceExtraction ?? false,
           },
           config,
         ),
@@ -113,6 +118,7 @@ export async function runFinancialAgent(
       overallConfidence: finalState.overallConfidence,
       retryCount: finalState.retryCount,
       hasConflicts: finalState.hasConflicts,
+      fromCache: finalState.fromCache ?? false,
       elapsedSeconds: elapsed,
       totalSteps: finalState.steps?.length ?? 0,
     });
@@ -130,6 +136,7 @@ export async function runFinancialAgent(
       error: finalState.error ?? null,
       steps: finalState.steps ?? [],
       crossVerifyResult: finalState.crossVerifyResult ?? null,
+      fromCache: finalState.fromCache ?? false,
     };
   } catch (err) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -147,6 +154,7 @@ export async function runFinancialAgent(
       warnings: [],
       error: err instanceof Error ? err.message : String(err),
       crossVerifyResult: null,
+      fromCache: false,
       steps: [{
         timestamp: new Date().toISOString(),
         node: 'agent',
