@@ -5,7 +5,7 @@ import { Resend } from 'resend';
 import { mergeIntoExistingDeal } from '../services/dealMerger.js';
 import { log } from '../utils/logger.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
-import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
+import { getOrgId, verifyDealAccess, verifyDocumentAccess } from '../middleware/orgScope.js';
 
 // Initialize Resend for document request emails
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
@@ -16,12 +16,26 @@ const router = Router();
 router.post('/documents/:id/link', async (req, res) => {
   try {
     const { id } = req.params;
+    const orgId = getOrgId(req);
+
     const schema = z.object({
       targetDealId: z.string().uuid(),
     });
     const { targetDealId } = schema.parse(req.body);
 
-    // Fetch original document
+    // Verify the source document belongs to caller's org.
+    const sourceDoc = await verifyDocumentAccess(id, orgId);
+    if (!sourceDoc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Verify target deal belongs to caller's org.
+    const targetDeal = await verifyDealAccess(targetDealId, orgId);
+    if (!targetDeal) {
+      return res.status(404).json({ error: 'Target deal not found' });
+    }
+
+    // Fetch full original document row (verifyDocumentAccess returns minimal projection)
     const { data: original, error: fetchErr } = await supabase
       .from('Document')
       .select('*')
@@ -30,17 +44,6 @@ router.post('/documents/:id/link', async (req, res) => {
 
     if (fetchErr || !original) {
       return res.status(404).json({ error: 'Document not found' });
-    }
-
-    // Verify target deal exists
-    const { data: targetDeal, error: dealErr } = await supabase
-      .from('Deal')
-      .select('id, name')
-      .eq('id', targetDealId)
-      .single();
-
-    if (dealErr || !targetDeal) {
-      return res.status(404).json({ error: 'Target deal not found' });
     }
 
     // Create new Document row pointing at same storage file
