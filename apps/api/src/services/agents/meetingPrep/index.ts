@@ -8,7 +8,7 @@ import { searchDocumentChunks, buildRAGContext, isRAGEnabled } from '../../../ra
 import { supabase } from '../../../supabase.js';
 import { z } from 'zod';
 import { log } from '../../../utils/logger.js';
-import { TOPIC_GUARDRAILS, CONTEXT_ANCHORING } from '../guardrails.js';
+import { TOPIC_GUARDRAILS, CONTEXT_ANCHORING, wrapDocumentContent } from '../guardrails.js';
 
 export interface MeetingPrepInput {
   dealId: string;
@@ -142,11 +142,11 @@ export async function generateMeetingPrep(input: MeetingPrepInput): Promise<Meet
     }
   }
 
-  // Document highlights
+  // Document highlights — wrap as untrusted external data (Task 4.7).
   if (docResults.length > 0) {
     const { data: docs } = await supabase.from('Document').select('id, name, type').eq('dealId', input.dealId);
     contextParts.push(`\nDOCUMENT HIGHLIGHTS:`);
-    contextParts.push(buildRAGContext(docResults, docs || []));
+    contextParts.push(wrapDocumentContent(buildRAGContext(docResults, docs || []), 'rag-results'));
   }
 
   // Recent activities

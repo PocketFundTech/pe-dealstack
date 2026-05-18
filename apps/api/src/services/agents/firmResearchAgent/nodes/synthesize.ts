@@ -4,6 +4,7 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { FirmResearchStateType, AgentStep, FirmProfile, PersonProfile } from '../state.js';
 import { invokeStructured } from '../../../llm.js';
 import { log } from '../../../../utils/logger.js';
+import { wrapDocumentContent } from '../../guardrails.js';
 
 function step(message: string, detail?: string): AgentStep {
   return { timestamp: new Date().toISOString(), node: 'synthesize', message, detail };
@@ -91,9 +92,15 @@ export async function synthesizeNode(
   // === Extract Firm Profile ===
   let firmProfile: FirmProfile | null = null;
   try {
+    // Wrap each external-data block in <document> delimiters so the
+    // model treats it as untrusted data, not instructions (Task 4.7).
     const firmContext = [
-      state.websiteText ? `=== WEBSITE CONTENT ===\n${state.websiteText.slice(0, 12000)}` : '',
-      state.firmSearchResults ? `\n=== WEB SEARCH RESULTS ===\n${state.firmSearchResults}` : '',
+      state.websiteText
+        ? `=== WEBSITE CONTENT ===\n${wrapDocumentContent(state.websiteText.slice(0, 12000), 'firm-website')}`
+        : '',
+      state.firmSearchResults
+        ? `\n=== WEB SEARCH RESULTS ===\n${wrapDocumentContent(state.firmSearchResults, 'firm-web-search')}`
+        : '',
     ].filter(Boolean).join('\n\n');
 
     const firmResult = await invokeStructured(FirmProfileSchema, [
@@ -119,8 +126,12 @@ export async function synthesizeNode(
   if (state.personSearchResults || state.linkedinUrl) {
     try {
       const personContext = [
-        state.personSearchResults ? `=== PERSON SEARCH RESULTS ===\n${state.personSearchResults}` : '',
-        state.websiteText ? `\n=== FIRM WEBSITE (for context) ===\n${state.websiteText.slice(0, 4000)}` : '',
+        state.personSearchResults
+          ? `=== PERSON SEARCH RESULTS ===\n${wrapDocumentContent(state.personSearchResults, 'person-web-search')}`
+          : '',
+        state.websiteText
+          ? `\n=== FIRM WEBSITE (for context) ===\n${wrapDocumentContent(state.websiteText.slice(0, 4000), 'firm-website')}`
+          : '',
       ].filter(Boolean).join('\n\n');
 
       const personResult = await invokeStructured(PersonProfileSchema, [

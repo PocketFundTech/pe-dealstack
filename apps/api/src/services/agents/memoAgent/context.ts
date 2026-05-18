@@ -5,6 +5,7 @@
 import { supabase } from '../../../supabase.js';
 import { searchDocumentChunks, isRAGEnabled } from '../../../rag.js';
 import { log } from '../../../utils/logger.js';
+import { wrapDocumentContent } from '../guardrails.js';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -391,7 +392,9 @@ export function formatContextForLLM(ctx: MemoContext): string {
       const sizeKB = doc.fileSize ? ` (${Math.round(doc.fileSize / 1024)}KB)` : '';
       parts.push(`\n### ${doc.name}${cimTag}${sizeKB}`);
       if (doc.contentSummary) {
-        parts.push(doc.contentSummary.slice(0, 2000));
+        // Wrap user-uploaded document body in <document> delimiters
+        // so the model treats it as untrusted data (Task 4.7).
+        parts.push(wrapDocumentContent(doc.contentSummary.slice(0, 2000), doc.name));
       }
     }
   } else {
