@@ -256,6 +256,26 @@ router.get('/activities/:id', async (req, res) => {
 router.delete('/activities/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const orgId = getOrgId(req);
+
+    // F-14: resolve the activity's dealId first, then verify the deal belongs
+    // to caller's org. Without this check any user could wipe another firm's
+    // audit trail with `DELETE /api/activities/<uuid>`. 404 (not 403) to
+    // prevent enumeration.
+    const { data: activityRef, error: refError } = await supabase
+      .from('Activity')
+      .select('id, dealId')
+      .eq('id', id)
+      .single();
+
+    if (refError || !activityRef?.dealId) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
+
+    const dealAccess = await verifyDealAccess(activityRef.dealId, orgId);
+    if (!dealAccess) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
 
     const { error } = await supabase
       .from('Activity')

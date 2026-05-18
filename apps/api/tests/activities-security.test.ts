@@ -221,3 +221,106 @@ describe('GET /api/activities/recent — multi-tenant scoping (F-2)', () => {
     expect(res.body).toEqual([]);
   });
 });
+
+describe('DELETE /api/activities/:id — cross-tenant protection (F-14)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
+  });
+
+  it('returns 404 and does not delete when activity belongs to another org', async () => {
+    let deleteInvoked = false;
+    let deleteIdFilter: string | null = null;
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Activity') {
+        return {
+          // Pre-fetch dealId for the activity
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: { id: 'activity-1', dealId: 'deal-from-org-B' },
+                error: null,
+              }),
+            }),
+          }),
+          delete: () => {
+            deleteInvoked = true;
+            return {
+              eq: (col: string, val: any) => {
+                if (col === 'id') deleteIdFilter = val;
+                return Promise.resolve({ error: null });
+              },
+            };
+          },
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+    verifyDealAccess.mockResolvedValue(null); // cross-org deal
+
+    const app = await buildApp('org-A');
+    const res = await request(app).delete('/api/activities/activity-1');
+
+    expect(res.status).toBe(404);
+    expect(deleteInvoked).toBe(false);
+    expect(deleteIdFilter).toBe(null);
+    expect(verifyDealAccess).toHaveBeenCalledWith('deal-from-org-B', 'org-A');
+  });
+
+  it('returns 404 when activity does not exist', async () => {
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Activity') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({ data: null, error: { code: 'PGRST116' } }),
+            }),
+          }),
+          delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).delete('/api/activities/does-not-exist');
+
+    expect(res.status).toBe(404);
+    expect(verifyDealAccess).not.toHaveBeenCalled();
+  });
+
+  it('deletes activity when its deal belongs to caller org', async () => {
+    let deleteIdFilter: string | null = null;
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Activity') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: { id: 'activity-1', dealId: 'deal-from-org-A' },
+                error: null,
+              }),
+            }),
+          }),
+          delete: () => ({
+            eq: (col: string, val: any) => {
+              if (col === 'id') deleteIdFilter = val;
+              return Promise.resolve({ error: null });
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+    verifyDealAccess.mockResolvedValue({ id: 'deal-from-org-A', organizationId: 'org-A' });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).delete('/api/activities/activity-1');
+
+    expect(res.status).toBe(204);
+    expect(deleteIdFilter).toBe('activity-1');
+    expect(verifyDealAccess).toHaveBeenCalledWith('deal-from-org-A', 'org-A');
+  });
+});
