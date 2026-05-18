@@ -9,7 +9,7 @@ import { deepExtract, isDeepExtractionAvailable, DeepExtractionResult } from '..
 import { AuditLog } from '../services/auditLog.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
-import { getOrgId } from '../middleware/orgScope.js';
+import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { extractTextFromPDF, upload } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 
@@ -185,6 +185,14 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     if (targetDealId) {
       // ─── Update Existing Deal path ───
+      // Verify the caller's org owns this deal before merging extracted data
+      // into it (and dropping a Document row pointing at it). Without this,
+      // a client could ingest a CIM into any tenant's deal.
+      const dealAccess = await verifyDealAccess(targetDealId, orgId);
+      if (!dealAccess) {
+        return res.status(404).json({ error: 'Deal not found' });
+      }
+
       log.info('Ingest into existing deal', { dealId: targetDealId });
       const result = await mergeIntoExistingDeal(targetDealId, aiData, req.user?.id, documentName);
       deal = result.deal;
