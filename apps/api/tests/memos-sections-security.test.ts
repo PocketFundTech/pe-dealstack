@@ -177,3 +177,106 @@ describe('PATCH /api/memos/:id/sections/:sectionId — F-7 cross-memo bind', () 
     expect(updateCols).toContain('memoId');
   });
 });
+
+describe('DELETE /api/memos/:id/sections/:sectionId — F-8 cross-memo bind', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
+  });
+
+  it('returns 404 when sectionId does not belong to memo (cross-org delete blocked)', async () => {
+    const filters: Filter[] = [];
+    let deleteInvoked = false;
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Memo') {
+        return makeMemoSelect({ memoExists: true, orgId: 'org-A' });
+      }
+      if (table === 'MemoSection') {
+        return {
+          select: () => ({
+            eq: (col: string, val: any) => {
+              filters.push({ col, val });
+              return {
+                eq: (col2: string, val2: any) => {
+                  filters.push({ col: col2, val: val2 });
+                  return {
+                    single: async () => ({ data: null, error: { code: 'PGRST116' } }),
+                  };
+                },
+              };
+            },
+          }),
+          delete: () => {
+            deleteInvoked = true;
+            return {
+              eq: () => ({ eq: async () => ({ error: null }) }),
+            };
+          },
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).delete('/api/memos/memo-A/sections/section-from-other-memo');
+
+    expect(res.status).toBe(404);
+    expect(deleteInvoked).toBe(false);
+    const cols = filters.map((f) => f.col);
+    expect(cols).toContain('memoId');
+  });
+
+  it('deletes section when sectionId belongs to verified memo', async () => {
+    const filters: Filter[] = [];
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Memo') {
+        return makeMemoSelect({ memoExists: true, orgId: 'org-A' });
+      }
+      if (table === 'MemoSection') {
+        return {
+          select: () => ({
+            eq: (col: string, val: any) => {
+              filters.push({ col, val });
+              return {
+                eq: (col2: string, val2: any) => {
+                  filters.push({ col: col2, val: val2 });
+                  return {
+                    single: async () => ({
+                      data: { id: 'section-A', memoId: 'memo-A' },
+                      error: null,
+                    }),
+                  };
+                },
+              };
+            },
+          }),
+          delete: () => ({
+            eq: (col: string, val: any) => {
+              filters.push({ col, val });
+              return {
+                eq: async (col2: string, val2: any) => {
+                  filters.push({ col: col2, val: val2 });
+                  return { error: null };
+                },
+              };
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).delete('/api/memos/memo-A/sections/section-A');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    const deleteFilterCols = filters
+      .filter((f) => f.col === 'memoId')
+      .map((f) => f.val);
+    // memoId filter must have been applied with the verified memo
+    expect(deleteFilterCols).toContain('memo-A');
+  });
+});

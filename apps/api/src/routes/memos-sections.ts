@@ -179,10 +179,22 @@ router.delete('/:id/sections/:sectionId', async (req, res) => {
     const { data: memo } = await supabase.from('Memo').select('id').eq('id', id).eq('organizationId', orgId).single();
     if (!memo) return res.status(404).json({ error: 'Memo not found' });
 
+    // F-8: bind sectionId to memo. Without this, a caller could delete a
+    // section from any other org's memo. Pre-check yields a real 404 instead
+    // of a silent zero-row delete.
+    const { data: existing } = await supabase
+      .from('MemoSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('memoId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { error } = await supabase
       .from('MemoSection')
       .delete()
-      .eq('id', sectionId);
+      .eq('id', sectionId)
+      .eq('memoId', id);
 
     if (error) throw error;
 
