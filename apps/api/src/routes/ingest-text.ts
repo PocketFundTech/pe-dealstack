@@ -4,6 +4,7 @@ import { extractDealDataFromText } from '../services/aiExtractor.js';
 import { z } from 'zod';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
@@ -196,7 +197,10 @@ subRouter.post('/text', async (req, res) => {
           if (result.success) log.debug('RAG embedding complete', { chunkCount: result.chunkCount });
           else log.error('RAG embedding failed', result.error);
         })
-        .catch(err => log.error('RAG embedding error', err));
+        .catch(err => {
+          log.error('RAG embedding error', err);
+          captureAgentError(err, { context: 'rag:embed_text' }, 'warning');
+        });
     }
 
     await AuditLog.aiIngest(req, docName, deal.id);

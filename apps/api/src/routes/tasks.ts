@@ -4,6 +4,7 @@ import { supabase } from '../supabase.js';
 import { requirePermission, PERMISSIONS } from '../middleware/rbac.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, resolveUserId } from './notifications.js';
 import { getOrgId } from '../middleware/orgScope.js';
 
@@ -143,7 +144,10 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_ASSIGN), async (req: Request
           : `New task assigned: ${task.title}`,
         message: dueLine,
         dealId: task.dealId || undefined,
-      }).catch(err => log.error('Notification error (task create)', err));
+      }).catch(err => {
+        log.error('Notification error (task create)', err);
+        captureAgentError(err, { context: 'notification:task_create' }, 'warning');
+      });
     }
 
     res.status(201).json(task);
@@ -197,7 +201,10 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
         type: 'TASK_ASSIGNED',
         title: `Task assigned to you: ${task.title}`,
         dealId: task.dealId || undefined,
-      }).catch(err => log.error('Notification error (task reassign)', err));
+      }).catch(err => {
+        log.error('Notification error (task reassign)', err);
+        captureAgentError(err, { context: 'notification:task_reassign' }, 'warning');
+      });
     }
 
     res.json(task);

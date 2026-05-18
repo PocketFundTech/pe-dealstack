@@ -18,6 +18,7 @@ import type { ClassificationResult } from '../../../documentChunker.js';
 import { extractTextFromExcel, isExcelFile } from '../../../excelFinancialExtractor.js';
 import { parseWithLlama, isLlamaParseEnabled } from '../../../llamaParse.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { ExtractionSource, AgentStep } from '../state.js';
 import { CHUNK_THRESHOLD, MAX_CHUNK_SIZE, MAX_CHUNKS, MIN_TEXT_LENGTH } from '../config.js';
@@ -338,6 +339,7 @@ export async function extractNode(
     };
   } catch (err) {
     log.error('Extract node: unexpected error', err);
+    captureAgentError(err, { agent: 'financialAgent', node: 'extract' });
     return {
       status: 'failed',
       error: `Extraction failed: ${err instanceof Error ? err.message : String(err)}`,

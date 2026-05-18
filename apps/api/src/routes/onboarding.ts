@@ -3,6 +3,7 @@ import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { runFirmResearch, runDeepResearch } from '../services/agents/firmResearchAgent/index.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { extractNameFromDomain } from '../utils/urlHelpers.js';
 import { runWithUsageContext } from '../middleware/usageContext.js';
 import firmProfileRouter from './onboarding-firm.js';
@@ -361,7 +362,10 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
             firmName,
             userId,
             organizationId: orgId,
-          }).catch(err => log.error('Deep research background task failed', { error: err.message }));
+          }).catch(err => {
+            log.error('Deep research background task failed', { error: err.message });
+            captureAgentError(err, { context: 'runDeepResearch:background' });
+          });
         },
       );
     }

@@ -8,6 +8,7 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import { supabase } from '../../../supabase.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { TOPIC_GUARDRAILS, CONTEXT_ANCHORING } from '../guardrails.js';
 import { runWithAgentBounds } from '../agentBounds.js';
 
@@ -316,6 +317,7 @@ export async function generateEmailDraft(input: EmailDraftInput): Promise<EmailD
     };
   } catch (error: any) {
     log.error('Email draft generation failed', error);
+    captureAgentError(error, { agent: 'emailDrafter', node: 'invoke' });
     return {
       status: 'failed',
       subject: '',

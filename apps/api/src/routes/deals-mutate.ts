@@ -11,6 +11,7 @@ import { requirePermission, PERMISSIONS } from '../middleware/rbac.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, notifyDealTeam, resolveUserId } from './notifications.js';
 import { createDealSchema, updateDealSchema } from './deals-schemas.js';
 
@@ -99,7 +100,10 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_CREATE), async (req, res) =>
             dealId: deal.id,
           });
         }
-      }).catch(err => log.error('Notification error (deal create)', err));
+      }).catch(err => {
+        log.error('Notification error (deal create)', err);
+        captureAgentError(err, { context: 'notification:deal_create' }, 'warning');
+      });
     }
 
     // Auto-archive sample deals when user creates their first real deal
@@ -222,7 +226,10 @@ router.patch('/:id', async (req, res) => {
           ? `Deal "${deal.name}" stage changed to ${data.stage}`
           : `Deal "${deal.name}" was updated`;
         notifyDealTeam(deal.id, 'DEAL_UPDATE', title, undefined, internalId || undefined);
-      }).catch(err => log.error('Notification error (deal update)', err));
+      }).catch(err => {
+        log.error('Notification error (deal update)', err);
+        captureAgentError(err, { context: 'notification:deal_update' }, 'warning');
+      });
     }
 
     res.json(deal);

@@ -4,6 +4,7 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { FirmResearchStateType, AgentStep, FirmProfile, PersonProfile } from '../state.js';
 import { invokeStructured } from '../../../llm.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import { wrapDocumentContent } from '../../guardrails.js';
 
 function step(message: string, detail?: string): AgentStep {
@@ -119,6 +120,7 @@ export async function synthesizeNode(
   } catch (error) {
     steps.push(step('Firm extraction failed', (error as Error).message));
     log.error('Firm synthesis failed', { error: (error as Error).message });
+    captureAgentError(error, { agent: 'firmResearchAgent', node: 'synthesize.firm' }, 'warning');
   }
 
   // === Extract Person Profile ===
@@ -149,6 +151,7 @@ export async function synthesizeNode(
     } catch (error) {
       steps.push(step('Person extraction failed', (error as Error).message));
       log.error('Person synthesis failed', { error: (error as Error).message });
+      captureAgentError(error, { agent: 'firmResearchAgent', node: 'synthesize.person' }, 'warning');
     }
   }
 

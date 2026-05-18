@@ -3,6 +3,7 @@ import { supabase } from '../supabase.js';
 import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtractor.js';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { extractTextFromWord } from '../services/documentParser.js';
 import { extractTextFromExcel, isExcelFile } from '../services/excelFinancialExtractor.js';
 import { deepExtract, isDeepExtractionAvailable, DeepExtractionResult } from '../services/langExtractClient.js';
@@ -468,7 +469,10 @@ router.post('/', upload.single('file'), async (req, res) => {
         .then(result => {
           if (result) log.info('Auto multi-doc analysis complete', { dealId: deal.id, conflicts: result.conflicts.length });
         })
-        .catch(err => log.error('Auto multi-doc analysis failed', err));
+        .catch(err => {
+          log.error('Auto multi-doc analysis failed', err);
+          captureAgentError(err, { context: 'multi_doc_analysis:background' });
+        });
     }
 
     log.info('Ingest complete', { dealId: deal.id, isUpdate });

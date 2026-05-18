@@ -4,6 +4,7 @@ import { extractDealDataFromText } from '../services/aiExtractor.js';
 import { z } from 'zod';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { researchCompany, buildResearchText } from '../services/companyResearcher.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
@@ -299,7 +300,10 @@ subRouter.post('/url', async (req, res) => {
           if (result.success) log.debug('Research RAG embedding complete', { chunkCount: result.chunkCount });
           else log.error('Research RAG embedding failed', result.error);
         })
-        .catch(err => log.error('Research RAG embedding error', err));
+        .catch(err => {
+          log.error('Research RAG embedding error', err);
+          captureAgentError(err, { context: 'rag:embed_url_research' }, 'warning');
+        });
     }
 
     await AuditLog.aiIngest(req, `Web Research — ${url}`, deal.id);

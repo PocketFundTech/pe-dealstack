@@ -11,6 +11,7 @@
 
 import { anthropic, isClaudeEnabled } from '../../../../services/anthropic.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType, AgentStep } from '../state.js';
 import type { ClassifiedStatement } from '../../../financialClassifier.js';
 import { VERIFY_SAMPLE_SIZE } from '../config.js';
@@ -328,6 +329,7 @@ export async function crossVerifyNode(
   } catch (error) {
     // Best-effort — don't block the pipeline
     log.warn('crossVerifyNode: Claude API call failed, continuing without cross-verification', error as object);
+    captureAgentError(error, { agent: 'financialAgent', node: 'crossVerify' }, 'warning');
     steps.push(step('crossVerify', 'Cross-verification encountered an error — continuing without it'));
     return { steps };
   }

@@ -9,6 +9,7 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import { supabase } from '../../../supabase.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { runWithAgentBounds } from '../agentBounds.js';
 
 // ─── Bounds ──────────────────────────────────────────────────────────
@@ -129,6 +130,7 @@ Generate 1-3 signals per deal, focusing on the most actionable ones. Only genera
     };
   } catch (error: any) {
     log.error('Signal analysis failed', error);
+    captureAgentError(error, { agent: 'signalMonitor', node: 'analyze' });
     return {
       signals: [],
       processedCount: 0,

@@ -3,6 +3,7 @@ import { supabase } from '../supabase.js';
 import { extractDealDataFromText } from '../services/aiExtractor.js';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { parseEmailFile, buildDealTextFromEmail } from '../services/emailParser.js';
 import { parseExcelToDealRows } from '../services/excelParser.js';
@@ -166,7 +167,10 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
 
             // RAG embed the attachment in background
             embedDocument(deal.id + '-' + att.filename, deal.id, pdfData.text)
-              .catch(err => log.error('Attachment RAG error', err));
+              .catch(err => {
+                log.error('Attachment RAG error', err);
+                captureAgentError(err, { context: 'rag:embed_email_attachment' }, 'warning');
+              });
           }
         } catch (err) {
           log.warn('Attachment processing failed', { filename: att.filename, error: err });
@@ -200,7 +204,10 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
     // Step 11: RAG embed email body in background
     if (dealText.length > 100) {
       embedDocument(document?.id || deal.id, deal.id, dealText)
-        .catch(err => log.error('Email RAG embedding error', err));
+        .catch(err => {
+          log.error('Email RAG embedding error', err);
+          captureAgentError(err, { context: 'rag:embed_email' }, 'warning');
+        });
     }
 
     // Step 11: Audit log

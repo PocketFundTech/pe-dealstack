@@ -16,6 +16,7 @@ import { openai, isAIEnabled, trackedChatCompletion } from '../../../../openai.j
 import { MODEL_CLASSIFICATION } from '../../../../utils/aiModels.js';
 import { classifyFinancialsVision } from '../../../visionExtractor.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { ClassifiedStatement, ClassificationResult } from '../../../financialClassifier.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { AgentStep, FailedCheck } from '../state.js';
@@ -240,6 +241,7 @@ export async function selfCorrectNode(
     };
   } catch (err) {
     log.error('Self-correct node: error during correction', err);
+    captureAgentError(err, { agent: 'financialAgent', node: 'selfCorrect' }, 'warning');
     steps.push(step('self_correct', 'Correction attempt failed', String(err)));
 
     return {

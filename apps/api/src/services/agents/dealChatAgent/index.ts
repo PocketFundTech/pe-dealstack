@@ -11,6 +11,7 @@ import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
 import { classifyAIError } from '../../../utils/aiErrors.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 
 // ─── Bounds ──────────────────────────────────────────────────────────
 // Hard limits on agent execution. Without these, a malformed tool output
@@ -261,6 +262,7 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
     };
   } catch (error: any) {
     log.error('Deal chat agent error', { message: error.message, stack: error.stack?.slice(0, 500) });
+    captureAgentError(error, { agent: 'dealChatAgent', node: 'invoke' });
 
     // Return specific error message so users know what's wrong
     const errorMsg = error.message || 'Unknown error';

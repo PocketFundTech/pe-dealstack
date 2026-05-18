@@ -4,6 +4,7 @@ import { isAIEnabled, DEAL_ANALYSIS_SYSTEM_PROMPT, generateDealContext, trackedC
 import { z } from 'zod';
 import { AICache } from '../services/aiCache.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import ingestRouter from './ai-ingest.js';
@@ -245,7 +246,10 @@ Generate a professional investment thesis that a PE analyst would write. Be spec
     if (req.user?.id) {
       resolveUserId(req.user.id).then(internalId => {
         notifyDealTeam(dealId, 'AI_INSIGHT', `AI thesis generated for "${deal.name}"`, undefined, internalId || undefined);
-      }).catch(err => log.error('Notification error (thesis)', err));
+      }).catch(err => {
+        log.error('Notification error (thesis)', err);
+        captureAgentError(err, { context: 'notifyDealTeam:ai_thesis' }, 'warning');
+      });
     }
 
     res.json({
@@ -344,7 +348,10 @@ Format your response as a JSON array of risk objects with fields: title, descrip
     if (req.user?.id) {
       resolveUserId(req.user.id).then(internalId => {
         notifyDealTeam(dealId, 'AI_INSIGHT', `Risk analysis completed for "${deal.name}"`, undefined, internalId || undefined);
-      }).catch(err => log.error('Notification error (risks)', err));
+      }).catch(err => {
+        log.error('Notification error (risks)', err);
+        captureAgentError(err, { context: 'notifyDealTeam:ai_risks' }, 'warning');
+      });
     }
 
     res.json({

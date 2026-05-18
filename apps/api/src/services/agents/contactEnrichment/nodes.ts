@@ -5,6 +5,7 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { invokeStructured } from '../../llm.js';
 import { supabase } from '../../../supabase.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { EnrichmentState } from './state.js';
 import { analyzeEmailDomain, scrapeCompanyWebsite, constructLinkedInUrl } from './helpers.js';
 import { buildResearchPrompt, enrichmentSchema } from './prompts.js';
@@ -273,6 +274,7 @@ export async function researchNode(state: typeof EnrichmentState.State) {
     };
   } catch (error: any) {
     log.error('Contact enrichment research failed', { error: error.message, contact: `${state.firstName} ${state.lastName}` });
+    captureAgentError(error, { agent: 'contactEnrichment', node: 'research' }, 'warning');
     steps.push({ timestamp: new Date().toISOString(), node: 'research', message: `LLM synthesis failed: ${error.message}` });
 
     // Fallback: return what we gathered from CRM without LLM
@@ -394,6 +396,7 @@ export async function saveNode(state: typeof EnrichmentState.State) {
     return { status: 'completed', steps };
   } catch (error: any) {
     steps.push({ timestamp: new Date().toISOString(), node: 'save', message: `Save failed: ${error.message}` });
+    captureAgentError(error, { agent: 'contactEnrichment', node: 'save' });
     return { status: 'failed', error: error.message, steps };
   }
 }

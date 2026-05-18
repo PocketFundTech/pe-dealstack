@@ -20,6 +20,7 @@
 
 import { getFinancialAgentGraph } from './graph.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import type { FileType, FinancialAgentStateType } from './state.js';
 import type { ReconcileResult } from './nodes/crossVerifyNode.js';
 import { DEFAULT_MAX_RETRIES } from './config.js';
@@ -141,6 +142,7 @@ export async function runFinancialAgent(
   } catch (err) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     log.error('Financial agent failed', { dealId: input.dealId, elapsedSeconds: elapsed, error: err });
+    captureAgentError(err, { agent: 'financialAgent', node: 'invoke' });
 
     return {
       status: 'failed',

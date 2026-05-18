@@ -9,6 +9,7 @@ import { validateFile, sanitizeFilename, isPotentiallyDangerous, ALLOWED_MIME_TY
 import { embedDocument } from '../rag.js';
 import { AICache } from '../services/aiCache.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { tryCompleteOnboardingStep } from './onboarding.js';
@@ -352,7 +353,10 @@ router.post('/deals/:dealId/documents', upload.single('file'), async (req, res) 
           aiExtractedData ? `AI-analyzed (${numPages} pages)` : undefined,
           internalId || undefined
         );
-      }).catch(err => log.error('Notification error (doc upload)', err));
+      }).catch(err => {
+        log.error('Notification error (doc upload)', err);
+        captureAgentError(err, { context: 'notifyDealTeam:doc_upload' }, 'warning');
+      });
     }
 
     // Invalidate AI cache since new document was uploaded

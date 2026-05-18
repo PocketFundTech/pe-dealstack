@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 
@@ -153,7 +154,10 @@ router.post('/:id/team', async (req, res) => {
         type: 'DEAL_UPDATE',
         title: `You were added to "${dealInfo?.name || 'a deal'}" as ${data.role}`,
         dealId: id,
-      }).catch(err => log.error('Notification error (team member added)', err));
+      }).catch(err => {
+        log.error('Notification error (team member added)', err);
+        captureAgentError(err, { context: 'notification:deal_team_added' }, 'warning');
+      });
     } else if (action === 'updated') {
       await supabase.from('Activity').insert({
         dealId: id,

@@ -10,6 +10,7 @@ import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
 import { classifyAIError } from '../../../utils/aiErrors.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { runWithAgentBounds } from '../agentBounds.js';
 
 // ─── Bounds ──────────────────────────────────────────────────────────
@@ -202,6 +203,7 @@ export async function runMemoChatAgent(input: MemoChatInput): Promise<MemoChatRe
       message: error.message,
       stack: error.stack?.slice(0, 500),
     });
+    captureAgentError(error, { agent: 'memoAgent', node: 'chat' });
 
     return {
       message: classifyAIError(error.message),

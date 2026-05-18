@@ -2,6 +2,7 @@
 import { getFirmResearchGraph } from './graph.js';
 import { FirmProfile, PersonProfile } from './state.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { runWithAgentBounds } from '../agentBounds.js';
 
 export interface FirmResearchInput {
@@ -96,6 +97,7 @@ export async function runFirmResearch(input: FirmResearchInput): Promise<FirmRes
     };
   } catch (error) {
     log.error('Firm research agent failed', { error: (error as Error).message });
+    captureAgentError(error, { agent: 'firmResearchAgent', node: 'invoke' });
     return {
       success: false,
       firmProfile: null,

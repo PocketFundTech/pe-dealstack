@@ -12,6 +12,7 @@ import {
 import { getChatModel, isLLMAvailable } from '../../llm.js';
 import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { resolveTimeoutMs } from '../agentBounds.js';
 
 // ─── Bounds ──────────────────────────────────────────────────────────
@@ -220,6 +221,7 @@ export async function generateSection(
       return generateSection(sectionType, context, customPrompt, sortOrder, attempt);
     }
     log.error(`[memoAgent/pipeline] Error generating section ${sectionType}: ${err?.message}`);
+    captureAgentError(err, { agent: 'memoAgent', node: `pipeline.${sectionType}` }, 'warning');
     return makePlaceholder(
       sectionType,
       title,

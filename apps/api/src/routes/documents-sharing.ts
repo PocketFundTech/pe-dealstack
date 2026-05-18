@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { Resend } from 'resend';
 import { mergeIntoExistingDeal } from '../services/dealMerger.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess, verifyDocumentAccess } from '../middleware/orgScope.js';
 
@@ -99,7 +100,10 @@ router.post('/documents/:id/link', async (req, res) => {
           `Linked from another deal's data room`,
           internalId || undefined
         );
-      }).catch(err => log.error('Notification error (doc link)', err));
+      }).catch(err => {
+        log.error('Notification error (doc link)', err);
+        captureAgentError(err, { context: 'notifyDealTeam:doc_link' }, 'warning');
+      });
     }
 
     res.status(201).json(linked);
@@ -217,7 +221,10 @@ router.post('/deals/:dealId/document-requests', async (req, res) => {
       `Document requested: ${documentName}`,
       `${requesterName} requested "${documentName}" for the ${folderName || 'data room'}`,
       internalUserId || undefined
-    ).catch(err => log.error('Notification error (doc request)', err));
+    ).catch(err => {
+      log.error('Notification error (doc request)', err);
+      captureAgentError(err, { context: 'notifyDealTeam:doc_request' }, 'warning');
+    });
 
     // Log activity
     await supabase.from('Activity').insert({

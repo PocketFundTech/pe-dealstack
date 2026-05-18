@@ -11,6 +11,7 @@
 import { runDeepPass } from '../../../financialExtractionOrchestrator.js';
 import { recordExtractionLearning } from '../../../agentMemory.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { AgentStep } from '../state.js';
 import {
@@ -184,6 +185,7 @@ export async function storeNode(
     };
   } catch (err) {
     log.error('Store node: error persisting statements', err);
+    captureAgentError(err, { agent: 'financialAgent', node: 'store' });
     return {
       status: 'failed',
       error: `Storage failed: ${err instanceof Error ? err.message : String(err)}`,
