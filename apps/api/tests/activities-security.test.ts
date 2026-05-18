@@ -135,3 +135,89 @@ describe('GET /api/activities/:id — cross-tenant protection (F-1)', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('GET /api/activities/recent — multi-tenant scoping (F-2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
+  });
+
+  it('only returns activities for deals in caller org', async () => {
+    // Two orgs: A and B. Deal-A1 belongs to org-A; activities for it should
+    // be returned. Deal-B1 belongs to org-B and must not appear.
+    const dealsForOrgA = [{ id: 'deal-A1' }];
+    const orgAActivities = [
+      { id: 'act-A1', dealId: 'deal-A1', type: 'NOTE_ADDED', title: 'A note' },
+    ];
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Deal') {
+        // Pre-fetch of deal IDs for the caller org
+        return {
+          select: () => ({
+            eq: (col: string, val: string) => {
+              expect(col).toBe('organizationId');
+              expect(val).toBe('org-A');
+              return Promise.resolve({ data: dealsForOrgA, error: null });
+            },
+          }),
+        };
+      }
+      if (table === 'Activity') {
+        // Activity query — must use .in('dealId', dealIds) for scope
+        return {
+          select: () => ({
+            in: (col: string, ids: string[]) => {
+              expect(col).toBe('dealId');
+              expect(ids).toEqual(['deal-A1']);
+              return {
+                order: () => ({
+                  limit: () => Promise.resolve({ data: orgAActivities, error: null }),
+                }),
+              };
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).get('/api/activities/recent');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(orgAActivities);
+  });
+
+  it('returns empty array when caller org has no deals', async () => {
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Deal') {
+        return {
+          select: () => ({
+            eq: () => Promise.resolve({ data: [], error: null }),
+          }),
+        };
+      }
+      // Activity query should NOT be reached (no dealIds → nothing to fetch)
+      // But if it is, return empty to avoid crash.
+      if (table === 'Activity') {
+        return {
+          select: () => ({
+            in: () => ({
+              order: () => ({
+                limit: () => Promise.resolve({ data: [], error: null }),
+              }),
+            }),
+          }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).get('/api/activities/recent');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});

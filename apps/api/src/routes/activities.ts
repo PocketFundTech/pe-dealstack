@@ -167,6 +167,48 @@ router.post('/deals/:dealId/activities', async (req, res) => {
   }
 });
 
+// GET /api/activities/recent - Get recent activities across caller's org deals
+// Registered BEFORE `/activities/:id` so Express doesn't match `recent` as a
+// path parameter (without this, /recent silently hits the :id handler).
+router.get('/activities/recent', async (req, res) => {
+  try {
+    const { limit } = recentActivitiesQuerySchema.parse(req.query);
+    const orgId = getOrgId(req);
+
+    // Pre-fetch deal IDs for this org, then filter activities at the DB layer.
+    // Avoids the "load N rows globally, filter in JS" anti-pattern (which can
+    // silently drop the caller's own activities when other tenants are busier).
+    const { data: deals, error: dealsErr } = await supabase
+      .from('Deal')
+      .select('id')
+      .eq('organizationId', orgId);
+
+    if (dealsErr) throw dealsErr;
+
+    const dealIds = (deals || []).map((d: { id: string }) => d.id);
+    if (dealIds.length === 0) {
+      return res.json([]);
+    }
+
+    const { data, error } = await supabase
+      .from('Activity')
+      .select(`
+        *,
+        deal:Deal(id, name, icon, industry)
+      `)
+      .in('dealId', dealIds)
+      .order('createdAt', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (error) {
+    log.error('Error fetching recent activities', error);
+    res.status(500).json({ error: 'Failed to fetch recent activities' });
+  }
+});
+
 // GET /api/activities/:id - Get single activity
 router.get('/activities/:id', async (req, res) => {
   try {
@@ -226,29 +268,6 @@ router.delete('/activities/:id', async (req, res) => {
   } catch (error) {
     log.error('Error deleting activity', error);
     res.status(500).json({ error: 'Failed to delete activity' });
-  }
-});
-
-// GET /api/activities/recent - Get recent activities across all deals
-router.get('/activities/recent', async (req, res) => {
-  try {
-    const { limit } = recentActivitiesQuerySchema.parse(req.query);
-
-    const { data, error } = await supabase
-      .from('Activity')
-      .select(`
-        *,
-        deal:Deal(id, name, icon, industry)
-      `)
-      .order('createdAt', { ascending: false })
-      .limit(limit);
-
-    if (error) throw error;
-
-    res.json(data || []);
-  } catch (error) {
-    log.error('Error fetching recent activities', error);
-    res.status(500).json({ error: 'Failed to fetch recent activities' });
   }
 });
 
