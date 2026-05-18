@@ -144,6 +144,8 @@ app.use('/api/', generalLimiter);
 app.use('/api/ai', aiLimiter);
 app.use('/api/memos/*/chat', aiLimiter);
 app.use('/api/memos/*/sections/*/generate', aiLimiter);
+// Deal chat invokes a LangGraph ReAct agent — see app.ts for rationale.
+app.use('/api/deals/*/chat', aiLimiter);
 app.use('/api/ingest', writeLimiter);
 
 app.use(express.json({ limit: '50mb' }));
