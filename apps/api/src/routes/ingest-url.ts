@@ -11,6 +11,7 @@ import { AuditLog } from '../services/auditLog.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { formatValueWithUnit } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
+import { isPrivateUrl } from '../utils/urlHelpers.js';
 
 const subRouter = Router();
 
@@ -33,6 +34,12 @@ subRouter.post('/url', async (req, res) => {
     }
 
     const { url, companyName: userCompanyName, autoCreateDeal, dealId: targetDealId } = validation.data;
+
+    // SECURITY: block SSRF — refuse URLs pointing to loopback / RFC1918 / .local before fetch.
+    if (isPrivateUrl(url)) {
+      return res.status(400).json({ error: 'URL points to a private/internal network' });
+    }
+
     log.info('URL research starting', { url, targetDealId });
 
     // Step 1: Research company (scrapes multiple pages in parallel)
