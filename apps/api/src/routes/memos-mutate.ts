@@ -136,16 +136,28 @@ router.post('/', async (req, res) => {
         const sectionTypes = templatePreset ? presetMap[templatePreset] : undefined;
         const { sections: generated } = await generateAllSections(memoFields.dealId, orgId, sectionTypes);
 
+        // Pre-fetch ALL existing sections for this memo in ONE query. The prior
+        // code did a per-section `.single()` existence check inside a for-loop,
+        // turning a 10-section generation into 10-20 sequential round-trips.
+        // No compound unique on (memoId, type) exists in the schema (multiple
+        // CUSTOM sections coexist), so we classify in-memory then issue parallel
+        // updates by primary key — the N+1 existence-check selects are gone.
+        const { data: existingRows } = await supabase
+          .from('MemoSection')
+          .select('id, type')
+          .eq('memoId', memo.id);
+        const existingByType = new Map<string, { id: string }>();
+        for (const row of existingRows || []) {
+          // First match wins; multiple CUSTOM rows are intentionally not matched
+          // (the original code's .single() would have errored on duplicates too).
+          if (!existingByType.has(row.type)) existingByType.set(row.type, { id: row.id });
+        }
+
         let completed = 0;
         const errors: string[] = [];
+        const updatePromises: Promise<any>[] = [];
         for (const gen of generated) {
-          const { data: existingSection } = await supabase
-            .from('MemoSection')
-            .select('id')
-            .eq('memoId', memo.id)
-            .eq('type', gen.type)
-            .single();
-
+          const existingSection = existingByType.get(gen.type);
           if (existingSection) {
             const updateData: any = {
               content: gen.content,
@@ -155,10 +167,13 @@ router.post('/', async (req, res) => {
             };
             if (gen.tableData) updateData.tableData = gen.tableData;
             if (gen.chartConfig) updateData.chartConfig = gen.chartConfig;
-            await supabase.from('MemoSection').update(updateData).eq('id', existingSection.id);
+            updatePromises.push(
+              supabase.from('MemoSection').update(updateData).eq('id', existingSection.id)
+            );
             completed++;
           }
         }
+        await Promise.all(updatePromises);
         generationStatus = { completed, total: generated.length, errors };
       } catch (error: any) {
         log.error('Auto-generation failed', { memoId: memo.id, error: error.message });

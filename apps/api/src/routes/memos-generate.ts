@@ -36,15 +36,34 @@ router.post('/:id/generate-all', async (req, res) => {
 
     const { sections: generated } = await generateAllSections(memo.dealId, orgId);
 
-    let completed = 0;
-    for (const gen of generated) {
-      const { data: existing } = await supabase
-        .from('MemoSection')
-        .select('id')
-        .eq('memoId', id)
-        .eq('type', gen.type)
-        .single();
+    // Pre-fetch ALL existing sections for this memo in ONE query. Replaces the
+    // per-section `.single()` existence check that turned a 10-section
+    // regeneration into 10-20 sequential round-trips. Schema has no compound
+    // unique on (memoId, type), so we classify in-memory then issue ONE batched
+    // insert for new rows + parallel per-row updates for existing rows.
+    const { data: existingRows } = await supabase
+      .from('MemoSection')
+      .select('id, type')
+      .eq('memoId', id);
+    const existingByType = new Map<string, { id: string }>();
+    for (const row of existingRows || []) {
+      if (!existingByType.has(row.type)) existingByType.set(row.type, { id: row.id });
+    }
 
+    // Normalize type to match DB CHECK constraint (unchanged from prior code)
+    const DB_TYPE_MAP: Record<string, string> = {
+      'EXIT_ANALYSIS': 'EXIT_STRATEGY',
+      'VALUE_CREATION_PLAN': 'VALUE_CREATION',
+      'QUALITY_OF_EARNINGS': 'FINANCIAL_PERFORMANCE',
+      'MANAGEMENT_ASSESSMENT': 'CUSTOM',
+      'OPERATIONAL_DEEP_DIVE': 'CUSTOM',
+    };
+
+    let completed = 0;
+    const updatePromises: Promise<any>[] = [];
+    const toInsert: any[] = [];
+
+    for (const gen of generated) {
       const updateData: any = {
         content: gen.content,
         aiGenerated: gen.aiGenerated,
@@ -54,25 +73,25 @@ router.post('/:id/generate-all', async (req, res) => {
       if (gen.tableData) updateData.tableData = gen.tableData;
       if (gen.chartConfig) updateData.chartConfig = gen.chartConfig;
 
+      const existing = existingByType.get(gen.type);
       if (existing) {
-        await supabase.from('MemoSection').update(updateData).eq('id', existing.id);
+        updatePromises.push(
+          supabase.from('MemoSection').update(updateData).eq('id', existing.id)
+        );
       } else {
-        // Normalize type to match DB CHECK constraint
-        const DB_TYPE_MAP: Record<string, string> = {
-          'EXIT_ANALYSIS': 'EXIT_STRATEGY',
-          'VALUE_CREATION_PLAN': 'VALUE_CREATION',
-          'QUALITY_OF_EARNINGS': 'FINANCIAL_PERFORMANCE',
-          'MANAGEMENT_ASSESSMENT': 'CUSTOM',
-          'OPERATIONAL_DEEP_DIVE': 'CUSTOM',
-        };
         const normalizedType = DB_TYPE_MAP[gen.type] || gen.type;
-        await supabase.from('MemoSection').insert({
+        toInsert.push({
           memoId: id, type: normalizedType, title: gen.title,
           sortOrder: (gen as any).sortOrder || completed + 1,
           status: 'DRAFT', ...updateData,
         });
       }
       completed++;
+    }
+
+    await Promise.all(updatePromises);
+    if (toInsert.length > 0) {
+      await supabase.from('MemoSection').insert(toInsert);
     }
 
     const { data: refreshedSections } = await supabase
