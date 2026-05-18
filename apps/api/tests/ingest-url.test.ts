@@ -307,15 +307,16 @@ describe('POST /api/ingest/url — SSRF protection', () => {
   beforeEach(() => vi.clearAllMocks());
 
   // isPrivateUrl covers: localhost, 127.x, 10.x, 192.168.x, 172.16-31.x,
-  // 0.0.0.0, *.local, *.internal. Skipping 169.254.169.254 (link-local /
-  // AWS IMDS) and [::1] (IPv6 loopback) — not covered by current helper;
-  // tracked as a separate hardening task.
+  // 169.254/16 (link-local / AWS IMDS), 100.64/10 (CGNAT), 0.0.0.0,
+  // *.local, *.internal, and IPv6 loopback/link-local/unique-local.
   const blocked = [
     'http://localhost:6379/',
     'http://10.0.0.1/',
     'http://192.168.1.1/admin',
     'http://127.0.0.1:8080/',
     'http://172.16.5.5/',
+    'http://169.254.169.254/latest/meta-data/', // AWS IMDS
+    'http://[::1]/',                            // IPv6 loopback
   ];
 
   for (const url of blocked) {
