@@ -278,8 +278,10 @@ vi.mock('../src/services/auditLog.js', () => ({
   AuditLog: { aiIngest: vi.fn() },
 }));
 vi.mock('../src/rag.js', () => ({ embedDocument: vi.fn() }));
+const verifyDealAccess = vi.fn();
 vi.mock('../src/middleware/orgScope.js', () => ({
   getOrgId: () => 'org-A',
+  verifyDealAccess,
 }));
 vi.mock('../src/routes/notifications.js', () => ({
   resolveUserId: vi.fn(),
@@ -333,5 +335,67 @@ describe('POST /api/ingest/url — SSRF protection', () => {
     const app = await buildRealRouterApp();
     await request(app).post('/api/ingest/url').send({ url: 'http://10.0.0.5/' });
     expect(researchCompany).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================
+// F-6 — cross-tenant protection on body `dealId`
+// ============================================================
+
+describe('POST /api/ingest/url — cross-tenant protection (F-6)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+
+    // Make the research pipeline return enough content so the handler
+    // reaches the `if (targetDealId)` branch rather than 400'ing earlier.
+    const { researchCompany, buildResearchText } = await import(
+      '../src/services/companyResearcher.js'
+    );
+    (researchCompany as any).mockResolvedValue({
+      companyWebsite: { scrapedPages: ['page1', 'page2'] },
+    });
+    (buildResearchText as any).mockReturnValue('A'.repeat(500));
+
+    const { extractDealDataFromText } = await import('../src/services/aiExtractor.js');
+    (extractDealDataFromText as any).mockResolvedValue({
+      companyName: { value: 'Acme Corp', confidence: 90 },
+      industry: { value: 'Healthcare', confidence: 80 },
+      description: { value: 'Test', confidence: 90 },
+      currency: 'USD',
+      revenue: { value: 50, confidence: 90 },
+      ebitda: { value: 10, confidence: 90 },
+      ebitdaMargin: { value: 20, confidence: 90 },
+      dealSize: { value: null, confidence: 0 },
+      revenueGrowth: { value: 15, confidence: 80 },
+      employees: { value: 500, confidence: 70 },
+      foundedYear: { value: null, confidence: 0 },
+      headquarters: { value: null, confidence: 0 },
+      keyRisks: [],
+      investmentHighlights: [],
+      summary: 'test',
+      overallConfidence: 85,
+      needsReview: false,
+      reviewReasons: [],
+    });
+  });
+
+  it('returns 404 and does NOT call mergeIntoExistingDeal when dealId is from another org', async () => {
+    verifyDealAccess.mockResolvedValue(null);
+
+    const { mergeIntoExistingDeal } = await import('../src/services/dealMerger.js');
+    const app = await buildRealRouterApp();
+    const res = await request(app)
+      .post('/api/ingest/url')
+      .send({
+        url: 'https://example.com',
+        dealId: '00000000-0000-0000-0000-00000000beef',
+      });
+
+    expect(res.status).toBe(404);
+    expect(verifyDealAccess).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-00000000beef',
+      'org-A',
+    );
+    expect(mergeIntoExistingDeal).not.toHaveBeenCalled();
   });
 });
