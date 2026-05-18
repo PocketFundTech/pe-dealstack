@@ -160,10 +160,21 @@ router.delete('/:id/sections/:sectionId', async (req, res) => {
     const { data: tpl } = await supabase.from('MemoTemplate').select('id').eq('id', id).eq('organizationId', orgId).single();
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
+    // F-12: bind sectionId to template. Without this, a caller could delete
+    // a section from any other org's template.
+    const { data: existing } = await supabase
+      .from('MemoTemplateSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('templateId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { error } = await supabase
       .from('MemoTemplateSection')
       .delete()
-      .eq('id', sectionId);
+      .eq('id', sectionId)
+      .eq('templateId', id);
 
     if (error) throw error;
 

@@ -150,3 +150,95 @@ describe('PATCH /api/templates/:id/sections/:sectionId — F-11 cross-template b
     expect(updateTemplateIdFilter).toBe('template-A');
   });
 });
+
+describe('DELETE /api/templates/:id/sections/:sectionId — F-12 cross-template bind', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
+  });
+
+  it('returns 404 when sectionId does not belong to template (cross-org delete blocked)', async () => {
+    const filters: Filter[] = [];
+    let deleteInvoked = false;
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'MemoTemplate') {
+        return makeTemplateSelect({ exists: true });
+      }
+      if (table === 'MemoTemplateSection') {
+        return {
+          select: () => ({
+            eq: (col: string, val: any) => {
+              filters.push({ col, val });
+              return {
+                eq: (col2: string, val2: any) => {
+                  filters.push({ col: col2, val: val2 });
+                  return {
+                    single: async () => ({ data: null, error: { code: 'PGRST116' } }),
+                  };
+                },
+              };
+            },
+          }),
+          delete: () => {
+            deleteInvoked = true;
+            return {
+              eq: () => ({
+                eq: async () => ({ error: null }),
+              }),
+            };
+          },
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).delete('/api/templates/template-A/sections/section-from-other-template');
+
+    expect(res.status).toBe(404);
+    expect(deleteInvoked).toBe(false);
+    const cols = filters.map((f) => f.col);
+    expect(cols).toContain('templateId');
+  });
+
+  it('deletes section when sectionId belongs to verified template', async () => {
+    let deleteTemplateIdFilter: string | null = null;
+
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'MemoTemplate') {
+        return makeTemplateSelect({ exists: true });
+      }
+      if (table === 'MemoTemplateSection') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { id: 'section-A', templateId: 'template-A' },
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+          delete: () => ({
+            eq: () => ({
+              eq: async (col2: string, val2: any) => {
+                if (col2 === 'templateId') deleteTemplateIdFilter = val2;
+                return { error: null };
+              },
+            }),
+          }),
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).delete('/api/templates/template-A/sections/section-A');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(deleteTemplateIdFilter).toBe('template-A');
+  });
+});
