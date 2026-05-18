@@ -81,14 +81,21 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
 
     if (memoError) throw memoError;
 
-    // Get section
+    // Get section — F-10: bind sectionId to memo. Without this, a caller
+    // could pass their own memoId (passes the org gate) plus a sectionId from
+    // any other org's memo. AI runs on caller's context but writes the output
+    // to the target org's section — incl. a prompt-injection payload via
+    // customPrompt.
     const { data: section, error: sectionError } = await supabase
       .from('MemoSection')
       .select('*')
       .eq('id', sectionId)
+      .eq('memoId', id)
       .single();
 
-    if (sectionError) throw sectionError;
+    if (sectionError || !section) {
+      return res.status(404).json({ error: 'Section not found' });
+    }
 
     // Build context
     const contextParts = [];
@@ -148,7 +155,8 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
 
     const generatedContent = response.choices[0].message.content;
 
-    // Update section
+    // Update section — F-10: bind sectionId to memo on the write as well,
+    // defense-in-depth alongside the fetch above.
     const { data: updatedSection, error: updateError } = await supabase
       .from('MemoSection')
       .update({
@@ -159,6 +167,7 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
         updatedAt: new Date().toISOString(),
       })
       .eq('id', sectionId)
+      .eq('memoId', id)
       .select()
       .single();
 
