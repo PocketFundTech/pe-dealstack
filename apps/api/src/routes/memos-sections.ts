@@ -140,10 +140,23 @@ router.patch('/:id/sections/:sectionId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-7: bind sectionId to memo. Without this, a caller could supply their
+    // own valid memoId (passes the org gate above) plus a sectionId from any
+    // other org's memo and overwrite that section. Pre-check yields a real
+    // 404 instead of a silent zero-row update.
+    const { data: existing } = await supabase
+      .from('MemoSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('memoId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { data: section, error } = await supabase
       .from('MemoSection')
       .update(validation.data)
       .eq('id', sectionId)
+      .eq('memoId', id)
       .select()
       .single();
 
