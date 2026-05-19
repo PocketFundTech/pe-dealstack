@@ -24,6 +24,20 @@ const API = process.env.API_BASE_URL || 'http://localhost:3001/api';
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 
+// ─── Integration Test Gate ────────────────────────────────────────
+//
+// This file exercises a LIVE API server + LIVE Supabase auth and is therefore
+// an integration test, not a unit test. CI environments do not have real
+// Supabase credentials, so the entire suite is gated behind RUN_INTEGRATION_TESTS.
+//
+// To run locally with credentials:
+//   RUN_INTEGRATION_TESTS=1 npx vitest run tests/org-isolation.test.ts
+//
+// Triage: .planning/codebase/TEST_FAILURE_TRIAGE.md (Phase 2 Task 2.2).
+const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === '1'
+  || process.env.RUN_INTEGRATION_TESTS === 'true';
+const describeIntegration = RUN_INTEGRATION ? describe : describe.skip;
+
 // ─── Auth Helper ──────────────────────────────────────────────────
 
 interface AuthSession {
@@ -84,6 +98,10 @@ let orgB_contactId: string;
 // ─── Setup ────────────────────────────────────────────────────────
 
 beforeAll(async () => {
+  // Short-circuit when integration mode is off — every describe below is
+  // already describe.skip'd, so we have no work to do and no credentials.
+  if (!RUN_INTEGRATION) return;
+
   // Login both accounts
   orgA = await login(
     process.env.TEST_ORG_A_EMAIL!,
@@ -141,7 +159,7 @@ beforeAll(async () => {
 
 // ─── Tests ────────────────────────────────────────────────────────
 
-describe('Org Isolation — Cross-Org Access Blocked', () => {
+describeIntegration('Org Isolation — Cross-Org Access Blocked', () => {
 
   // ── Deals ──────────────────────────────────────────────────────
 
@@ -348,7 +366,7 @@ describe('Org Isolation — Cross-Org Access Blocked', () => {
 
 // ─── Same-Org Access Works ────────────────────────────────────────
 
-describe('Org Isolation — Same-Org Access Works', () => {
+describeIntegration('Org Isolation — Same-Org Access Works', () => {
   it('Org A can access their own deal', async () => {
     const res = await api('GET', `/deals/${orgA_dealId}`, orgA.token);
     expect(res.status).toBe(200);

@@ -65,10 +65,13 @@ describe('validateFinancials', () => {
   });
 
   it('should flag very low revenue', async () => {
+    // Policy (see financialValidator.ts): micro-acquisitions with $1K+ revenue
+    // are valid. Only flag values below $100 (0.0001 in millions) as likely
+    // unit errors. Earlier threshold of $100K was relaxed in commit ebd4440.
     const validate = await getValidator();
-    const result = validate({ revenue: 0.05 }); // $50K
+    const result = validate({ revenue: 0.00005 }); // $50 (below $100 threshold)
     expect(result.isValid).toBe(false);
-    expect(result.warnings[0]).toContain('too low');
+    expect(result.warnings[0]).toContain('extremely low');
   });
 
   it('should flag negative revenue', async () => {
