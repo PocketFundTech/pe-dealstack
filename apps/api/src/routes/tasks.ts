@@ -6,7 +6,7 @@ import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, resolveUserId } from './notifications.js';
-import { getOrgId } from '../middleware/orgScope.js';
+import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 
 const router = Router();
 
@@ -88,6 +88,27 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_ASSIGN), async (req: Request
 
     const data = validation.data;
     const orgId = getOrgId(req);
+
+    // F-22: verify cross-org references in the body. Without these checks
+    // a user could create a task in their org that pins a foreign org's
+    // dealId or routes a notification to a foreign org's user.
+    if (data.dealId) {
+      const dealAccess = await verifyDealAccess(data.dealId, orgId);
+      if (!dealAccess) {
+        return res.status(400).json({ error: 'Invalid dealId' });
+      }
+    }
+    if (data.assignedTo) {
+      const { data: assignee } = await supabase
+        .from('User')
+        .select('id')
+        .eq('id', data.assignedTo)
+        .eq('organizationId', orgId)
+        .single();
+      if (!assignee) {
+        return res.status(400).json({ error: 'Invalid assignedTo' });
+      }
+    }
 
     // Resolve the creator's internal user ID
     let createdBy: string | null = null;
@@ -179,6 +200,26 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
 
     if (fetchError || !existing) {
       return res.status(404).json({ error: 'Task not found' });
+    }
+
+    // F-22: same checks on PATCH — reject body refs from another org.
+    // updateTaskSchema allows null to unassign; skip the check on null/undefined.
+    if (data.dealId) {
+      const dealAccess = await verifyDealAccess(data.dealId, orgId);
+      if (!dealAccess) {
+        return res.status(400).json({ error: 'Invalid dealId' });
+      }
+    }
+    if (data.assignedTo) {
+      const { data: assignee } = await supabase
+        .from('User')
+        .select('id')
+        .eq('id', data.assignedTo)
+        .eq('organizationId', orgId)
+        .single();
+      if (!assignee) {
+        return res.status(400).json({ error: 'Invalid assignedTo' });
+      }
     }
 
     const { data: task, error } = await supabase
