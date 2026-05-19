@@ -3,6 +3,12 @@
  * Provides type safety across routes, middleware, and services
  */
 
+// Canonical enums live in @ai-crm/shared so apps/api and apps/web-next
+// can't drift. Re-export here so existing import sites (`from '../types/index.js'`)
+// keep working — the SOURCE moved, the import path didn't.
+export { UserRole } from '@ai-crm/shared';
+import type { UserRole } from '@ai-crm/shared';
+
 // ============================================================
 // User Types
 // ============================================================
@@ -21,8 +27,6 @@ export interface User {
   createdAt: string;
   updatedAt: string;
 }
-
-export type UserRole = 'ADMIN' | 'MEMBER' | 'VIEWER';
 
 // Note: Express Request is extended in middleware/auth.ts and middleware/requestId.ts
 // Use req.user and req.requestId directly on Express.Request
