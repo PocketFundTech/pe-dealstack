@@ -107,15 +107,15 @@ function buildMockSupabase(opts: {
 
   return (table: string) => {
     if (table === 'Deal') {
-      // .select('name').eq('id', dealId).single()
+      // .select('name').eq('id', dealId).eq('organizationId', orgId).single()
       return {
         select: () => {
           track('Deal', 'select');
-          return {
-            eq: () => ({
-              single: async () => ({ data: { name: 'Test Deal' }, error: null }),
-            }),
+          const chain: any = {
+            eq: () => chain,
+            single: async () => ({ data: { name: 'Test Deal' }, error: null }),
           };
+          return chain;
         },
       };
     }

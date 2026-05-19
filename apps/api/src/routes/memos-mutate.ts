@@ -38,14 +38,22 @@ router.post('/', async (req, res) => {
     // Strip templateId, autoGenerate, templatePreset from memoData (not Memo table columns)
     const { templateId, autoGenerate, templatePreset, ...memoFields } = validation.data;
 
-    // Fetch deal name if dealId provided and no explicit project name
-    if (memoFields.dealId && (!memoFields.projectName || memoFields.projectName === 'New Project')) {
+    // F-18: scope deal lookup to caller's org. The prior `.eq('id', dealId)`
+    // select alone would echo any deal's name back as the memo's projectName,
+    // leaking the deal name string across orgs. Now: if dealId is provided but
+    // not in caller's org, refuse to create the memo at all (400, since dealId
+    // is a required and validated field — wrong-org is a validation error).
+    if (memoFields.dealId) {
       const { data: deal } = await supabase
         .from('Deal')
         .select('name')
         .eq('id', memoFields.dealId)
+        .eq('organizationId', orgId)
         .single();
-      if (deal?.name) {
+      if (!deal) {
+        return res.status(400).json({ error: 'Invalid dealId' });
+      }
+      if (!memoFields.projectName || memoFields.projectName === 'New Project') {
         memoFields.projectName = deal.name;
       }
     }
@@ -71,40 +79,47 @@ router.post('/', async (req, res) => {
     // Create sections from template or use defaults
     let usedTemplate = false;
     if (templateId) {
-      const { data: templateSections, error: tplError } = await supabase
-        .from('MemoTemplateSection')
-        .select('*')
-        .eq('templateId', templateId)
-        .order('sortOrder', { ascending: true });
+      // F-19: verify the template belongs to the caller's org BEFORE cloning
+      // sections or incrementing usage. The previous code fetched sections by
+      // templateId alone and would clone any org's template structure into
+      // the new memo, and the usage increment also ran with no org check.
+      const { data: tpl } = await supabase
+        .from('MemoTemplate')
+        .select('id, usageCount')
+        .eq('id', templateId)
+        .eq('organizationId', orgId)
+        .single();
 
-      if (!tplError && templateSections && templateSections.length > 0) {
-        const sections = templateSections.map((ts: any, idx: number) => ({
-          memoId: memo.id,
-          type: SECTION_TYPE_MAP[ts.title.toLowerCase()] || 'CUSTOM',
-          title: ts.title,
-          sortOrder: ts.sortOrder ?? idx,
-          aiPrompt: ts.aiPrompt || null,
-        }));
+      if (tpl) {
+        const { data: templateSections, error: tplError } = await supabase
+          .from('MemoTemplateSection')
+          .select('*')
+          .eq('templateId', templateId)
+          .order('sortOrder', { ascending: true });
 
-        const { error: sectionsError } = await supabase.from('MemoSection').insert(sections);
-        if (sectionsError) throw sectionsError;
+        if (!tplError && templateSections && templateSections.length > 0) {
+          const sections = templateSections.map((ts: any, idx: number) => ({
+            memoId: memo.id,
+            type: SECTION_TYPE_MAP[ts.title.toLowerCase()] || 'CUSTOM',
+            title: ts.title,
+            sortOrder: ts.sortOrder ?? idx,
+            aiPrompt: ts.aiPrompt || null,
+          }));
 
-        usedTemplate = true;
+          const { error: sectionsError } = await supabase.from('MemoSection').insert(sections);
+          if (sectionsError) throw sectionsError;
 
-        // Increment template usage count
-        const { data: tpl } = await supabase
-          .from('MemoTemplate')
-          .select('usageCount')
-          .eq('id', templateId)
-          .single();
-        if (tpl) {
+          usedTemplate = true;
+
+          // Increment template usage count (org-scoped — see F-19 fetch above)
           await supabase
             .from('MemoTemplate')
             .update({ usageCount: (tpl.usageCount || 0) + 1 })
-            .eq('id', templateId);
-        }
+            .eq('id', templateId)
+            .eq('organizationId', orgId);
 
-        log.debug('Memo created from template', { memoId: memo.id, templateId, sectionCount: sections.length });
+          log.debug('Memo created from template', { memoId: memo.id, templateId, sectionCount: sections.length });
+        }
       }
     }
 
