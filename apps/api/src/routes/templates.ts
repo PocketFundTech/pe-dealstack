@@ -326,8 +326,23 @@ router.post('/:id/use', async (req, res) => {
     const { id } = req.params;
     const orgId = getOrgId(req);
 
+    // F-19: verify the template belongs to the caller's org BEFORE the RPC.
+    // The `increment_template_usage` RPC takes only template_id and would
+    // bump usageCount on any org's template otherwise. Mirror the
+    // memos-mutate fix here.
+    const { data: existing } = await supabase
+      .from('MemoTemplate')
+      .select('id')
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
     // Increment usage count
-    const { data: template, error } = await supabase
+    const { error } = await supabase
       .rpc('increment_template_usage', { template_id: id });
 
     // Fallback if RPC doesn't exist

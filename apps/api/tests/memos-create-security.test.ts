@@ -217,3 +217,52 @@ describe('POST /api/memos — template usage scoping (F-19)', () => {
     expect(templateUpdateCalled).toBe(false);
   });
 });
+
+describe('POST /api/templates/:id/use — RPC scoping (F-19, templates.ts)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
+    mockSupabase.rpc.mockReset();
+  });
+
+  it('returns 404 and does NOT call RPC when template is in another org', async () => {
+    let rpcCalled = false;
+    mockSupabase.rpc.mockImplementation(() => {
+      rpcCalled = true;
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    let templateLookupFilters: { col: string; val: string }[] = [];
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'MemoTemplate') {
+        const chain: any = {
+          eq: (col: string, val: string) => {
+            templateLookupFilters.push({ col, val });
+            return chain;
+          },
+          single: async () => ({ data: null, error: null }), // cross-org → null
+        };
+        return {
+          select: () => chain,
+        };
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    const { default: router } = await import('../src/routes/templates.js');
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res, next) => {
+      req.user = { id: 'auth-user-1', organizationId: 'org-A' };
+      next();
+    });
+    app.use('/api/templates', router);
+
+    const res = await request(app).post('/api/templates/foreign-tpl/use');
+
+    expect(res.status).toBe(404);
+    expect(rpcCalled).toBe(false);
+    const cols = templateLookupFilters.map((f) => f.col);
+    expect(cols).toContain('organizationId');
+  });
+});
