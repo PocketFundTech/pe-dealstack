@@ -272,6 +272,23 @@ router.delete('/:id', requirePermission(PERMISSIONS.USER_DELETE), async (req: Re
 router.get('/:id/deals', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
+    const orgId = getOrgId(req);
+
+    // F-20: verify the target user belongs to the caller's org before
+    // listing their DealTeamMember rows. Without this gate the endpoint
+    // would return any user's deal participations across orgs (Deal name,
+    // stage, industry, dealSize, irrProjected, Company name + logo).
+    // Mirrors the `GET /api/users/:id` pattern at line 99 above.
+    const { data: targetUser, error: targetErr } = await supabase
+      .from('User')
+      .select('id')
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .single();
+
+    if (targetErr || !targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     const { data: teamMemberships, error } = await supabase
       .from('DealTeamMember')
