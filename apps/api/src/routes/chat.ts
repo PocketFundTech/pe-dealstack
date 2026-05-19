@@ -21,6 +21,17 @@ const sendMessageSchema = z.object({
   userId: z.string().uuid(),
 });
 
+// ─── Pagination (Task 5.3.6) ──────────────────────────────────
+// Chat message history per conversation. Default 50 (a "page" of chat),
+// cap at 500. Previously had ad-hoc limit/offset parsing with no default
+// and no upper bound — ?limit=999999 returned the entire conversation.
+const PAGINATION_DEFAULT = 50;
+const PAGINATION_MAX = 500;
+const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(PAGINATION_MAX).default(PAGINATION_DEFAULT),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 // System prompt for deal analysis
 const DEAL_ANALYST_PROMPT = `You are an expert Private Equity investment analyst assistant for PE OS, a deal management platform.
 
@@ -382,27 +393,32 @@ router.get('/conversations/:id/messages', async (req: Request, res: Response, ne
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    const { limit, offset } = req.query;
+    // Replace ad-hoc parseInt with zod-validated pagination. Previously,
+    // ?limit absent meant "no limit at all" (returned the entire chat),
+    // and ?limit=999999 was accepted with no upper bound. Now defaults to
+    // 50 with a hard cap of 500.
+    const paginationParsed = paginationSchema.safeParse(req.query);
+    if (!paginationParsed.success) {
+      return res.status(400).json({ error: 'Invalid pagination', details: paginationParsed.error.errors });
+    }
+    const { limit, offset } = paginationParsed.data;
 
-    let query = supabase
+    const { data: messages, error } = await supabase
       .from('ChatMessage')
       .select('*')
       .eq('conversationId', id)
-      .order('createdAt', { ascending: true });
-
-    if (limit) {
-      query = query.limit(parseInt(limit as string, 10));
-    }
-
-    if (offset) {
-      query = query.range(parseInt(offset as string, 10), parseInt(offset as string, 10) + parseInt(limit as string || '50', 10) - 1);
-    }
-
-    const { data: messages, error } = await query;
+      .order('createdAt', { ascending: true })
+      .range(offset, offset + limit - 1);
 
     if (error) throw error;
 
-    res.json(messages || []);
+    // Preserve legacy array response shape; expose pagination via headers
+    // so existing clients still get Array.isArray(messages) === true.
+    const rows = messages || [];
+    res.setHeader('X-Pagination-Limit', String(limit));
+    res.setHeader('X-Pagination-Offset', String(offset));
+    res.setHeader('X-Pagination-Has-More', String(rows.length === limit));
+    res.json(rows);
   } catch (error) {
     next(error);
   }
