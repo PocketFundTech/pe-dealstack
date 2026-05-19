@@ -6,6 +6,14 @@ import { analyzeFinancials } from '../services/analysis/index.js';
 
 const router = Router();
 
+// ─── Aggregate cap (Task 5.3.2) ───────────────────────────────
+// Memo generation and benchmarking need all rows for analyzeFinancials /
+// peer percentile math; pagination would skew results. Defensive cap of
+// 500 rows with log.warn on hit. Peer-deal loop has its own .slice(0, 50)
+// cap on number-of-peer-deals which is separate from this row cap.
+const AGGREGATE_CAP = 500;
+const PEER_DEAL_CAP = 50;
+
 // ─── Phase 5: Portfolio Benchmarking ─────────────────────────
 
 router.get('/deals/:dealId/financials/benchmark', async (req, res) => {
@@ -37,12 +45,16 @@ router.get('/deals/:dealId/financials/benchmark', async (req, res) => {
     const dealGrossMargin = dealLi.gross_profit && dealRev && dealRev > 0
       ? (dealLi.gross_profit / dealRev) * 100 : null;
 
-    // Get latest income statements from ALL deals in the org
+    // Get peer deals in the org. Push the cap down to the DB (instead of
+    // fetching all and slicing in-app) so a tenant with thousands of deals
+    // doesn't pull the full Deal table into memory just to slice the first
+    // 50 off. Matches the existing .slice(0, 50) semantics below.
     const { data: allDeals } = await supabase
       .from('Deal')
       .select('id, name')
       .eq('organizationId', orgId)
-      .neq('id', dealId);
+      .neq('id', dealId)
+      .limit(PEER_DEAL_CAP);
 
     if (!allDeals || allDeals.length === 0) {
       return res.json({ hasData: true, peerCount: 0, benchmarks: [] });
@@ -51,7 +63,7 @@ router.get('/deals/:dealId/financials/benchmark', async (req, res) => {
     const peerMetrics: { revenue: number; ebitdaMargin: number; grossMargin: number | null }[] = [];
 
     // Fetch latest IS for each peer deal
-    for (const peer of allDeals.slice(0, 50)) {
+    for (const peer of allDeals.slice(0, PEER_DEAL_CAP)) {
       const { data: peerRows } = await supabase
         .from('FinancialStatement')
         .select('lineItems')
@@ -171,13 +183,19 @@ router.get('/deals/:dealId/financials/memo', async (req, res) => {
 
     if (!deal) return res.status(404).json({ error: 'Deal not found' });
 
-    // Fetch financials
+    // Fetch financials (aggregate — feeds analyzeFinancials; cap at
+    // AGGREGATE_CAP with log.warn on hit per Task 5.3.2)
     const { data: rows } = await supabase
       .from('FinancialStatement')
       .select('*')
       .eq('dealId', dealId)
       .eq('isActive', true)
-      .order('period', { ascending: true });
+      .order('period', { ascending: true })
+      .range(0, AGGREGATE_CAP - 1);
+
+    if (rows && rows.length === AGGREGATE_CAP) {
+      log.warn('financials memo hit row cap', { dealId, cap: AGGREGATE_CAP });
+    }
 
     // Fetch analysis
     let analysis = null;
