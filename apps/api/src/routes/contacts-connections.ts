@@ -220,6 +220,15 @@ router.post('/:id/connections', async (req: Request, res) => {
       return res.status(400).json({ error: 'Cannot create a connection to the same contact' });
     }
 
+    // F-15: verify the related contact is also in the caller's org.
+    // Without this, a user could create a relationship from their own contact
+    // pointing at any other org's contact and the GET handler would echo that
+    // contact's identity (firstName, lastName, company, title) back through the join.
+    const relatedAccess = await verifyContactAccess(relatedContactId, orgId);
+    if (!relatedAccess) {
+      return res.status(404).json({ error: 'Related contact not found' });
+    }
+
     const insertData: any = {
       contactId: id,
       relatedContactId,
@@ -265,10 +274,14 @@ router.delete('/:id/connections/:connectionId', async (req: Request, res) => {
       return res.status(404).json({ error: 'Contact not found' });
     }
 
+    // F-16: constrain delete to relationships involving the verified contact.
+    // Without this filter, a caller can delete any ContactRelationship row in
+    // any org just by knowing its id.
     const { error } = await supabase
       .from('ContactRelationship')
       .delete()
-      .eq('id', connectionId);
+      .eq('id', connectionId)
+      .or(`contactId.eq.${id},relatedContactId.eq.${id}`);
 
     if (error) throw error;
 
