@@ -14,18 +14,40 @@ const createSchema = z.object({
   notes: z.string().max(2000).optional().or(z.literal('')),
 });
 
+// ─── Pagination (Task 5.3.5) ──────────────────────────────────
+// Default 50 (a watchlist is shorter than a deal list), cap 500.
+const PAGINATION_DEFAULT = 50;
+const PAGINATION_MAX = 500;
+const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(PAGINATION_MAX).default(PAGINATION_DEFAULT),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 // ─── GET /api/watchlist — list for current org ────────────────
 router.get('/', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
+
+    const paginationParsed = paginationSchema.safeParse(req.query);
+    if (!paginationParsed.success) {
+      return res.status(400).json({ error: 'Invalid pagination', details: paginationParsed.error.errors });
+    }
+    const { limit, offset } = paginationParsed.data;
+
     const { data, error } = await supabase
       .from('Watchlist')
       .select('*')
       .eq('organizationId', orgId)
-      .order('createdAt', { ascending: false });
+      .order('createdAt', { ascending: false })
+      .range(offset, offset + limit - 1);
 
     if (error) throw error;
-    res.json({ items: data || [] });
+
+    const items = data || [];
+    res.json({
+      items,
+      pagination: { limit, offset, hasMore: items.length === limit },
+    });
   } catch (err) {
     log.error('List watchlist error', err);
     res.status(500).json({ error: 'Failed to load watchlist' });
