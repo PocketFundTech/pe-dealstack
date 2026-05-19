@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
 import { getOrgId } from '../middleware/orgScope.js';
@@ -49,7 +50,7 @@ const importContactsSchema = z.object({
 
 // ─── GET /api/contacts — List contacts with filters ─────────
 
-router.get('/', async (req: any, res) => {
+router.get('/', async (req: Request, res) => {
   try {
     const query = contactsQuerySchema.safeParse(req.query);
     if (!query.success) {
@@ -106,7 +107,7 @@ router.get('/', async (req: any, res) => {
 
 // ─── GET /api/contacts/export — Export contacts as CSV ───────
 
-router.get('/export', async (req: any, res) => {
+router.get('/export', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
     const query = contactsQuerySchema.safeParse(req.query);
@@ -173,7 +174,7 @@ router.get('/export', async (req: any, res) => {
 
 // ─── GET /api/contacts/:id — Get contact with details ───────
 
-router.get('/:id', async (req: any, res) => {
+router.get('/:id', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -220,7 +221,7 @@ router.get('/:id', async (req: any, res) => {
 
 // ─── POST /api/contacts — Create contact ────────────────────
 
-router.post('/', async (req: any, res) => {
+router.post('/', async (req: Request, res) => {
   try {
     const validation = createContactSchema.safeParse(req.body);
     if (!validation.success) {
@@ -285,7 +286,7 @@ router.post('/', async (req: any, res) => {
 
 // ─── PATCH /api/contacts/:id — Update contact ───────────────
 
-router.patch('/:id', async (req: any, res) => {
+router.patch('/:id', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const validation = updateContactSchema.safeParse(req.body);
@@ -331,7 +332,7 @@ router.patch('/:id', async (req: any, res) => {
 
 // ─── DELETE /api/contacts/:id — Delete contact ──────────────
 
-router.delete('/:id', async (req: any, res) => {
+router.delete('/:id', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -355,7 +356,7 @@ router.delete('/:id', async (req: any, res) => {
 
 // ─── POST /api/contacts/import — Bulk import contacts ───────
 
-router.post('/import', async (req: any, res) => {
+router.post('/import', async (req: Request, res) => {
   try {
     const validation = importContactsSchema.safeParse(req.body);
     if (!validation.success) {

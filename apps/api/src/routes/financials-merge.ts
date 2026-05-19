@@ -77,7 +77,7 @@ router.post('/deals/:dealId/financials/resolve', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
-    const user = (req as any).user;
+    const user = req.user;
     const { statementType, period, chosenVersionId, customLineItems } = resolveSchema.parse(req.body);
 
     // Get all versions for this conflict
@@ -143,7 +143,7 @@ router.post('/deals/:dealId/financials/resolve-all', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
-    const user = (req as any).user;
+    const user = req.user;
     const strategy = req.body.strategy ?? 'highest_confidence';
 
     const { data: rows, error } = await supabase

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
@@ -8,7 +9,7 @@ import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 const router = Router();
 
 // POST /api/deals/:id/analyze — Run multi-document analysis
-router.post('/:id/analyze', async (req: any, res) => {
+router.post('/:id/analyze', async (req: Request, res) => {
   try {
     const dealId = req.params.id;
     const orgId = getOrgId(req);

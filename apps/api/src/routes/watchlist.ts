@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
@@ -14,7 +15,7 @@ const createSchema = z.object({
 });
 
 // ─── GET /api/watchlist — list for current org ────────────────
-router.get('/', async (req: any, res) => {
+router.get('/', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
     const { data, error } = await supabase
@@ -32,7 +33,7 @@ router.get('/', async (req: any, res) => {
 });
 
 // ─── POST /api/watchlist — add a new entry ────────────────────
-router.post('/', async (req: any, res) => {
+router.post('/', async (req: Request, res) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -65,7 +66,7 @@ router.post('/', async (req: any, res) => {
 });
 
 // ─── DELETE /api/watchlist/:id — remove (org-scoped) ──────────
-router.delete('/:id', async (req: any, res) => {
+router.delete('/:id', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
     const { id } = req.params;

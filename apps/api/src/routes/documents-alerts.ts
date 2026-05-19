@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
@@ -15,7 +16,7 @@ const router = Router();
  * Joins through Deal to filter by organizationId. Returns at most 20 items
  * with the deal name + a 'state' tag the frontend uses for badge color.
  */
-router.get('/alerts', async (req: any, res) => {
+router.get('/alerts', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
 

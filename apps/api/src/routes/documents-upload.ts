@@ -305,7 +305,7 @@ router.post('/deals/:dealId/documents', upload.single('file'), async (req, res) 
     let updatedFields: string[] = [];
     if (autoUpdateDeal && aiExtractedData) {
       try {
-        const mergeResult = await mergeIntoExistingDeal(dealId, aiExtractedData, (req as any).user?.id, documentName);
+        const mergeResult = await mergeIntoExistingDeal(dealId, aiExtractedData, req.user?.id, documentName);
         dealUpdated = true;
         updatedFields = Object.keys(mergeResult.deal || {}).filter(k =>
           ['revenue', 'ebitda', 'industry', 'description', 'aiThesis'].includes(k) && mergeResult.deal[k] != null

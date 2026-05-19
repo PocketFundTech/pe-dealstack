@@ -75,7 +75,7 @@ router.post('/documents/:id/link', async (req, res) => {
     // If original had extracted data, merge into target deal
     if (original.extractedData) {
       try {
-        await mergeIntoExistingDeal(targetDealId, original.extractedData, (req as any).user?.id, original.name);
+        await mergeIntoExistingDeal(targetDealId, original.extractedData, req.user?.id, original.name);
         log.info('Target deal auto-updated from linked document', { targetDealId, documentName: original.name });
       } catch (mergeError) {
         log.error('Failed to auto-update target deal from linked doc', mergeError);

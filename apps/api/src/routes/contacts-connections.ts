@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
 import { log } from '../utils/logger.js';
@@ -32,7 +33,7 @@ const createConnectionSchema = z.object({
 
 // ─── POST /api/contacts/:id/interactions — Add interaction ──
 
-router.post('/:id/interactions', async (req: any, res) => {
+router.post('/:id/interactions', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -80,7 +81,7 @@ router.post('/:id/interactions', async (req: any, res) => {
 
 // ─── POST /api/contacts/:id/deals — Link contact to deal ────
 
-router.post('/:id/deals', async (req: any, res) => {
+router.post('/:id/deals', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -130,7 +131,7 @@ router.post('/:id/deals', async (req: any, res) => {
 
 // ─── DELETE /api/contacts/:contactId/deals/:dealId — Unlink ─
 
-router.delete('/:contactId/deals/:dealId', async (req: any, res) => {
+router.delete('/:contactId/deals/:dealId', async (req: Request, res) => {
   try {
     const { contactId, dealId } = req.params;
     const orgId = getOrgId(req);
@@ -158,7 +159,7 @@ router.delete('/:contactId/deals/:dealId', async (req: any, res) => {
 
 // ─── GET /api/contacts/:id/connections — List connections (bidirectional) ─
 
-router.get('/:id/connections', async (req: any, res) => {
+router.get('/:id/connections', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -199,7 +200,7 @@ router.get('/:id/connections', async (req: any, res) => {
 
 // ─── POST /api/contacts/:id/connections — Create connection ─
 
-router.post('/:id/connections', async (req: any, res) => {
+router.post('/:id/connections', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -255,7 +256,7 @@ router.post('/:id/connections', async (req: any, res) => {
 
 // ─── DELETE /api/contacts/:id/connections/:connectionId — Remove connection ─
 
-router.delete('/:id/connections/:connectionId', async (req: any, res) => {
+router.delete('/:id/connections/:connectionId', async (req: Request, res) => {
   try {
     const { id, connectionId } = req.params;
     const orgId = getOrgId(req);
