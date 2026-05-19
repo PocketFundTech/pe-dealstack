@@ -20,6 +20,15 @@ import financialsMemoRouter from './financials-memo.js';
 
 const router = Router();
 
+// ─── Aggregate cap (Task 5.3.1) ───────────────────────────────
+// These endpoints (analysis / insights / cross-doc) feed every row into
+// math (analyzeFinancials, conflict detection) so paginating would silently
+// produce wrong results. Instead we apply a defensive upper bound and log
+// if a deal ever hits it. Per REMEDIATION_ROADMAP Phase 5 Task 5.3 option
+// (1): "for endpoints whose semantics demand all rows, log the unbounded-
+// ness as a known trade-off".
+const AGGREGATE_CAP = 500;
+
 // Mount benchmark + memo sub-router
 router.use('/', financialsMemoRouter);
 
@@ -38,9 +47,14 @@ router.get('/deals/:dealId/financials/analysis', async (req, res) => {
       .select('*')
       .eq('dealId', dealId)
       .eq('isActive', true)
-      .order('period', { ascending: true });
+      .order('period', { ascending: true })
+      .range(0, AGGREGATE_CAP - 1);
 
     if (error) throw error;
+
+    if (rows && rows.length === AGGREGATE_CAP) {
+      log.warn('financials analysis hit row cap', { dealId, cap: AGGREGATE_CAP });
+    }
 
     if (!rows || rows.length === 0) {
       return res.json({ hasData: false, qoe: null, ratios: [], periods: [] });
@@ -63,15 +77,21 @@ router.get('/deals/:dealId/financials/insights', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
-    // Fetch financial rows
+    // Fetch financial rows (aggregate — see AGGREGATE_CAP note above)
     const { data: rows, error } = await supabase
       .from('FinancialStatement')
       .select('*')
       .eq('dealId', dealId)
       .eq('isActive', true)
-      .order('period', { ascending: true });
+      .order('period', { ascending: true })
+      .range(0, AGGREGATE_CAP - 1);
 
     if (error) throw error;
+
+    if (rows && rows.length === AGGREGATE_CAP) {
+      log.warn('financials insights hit row cap', { dealId, cap: AGGREGATE_CAP });
+    }
+
     if (!rows || rows.length === 0) {
       return res.json({ hasData: false, insights: null });
     }
@@ -141,15 +161,21 @@ router.post('/deals/:dealId/financials/insights/regenerate', async (req, res) =>
     // Invalidate cache
     await invalidateCache(dealId);
 
-    // Fetch rows
+    // Fetch rows (aggregate — see AGGREGATE_CAP note above)
     const { data: rows, error } = await supabase
       .from('FinancialStatement')
       .select('*')
       .eq('dealId', dealId)
       .eq('isActive', true)
-      .order('period', { ascending: true });
+      .order('period', { ascending: true })
+      .range(0, AGGREGATE_CAP - 1);
 
     if (error) throw error;
+
+    if (rows && rows.length === AGGREGATE_CAP) {
+      log.warn('financials regenerate hit row cap', { dealId, cap: AGGREGATE_CAP });
+    }
+
     if (!rows || rows.length === 0) {
       return res.json({ hasData: false, insights: null });
     }
@@ -198,14 +224,23 @@ router.get('/deals/:dealId/financials/cross-doc', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
-    // Get ALL rows (including inactive) to compare across documents
+    // Get rows (including inactive) to compare across documents. Aggregate
+    // endpoint — needs all rows to detect conflicts. Defensive cap of
+    // AGGREGATE_CAP applied; log if hit (a deal with >500 statement rows
+    // including inactive duplicates is pathological).
     const { data: allRows, error } = await supabase
       .from('FinancialStatement')
       .select('*, Document(id, name)')
       .eq('dealId', dealId)
-      .order('period', { ascending: true });
+      .order('period', { ascending: true })
+      .range(0, AGGREGATE_CAP - 1);
 
     if (error) throw error;
+
+    if (allRows && allRows.length === AGGREGATE_CAP) {
+      log.warn('financials cross-doc hit row cap', { dealId, cap: AGGREGATE_CAP });
+    }
+
     if (!allRows || allRows.length === 0) {
       return res.json({ hasData: false, conflicts: [], documents: [] });
     }
