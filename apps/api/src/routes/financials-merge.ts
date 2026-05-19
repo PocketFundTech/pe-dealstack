@@ -92,6 +92,17 @@ router.post('/deals/:dealId/financials/resolve', async (req, res) => {
       return res.status(404).json({ error: 'No versions found for this period' });
     }
 
+    // F-24: verify the supplied chosenVersionId belongs to the versions
+    // pre-fetched for THIS (dealId, statementType, period). Without this
+    // gate the later activation update fires `.eq('id', chosenVersionId)`
+    // alone — letting a caller flip `isActive=true` on any other org's
+    // FinancialStatement row. The versions array is already org-scoped
+    // (it was filtered by dealId which passed verifyDealAccess), so a
+    // membership check is sufficient.
+    if (chosenVersionId && !versions.some((v: any) => v.id === chosenVersionId)) {
+      return res.status(400).json({ error: 'chosenVersionId does not belong to this conflict' });
+    }
+
     // Deactivate all versions
     const allIds = versions.map((v: any) => v.id);
     await supabase
