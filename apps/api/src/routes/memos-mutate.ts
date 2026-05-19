@@ -91,11 +91,17 @@ router.post('/', async (req, res) => {
         .single();
 
       if (tpl) {
+        // Cap template-section clone at 500 rows (Task 5.3.4). The original
+        // unbounded select would clone a pathological 10k-section template
+        // into MemoSection in one insert — defensive bound covers any
+        // legitimate template (a "comprehensive IC memo" rarely exceeds
+        // 30 sections) while preventing abuse.
         const { data: templateSections, error: tplError } = await supabase
           .from('MemoTemplateSection')
           .select('*')
           .eq('templateId', templateId)
-          .order('sortOrder', { ascending: true });
+          .order('sortOrder', { ascending: true })
+          .range(0, 499);
 
         if (!tplError && templateSections && templateSections.length > 0) {
           const sections = templateSections.map((ts: any, idx: number) => ({
