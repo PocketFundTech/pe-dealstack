@@ -1,7 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'node:crypto';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { findOrCreateUser } from '../services/userService.js';
+
+/** Build a slug suffix using a UUID fragment so same-millisecond inserts don't collide. */
+function buildSlug(base: string): string {
+  return `${base}-${randomUUID().slice(0, 8)}`;
+}
 
 /**
  * Organization scoping middleware.
@@ -52,7 +58,7 @@ export async function orgMiddleware(
       // User exists but has no Organization — find existing or create one
       try {
         const firmName = req.user.firmName || req.user.email?.split('@')[0] || 'My Firm';
-        const slug = firmName.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').substring(0, 100);
+        const slugBase = firmName.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').substring(0, 100);
 
         // First try to find an existing org with same name (might exist from a previous failed attempt)
         let newOrg: { id: string } | null = null;
@@ -65,22 +71,54 @@ export async function orgMiddleware(
         if (existingOrg) {
           newOrg = existingOrg;
         } else {
-          const { data: createdOrg } = await supabase
-            .from('Organization')
-            .insert({ name: firmName, slug: `${slug}-${Date.now().toString(36)}` })
-            .select('id')
-            .single();
+          // Attempt insert with a UUID-suffixed slug. Retry once on unique-slug
+          // collision (Postgres 23505) — astronomically unlikely but cheap to handle.
+          let createdOrg: { id: string } | null = null;
+          let insertErr: { code?: string } | null = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const res = await supabase
+              .from('Organization')
+              .insert({ name: firmName, slug: buildSlug(slugBase) })
+              .select('id')
+              .single();
+            createdOrg = (res.data as { id: string } | null) ?? null;
+            insertErr = (res.error as { code?: string } | null) ?? null;
+            if (createdOrg) break;
+            if (insertErr?.code !== '23505') break; // non-unique-violation: don't retry
+            log.warn('Org middleware: slug collision, retrying with new slug', { attempt });
+          }
+          if (!createdOrg && insertErr) {
+            log.error('Org middleware: failed to create org', insertErr);
+          }
           newOrg = createdOrg;
         }
 
         if (newOrg) {
-          await supabase
+          // Race guard: re-fetch User by authId — a parallel request may have
+          // already set organizationId. If so, prefer the existing org and
+          // discard the one we just created (it will be orphaned).
+          const { data: refetched } = await supabase
             .from('User')
-            .update({ organizationId: newOrg.id })
-            .eq('id', userRecord.id);
+            .select('id, organizationId')
+            .eq('authId', req.user.id)
+            .single();
 
-          req.user.organizationId = newOrg.id;
-          log.info('Org middleware: auto-created org for user without one', { userId: userRecord.id, orgId: newOrg.id });
+          if (refetched?.organizationId && refetched.organizationId !== newOrg.id) {
+            log.warn('Org middleware: race detected — parallel request set organizationId, using existing', {
+              userId: userRecord.id,
+              parallelOrgId: refetched.organizationId,
+              discardedOrgId: newOrg.id,
+            });
+            req.user.organizationId = refetched.organizationId;
+          } else {
+            await supabase
+              .from('User')
+              .update({ organizationId: newOrg.id })
+              .eq('id', userRecord.id);
+
+            req.user.organizationId = newOrg.id;
+            log.info('Org middleware: auto-created org for user without one', { userId: userRecord.id, orgId: newOrg.id });
+          }
         }
       } catch (createErr) {
         log.error('Org middleware: failed to auto-create org', createErr);
