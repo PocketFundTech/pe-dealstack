@@ -12,6 +12,10 @@ const router = Router();
 const connectSchema = z.object({ token: z.string().trim().min(10) });
 const importSchema = z.object({ mode: z.enum(['fill', 'refresh']).optional() });
 
+// Object-read scopes let us import records; schema-read scopes let us discover the
+// client's custom properties (GET /crm/v3/properties/{object}) so custom fields aren't
+// silently dropped. Both sets are required for a lossless import.
+//
 // crm.objects.notes.read and crm.objects.emails.read are confirmed real
 // HubSpot scope names (verified against HubSpot's community forum).
 // crm.objects.calls.read / meetings.read / tasks.read follow the same
@@ -19,8 +23,10 @@ const importSchema = z.object({ mode: z.enum(['fill', 'refresh']).optional() });
 // authoritative scopes reference — if a client reports one of these three
 // doesn't appear in their Private App scope picker, double-check against
 // HubSpot's current docs before assuming the client's portal is at fault.
-const REQUIRED_SCOPES = 'crm.objects.companies.read, crm.objects.contacts.read, crm.objects.deals.read, '
-  + 'crm.objects.notes.read, crm.objects.calls.read, crm.objects.meetings.read, crm.objects.emails.read, crm.objects.tasks.read';
+const REQUIRED_SCOPES =
+  'crm.objects.companies.read, crm.objects.contacts.read, crm.objects.deals.read, '
+  + 'crm.objects.notes.read, crm.objects.calls.read, crm.objects.meetings.read, crm.objects.emails.read, crm.objects.tasks.read, '
+  + 'crm.schemas.companies.read, crm.schemas.contacts.read, crm.schemas.deals.read';
 
 function tokenRejectionMessage(v: { status: number; category: string | null }): string {
   if (v.status === 401) return 'HubSpot did not recognize this token. Paste the full Private App access token (it starts with "pat-").';
