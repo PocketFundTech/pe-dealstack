@@ -39,11 +39,11 @@
 
 | Role | Default | Env override |
 |---|---|---|
-| `extraction` (CIM/financials, hardest) | `claude-opus-4-8` | `AI_EXTRACTION_MODEL` (e.g. `claude-fable-5`) |
+| `extraction` (CIM/financials, hardest) | `claude-fable-5` | `AI_EXTRACTION_MODEL` (e.g. `claude-opus-4-8` to downgrade) |
 | `chat` (deal chat, analysis — Phase 2 consumers) | `claude-sonnet-5` | `AI_CHAT_MODEL` |
 | `fast` (routing, sentiment, small tasks) | `claude-haiku-4-5` | `AI_FAST_MODEL` |
 
-**Fable 5 note:** supported via the override, with three conditions wired into `client.ts` when the model is `claude-fable-5`: (a) omit the `thinking` param entirely (explicit disable 400s); (b) send the server-side `fallbacks: [{model: "claude-opus-4-8"}]` beta so a classifier refusal degrades gracefully instead of failing the extraction; (c) handle `stop_reason: "refusal"` before reading content. Pricing is 2× Opus 4.8 ($10/$50 vs $5/$25 per MTok) and it requires 30-day data retention on the org — confirm that against the security-whitepaper commitments before making it the default. **Recommendation: launch on Opus 4.8, bake off Fable 5 on the same harness, upgrade if the accuracy delta justifies it.**
+**Fable 5 is the day-one extraction default (decision 2026-07-11).** Three conditions are wired into `client.ts` whenever the model is `claude-fable-5`: (a) omit the `thinking` param entirely (explicit disable 400s); (b) send the server-side `fallbacks: [{model: "claude-opus-4-8"}]` beta (`server-side-fallback-2026-06-01`) so a classifier refusal is transparently re-served by Opus 4.8 instead of failing the extraction; (c) branch on `stop_reason: "refusal"` before reading content (a refusal surviving the fallback chain marks the document `needs_review`, never a 500). Operational prerequisites: the Anthropic org must be on ≥30-day data retention or **every** Fable 5 request 400s (verify in the Console before the flag flips, and check the security whitepaper's retention language stays truthful); cost is $10/$50 per MTok (2× Opus 4.8) — the bake-off harness reports cost per document so the premium is measured, not assumed, and `AI_EXTRACTION_MODEL` is the one-line downgrade if it isn't earning its price.
 
 - Structured output via `client.messages.parse()` with schemas derived from the existing Zod definitions (`financialSchema.ts` is the starting point). One convention replaces the current three.
 - Error handling: typed SDK exceptions, most-specific-first; keep the existing `aiCircuitBreaker.ts` semantics but move them into `tracked.ts` so they apply uniformly.
@@ -67,7 +67,7 @@
 ### 3.3 Rollout flag + bake-off
 
 - `EXTRACTION_ENGINE=legacy|claude` (default `legacy`) selected inside `extractNode.ts` — the LangGraph graph shape is untouched in Phase 1, so the agent-log UI keeps working.
-- Bake-off harness: `apps/api/scripts/extraction-bakeoff.ts` runs both engines over a set of real anonymized CIMs/financial PDFs and reports per-line-item agreement, validator pass rate, wall-clock, and cost. Acceptance gate: new engine ≥ legacy on validator pass rate and ≤ legacy on cost per document.
+- Bake-off harness: `apps/api/scripts/extraction-bakeoff.ts` runs the engines over a set of real anonymized CIMs/financial PDFs and reports per-line-item agreement, validator pass rate, wall-clock, and cost per document. Runs three candidates: legacy, `claude-fable-5`, `claude-opus-4-8`. Acceptance gate: Fable 5 ≥ legacy on validator pass rate (hard gate); cost is reported for the Fable-5-vs-Opus-4.8 decision, not gated (the model default is a product decision made 2026-07-11).
 - After the gate passes and the flag flips in production for two weeks: delete `azureDocIntelligence.ts`, `llamaParse.ts`, `visionExtractor.ts`, `financialClassifier.ts` (classifier prompts), `openai.ts`, the LangChain paths of `llm.ts`, and drop deps `@azure/ai-form-recognizer`, `@llamaindex/cloud`, `openai`, `@langchain/openai` (LangGraph itself stays until Phase 2).
 
 ### 3.4 Non-extraction call-site migration
