@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@ai-crm/shared": "*",
-    "@anthropic-ai/sdk": "^0.91.1",
+    "@anthropic-ai/sdk": "^0.111.0",
     "@azure/ai-form-recognizer": "^5.1.0",
     "@google/generative-ai": "^0.24.1",
     "@langchain/core": "^1.1.29",
