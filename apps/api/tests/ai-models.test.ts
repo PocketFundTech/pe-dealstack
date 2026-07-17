@@ -38,4 +38,27 @@ describe('getModelConfig', () => {
     expect(cfg.fallbacks).toBeUndefined();
     expect(cfg.betas).toEqual([]);
   });
+
+  it('honors chat and fast env overrides too', async () => {
+    process.env.AI_CHAT_MODEL = 'claude-sonnet-4-6';
+    process.env.AI_FAST_MODEL = 'claude-sonnet-5';
+    const { getModelConfig } = await getModels();
+    expect(getModelConfig('chat').model).toBe('claude-sonnet-4-6');
+    expect(getModelConfig('fast').model).toBe('claude-sonnet-5');
+  });
+
+  it('treats an empty-string env override as unset', async () => {
+    process.env.AI_EXTRACTION_MODEL = '';
+    const { getModelConfig } = await getModels();
+    expect(getModelConfig('extraction').model).toBe('claude-fable-5');
+  });
+
+  it('keys fable plumbing off the resolved model, not the role', async () => {
+    process.env.AI_CHAT_MODEL = 'claude-fable-5';
+    const { getModelConfig } = await getModels();
+    const cfg = getModelConfig('chat');
+    expect(cfg.betas).toContain('server-side-fallback-2026-06-01');
+    expect(cfg.fallbacks).toEqual([{ model: 'claude-opus-4-8' }]);
+    expect(cfg.maxTokens).toBe(16000); // maxTokens stays role-specific
+  });
 });
