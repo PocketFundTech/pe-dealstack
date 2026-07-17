@@ -3,7 +3,9 @@
 
 -- 1) Allow 'claude' as an extractionSource on FinancialStatement.
 -- Default Postgres name for an inline column CHECK is <table>_<column>_check.
--- If the DROP fails, find the real name with:
+-- NOTE: DROP ... IF EXISTS silently no-ops on a name mismatch, which would
+-- leave the old stricter constraint ANDed with the new one. After running,
+-- verify exactly one check constraint exists on the column:
 --   SELECT conname FROM pg_constraint
 --   WHERE conrelid = '"FinancialStatement"'::regclass AND contype = 'c';
 ALTER TABLE "FinancialStatement"
@@ -22,4 +24,5 @@ INSERT INTO "ModelPrice" (model, provider, "inputPricePer1M", "outputPricePer1M"
 ON CONFLICT (model) DO UPDATE
   SET "inputPricePer1M" = EXCLUDED."inputPricePer1M",
       "outputPricePer1M" = EXCLUDED."outputPricePer1M",
-      provider = EXCLUDED.provider;
+      provider = EXCLUDED.provider,
+      "updatedAt" = now();
