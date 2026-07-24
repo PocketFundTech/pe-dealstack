@@ -58,7 +58,7 @@
 
 **Excel path:** keep `excelFinancialExtractor.ts` sheet-scoring + xlsx→markdown conversion (Claude has no native xlsx document block), but the classification call moves to the new client with the same schema.
 
-**Validation:** `financialValidator.ts` (deterministic math checks) stays as the single post-check. On failure: **one** targeted repair call (failing items only, with validator errors in the prompt), then store with `extractionConfidence` and `mergeStatus` exactly as today. The verify/cross-verify/self-correct loop is not ported.
+**Validation:** `financialValidator.ts` (deterministic math checks) stays as the single post-check. On failure: **one** targeted repair call — validator failures listed in the prompt with the prior extraction JSON as anchor; the model returns the full corrected structure (prevents drift in already-correct values). Then store with `extractionConfidence` and `mergeStatus` exactly as today. The verify/cross-verify/self-correct loop is not ported.
 
 **Kept as-is:** `financialExtractionOrchestrator.ts` fast/deep-pass split and DB upsert/merge semantics; `extractionCache.ts` content-hash cache; the per-org concurrency semaphore (still useful for cost bounding).
 

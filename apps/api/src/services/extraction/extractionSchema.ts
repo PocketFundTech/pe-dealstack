@@ -73,9 +73,11 @@ export const EXTRACTION_JSON_SCHEMA = {
                     type: 'object',
                     properties: {
                       name: { type: 'string', description: 'snake_case canonical name from the vocabulary' },
-                      value: { type: ['number', 'null'], description: 'Value EXACTLY as printed — do NOT convert units' },
-                      sourcePage: { type: ['integer', 'null'], description: '1-based page the value appears on' },
-                      sourceQuote: { type: ['string', 'null'], description: 'Short verbatim snippet containing the value' },
+                      // anyOf (not type arrays) — matches the SDK's own zodOutputFormat output;
+                      // array-form `type` is undocumented for structured outputs (400 risk).
+                      value: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'Value EXACTLY as printed — do NOT convert units' },
+                      sourcePage: { anyOf: [{ type: 'integer' }, { type: 'null' }], description: '1-based page the value appears on' },
+                      sourceQuote: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Short verbatim snippet containing the value' },
                     },
                     required: ['name', 'value', 'sourcePage', 'sourceQuote'],
                     additionalProperties: false,
@@ -105,12 +107,12 @@ export const EXTRACTION_SYSTEM_PROMPT = `You are a private-equity financial anal
 
 Rules:
 - Report every value EXACTLY as printed in the document. Do NOT convert units or currencies — instead set unitScale (UNITS/THOUSANDS/MILLIONS/BILLIONS) and currency per statement to describe how the document prints them.
-- Use these canonical snake_case names when a line matches:
+- Use these canonical snake_case names when a line represents the same concept, even if the document's label differs (e.g. "Turnover"/"Net Sales" → revenue):
   income statement: revenue, cogs, gross_profit, gross_margin_pct, sga, rd, other_opex, total_opex, ebitda, ebitda_margin_pct, da, ebit, interest_expense, ebt, tax, net_income, sde
   balance sheet: cash, accounts_receivable, inventory, other_current_assets, total_current_assets, ppe_net, goodwill, intangibles, total_assets, accounts_payable, short_term_debt, other_current_liabilities, total_current_liabilities, long_term_debt, total_liabilities, total_equity
   cash flow: operating_cf, capex, fcf, acquisitions, debt_repayment, dividends, net_change_cash, investing_activities, financing_activities
   Anything material that doesn't match gets a descriptive snake_case name.
-- Percentages (names ending _pct) are reported as percent numbers (e.g. 42.5), never fractions.
+- Percentages (names ending _pct) are reported as percent numbers (e.g. 42.5), never fractions — the one exception to "exactly as printed": convert a printed decimal fraction (0.425) to its percent equivalent (42.5).
 - Every line item needs sourcePage (1-based) and a short verbatim sourceQuote when the value is visible in the document; use null only when genuinely unavailable.
 - One period entry per fiscal period column. Projected periods keep their suffix (e.g. "2025E").
 - If a statement type is absent, omit it and add a warning.`;

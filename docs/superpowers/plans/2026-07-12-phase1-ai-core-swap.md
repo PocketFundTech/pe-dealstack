@@ -590,9 +590,9 @@ export const EXTRACTION_JSON_SCHEMA = {
                     type: 'object',
                     properties: {
                       name: { type: 'string', description: 'snake_case canonical name from the vocabulary' },
-                      value: { type: ['number', 'null'], description: 'Value EXACTLY as printed — do NOT convert units' },
-                      sourcePage: { type: ['integer', 'null'], description: '1-based page the value appears on' },
-                      sourceQuote: { type: ['string', 'null'], description: 'Short verbatim snippet containing the value' },
+                      value: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'Value EXACTLY as printed — do NOT convert units' },
+                      sourcePage: { anyOf: [{ type: 'integer' }, { type: 'null' }], description: '1-based page the value appears on' },
+                      sourceQuote: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Short verbatim snippet containing the value' },
                     },
                     required: ['name', 'value', 'sourcePage', 'sourceQuote'],
                     additionalProperties: false,
