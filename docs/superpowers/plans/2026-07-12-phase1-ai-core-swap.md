@@ -626,7 +626,7 @@ Rules:
   income statement: revenue, cogs, gross_profit, gross_margin_pct, sga, rd, other_opex, total_opex, ebitda, ebitda_margin_pct, da, ebit, interest_expense, ebt, tax, net_income, sde
   balance sheet: cash, accounts_receivable, inventory, other_current_assets, total_current_assets, ppe_net, goodwill, intangibles, total_assets, accounts_payable, short_term_debt, other_current_liabilities, total_current_liabilities, long_term_debt, total_liabilities, total_equity
   cash flow: operating_cf, capex, fcf, acquisitions, debt_repayment, dividends, net_change_cash, investing_activities, financing_activities
-  Anything material that doesn't match gets a descriptive snake_case name.
+  Anything material that doesn't match gets a descriptive snake_case name. Any invented name for a ratio, rate, or multiple (not a dollar amount) MUST end in _pct (percentages) or _ratio/_multiple (e.g. tax_rate_pct, debt_to_ebitda_ratio, current_ratio) — downstream code scales dollar amounts by unitScale but leaves these suffixed fields untouched, so an unsuffixed ratio would be silently corrupted.
 - Percentages (names ending _pct) are reported as percent numbers (e.g. 42.5), never fractions — the one exception to "exactly as printed": convert a printed decimal fraction (0.425) to its percent equivalent (42.5).
 - Every line item needs sourcePage (1-based) and a short verbatim sourceQuote when the value is visible in the document; use null only when genuinely unavailable.
 - One period entry per fiscal period column. Projected periods keep their suffix (e.g. "2025E").
@@ -782,17 +782,26 @@ Create `apps/api/src/services/extraction/normalize.ts`:
  *
  * - Scale conversion to canonical MILLIONS happens HERE (deterministic code),
  *   not in prompts — the top source of legacy scale errors (spec §3.2).
- * - Percent fields (name ends `_pct`) are never scaled.
- * - Provenance folds into the legacy `${name}_source` string convention:
- *   `p{page}: "{quote}"`.
- * - Alias canonicalization is delegated to validateLineItems (financialSchema).
+ *   Converted values are rounded to 4 decimals to kill reciprocal-multiply
+ *   float noise (mirrors financialClassifier.ts's own rounding convention).
+ * - Ratio-like fields (name ends `_pct`, `_ratio`, or `_multiple`) are never
+ *   scaled — matches the suffix convention the prompt requires for any
+ *   invented ratio/rate/multiple name (extractionSchema.ts).
+ * - Provenance folds into the legacy `${name}_source` string convention: the
+ *   VERBATIM sourceQuote (matching financialClassifier.ts's own convention —
+ *   see extractionPrompt.ts's source_quote examples), falling back to a bare
+ *   `p{page}` marker only when no quote was captured. A prefix-wrapped quote
+ *   would never literally appear in the source document, which silently
+ *   defeats storeNode.ts's scoreSourceMatch() substring check.
+ * - Alias canonicalization is delegated to validateLineItems (financialSchema),
+ *   which exports its alias table so this module has a single source of truth.
  */
 
 import type {
   ClassificationResult,
   ClassifiedStatement,
 } from '../financialClassifier.js';
-import { validateLineItems } from '../financialSchema.js';
+import { validateLineItems, LINE_ITEM_ALIASES } from '../financialSchema.js';
 import type { ExtractionResponse, RawStatement } from './extractionSchema.js';
 
 const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
@@ -802,6 +811,29 @@ const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
   BILLIONS: 1_000,
 };
 
+/** Round to 4 decimals — kills float noise from the reciprocal scale factors above. */
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+/**
+ * Post-pass after validateLineItems: when both an alias and its canonical
+ * target are present (validateLineItems only renames when the canonical key
+ * is absent), drop the alias so the record has a single, unambiguous key.
+ */
+function dropDuplicateAliases(
+  record: Record<string, unknown>,
+  warnings: string[],
+): void {
+  for (const [alias, canonical] of Object.entries(LINE_ITEM_ALIASES)) {
+    if (alias in record && canonical in record) {
+      delete record[alias];
+      delete record[`${alias}_source`];
+      warnings.push(`Dropped duplicate alias "${alias}" (canonical "${canonical}" present)`);
+    }
+  }
+}
+
 function foldPeriodLineItems(
   items: Array<{ name: string; value: number | null; sourcePage: number | null; sourceQuote: string | null }>,
   factor: number,
@@ -809,12 +841,14 @@ function foldPeriodLineItems(
   const record: Record<string, number | string | null> = {};
   for (const item of items) {
     const name = item.name.trim().toLowerCase().replace(/\s+/g, '_');
-    if (name in record) continue; // first occurrence wins
-    const isPct = name.endsWith('_pct');
-    record[name] = item.value === null ? null : isPct ? item.value : item.value * factor;
+    // First non-null value wins — a null placeholder shouldn't shadow a
+    // real value reported under the same name later in the array.
+    if (name in record && record[name] !== null) continue;
+    const isUnscaled = name.endsWith('_pct') || name.endsWith('_ratio') || name.endsWith('_multiple');
+    record[name] = item.value === null ? null : isUnscaled ? item.value : round4(item.value * factor);
     if (item.sourcePage !== null || item.sourceQuote !== null) {
       const page = item.sourcePage !== null ? `p${item.sourcePage}` : 'p?';
-      record[`${name}_source`] = item.sourceQuote !== null ? `${page}: "${item.sourceQuote}"` : page;
+      record[`${name}_source`] = item.sourceQuote !== null ? item.sourceQuote : page;
     }
   }
   return record;
@@ -837,6 +871,7 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
       const folded = foldPeriodLineItems(p.lineItems, factor);
       const { normalized, warnings: itemWarnings } = validateLineItems(stmt.statementType, folded);
       warnings.push(...itemWarnings.map((w) => `${stmt.statementType} ${p.period}: ${w}`));
+      dropDuplicateAliases(normalized, warnings);
       return {
         period: p.period,
         periodType: p.periodType,
@@ -860,6 +895,8 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
   };
 }
 ```
+
+**Note (post-review correction, 2026-07-27):** this block supersedes the plan's original Step 3 code — the first version wrapped `_source` as `` `p{page}: "{quote}"` ``, which would never literally appear in source document text and silently defeated `storeNode.ts`'s `scoreSourceMatch()` check; it also used unrounded reciprocal multiplication (float noise) and only exempted `_pct` (not `_ratio`/`_multiple`) from scaling. See the corresponding fix commit on `feat/phase1-ai-core` and the updated `EXTRACTION_SYSTEM_PROMPT` in Task 4 (ratio/multiple suffix rule).
 
 - [ ] **Step 4: Run test to verify it passes**
 

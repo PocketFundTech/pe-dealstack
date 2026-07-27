@@ -49,13 +49,95 @@ describe('toClassificationResult', () => {
     expect(result.statements[0].unitScale).toBe('MILLIONS'); // post-conversion
   });
 
-  it('folds provenance into <name>_source strings and dedupes aliases', async () => {
+  it('folds provenance into <name>_source strings (bare quote, not wrapped) and dedupes aliases', async () => {
     const toClassificationResult = await getNormalize();
     const result = toClassificationResult(fixture());
     const li = result.statements[0].periods[0].lineItems as Record<string, unknown>;
-    expect(li.revenue_source).toBe('p12: "Revenue of $45,200"');
+    // Bare verbatim quote — must be substring-matchable against real document
+    // text by storeNode.ts's scoreSourceMatch(), which a wrapped/prefixed
+    // string like `p12: "..."` would never match.
+    expect(li.revenue_source).toBe('Revenue of $45,200');
     // total_revenue is an alias of revenue — canonical key wins, no duplicate
     expect(li.total_revenue).toBeUndefined();
+  });
+
+  it('falls back to a bare page marker when no source quote was captured', async () => {
+    const toClassificationResult = await getNormalize();
+    const result = toClassificationResult(
+      fixture({
+        statements: [
+          {
+            statementType: 'INCOME_STATEMENT',
+            unitScale: 'MILLIONS',
+            currency: 'USD',
+            periods: [
+              {
+                period: '2023',
+                periodType: 'HISTORICAL',
+                confidence: 70,
+                lineItems: [{ name: 'revenue', value: 45.2, sourcePage: 9, sourceQuote: null }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const li = result.statements[0].periods[0].lineItems as Record<string, unknown>;
+    expect(li.revenue_source).toBe('p9');
+  });
+
+  it('prefers a later non-null value over an earlier null for the same name', async () => {
+    const toClassificationResult = await getNormalize();
+    const result = toClassificationResult(
+      fixture({
+        statements: [
+          {
+            statementType: 'INCOME_STATEMENT',
+            unitScale: 'MILLIONS',
+            currency: 'USD',
+            periods: [
+              {
+                period: '2023',
+                periodType: 'HISTORICAL',
+                confidence: 70,
+                lineItems: [
+                  { name: 'revenue', value: null, sourcePage: null, sourceQuote: null },
+                  { name: 'revenue', value: 45.2, sourcePage: 9, sourceQuote: 'Revenue $45.2M' },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const li = result.statements[0].periods[0].lineItems as Record<string, unknown>;
+    expect(li.revenue).toBe(45.2);
+    expect(li.revenue_source).toBe('Revenue $45.2M');
+  });
+
+  it('rounds converted values to 4 decimals to avoid reciprocal-multiply float noise', async () => {
+    const toClassificationResult = await getNormalize();
+    const result = toClassificationResult(
+      fixture({
+        statements: [
+          {
+            statementType: 'INCOME_STATEMENT',
+            unitScale: 'UNITS',
+            currency: 'USD',
+            periods: [
+              {
+                period: '2023',
+                periodType: 'HISTORICAL',
+                confidence: 70,
+                lineItems: [{ name: 'revenue', value: 99999, sourcePage: null, sourceQuote: null }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    // 99999 * (1/1_000_000) has float noise past 4 decimals without rounding.
+    expect(result.statements[0].periods[0].lineItems.revenue).toBe(0.1);
   });
 
   it('adds a warning for non-USD currency and for BILLIONS scale conversion', async () => {
@@ -81,5 +163,36 @@ describe('toClassificationResult', () => {
     );
     expect(result.statements[0].periods[0].lineItems.revenue).toBeCloseTo(1200);
     expect(result.warnings.some((w) => w.includes('EUR'))).toBe(true);
+  });
+
+  it('leaves invented _ratio/_multiple fields unscaled, same as _pct', async () => {
+    const toClassificationResult = await getNormalize();
+    const result = toClassificationResult(
+      fixture({
+        statements: [
+          {
+            statementType: 'INCOME_STATEMENT',
+            unitScale: 'THOUSANDS',
+            currency: 'USD',
+            periods: [
+              {
+                period: '2023',
+                periodType: 'HISTORICAL',
+                confidence: 70,
+                lineItems: [
+                  { name: 'tax_rate_pct', value: 21, sourcePage: null, sourceQuote: null },
+                  { name: 'debt_to_ebitda_ratio', value: 3.2, sourcePage: null, sourceQuote: null },
+                  { name: 'ev_multiple', value: 8.5, sourcePage: null, sourceQuote: null },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const li = result.statements[0].periods[0].lineItems;
+    expect(li.tax_rate_pct).toBe(21);
+    expect(li.debt_to_ebitda_ratio).toBe(3.2);
+    expect(li.ev_multiple).toBe(8.5);
   });
 });
