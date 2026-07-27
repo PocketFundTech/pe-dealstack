@@ -66,6 +66,42 @@ function failureSummaries(classification: ClassificationResult): string[] {
     .map((c) => `${c.check}${c.period ? ` [${c.period}]` : ''}: ${c.message}`);
 }
 
+/** Which statement types (by statementType key) have at least one error-severity validation failure. */
+function statementTypesWithErrors(statements: ClassificationResult['statements']): Set<string> {
+  const types = new Set<string>();
+  for (const stmt of statements) {
+    const result = validateStatements([stmt]);
+    if (result.errorCount > 0) types.add(stmt.statementType);
+  }
+  return types;
+}
+
+/**
+ * Merge the repair response into the original extraction, statement-type by
+ * statement-type. A statement type that was already clean in `first` is
+ * NEVER replaced by the repair pass's version, even if present there — this
+ * is the guard against a repair pass silently dropping or drifting a
+ * correct statement type while fixing an unrelated one (see review finding:
+ * a repaired response that omits a previously-clean statement type must not
+ * be able to delete that data).
+ */
+function mergeRepairedStatements(
+  first: ClassificationResult,
+  repaired: ClassificationResult,
+  failedTypes: Set<string>,
+): ClassificationResult {
+  const repairedByType = new Map(repaired.statements.map((s) => [s.statementType, s]));
+  const statements = first.statements.map((stmt) => {
+    if (!failedTypes.has(stmt.statementType)) return stmt; // clean — never touched by repair
+    return repairedByType.get(stmt.statementType) ?? stmt; // repair dropped it → keep original
+  });
+  return {
+    statements,
+    overallConfidence: Math.min(first.overallConfidence, repaired.overallConfidence),
+    warnings: [...first.warnings, ...repaired.warnings],
+  };
+}
+
 export async function extractWithClaude(input: ClaudeEngineInput): Promise<ClaudeEngineResult | null> {
   const { fileBuffer, fileName, fileType } = input;
   const usage = { inputTokens: 0, outputTokens: 0 };
@@ -73,6 +109,11 @@ export async function extractWithClaude(input: ClaudeEngineInput): Promise<Claud
   // ── Build the document content block ─────────────────────────────
   let documentBlocks: ContentBlock[];
   let rawText: string;
+  // Tracks the Files API upload (PDF branch only) so it can be deleted in the
+  // `finally` below regardless of how the extraction below exits — the Files
+  // API has no TTL/auto-expiry, so an undeleted file is a permanent leak
+  // against the org's storage cap.
+  let uploadedFileId: string | null = null;
 
   if (fileType === 'excel') {
     const excelText = extractTextFromExcel(fileBuffer);
@@ -85,13 +126,20 @@ export async function extractWithClaude(input: ClaudeEngineInput): Promise<Claud
   } else {
     // PDF (and image-PDF) path: upload once, reference by file_id.
     const client = getAnthropicClient();
-    const uploaded = await client.beta.files.upload({
-      file: await toFile(fileBuffer, fileName, { type: 'application/pdf' }),
-      betas: [FILES_BETA],
-    } as never);
+    let uploaded: { id: string };
+    try {
+      uploaded = (await client.beta.files.upload({
+        file: await toFile(fileBuffer, fileName, { type: 'application/pdf' }),
+        betas: [FILES_BETA],
+      } as never)) as { id: string };
+    } catch (err) {
+      log.error('claudeEngine: file upload failed', err, { fileName });
+      return null;
+    }
+    uploadedFileId = uploaded.id;
     rawText = `[claude-native-pdf] ${fileName} — extracted via structured output; no text-layer dump`;
     documentBlocks = [
-      { type: 'document', source: { type: 'file', file_id: (uploaded as { id: string }).id } },
+      { type: 'document', source: { type: 'file', file_id: uploaded.id } },
     ];
   }
 
@@ -129,35 +177,47 @@ export async function extractWithClaude(input: ClaudeEngineInput): Promise<Claud
     }
   };
 
-  // ── Pass 1: extraction ────────────────────────────────────────────
-  const first = await callEngine();
-  if (!first || first.statements.length === 0) {
-    return first ? { classification: first, rawText, repairUsed: false, usage } : null;
-  }
+  try {
+    // ── Pass 1: extraction ────────────────────────────────────────────
+    const first = await callEngine();
+    if (!first || first.statements.length === 0) {
+      return first ? { classification: first, rawText, repairUsed: false, usage } : null;
+    }
 
-  // ── Pass 2 (max one): repair only if deterministic checks fail ────
-  const firstFailures = failureSummaries(first);
-  if (firstFailures.length === 0) {
-    return { classification: first, rawText, repairUsed: false, usage };
-  }
+    // ── Pass 2 (max one): repair only if deterministic checks fail ────
+    const firstFailures = failureSummaries(first);
+    if (firstFailures.length === 0) {
+      return { classification: first, rawText, repairUsed: false, usage };
+    }
 
-  log.info('claudeEngine: validator failures — running single repair pass', {
-    fileName,
-    failures: firstFailures.length,
-  });
-  const previousJson = JSON.stringify(first.statements);
-  const repaired = await callEngine(buildRepairInstruction(firstFailures, previousJson));
+    const failedTypes = statementTypesWithErrors(first.statements);
+    log.info('claudeEngine: validator failures — running single repair pass', {
+      fileName,
+      failures: firstFailures.length,
+      failedStatementTypes: [...failedTypes],
+    });
+    const previousJson = JSON.stringify(first.statements);
+    const repaired = await callEngine(buildRepairInstruction(firstFailures, previousJson));
 
-  if (repaired && repaired.statements.length > 0) {
-    const repairedFailures = failureSummaries(repaired);
-    if (repairedFailures.length < firstFailures.length) {
-      repaired.warnings.push(
-        `Repair pass fixed ${firstFailures.length - repairedFailures.length}/${firstFailures.length} validation errors`,
-      );
-      return { classification: repaired, rawText, repairUsed: true, usage };
+    if (repaired && repaired.statements.length > 0) {
+      const merged = mergeRepairedStatements(first, repaired, failedTypes);
+      const mergedFailures = failureSummaries(merged);
+      if (mergedFailures.length < firstFailures.length) {
+        merged.warnings.push(
+          `Repair pass fixed ${firstFailures.length - mergedFailures.length}/${firstFailures.length} validation errors`,
+        );
+        return { classification: merged, rawText, repairUsed: true, usage };
+      }
+    }
+
+    first.warnings.push('Repair pass did not improve validation — original extraction kept');
+    return { classification: first, rawText, repairUsed: true, usage };
+  } finally {
+    if (uploadedFileId) {
+      const fileIdToDelete = uploadedFileId;
+      void getAnthropicClient()
+        .beta.files.delete(fileIdToDelete, { betas: [FILES_BETA] } as never)
+        .catch((err: unknown) => log.warn('claudeEngine: failed to delete uploaded file', { fileName, fileId: fileIdToDelete, err }));
     }
   }
-
-  first.warnings.push('Repair pass did not improve validation — original extraction kept');
-  return { classification: first, rawText, repairUsed: true, usage };
 }
