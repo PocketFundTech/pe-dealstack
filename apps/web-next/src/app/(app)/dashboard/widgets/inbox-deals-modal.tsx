@@ -33,7 +33,22 @@ export interface InboxDealCandidate {
   dealSize: number | null;
   overallConfidence: number;
   reviewReasons: string[];
+  // Explainable pickup breakdown from the backend signal scorer — why this
+  // email was picked up and at what priority.
+  signalScore: number;
+  priority: "high" | "medium" | "low";
+  signals: string[];
 }
+
+// Priority chip styling — High/Medium/Low tiers from the signal scorer.
+const PRIORITY_STYLES: Record<
+  InboxDealCandidate["priority"],
+  { label: string; className: string }
+> = {
+  high: { label: "High priority", className: "bg-green-50 text-green-700 border border-green-200" },
+  medium: { label: "Medium priority", className: "bg-amber-50 text-amber-700 border border-amber-200" },
+  low: { label: "Low priority", className: "bg-gray-100 text-text-muted border border-border-subtle" },
+};
 
 interface InboxDealsModalProps {
   candidates: InboxDealCandidate[];
@@ -95,6 +110,7 @@ function CandidateCard({
   // overallConfidence is already a 0–100 percentage (see aiExtractor: needsReview
   // triggers when it drops below 70), so round it — do NOT multiply by 100.
   const confidencePct = Math.round(candidate.overallConfidence);
+  const priority = PRIORITY_STYLES[candidate.priority] ?? PRIORITY_STYLES.low;
 
   const handleCreate = async () => {
     setCreating(true);
@@ -133,10 +149,35 @@ function CandidateCard({
             {relative && <span> &middot; {relative}</span>}
           </p>
         </div>
-        <span className="shrink-0 rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-bold text-primary">
-          {confidencePct}% confidence
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold", priority.className)}>
+            {priority.label}
+          </span>
+          <span className="rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-bold text-primary">
+            {confidencePct}% confidence
+          </span>
+        </div>
       </div>
+
+      {/* Why this email was picked up — the signal breakdown from the scanner. */}
+      {candidate.signals.length > 0 && (
+        <div className="mb-3 rounded-lg bg-gray-50 px-3 py-2">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+            Why it was picked up
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {candidate.signals.map((signal, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-0.5 text-[11px] text-text-secondary ring-1 ring-border-subtle"
+              >
+                <span className="material-symbols-outlined text-[12px] text-primary">check_small</span>
+                {signal}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Editable deal name */}
       <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-text-muted">

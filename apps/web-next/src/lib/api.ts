@@ -117,9 +117,55 @@ async function requestRaw(path: string, options: RequestInit = {}): Promise<Resp
   return res;
 }
 
+/**
+ * POST that consumes an NDJSON (newline-delimited JSON) streaming response,
+ * invoking `onLine` for each parsed object AS IT ARRIVES. Powers live progress
+ * UIs (e.g. the inbox-scan terminal) where the server streams events over a
+ * long-running request instead of returning one buffered payload.
+ *
+ * 401 redirects to /login; a non-OK status throws ApiError with the server's
+ * message. Resolves once the stream ends.
+ */
+async function postStream(
+  path: string,
+  body: unknown,
+  onLine: (obj: unknown) => void,
+): Promise<void> {
+  const res = await requestRaw(path, { method: "POST", body: JSON.stringify(body) });
+  if (!res.ok || !res.body) {
+    const errBody = await res.json().catch(() => ({}) as Record<string, unknown>);
+    const msg = (errBody as { error?: string }).error || res.statusText || `API error ${res.status}`;
+    throw new ApiError(msg, res.status, (errBody as { code?: string }).code);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const flush = (chunk: string) => {
+    buffer += chunk;
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      try {
+        onLine(JSON.parse(line));
+      } catch {
+        // Partial/garbled line — skip it rather than aborting the whole stream.
+      }
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    flush(decoder.decode(value, { stream: true }));
+  }
+  flush(decoder.decode()); // final buffered line, if any
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   getRaw: (path: string) => requestRaw(path),
+  postStream,
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) =>

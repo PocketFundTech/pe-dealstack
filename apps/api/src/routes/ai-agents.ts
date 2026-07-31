@@ -209,6 +209,48 @@ router.post('/ai/scan-inbox', async (req, res) => {
   }
 });
 
+// POST /api/ai/scan-inbox/stream - Same scan, but streams NDJSON progress
+// events (one JSON object per line) as each email is listed, scored, gated,
+// extracted, and surfaced — so the dashboard can render a live terminal of
+// exactly which mail is being picked up. The final line is a `{t:'result'}`
+// event carrying the same payload the buffered endpoint returns.
+router.post('/ai/scan-inbox/stream', async (req, res) => {
+  const orgId = getOrgId(req);
+  const authUserId = req.user?.id;
+  if (!authUserId) return res.status(401).json({ error: 'Not authenticated' });
+  const parsed = scanInboxSchema.safeParse(req.body ?? {});
+  const lookbackDays = parsed.success ? parsed.data.lookbackDays : undefined;
+
+  // NDJSON stream. `no-transform` + flushing after each line keeps the
+  // (possible) compression/proxy layers from buffering the whole response.
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const write = (obj: unknown) => {
+    res.write(JSON.stringify(obj) + '\n');
+    // compression middleware monkey-patches res.flush; force each line out.
+    (res as unknown as { flush?: () => void }).flush?.();
+  };
+
+  try {
+    const result = await scanInboxForDeals({
+      orgId,
+      authUserId,
+      lookbackDays,
+      onEvent: (ev) => write(ev),
+    });
+    write({ t: 'result', result });
+  } catch (error: any) {
+    log.error('Inbox deal scan (stream) error', error);
+    const { userMessage } = classifyAIErrorObject(error);
+    write({ t: 'error', msg: userMessage });
+  } finally {
+    res.end();
+  }
+});
+
 // ─── Smart Email Drafting ─────────────────────────────────────────
 
 const emailDraftSchema = z.object({

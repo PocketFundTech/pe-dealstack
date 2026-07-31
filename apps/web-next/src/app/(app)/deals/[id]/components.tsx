@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { STAGE_LABELS } from "@/lib/constants";
+import { isGooglePickerConfigured, preloadGooglePicker } from "@/lib/googlePicker";
 import { DocumentRow, DocumentAnalysisModal } from "./document-row";
 import { PIPELINE_STAGES, type DocItem } from "./deal-detail-shared";
 
@@ -47,16 +48,28 @@ export function DocumentsTab({
   uploading,
   fileInputRef,
   onUpload,
+  driveImporting,
+  onImportFromDrive,
 }: {
   documents: DocItem[];
   uploading: boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  driveImporting: boolean;
+  onImportFromDrive: () => void;
 }) {
   // Modal state for AI-only docs (those without a backing file). Lifted here
   // so the modal renders alongside the row list and can be opened from either
   // the row click or the inline action button.
   const [analysisDoc, setAnalysisDoc] = useState<DocItem | null>(null);
+
+  // Warm the Google Picker SDKs when this tab mounts so the "Google Drive"
+  // popup opens reliably on first click (see preloadGooglePicker's docblock).
+  useEffect(() => {
+    if (isGooglePickerConfigured) preloadGooglePicker();
+  }, []);
+
+  const busy = uploading || driveImporting;
 
   return (
     <div className="flex flex-col gap-4">
@@ -64,7 +77,7 @@ export function DocumentsTab({
         <h3 className="text-sm font-semibold text-text-main">
           Documents ({documents.length})
         </h3>
-        <div>
+        <div className="flex items-center gap-2">
           <input
             ref={fileInputRef}
             type="file"
@@ -72,9 +85,21 @@ export function DocumentsTab({
             className="hidden"
             onChange={onUpload}
           />
+          {isGooglePickerConfigured && (
+            <button
+              onClick={onImportFromDrive}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-text-secondary bg-white border border-border-subtle rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {driveImporting ? "progress_activity" : "add_to_drive"}
+              </span>
+              {driveImporting ? "Importing..." : "Google Drive"}
+            </button>
+          )}
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
+            disabled={busy}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-60"
             style={{ backgroundColor: "#003366" }}
           >

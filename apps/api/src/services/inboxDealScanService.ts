@@ -27,6 +27,12 @@ import type { Integration } from '../integrations/_platform/types.js';
 import type { GmailMessageFull } from '../integrations/gmail/types.js';
 import { extractDealDataFromText } from './aiExtractor.js';
 import { extractTextFromPDF } from './pdfExtractor.js';
+import {
+  scoreDealSignals,
+  priorityRank,
+  LLM_EXTRACTION_GATE,
+  type DealPriority,
+} from './inboxDealSignals.js';
 
 // ─── Tunables (no magic numbers) ───────────────────────────────────
 const LOOKBACK_DAYS_DEFAULT = 14;
@@ -84,12 +90,42 @@ export interface InboxDealCandidate {
   dealSize: number | null; // millions, null if confidence < FIELD_FLOOR
   overallConfidence: number;
   reviewReasons: string[];
+  // Explainable pickup signals (inboxDealSignals.ts) — the "why this email was
+  // picked up, and at what priority" breakdown shown in the widget.
+  signalScore: number; // 0–100
+  priority: DealPriority; // 'high' | 'medium' | 'low'
+  signals: string[]; // matched deal signals, strongest first
 }
+
+// Compact, user-facing summary of how the scan triaged the inbox — powers the
+// "here's what the scan did" line in the Inbox Deal Finder widget.
+export interface InboxScanProcess {
+  scanned: number; // emails fetched from the keyword-scoped Gmail query
+  skippedLowSignal: number; // fetched but gated out before the LLM (noise)
+  high: number; // surfaced candidates by priority
+  medium: number;
+  low: number;
+}
+
+// ─── Live progress events ──────────────────────────────────────────
+// Emitted through the optional `onEvent` callback so the streaming route can
+// relay a terminal-style, real-time log of exactly which emails the scan sees,
+// scores, extracts, and surfaces — the user watches new mail get picked up.
+export type ScanEvent =
+  | { t: 'status'; msg: string }
+  | { t: 'listed'; count: number; lookbackDays: number }
+  | { t: 'email'; subject: string; from: string; score: number; priority: DealPriority; gated: boolean; signals: string[] }
+  | { t: 'extract'; subject: string }
+  | { t: 'candidate'; company: string; priority: DealPriority; confidence: number }
+  | { t: 'skip'; subject: string; reason: string }
+  | { t: 'result'; result: InboxScanResult }
+  | { t: 'error'; msg: string };
 
 export interface InboxScanResult {
   connected: boolean;
   scanned: number;
   candidates: InboxDealCandidate[];
+  process?: InboxScanProcess;
   // Count of PDF attachments that existed on scanned emails but yielded no
   // usable text — scanned/image-only PDFs (pdf-parse returns ~nothing), files
   // that threw, oversized files, or attachments skipped once the PDF time/byte
@@ -330,8 +366,18 @@ export async function scanInboxForDeals(args: {
   orgId: string;
   authUserId: string;
   lookbackDays?: number;
+  // Optional progress sink — the streaming route feeds each event to the client
+  // as a terminal log line. No-op for the plain (buffered) endpoint.
+  onEvent?: (ev: ScanEvent) => void;
 }): Promise<InboxScanResult> {
   const { orgId, authUserId } = args;
+  const emit = (ev: ScanEvent) => {
+    try {
+      args.onEvent?.(ev);
+    } catch {
+      // A broken client stream must never break the scan itself.
+    }
+  };
   const notConnected: InboxScanResult = {
     connected: false,
     scanned: 0,
@@ -365,6 +411,8 @@ export async function scanInboxForDeals(args: {
     return notConnected;
   }
 
+  emit({ t: 'status', msg: 'Connecting to Gmail…' });
+
   // 4. Ensure a fresh access token.
   const accessToken = await ensureFreshGmailToken(integration as Integration);
   if (!accessToken) {
@@ -373,8 +421,10 @@ export async function scanInboxForDeals(args: {
   }
 
   // 5. List recent deal-candidate emails (broad keyword scope, no contacts needed).
+  emit({ t: 'status', msg: `Searching inbox — last ${lookbackDays} days…` });
   const since = new Date(Date.now() - lookbackDays * MS_PER_DAY);
   const headers = await listRecentDealCandidates(accessToken, since, MAX_SCAN_EMAILS);
+  emit({ t: 'listed', count: headers.length, lookbackDays });
   if (headers.length === 0) {
     log.info('inboxDealScan: no candidate emails in window', { orgId, lookbackDays });
     return { connected: true, scanned: 0, candidates: [], attachmentsUnread: 0 };
@@ -401,15 +451,49 @@ export async function scanInboxForDeals(args: {
     return { connected: true, scanned: 0, candidates: [], attachmentsUnread: 0 };
   }
 
-  // Map each message to its deal-document attachment name (if any), then bubble
-  // those emails to the front so their (often large) PDFs get first claim on the
-  // shared PDF-work budget before it's exhausted by lower-signal emails.
+  // Score each message's deal-signal strength (cheap, no LLM) from its subject,
+  // body/snippet, and attachment filenames. This is the PRECISION gate: the
+  // Gmail query casts a wide net for recall, and this drops the emails that only
+  // brushed a keyword (a newsletter that says "for sale") before we spend an LLM
+  // call on them — which is what stops the scan "picking up randomly". It also
+  // yields the priority + human-readable breakdown surfaced in the widget.
+  emit({ t: 'status', msg: `Scoring ${messages.length} email${messages.length === 1 ? '' : 's'} for deal signals…` });
+  const signalByMsgId = new Map<string, ReturnType<typeof scoreDealSignals>>();
   const dealAttachByMsgId = new Map<string, string | null>();
-  for (const m of messages) dealAttachByMsgId.set(m.id, dealAttachmentName(m));
-  messages.sort(
-    (a, b) =>
-      Number(dealAttachByMsgId.get(b.id) != null) -
-      Number(dealAttachByMsgId.get(a.id) != null),
+  for (const m of messages) {
+    dealAttachByMsgId.set(m.id, dealAttachmentName(m));
+    const signal = scoreDealSignals({
+      subject: m.headers.Subject || '',
+      body: m.body || m.snippet || '',
+      attachmentNames: m.attachments.map((a) => a.filename).filter(Boolean),
+    });
+    signalByMsgId.set(m.id, signal);
+    emit({
+      t: 'email',
+      subject: m.headers.Subject || '(no subject)',
+      from: m.headers.From || 'unknown',
+      score: signal.score,
+      priority: signal.priority,
+      gated: signal.score < LLM_EXTRACTION_GATE,
+      signals: signal.signals,
+    });
+  }
+
+  // Gate out low-signal noise before the LLM; keep a count so the widget can
+  // show "N skipped as low-signal" instead of silently discarding them.
+  const toExtract = messages.filter(
+    (m) => (signalByMsgId.get(m.id)?.score ?? 0) >= LLM_EXTRACTION_GATE,
+  );
+  const skippedLowSignal = messages.length - toExtract.length;
+  emit({
+    t: 'status',
+    msg: `${toExtract.length} passed the signal gate · ${skippedLowSignal} skipped — extracting with AI…`,
+  });
+
+  // Highest-signal emails first — they get first claim on the shared PDF-work
+  // budget (their decks are the ones worth parsing) and are extracted first.
+  toExtract.sort(
+    (a, b) => (signalByMsgId.get(b.id)?.score ?? 0) - (signalByMsgId.get(a.id)?.score ?? 0),
   );
 
   // 7. Existing org company names for dedupe.
@@ -422,12 +506,13 @@ export async function scanInboxForDeals(args: {
   const pdfBudget = makePdfWorkBudget();
   type Extracted = { message: GmailMessageFull; data: Awaited<ReturnType<typeof extractDealDataFromText>> };
   const extracted = await mapWithConcurrency<GmailMessageFull, Extracted | null>(
-    messages,
+    toExtract,
     EXTRACT_CONCURRENCY,
     async (m) => {
       const subject = m.headers.Subject || '(no subject)';
       const from = m.headers.From || 'unknown';
       const bodyText = m.body || m.snippet || '';
+      emit({ t: 'extract', subject });
 
       // Teasers/CIMs often arrive AS a PDF with a near-empty body — pull the
       // attachment text so those emails clear the length floor below.
@@ -457,8 +542,12 @@ export async function scanInboxForDeals(args: {
     if (!item || !item.data) continue;
     const { message, data } = item;
 
+    const subject = message.headers.Subject || '(no subject)';
     const companyName = (data.companyName.value ?? '').trim();
-    if (!companyName) continue;
+    if (!companyName) {
+      emit({ t: 'skip', subject, reason: 'no company name found' });
+      continue;
+    }
 
     // A deal-document attachment (CIM/teaser/IM) is itself a strong signal, so
     // hold such emails to a lower confidence bar than a plain body-only email.
@@ -466,11 +555,17 @@ export async function scanInboxForDeals(args: {
     const confidenceFloor = attachmentName
       ? MIN_CANDIDATE_CONFIDENCE_WITH_ATTACHMENT
       : MIN_CANDIDATE_CONFIDENCE;
-    if (data.overallConfidence < confidenceFloor) continue;
+    if (data.overallConfidence < confidenceFloor) {
+      emit({ t: 'skip', subject, reason: `low extraction confidence (${data.overallConfidence}%)` });
+      continue;
+    }
 
     // Dedupe against existing org companies AND across this scan's candidates.
     const key = companyName.toLowerCase();
-    if (existingNames.has(key)) continue;
+    if (existingNames.has(key)) {
+      emit({ t: 'skip', subject, reason: `"${companyName}" already exists` });
+      continue;
+    }
     existingNames.add(key);
 
     const reviewReasons = Array.isArray(data.reviewReasons) ? [...data.reviewReasons] : [];
@@ -478,6 +573,13 @@ export async function scanInboxForDeals(args: {
       reviewReasons.unshift(`Deal document attached: ${attachmentName}`);
     }
 
+    const signal = signalByMsgId.get(message.id);
+    emit({
+      t: 'candidate',
+      company: companyName,
+      priority: signal?.priority ?? 'low',
+      confidence: data.overallConfidence,
+    });
     candidates.push({
       emailId: message.id,
       threadId: message.threadId,
@@ -495,16 +597,33 @@ export async function scanInboxForDeals(args: {
       dealSize: gateFinancial(data.dealSize),
       overallConfidence: data.overallConfidence,
       reviewReasons,
+      signalScore: signal?.score ?? 0,
+      priority: signal?.priority ?? 'low',
+      signals: signal?.signals ?? [],
     });
   }
 
-  // 10. Sort by overall confidence, highest first.
-  candidates.sort((a, b) => b.overallConfidence - a.overallConfidence);
+  // 10. Sort by priority tier first, then signal strength, then extraction
+  // confidence — so the strongest, most-clearly-a-deal emails sit at the top.
+  candidates.sort(
+    (a, b) =>
+      priorityRank(a.priority) - priorityRank(b.priority) ||
+      b.signalScore - a.signalScore ||
+      b.overallConfidence - a.overallConfidence,
+  );
+
+  const scanProcess: InboxScanProcess = {
+    scanned: messages.length,
+    skippedLowSignal,
+    high: candidates.filter((c) => c.priority === 'high').length,
+    medium: candidates.filter((c) => c.priority === 'medium').length,
+    low: candidates.filter((c) => c.priority === 'low').length,
+  };
 
   log.info('inboxDealScan: complete', {
     orgId,
-    scanned: messages.length,
     candidates: candidates.length,
+    ...scanProcess,
     attachmentsUnread: pdfBudget.attachmentsUnread,
   });
 
@@ -513,6 +632,7 @@ export async function scanInboxForDeals(args: {
     connected: true,
     scanned: messages.length,
     candidates,
+    process: scanProcess,
     attachmentsUnread: pdfBudget.attachmentsUnread,
   };
 }

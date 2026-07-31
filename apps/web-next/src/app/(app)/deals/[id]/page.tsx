@@ -26,6 +26,7 @@ import {
   selectTerminalStage,
   confirmDeleteDeal as confirmDeleteDealFn,
   uploadDocuments,
+  importDriveDocument,
   sendPrompt as sendPromptFn,
   clearChatHistory as clearChatHistoryFn,
 } from "./deal-page-handlers";
@@ -87,6 +88,7 @@ export default function DealDetailPage() {
   // Documents
   const [documents, setDocuments] = useState<DocItem[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [driveImporting, setDriveImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Chat (always visible in sidebar, load eagerly)
@@ -247,6 +249,9 @@ export default function DealDetailPage() {
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) =>
     uploadDocuments(e, { dealId, setUploading, setDocuments, fileInputRef, showToast });
 
+  const handleImportFromDrive = () =>
+    importDriveDocument({ dealId, setDriveImporting, setDocuments, showToast });
+
   // Send a specific text (used by suggestion chips) without relying on
   // chatInput state -- setState is async so a chip click can't setChatInput
   // then immediately read it.
@@ -320,6 +325,8 @@ export default function DealDetailPage() {
             uploading={uploading}
             fileInputRef={fileInputRef}
             onUpload={handleUpload}
+            driveImporting={driveImporting}
+            onImportFromDrive={handleImportFromDrive}
             onOpenFinancialsFullscreen={() => setFullscreenSection("financials")}
             onOpenAnalysisFullscreen={() => setFullscreenSection("analysis")}
           />

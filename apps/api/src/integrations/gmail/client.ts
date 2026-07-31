@@ -380,12 +380,18 @@ export async function listMessagesForDeal(
   return out.slice(0, cap);
 }
 
-// Language common in sourcing / intro emails from bankers and brokers. Used to
-// keyword-scope the broad inbox scan so we don't fetch + AI-extract every email.
+// Language common in sourcing / intro emails from bankers, brokers, AND the
+// off-market deal-sourcing firms that dominate real inbound (Pocket Fund style
+// "here are this week's opportunities" emails). Used to keyword-scope the broad
+// inbox scan so we don't fetch + AI-extract every email. Kept intentionally
+// wide for RECALL — the per-email signal score (inboxDealSignals.ts) is the
+// PRECISION gate that drops anything that merely brushes one of these terms.
 export const DEAL_SOURCING_TERMS = [
+  // Bank / broker CIM language
   'confidential information memorandum',
   'CIM',
   'teaser',
+  'information memorandum',
   'investment opportunity',
   'acquisition opportunity',
   'for sale',
@@ -393,6 +399,15 @@ export const DEAL_SOURCING_TERMS = [
   'enterprise value',
   'EBITDA',
   'buyout',
+  // Off-market / SaaS sourcing language (the majority of real inbound)
+  'MRR',
+  'ARR',
+  'asking price',
+  'seeking a buyer',
+  'majority buyout',
+  'one-pager',
+  'deal flow',
+  'acquisition opportunities',
 ];
 
 // Attachment-FILENAME signals. Gmail free-text search does NOT match attachment
@@ -405,6 +420,10 @@ export const DEAL_ATTACHMENT_FILENAME_TERMS = [
   'cim',
   'teaser',
   'memorandum',
+  'one-pager',
+  'onepager',
+  'tearsheet',
+  'tear-sheet',
 ];
 
 /**

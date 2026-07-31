@@ -61,6 +61,8 @@ export interface DealPageLeftPanelProps {
   uploading: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  driveImporting: boolean;
+  onImportFromDrive: () => void;
 
   // Fullscreen overlay openers (Financials / Analysis sections)
   onOpenFinancialsFullscreen: () => void;
@@ -84,6 +86,8 @@ export function DealPageLeftPanel({
   uploading,
   fileInputRef,
   onUpload,
+  driveImporting,
+  onImportFromDrive,
   onOpenFinancialsFullscreen,
   onOpenAnalysisFullscreen,
 }: DealPageLeftPanelProps) {
@@ -183,6 +187,8 @@ export function DealPageLeftPanel({
               uploading={uploading}
               fileInputRef={fileInputRef}
               onUpload={onUpload}
+              driveImporting={driveImporting}
+              onImportFromDrive={onImportFromDrive}
             />
           )}
           {activeTab === "Activity" && (

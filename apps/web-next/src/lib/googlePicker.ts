@@ -53,6 +53,28 @@ export function getGooglePickerConfig(): GooglePickerConfig & {
 export const isGooglePickerConfigured: boolean =
   getGooglePickerConfig().isConfigured;
 
+/**
+ * Drive MIME allow-list for adding a document to an EXISTING deal (deal
+ * Documents tab → "Google Drive"). Mirrors the server document-upload
+ * validator's accepted types (apps/api fileValidator.ALLOWED_MIME_TYPES) PLUS
+ * native Google types that export cleanly to a supported format (Docs/Slides →
+ * PDF, Sheets → XLSX). Deliberately EXCLUDES text/plain, which the document
+ * upload endpoint rejects — filtering it out of the picker avoids a confusing
+ * post-pick error. Distinct from the deal-intake ingest list (which also
+ * accepts .txt because that path runs a different pipeline).
+ */
+export const DRIVE_DOCUMENT_MIME_TYPES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+  "text/csv",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+  "application/vnd.google-apps.document",
+  "application/vnd.google-apps.spreadsheet",
+  "application/vnd.google-apps.presentation",
+];
+
 /** Shape returned to the caller when a file is picked. */
 export interface PickedGoogleFile {
   fileId: string;

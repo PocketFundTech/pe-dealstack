@@ -485,7 +485,7 @@ export default function DashboardPage() {
       />
 
       {tasksModalOpen && (
-        <TasksModal tasks={tasks} onClose={() => setTasksModalOpen(false)} />
+        <TasksModal tasks={tasks} onClose={() => setTasksModalOpen(false)} onToggle={toggleTask} />
       )}
     </div>
   );

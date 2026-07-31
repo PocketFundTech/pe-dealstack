@@ -78,6 +78,14 @@ const nextConfig: NextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          // Google Identity Services + the Drive Picker open an OAuth popup and
+          // then call window.close()/poll window.closed on it. Under the default
+          // (or a stricter same-origin) COOP those cross-window calls are severed
+          // — Chrome logs "Cross-Origin-Opener-Policy policy would block the
+          // window.close call" and the picker's token callback never fires.
+          // `same-origin-allow-popups` keeps this document isolated from any
+          // cross-origin opener while still letting the popups WE open talk back.
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
         ],
       },
     ];
