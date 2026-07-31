@@ -14,6 +14,7 @@ import { log } from '../../../../utils/logger.js';
 import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { AgentStep } from '../state.js';
+import type { ClassifiedStatement } from '../../../financialClassifier.js';
 import {
   computeCompositeConfidence,
   getConfidenceTier,
@@ -25,6 +26,65 @@ import {
 /** Create a timestamped agent step */
 function step(node: string, message: string, detail?: string): AgentStep {
   return { timestamp: new Date().toISOString(), node, message, detail };
+}
+
+/**
+ * Marker prefix set by the Claude engine's native-PDF path (claudeEngine.ts)
+ * when there's no real text layer to check sourceQuotes against — native
+ * PDF input replaces pdf-parse entirely for that path, so scoreSourceMatch's
+ * substring check has nothing real to compare against.
+ */
+export const CLAUDE_NATIVE_PDF_MARKER = '[claude-native-pdf]';
+
+/** A bare page marker (no quote captured) carries the same evidentiary
+ * weight as "no source" — the model didn't cite anything checkable. */
+function isBarePageMarker(sourceValue: string): boolean {
+  return /^p(\d+|\?)$/.test(sourceValue);
+}
+
+/**
+ * Score a single _source value when there's no real text layer to check it
+ * against. The structured extraction schema REQUIRES sourcePage/sourceQuote
+ * per line item (extractionSchema.ts), so a well-formed quote is a real —
+ * if unverified — provenance signal: better than no citation at all, but
+ * not confirmable the way a text-layer substring match is. Deliberately
+ * scored below scoreSourceMatch's 100 (confirmed) and 80 (partial) tiers.
+ */
+function scoreClaudeNativePdfSource(sourceValue: string): number {
+  return isBarePageMarker(sourceValue) ? 20 : 75;
+}
+
+/**
+ * Average source-match confidence across every _source field in the
+ * extracted statements. Exported as a pure function for testing (mirrors
+ * the `reconcileResults` "exported for testing" convention in
+ * crossVerifyNode.ts).
+ *
+ * When rawText carries CLAUDE_NATIVE_PDF_MARKER, scoreSourceMatch's
+ * text-substring check is skipped in favor of scoreClaudeNativePdfSource —
+ * there's no real document text to check citations against. Claude-Excel
+ * extractions (rawText = real converted Excel text) still use
+ * scoreSourceMatch normally, as do all legacy (gpt4o/azure/vision) sources.
+ */
+export function computeSourceMatchAvg(
+  statements: ClassifiedStatement[],
+  rawText: string,
+): number {
+  if (!rawText || statements.length === 0) return 20; // default if no source quotes
+
+  const usesClaudeNativePdf = rawText.startsWith(CLAUDE_NATIVE_PDF_MARKER);
+  const scores: number[] = [];
+  for (const stmt of statements) {
+    for (const period of stmt.periods) {
+      for (const [key, val] of Object.entries(period.lineItems || {})) {
+        if (key.endsWith('_source') && typeof val === 'string') {
+          scores.push(usesClaudeNativePdf ? scoreClaudeNativePdfSource(val) : scoreSourceMatch(val, rawText));
+        }
+      }
+    }
+  }
+  if (scores.length === 0) return 20;
+  return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
 }
 
 /**
@@ -73,22 +133,7 @@ export async function storeNode(
       : null;
 
     // Average source match across all periods
-    let sourceMatchAvg = 20; // default if no source quotes
-    if (rawText && statements.length > 0) {
-      const scores: number[] = [];
-      for (const stmt of statements) {
-        for (const period of stmt.periods) {
-          for (const [key, val] of Object.entries(period.lineItems || {})) {
-            if (key.endsWith('_source') && typeof val === 'string') {
-              scores.push(scoreSourceMatch(val, rawText));
-            }
-          }
-        }
-      }
-      if (scores.length > 0) {
-        sourceMatchAvg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
-      }
-    }
+    const sourceMatchAvg = computeSourceMatchAvg(statements, rawText);
 
     const compositeScore = computeCompositeConfidence({
       llmConfidence: state.overallConfidence,

@@ -96,6 +96,10 @@ export async function verifyNode(
   const steps: AgentStep[] = [];
   const { statements, rawText } = state;
 
+  if (state.extractionSource === 'claude') {
+    return { steps: [step('verify', 'Skipped — structured-output engine carries in-schema provenance')] };
+  }
+
   // Skip if flag is set (serverless timeout optimization)
   if (state.skipVerify) {
     steps.push(step('verify', 'Skipping verification (fast mode)'));

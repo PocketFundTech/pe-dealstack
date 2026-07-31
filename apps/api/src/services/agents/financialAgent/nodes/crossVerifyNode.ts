@@ -227,6 +227,10 @@ export async function crossVerifyNode(
   const steps: AgentStep[] = [];
   const { statements, rawText } = state;
 
+  if (state.extractionSource === 'claude') {
+    return { steps: [step('crossVerify', 'Skipped — structured-output engine carries in-schema provenance')] };
+  }
+
   // Skip if Claude not configured
   if (!isClaudeEnabled() || !anthropic) {
     steps.push(step('crossVerify', 'Skipping cross-verification — ANTHROPIC_API_KEY not configured'));

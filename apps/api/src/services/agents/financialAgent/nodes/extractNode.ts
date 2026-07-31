@@ -95,6 +95,52 @@ export async function extractNode(
   };
 
   try {
+    // ── Claude structured-output engine (Phase 1, EXTRACTION_ENGINE=claude) ──
+    if ((process.env.EXTRACTION_ENGINE || 'legacy') === 'claude') {
+      steps.push(step('extract', 'EXTRACTION_ENGINE=claude — using structured-output engine'));
+      const { extractWithClaude } = await import('../../../extraction/claudeEngine.js');
+      const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType });
+
+      if (!engineResult || engineResult.classification.statements.length === 0) {
+        return {
+          status: 'failed',
+          error: 'Claude engine found no financial statements (or the request was declined)',
+          steps: [...steps, step('extract', 'Claude engine returned no statements')],
+        };
+      }
+
+      const { classification, rawText: engineRawText, repairUsed } = engineResult;
+      steps.push(
+        step(
+          'extract',
+          `Claude engine extracted ${classification.statements.length} statement type(s)` +
+            (repairUsed ? ' (repair pass used)' : ''),
+          `tokens in/out: ${engineResult.usage.inputTokens}/${engineResult.usage.outputTokens}`,
+        ),
+      );
+
+      cacheResult({
+        rawText: engineRawText,
+        extractionSource: 'claude',
+        classification,
+        statements: classification.statements,
+        overallConfidence: classification.overallConfidence,
+        warnings: classification.warnings,
+      });
+
+      return {
+        rawText: engineRawText,
+        extractionSource: 'claude',
+        classification,
+        statements: classification.statements,
+        overallConfidence: classification.overallConfidence,
+        warnings: classification.warnings,
+        fromCache: false,
+        status: 'validating',
+        steps,
+      };
+    }
+
     // ── Excel Path ─────────────────────────────────────────────
     if (fileType === 'excel' || isExcelFile(null, fileName)) {
       steps.push(step('extract', 'Detected Excel file — parsing with xlsx'));
