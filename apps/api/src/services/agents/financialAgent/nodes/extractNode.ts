@@ -65,9 +65,15 @@ export async function extractNode(
   // or re-extracted via the route — hit the cache regardless of which
   // extraction layer (Excel/LlamaParse/pdf-parse/Vision) succeeded.
   const contentHash = hashContent(fileBuffer);
+  // Cache key includes the active engine so a document cached by one engine
+  // is never silently served to the other — critical for both the rollout
+  // (flag ON must not skip the new engine due to a stale legacy cache hit)
+  // and rollback (flag OFF must not keep serving claude-flavored cached
+  // state). extractionMode's own doc comment already reserves this purpose.
+  const engineMode = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude' ? 'claude' : 'default';
 
   if (!forceExtraction) {
-    const cached = await getCachedExtraction({ contentHash });
+    const cached = await getCachedExtraction({ contentHash, extractionMode: engineMode });
     if (cached) {
       steps.push(step('extract', `Cache hit — skipping LLM extraction (saved ~$0.75-$1.50)`));
       return {
@@ -89,7 +95,7 @@ export async function extractNode(
   /** Persist a successful extraction to the cache (best-effort). */
   const cacheResult = (payload: CachedExtractionResult): void => {
     if (!payload.classification || payload.statements.length === 0) return;
-    void putCachedExtraction({ contentHash }, payload).catch(() => {
+    void putCachedExtraction({ contentHash, extractionMode: engineMode }, payload).catch(() => {
       // Errors already logged inside putCachedExtraction; swallow here.
     });
   };
@@ -101,11 +107,38 @@ export async function extractNode(
       const { extractWithClaude } = await import('../../../extraction/claudeEngine.js');
       const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType });
 
-      if (!engineResult || engineResult.classification.statements.length === 0) {
+      if (!engineResult) {
         return {
           status: 'failed',
-          error: 'Claude engine found no financial statements (or the request was declined)',
-          steps: [...steps, step('extract', 'Claude engine returned no statements')],
+          error: 'Claude engine could not extract this document (upload failed or the request was declined)',
+          steps: [...steps, step('extract', 'Claude engine returned no result')],
+        };
+      }
+
+      if (engineResult.classification.statements.length === 0) {
+        // Matches the legacy convention (see the Excel/Vision "no financial
+        // data found" paths below): a genuinely empty extraction is a
+        // successful, completed run with zero data — not a pipeline failure.
+        cacheResult({
+          rawText: engineResult.rawText,
+          extractionSource: 'claude',
+          classification: engineResult.classification,
+          statements: [],
+          overallConfidence: 0,
+          warnings: engineResult.classification.warnings,
+        });
+        return {
+          rawText: engineResult.rawText,
+          extractionSource: 'claude',
+          classification: engineResult.classification,
+          statements: [],
+          overallConfidence: 0,
+          warnings: engineResult.classification.warnings.length > 0
+            ? engineResult.classification.warnings
+            : ['No financial data found by the claude engine'],
+          fromCache: false,
+          status: 'validating',
+          steps: [...steps, step('extract', 'Claude engine found no financial statements in the document')],
         };
       }
 

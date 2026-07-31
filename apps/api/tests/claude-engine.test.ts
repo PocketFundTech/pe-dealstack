@@ -164,6 +164,7 @@ describe('extractWithClaude', () => {
     const content = calls[0].messages[0].content;
     expect(content.some((b: any) => b.type === 'document' && b.source?.file_id === 'file_test123')).toBe(true);
     expect(calls[0].extraBetas).toContain('files-api-2025-04-14');
+    expect(out!.rawText.startsWith('[claude-native-pdf]')).toBe(true);
   });
 
   it('runs exactly one repair pass when the validator fails, keeping the better result', async () => {

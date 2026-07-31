@@ -15,6 +15,7 @@ import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { AgentStep } from '../state.js';
 import type { ClassifiedStatement } from '../../../financialClassifier.js';
+import { CLAUDE_NATIVE_PDF_MARKER } from '../../../extraction/claudeEngine.js';
 import {
   computeCompositeConfidence,
   getConfidenceTier,
@@ -34,12 +35,16 @@ function step(node: string, message: string, detail?: string): AgentStep {
  * PDF input replaces pdf-parse entirely for that path, so scoreSourceMatch's
  * substring check has nothing real to compare against.
  */
-export const CLAUDE_NATIVE_PDF_MARKER = '[claude-native-pdf]';
+export { CLAUDE_NATIVE_PDF_MARKER } from '../../../extraction/claudeEngine.js';
 
 /** A bare page marker (no quote captured) carries the same evidentiary
  * weight as "no source" — the model didn't cite anything checkable. */
 function isBarePageMarker(sourceValue: string): boolean {
-  return /^p(\d+|\?)$/.test(sourceValue);
+  const trimmed = sourceValue.trim();
+  // An empty/whitespace-only quote carries the same evidentiary weight as a
+  // bare page marker — no real citation was captured, matching legacy
+  // scoreSourceMatch's treatment of a falsy quote (compositeConfidence.ts).
+  return trimmed === '' || /^p(\d+|\?)$/.test(trimmed);
 }
 
 /**

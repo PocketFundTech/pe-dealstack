@@ -25,6 +25,14 @@ import { toClassificationResult } from './normalize.js';
 
 const FILES_BETA = 'files-api-2025-04-14';
 
+/**
+ * Prefix on `rawText` for the PDF path — signals "no real text layer exists"
+ * to any downstream confidence-scoring logic (see storeNode.ts's
+ * computeSourceMatchAvg, which imports this constant rather than
+ * hardcoding its own copy).
+ */
+export const CLAUDE_NATIVE_PDF_MARKER = '[claude-native-pdf]';
+
 export interface ClaudeEngineInput {
   fileBuffer: Buffer;
   fileName: string;
@@ -156,7 +164,7 @@ export async function extractWithClaude(input: ClaudeEngineInput): Promise<Claud
       return null;
     }
     uploadedFileId = uploaded.id;
-    rawText = `[claude-native-pdf] ${fileName} — extracted via structured output; no text-layer dump`;
+    rawText = `${CLAUDE_NATIVE_PDF_MARKER} ${fileName} — extracted via structured output; no text-layer dump`;
     documentBlocks = [
       { type: 'document', source: { type: 'file', file_id: uploaded.id } },
     ];

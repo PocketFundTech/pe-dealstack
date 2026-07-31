@@ -42,6 +42,13 @@ describe('computeSourceMatchAvg', () => {
     expect(avg).toBe(20);
   });
 
+  it('scores an empty/whitespace-only quote the same as a bare page marker (20)', async () => {
+    const { computeSourceMatchAvg, CLAUDE_NATIVE_PDF_MARKER } = await getStoreNode();
+    const rawText = `${CLAUDE_NATIVE_PDF_MARKER} cim.pdf`;
+    const avg = computeSourceMatchAvg(stmt({ revenue: 45.2, revenue_source: '   ' }), rawText);
+    expect(avg).toBe(20);
+  });
+
   it('defaults to 20 when there are no _source fields or no rawText', async () => {
     const { computeSourceMatchAvg } = await getStoreNode();
     expect(computeSourceMatchAvg(stmt({ revenue: 45.2 }), 'some real text')).toBe(20);

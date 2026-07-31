@@ -59,6 +59,39 @@ describe('extractNode engine flag', () => {
     expect(result.statements).toHaveLength(1);
   });
 
+  it('treats an engine null result as a real failure, distinct from a valid empty extraction', async () => {
+    process.env.EXTRACTION_ENGINE = 'claude';
+    vi.mocked((await import('../src/services/extraction/claudeEngine.js')).extractWithClaude).mockResolvedValueOnce(null);
+    const { extractNode } = await import('../src/services/agents/financialAgent/nodes/extractNode.js');
+    const result = await extractNode({
+      fileBuffer: Buffer.from('%PDF-fake'),
+      fileName: 'test.pdf',
+      fileType: 'pdf',
+      forceExtraction: true,
+    } as any);
+    expect(result.status).toBe('failed');
+  });
+
+  it('treats a valid but empty extraction as a completed run, not a failure', async () => {
+    process.env.EXTRACTION_ENGINE = 'claude';
+    vi.mocked((await import('../src/services/extraction/claudeEngine.js')).extractWithClaude).mockResolvedValueOnce({
+      classification: { statements: [], overallConfidence: 0, warnings: [] },
+      rawText: '[claude-native-pdf] empty.pdf',
+      repairUsed: false,
+      usage: { inputTokens: 5, outputTokens: 2 },
+    });
+    const { extractNode } = await import('../src/services/agents/financialAgent/nodes/extractNode.js');
+    const result = await extractNode({
+      fileBuffer: Buffer.from('%PDF-fake'),
+      fileName: 'empty.pdf',
+      fileType: 'pdf',
+      forceExtraction: true,
+    } as any);
+    expect(result.status).toBe('validating');
+    expect(result.statements).toEqual([]);
+    expect(result.extractionSource).toBe('claude');
+  });
+
   it('legacy path is untouched when the flag is absent', async () => {
     delete process.env.EXTRACTION_ENGINE;
     const { extractNode } = await import('../src/services/agents/financialAgent/nodes/extractNode.js');
