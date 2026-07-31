@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { computeCompositeConfidence, getConfidenceTier } from '../src/services/compositeConfidence.js';
+import { computeCompositeConfidence, getConfidenceTier, scoreSourceMatch } from '../src/services/compositeConfidence.js';
+
+describe('scoreSourceMatch', () => {
+  it('scores a whitespace-only quote the same as an empty one (no real citation)', () => {
+    // Regression: normalizing before the falsy check matters — a truthy
+    // whitespace-only string previously slipped past `!sourceQuote` and then
+    // matched via `''.includes('')`, scoring a perfect 100 for zero citation.
+    expect(scoreSourceMatch('   ', 'The company reported revenue of $45.2M.')).toBe(20);
+    expect(scoreSourceMatch('\n\t', 'The company reported revenue of $45.2M.')).toBe(20);
+    expect(scoreSourceMatch('', 'The company reported revenue of $45.2M.')).toBe(20);
+    expect(scoreSourceMatch(undefined, 'The company reported revenue of $45.2M.')).toBe(20);
+  });
+
+  it('still scores a real verbatim quote as a full match', () => {
+    expect(scoreSourceMatch('revenue of $45.2M', 'The company reported revenue of $45.2M.')).toBe(100);
+  });
+});
 
 describe('computeCompositeConfidence', () => {
   it('returns high confidence when all signals agree', () => {

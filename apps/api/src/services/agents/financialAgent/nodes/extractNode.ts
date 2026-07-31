@@ -65,12 +65,19 @@ export async function extractNode(
   // or re-extracted via the route — hit the cache regardless of which
   // extraction layer (Excel/LlamaParse/pdf-parse/Vision) succeeded.
   const contentHash = hashContent(fileBuffer);
+  // Single source of truth for the engine flag — read once so the cache-key
+  // dimension below and the branch condition later can never drift apart
+  // (two independent reads of the same env var previously re-opened the
+  // exact cross-engine cache-poisoning gap this was written to close).
+  const useClaudeEngine = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude';
   // Cache key includes the active engine so a document cached by one engine
   // is never silently served to the other — critical for both the rollout
   // (flag ON must not skip the new engine due to a stale legacy cache hit)
   // and rollback (flag OFF must not keep serving claude-flavored cached
-  // state). extractionMode's own doc comment already reserves this purpose.
-  const engineMode = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude' ? 'claude' : 'default';
+  // state). extractionMode's own doc comment currently describes a fast/deep
+  // split reservation; this field is now overloaded to also carry the engine
+  // dimension — a future fast/deep split will need to compose with this.
+  const engineMode = useClaudeEngine ? 'claude' : 'default';
 
   if (!forceExtraction) {
     const cached = await getCachedExtraction({ contentHash, extractionMode: engineMode });
@@ -102,7 +109,7 @@ export async function extractNode(
 
   try {
     // ── Claude structured-output engine (Phase 1, EXTRACTION_ENGINE=claude) ──
-    if ((process.env.EXTRACTION_ENGINE || 'legacy') === 'claude') {
+    if (useClaudeEngine) {
       steps.push(step('extract', 'EXTRACTION_ENGINE=claude — using structured-output engine'));
       const { extractWithClaude } = await import('../../../extraction/claudeEngine.js');
       const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType });

@@ -44,7 +44,13 @@ export interface CachedExtractionResult {
 export interface ExtractionCacheKey {
   /** SHA-256 hex of the canonical content (post-OCR text or raw bytes). */
   contentHash: string;
-  /** Logical extraction mode — currently always 'default'. Reserved for fast/deep split. */
+  /**
+   * Logical extraction mode. Originally reserved for a fast/deep split
+   * (still unimplemented); also now carries the active extraction ENGINE
+   * ('default' for legacy, 'claude' for EXTRACTION_ENGINE=claude — see
+   * extractNode.ts) so a document cached under one engine is never served
+   * to the other. A future fast/deep split will need to compose with this.
+   */
   extractionMode?: string;
   /** Model tier (e.g. classification model name). Cache invalidates when the model changes. */
   modelTier?: string;
