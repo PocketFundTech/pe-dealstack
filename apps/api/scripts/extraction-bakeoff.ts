@@ -109,7 +109,7 @@ async function main(): Promise<void> {
       process.stdout.write(`  [legacy] ${file} ... `);
       const t0 = Date.now();
       try {
-        let text: string;
+        let text: string | null;
         if (fileType === 'excel') {
           const { extractTextFromExcel } = await import('../src/services/excelFinancialExtractor.js');
           text = extractTextFromExcel(buffer);
@@ -119,9 +119,10 @@ async function main(): Promise<void> {
           const pdfParse = require('pdf-parse');
           text = (await pdfParse(buffer)).text ?? '';
         }
-        const { classifyFinancials } = await import('../src/services/financialClassifier.js');
-        const classification = await classifyFinancials(text);
-        results.push(summarize('legacy', file, classification, Date.now() - t0, null));
+        const classification = text
+          ? await (await import('../src/services/financialClassifier.js')).classifyFinancials(text)
+          : null;
+        results.push(summarize('legacy', file, classification, Date.now() - t0, null, text ? '' : 'no readable text extracted'));
         console.log('done');
       } catch (err) {
         results.push(summarize('legacy', file, null, Date.now() - t0, null, String(err)));
