@@ -93,10 +93,29 @@ function mergeRepairedStatements(
   const repairedByType = new Map(repaired.statements.map((s) => [s.statementType, s]));
   const statements = first.statements.map((stmt) => {
     if (!failedTypes.has(stmt.statementType)) return stmt; // clean — never touched by repair
-    return repairedByType.get(stmt.statementType) ?? stmt; // repair dropped it → keep original
+    const repairedStmt = repairedByType.get(stmt.statementType);
+    if (!repairedStmt) return stmt; // repair dropped the whole type → keep original
+
+    // Guard against the repair pass silently DELETING a period that was
+    // present in `first` — the same count-based acceptance gate that
+    // motivated the type-level guard above would read a shrunk period list
+    // as "improvement" (fewer periods → fewer checks → fewer failures).
+    // Any period present in `first` but missing from `repaired` is carried
+    // forward verbatim; periods the repair pass DID return are trusted (it
+    // was asked to fix specific periods, and mixing values across passes
+    // for a period it touched would be worse than trusting its output).
+    const repairedPeriodNames = new Set(repairedStmt.periods.map((p) => p.period));
+    const droppedPeriods = stmt.periods.filter((p) => !repairedPeriodNames.has(p.period));
+    return droppedPeriods.length > 0
+      ? { ...repairedStmt, periods: [...repairedStmt.periods, ...droppedPeriods] }
+      : repairedStmt;
   });
   return {
     statements,
+    // Deliberately conservative: min(), not average — this is an integrity
+    // gate (storeNode.ts blocks storage below a confidence threshold), and
+    // understating confidence after a partial repair is the safe direction
+    // to be wrong in. Do not "improve" this to an average.
     overallConfidence: Math.min(first.overallConfidence, repaired.overallConfidence),
     warnings: [...first.warnings, ...repaired.warnings],
   };

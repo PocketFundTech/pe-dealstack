@@ -220,6 +220,93 @@ describe('extractWithClaude', () => {
     expect(cashFlow.periods[0].lineItems.fcf).toBe(40);
   });
 
+  it('regression: a repair pass that silently drops a clean PERIOD within a failing statement type does not lose it', async () => {
+    // BALANCE_SHEET has two periods: 2022 balances correctly (clean), 2023
+    // does not (the genuine failure driving repair). The repair response
+    // returns BALANCE_SHEET with ONLY the fixed 2023 period — silently
+    // dropping 2022 — the same count-based-acceptance blind spot as the
+    // statement-type bug, one level deeper (period, not type).
+    const first = {
+      statements: [
+        {
+          statementType: 'BALANCE_SHEET',
+          unitScale: 'MILLIONS',
+          currency: 'USD',
+          periods: [
+            {
+              period: '2022',
+              periodType: 'HISTORICAL',
+              confidence: 90,
+              lineItems: [
+                { name: 'cash', value: 20, sourcePage: 1, sourceQuote: 'cash' },
+                { name: 'total_assets', value: 100, sourcePage: 1, sourceQuote: 'assets' },
+                { name: 'total_liabilities', value: 50, sourcePage: 1, sourceQuote: 'liab' },
+                { name: 'total_equity', value: 50, sourcePage: 1, sourceQuote: 'equity' }, // 50+50=100 ✓
+              ],
+            },
+            {
+              period: '2023',
+              periodType: 'HISTORICAL',
+              confidence: 90,
+              lineItems: [
+                { name: 'cash', value: 20, sourcePage: 1, sourceQuote: 'cash' },
+                { name: 'total_assets', value: 100, sourcePage: 1, sourceQuote: 'assets' },
+                { name: 'total_liabilities', value: 50, sourcePage: 1, sourceQuote: 'liab' },
+                { name: 'total_equity', value: 30, sourcePage: 1, sourceQuote: 'equity' }, // 50+30=80 ✗ fails bs_balances
+              ],
+            },
+          ],
+        },
+      ],
+      overallConfidence: 90,
+      warnings: [],
+    };
+    const repairedOnly2023 = {
+      statements: [
+        {
+          statementType: 'BALANCE_SHEET',
+          unitScale: 'MILLIONS',
+          currency: 'USD',
+          periods: [
+            {
+              period: '2023',
+              periodType: 'HISTORICAL',
+              confidence: 90,
+              lineItems: [
+                { name: 'cash', value: 20, sourcePage: 1, sourceQuote: 'cash' },
+                { name: 'total_assets', value: 100, sourcePage: 1, sourceQuote: 'assets' },
+                { name: 'total_liabilities', value: 50, sourcePage: 1, sourceQuote: 'liab' },
+                { name: 'total_equity', value: 50, sourcePage: 1, sourceQuote: 'equity' }, // fixed: 50+50=100 ✓
+              ],
+            },
+            // 2022 omitted entirely — the exact silent-deletion failure mode.
+          ],
+        },
+      ],
+      overallConfidence: 90,
+      warnings: [],
+    };
+    responses = [JSON.stringify(first), JSON.stringify(repairedOnly2023)];
+    const extractWithClaude = await getEngine();
+    const out = await extractWithClaude({ fileBuffer: Buffer.from('%PDF-fake'), fileName: 'cim.pdf', fileType: 'pdf' });
+
+    expect(out).not.toBeNull();
+    expect(out!.repairUsed).toBe(true);
+    expect(calls).toHaveLength(2); // exactly one repair pass
+
+    const balanceSheet = findStatement(out!.classification, 'BALANCE_SHEET');
+    expect(balanceSheet.periods).toHaveLength(2); // both periods survive — none silently dropped
+
+    const period2022 = balanceSheet.periods.find((p: any) => p.period === '2022');
+    const period2023 = balanceSheet.periods.find((p: any) => p.period === '2023');
+    // 2022 was clean and omitted by the repair — must survive verbatim from `first`.
+    expect(period2022).toBeDefined();
+    expect(period2022.lineItems.total_equity).toBe(50);
+    // 2023 was the genuine failure — the repaired (fixed) value is adopted.
+    expect(period2023).toBeDefined();
+    expect(period2023.lineItems.total_equity).toBe(50);
+  });
+
   it('returns null gracefully when the file upload fails, instead of throwing', async () => {
     uploadMock.mockRejectedValueOnce(new Error('upload failed'));
     const extractWithClaude = await getEngine();
