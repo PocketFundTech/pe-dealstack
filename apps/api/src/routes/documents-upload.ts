@@ -734,16 +734,26 @@ router.post('/deals/:dealId/documents/from-drive', async (req: Request, res: Res
       exported,
     });
 
+    // Drive filenames can legally contain characters a browser file-picker
+    // never produces — ":", "?", "|", "*", leading/trailing spaces, consecutive
+    // dots. The shared handler's validateFile() treats those as a "dangerous
+    // filename" and 400s, so a perfectly good PDF/Doc from Drive would be
+    // rejected on its NAME alone (e.g. "Q3: Teaser.pdf"). Pre-sanitize to the
+    // same shape a safe upload filename has BEFORE handing it to the pipeline;
+    // the real content checks (magic bytes, type allow-list, size) still run on
+    // the actual bytes.
+    const safeName = sanitizeFilename(documentName).replace(/\.{2,}/g, '.');
+
     // Synthesize a multer-style file + body so the shared upload handler runs
     // the identical pipeline. handleDocumentUpload reads req.file for the
     // bytes/size/mime/name and req.body.name to pin the resolved filename.
     (req as any).file = {
       buffer,
-      originalname: documentName,
+      originalname: safeName,
       mimetype: mimeType,
       size: buffer.length,
     };
-    req.body = { ...req.body, name: documentName };
+    req.body = { ...req.body, name: safeName };
 
     return handleDocumentUpload(req, res);
   } catch (error) {
