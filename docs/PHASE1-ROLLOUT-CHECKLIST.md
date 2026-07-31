@@ -67,6 +67,38 @@ Set `EXTRACTION_ENGINE=claude` in Vercel env, deploy.
   chunked-parallel calls; confirm the existing timeout budget is still
   comfortable using the bake-off's recorded `durationMs` numbers.
 
+## 4a. Known limitations, consciously deferred (final whole-branch review)
+
+These were assessed against the spec and judged acceptable to ride the soak
+period rather than block this branch — read before the flag is flipped
+anywhere beyond a controlled test:
+
+- **No circuit breaker on the new tracked client** (`services/ai/client.ts`).
+  Spec §3.1 called for porting `aiCircuitBreaker.ts`'s semantics; this
+  didn't happen. Mitigated by the SDK's own retry behavior, the per-org
+  extraction semaphore, and the 120s agent timeout — but a sustained
+  Anthropic outage will be felt per-request rather than short-circuited.
+- **No `cache_control` breakpoint on the document block.** The repair pass
+  re-sends the same uploaded `file_id` and pays full input price a second
+  time; one breakpoint after the document content would reprice that
+  resend at ~0.1x (both calls are well within the 5-minute cache TTL).
+  Cost-only — not a correctness issue.
+- **No page/size chunking on the native-PDF path.** The API caps PDFs at
+  600 pages; an unusually long CIM would 400 rather than falling back to
+  chunking the way the legacy pdf-parse path did. Related: if a single
+  extraction call exceeds the 64K output-token ceiling, the response
+  truncates mid-JSON and currently surfaces only as a generic "response was
+  not valid JSON" log line — worth checking `stopReason === 'max_tokens'`
+  on the engine result and logging that case distinctly so it's
+  diagnosable from the logs alone.
+- **`claude-sonnet-5` is seeded in `ModelPrice` at sticker pricing** ($3/$15
+  per MTok) while an introductory rate ($2/$10) runs through 2026-08-31.
+  Not consumed by anything in Phase 1 (chat/fast roles have no callers
+  yet) — revisit when Phase 2 wires up chat/fast usage.
+
+None of these block a default-off merge. Resolve or consciously re-accept
+before scaling past a small controlled rollout.
+
 ## 5. Soak period
 
 Two weeks in production with the flag on, per the original design spec

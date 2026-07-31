@@ -143,9 +143,17 @@ export async function validateNode(
   if (hasActionableFailures && canSelfCorrect) {
     nextStatus = 'self_correcting';
     steps.push(step('validate', `${failedChecks.length} issue(s) found — routing to self-correction (attempt ${retryCount + 1}/${maxRetries})`));
-  } else if (hasActionableFailures && extractionSource === 'claude') {
+  } else if (hasActionableFailures && extractionSource === 'claude' && failedErrors.length > 0) {
+    // The engine's own repair pass (claudeEngine.ts) only triggers on
+    // error-severity validator failures — this branch is reachable exactly
+    // when that condition held, so the message is accurate. A claude-sourced
+    // run with ONLY low-confidence flags (failedErrors.length === 0) falls
+    // through to the next branch instead, where no repair claim is made.
     nextStatus = 'storing';
     steps.push(step('validate', `${failedChecks.length} issue(s) remain — claude engine's repair pass already ran; storing with flags for human review`));
+  } else if (hasActionableFailures && extractionSource === 'claude') {
+    nextStatus = 'storing';
+    steps.push(step('validate', `${failedChecks.length} issue(s) remain (low-confidence periods only — the claude engine does not re-extract on confidence alone); storing with flags for human review`));
   } else if (hasActionableFailures) {
     nextStatus = 'storing';
     steps.push(step('validate', `${failedChecks.length} issue(s) remain after ${maxRetries} retries — storing with flags for human review`));

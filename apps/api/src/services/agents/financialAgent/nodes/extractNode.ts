@@ -1,7 +1,10 @@
 /**
  * Extract Node — LangGraph node for the financial extraction agent.
  *
- * Routes the file to the best extraction layer:
+ * EXTRACTION_ENGINE=claude routes to the Claude structured-output engine
+ * (services/extraction/claudeEngine.ts) — see the branch near the top of
+ * the try block below. When the flag is unset (default), routes the file
+ * to the legacy extraction layer:
  *   Excel → xlsx parser → CSV text → AI classifier (MODEL_CLASSIFICATION)
  *   PDF Layer 1 → LlamaParse structured markdown (if configured)
  *   PDF Layer 2 → pdf-parse text → AI classifier (MODEL_CLASSIFICATION)
@@ -22,6 +25,7 @@ import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { ExtractionSource, AgentStep } from '../state.js';
 import { CHUNK_THRESHOLD, MAX_CHUNK_SIZE, MAX_CHUNKS, MIN_TEXT_LENGTH } from '../config.js';
+import { getModelConfig } from '../../../ai/models.js';
 import {
   getCachedExtraction,
   putCachedExtraction,
@@ -78,9 +82,16 @@ export async function extractNode(
   // split reservation; this field is now overloaded to also carry the engine
   // dimension — a future fast/deep split will need to compose with this.
   const engineMode = useClaudeEngine ? 'claude' : 'default';
+  // Also key the cache on the resolved extraction MODEL (not just engine) —
+  // otherwise the documented one-line rollback (AI_EXTRACTION_MODEL override,
+  // e.g. fable-5 → opus-4-8) keeps serving results cached under the old
+  // model for up to the cache's 30-day TTL. Legacy path keeps the existing
+  // default ('tier1') — unaffected, since modelTier is only overridden here
+  // when the claude engine is active.
+  const modelTier = useClaudeEngine ? getModelConfig('extraction').model : undefined;
 
   if (!forceExtraction) {
-    const cached = await getCachedExtraction({ contentHash, extractionMode: engineMode });
+    const cached = await getCachedExtraction({ contentHash, extractionMode: engineMode, modelTier });
     if (cached) {
       steps.push(step('extract', `Cache hit — skipping LLM extraction (saved ~$0.75-$1.50)`));
       return {
@@ -102,7 +113,7 @@ export async function extractNode(
   /** Persist a successful extraction to the cache (best-effort). */
   const cacheResult = (payload: CachedExtractionResult): void => {
     if (!payload.classification || payload.statements.length === 0) return;
-    void putCachedExtraction({ contentHash, extractionMode: engineMode }, payload).catch(() => {
+    void putCachedExtraction({ contentHash, extractionMode: engineMode, modelTier }, payload).catch(() => {
       // Errors already logged inside putCachedExtraction; swallow here.
     });
   };
@@ -126,14 +137,12 @@ export async function extractNode(
         // Matches the legacy convention (see the Excel/Vision "no financial
         // data found" paths below): a genuinely empty extraction is a
         // successful, completed run with zero data — not a pipeline failure.
-        cacheResult({
-          rawText: engineResult.rawText,
-          extractionSource: 'claude',
-          classification: engineResult.classification,
-          statements: [],
-          overallConfidence: 0,
-          warnings: engineResult.classification.warnings,
-        });
+        // Deliberately NOT cached: `cacheResult`'s own guard would no-op this
+        // anyway (empty statements), and that's intentional, not an oversight
+        // — an empty claude result isn't reliably distinguishable from a soft
+        // failure (e.g. a scanned page the model couldn't read), so caching
+        // a negative for the 30-day TTL risks permanently poisoning a
+        // document that would extract fine on retry.
         return {
           rawText: engineResult.rawText,
           extractionSource: 'claude',

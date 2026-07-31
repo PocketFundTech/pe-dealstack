@@ -119,13 +119,23 @@ Rules:
 
 export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balance sheet, and cash flow data from the attached document into the required JSON structure.`;
 
-/** Repair prompt: one pass, targeted at deterministic validator failures. */
+/**
+ * Repair prompt: one pass, targeted at deterministic validator failures.
+ *
+ * IMPORTANT: `previousJson` is the NORMALIZED result (normalize.ts already
+ * converted it to canonical MILLIONS/USD) — not the raw as-printed values
+ * the model originally returned. The repair response must stay in that same
+ * normalized form (unitScale: MILLIONS, currency: USD), or a document
+ * printed in THOUSANDS produces a uniform 1000x scale error that the
+ * deterministic validator cannot catch (every math check is scale-invariant)
+ * and the merge acceptance gate would silently accept.
+ */
 export function buildRepairInstruction(failures: string[], previousJson: string): string {
   return `A deterministic validator found these problems with your previous extraction:
 ${failures.map((f) => `- ${f}`).join('\n')}
 
-Your previous extraction JSON:
+Your previous extraction, already normalized to MILLIONS/USD:
 ${previousJson}
 
-Re-examine the document and return the FULL corrected extraction in the same JSON structure. Fix the flagged values by re-reading the source pages; keep values that were correct unchanged. Remember: values exactly as printed, unitScale/currency describe the document.`;
+Re-examine the document and return the FULL corrected extraction in the same JSON structure. Fix the flagged values by re-reading the source pages; keep values that were correct unchanged. The anchor above is already normalized — report ALL values (corrected and unchanged) in MILLIONS/USD to match it exactly, with unitScale set to "MILLIONS" and currency to "USD" on every statement. Do NOT re-derive as-printed units or currency for this repair pass.`;
 }

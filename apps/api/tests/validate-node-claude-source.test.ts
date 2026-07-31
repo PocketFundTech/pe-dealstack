@@ -37,6 +37,30 @@ function stateWithFailingBalanceSheet(extractionSource: string) {
   } as any;
 }
 
+function stateWithOnlyLowConfidence(extractionSource: string) {
+  return {
+    extractionSource,
+    retryCount: 0,
+    maxRetries: 3,
+    overallConfidence: 60,
+    statements: [
+      {
+        statementType: 'INCOME_STATEMENT',
+        unitScale: 'MILLIONS',
+        currency: 'USD',
+        periods: [
+          {
+            period: '2023',
+            periodType: 'HISTORICAL',
+            confidence: 65, // below CONFIDENCE_THRESHOLD — the ONLY actionable failure
+            lineItems: { revenue: 100, cogs: 40, gross_profit: 60 }, // internally consistent — no math errors
+          },
+        ],
+      },
+    ],
+  } as any;
+}
+
 describe('validateNode claude-source handling', () => {
   it('routes a legacy (gpt4o) source with failures to self_correcting as before', async () => {
     const validateNode = await getValidateNode();
@@ -45,11 +69,23 @@ describe('validateNode claude-source handling', () => {
     expect(result.steps?.some((s) => s.message.includes('routing to self-correction'))).toBe(true);
   });
 
-  it('routes a claude source with failures to storing, with an accurate log message', async () => {
+  it('routes a claude source with error-severity failures to storing, claiming the repair pass ran (accurate — the engine DOES repair on these)', async () => {
     const validateNode = await getValidateNode();
     const result = await validateNode(stateWithFailingBalanceSheet('claude'));
     expect(result.status).toBe('storing');
     expect(result.steps?.some((s) => s.message.includes('routing to self-correction'))).toBe(false);
     expect(result.steps?.some((s) => s.message.includes("repair pass already ran"))).toBe(true);
+  });
+
+  it('routes a claude source with ONLY low-confidence failures to storing, WITHOUT claiming a repair pass ran (the engine never repairs on confidence alone)', async () => {
+    // Regression: claudeEngine.ts's internal repair only triggers on
+    // error-severity validateStatements() failures, not low-confidence
+    // flags. Claiming "repair pass already ran" here would be inaccurate —
+    // no repair call was ever made for this extraction.
+    const validateNode = await getValidateNode();
+    const result = await validateNode(stateWithOnlyLowConfidence('claude'));
+    expect(result.status).toBe('storing');
+    expect(result.steps?.some((s) => s.message.includes("repair pass already ran"))).toBe(false);
+    expect(result.steps?.some((s) => s.message.includes('does not re-extract on confidence alone'))).toBe(true);
   });
 });
