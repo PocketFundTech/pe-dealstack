@@ -123,19 +123,25 @@ export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balanc
  * Repair prompt: one pass, targeted at deterministic validator failures.
  *
  * IMPORTANT: `previousJson` is the NORMALIZED result (normalize.ts already
- * converted it to canonical MILLIONS/USD) — not the raw as-printed values
+ * converted it to canonical MILLIONS scale) — not the raw as-printed values
  * the model originally returned. The repair response must stay in that same
- * normalized form (unitScale: MILLIONS, currency: USD), or a document
- * printed in THOUSANDS produces a uniform 1000x scale error that the
- * deterministic validator cannot catch (every math check is scale-invariant)
- * and the merge acceptance gate would silently accept.
+ * normalized SCALE (unitScale: MILLIONS), or a document printed in
+ * THOUSANDS produces a uniform 1000x scale error that the deterministic
+ * validator cannot catch (every math check is scale-invariant) and the
+ * merge acceptance gate would silently accept.
+ *
+ * Currency is NOT normalized anywhere in this pipeline (normalize.ts only
+ * warns on non-USD, never converts) — the repair response must keep each
+ * statement's currency exactly as it appears in the anchor. Telling the
+ * model to force "USD" here would mislabel a EUR/GBP document without
+ * converting any values.
  */
 export function buildRepairInstruction(failures: string[], previousJson: string): string {
   return `A deterministic validator found these problems with your previous extraction:
 ${failures.map((f) => `- ${f}`).join('\n')}
 
-Your previous extraction, already normalized to MILLIONS/USD:
+Your previous extraction, already normalized to canonical MILLIONS scale (currency unchanged from the document):
 ${previousJson}
 
-Re-examine the document and return the FULL corrected extraction in the same JSON structure. Fix the flagged values by re-reading the source pages; keep values that were correct unchanged. The anchor above is already normalized — report ALL values (corrected and unchanged) in MILLIONS/USD to match it exactly, with unitScale set to "MILLIONS" and currency to "USD" on every statement. Do NOT re-derive as-printed units or currency for this repair pass.`;
+Re-examine the document and return the FULL corrected extraction in the same JSON structure. Fix the flagged values by re-reading the source pages; keep values that were correct unchanged. The anchor above is already scale-normalized — report ALL values (corrected and unchanged) in MILLIONS to match it exactly, with unitScale set to "MILLIONS" on every statement. Keep each statement's currency exactly as shown in the anchor — do NOT change it to USD or any other currency. Do NOT re-derive as-printed units for this repair pass.`;
 }
