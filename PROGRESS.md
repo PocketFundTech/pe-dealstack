@@ -62,7 +62,7 @@ While building the claude engine's storeNode scoring, a latent bug was found in 
 | File | Change |
 |------|--------|
 | `apps/api/.env.example` | Documented `EXTRACTION_ENGINE` flag + `AI_EXTRACTION_MODEL`/`AI_CHAT_MODEL`/`AI_FAST_MODEL` overrides |
-| `progress.md` | This entry |
+| `PROGRESS.md` | This entry |
 | `docs/PHASE1-ROLLOUT-CHECKLIST.md` | **New** — consolidated operator rollout checklist (migration, retention check, bake-off gate, flag flip, soak period, post-soak cleanup) |
 
 **Production modules landed across the 9-task plan (for reference — not modified in this session):**
