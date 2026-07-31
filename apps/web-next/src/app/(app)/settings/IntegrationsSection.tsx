@@ -256,6 +256,7 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<HubSpotImportJob | null>(null);
+  const [overwrite, setOverwrite] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -306,7 +307,9 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
     setBusy(true);
     setError(null);
     try {
-      const { jobId } = await api.post<{ jobId: string }>("/integrations/hubspot/import", {});
+      const { jobId } = await api.post<{ jobId: string }>("/integrations/hubspot/import", {
+        mode: overwrite ? "refresh" : "fill",
+      });
       // Immediately fetch initial state, then poll every 2 s
       const fetchJob = async () => {
         const j = await api.get<HubSpotImportJob>(`/integrations/hubspot/import/${jobId}`);
@@ -403,6 +406,25 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
               Disconnect
             </button>
           </div>
+
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={overwrite}
+              onChange={(e) => setOverwrite(e.target.checked)}
+              disabled={busy || isImporting}
+              className="mt-0.5 h-4 w-4 rounded border-border-subtle accent-[#003366] disabled:opacity-50"
+            />
+            <span className="text-xs">
+              <span className="font-semibold text-text-main">
+                Overwrite existing values with HubSpot data
+              </span>
+              <span className="block text-text-muted">
+                Off by default: fields already filled in PE OS are left untouched. Turn this on to
+                re-import after correcting records in HubSpot.
+              </span>
+            </span>
+          </label>
 
           <button
             type="button"

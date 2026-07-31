@@ -13,7 +13,8 @@ const validateToken = vi.fn().mockResolvedValue({ ok: true, status: 200, categor
 vi.mock('../src/services/hubspot/client.js', () => ({
   HubSpotClient: vi.fn().mockImplementation(function () { return { validateToken }; }),
 }));
-vi.mock('../src/services/hubspot/importEngine.js', () => ({ runImportBatch: vi.fn().mockResolvedValue(false) }));
+const runImportBatch = vi.fn().mockResolvedValue(false);
+vi.mock('../src/services/hubspot/importEngine.js', () => ({ runImportBatch }));
 
 const buildApp = async () => {
   const { default: router } = await import('../src/routes/hubspot-import.js');
@@ -119,6 +120,30 @@ describe('hubspot-import routes', () => {
     // The only ImportJob query should be the .in() check, not an insert
     // We verify by confirming no insert chain was used to return a new id
     expect(res.body.jobId).toBe('existing-job');
+  });
+
+  it('POST /import defaults to fill mode when none is specified', async () => {
+    const singleMock = vi.fn().mockResolvedValueOnce({ data: { id: 'internal-user-1' } });
+    const maybeSingleMock = vi.fn()
+      .mockResolvedValueOnce({ data: { accessToken: 'enc:tok' } })
+      .mockResolvedValueOnce({ data: null })
+      .mockResolvedValueOnce({ data: { id: 'job-1' } });
+    mockSupabase.from.mockReturnValue(chain({ single: singleMock, maybeSingle: maybeSingleMock }));
+    await request(await buildApp()).post('/api/integrations/hubspot/import').send({});
+    await new Promise((r) => setTimeout(r, 0)); // let the fire-and-forget drive loop tick
+    expect(runImportBatch).toHaveBeenCalledWith('job-1', 'tok', 'fill');
+  });
+
+  it('POST /import passes refresh mode through to the drive loop', async () => {
+    const singleMock = vi.fn().mockResolvedValueOnce({ data: { id: 'internal-user-1' } });
+    const maybeSingleMock = vi.fn()
+      .mockResolvedValueOnce({ data: { accessToken: 'enc:tok' } })
+      .mockResolvedValueOnce({ data: null })
+      .mockResolvedValueOnce({ data: { id: 'job-2' } });
+    mockSupabase.from.mockReturnValue(chain({ single: singleMock, maybeSingle: maybeSingleMock }));
+    await request(await buildApp()).post('/api/integrations/hubspot/import').send({ mode: 'refresh' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runImportBatch).toHaveBeenCalledWith('job-2', 'tok', 'refresh');
   });
 
   it('GET /import/:id returns status', async () => {

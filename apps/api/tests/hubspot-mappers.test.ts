@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapCompany, mapContact, mapDeal } from '../src/services/hubspot/mappers.js';
+import { mapCompany, mapContact, mapDeal, hubspotStageToDealStage } from '../src/services/hubspot/mappers.js';
 
 describe('mapCompany', () => {
   it('maps standard properties and stashes the rest', () => {
@@ -67,5 +67,86 @@ describe('mapDeal', () => {
 
   it('handles missing amount as null dealSize', () => {
     expect(mapDeal({ id: '9', properties: { dealname: 'X' } }).dealSize).toBeNull();
+  });
+});
+
+describe('hubspotStageToDealStage', () => {
+  it('maps a closed-won label to CLOSED_WON', () => {
+    expect(hubspotStageToDealStage('Closed Won')).toBe('CLOSED_WON');
+  });
+
+  it('maps a due-diligence label to DUE_DILIGENCE', () => {
+    expect(hubspotStageToDealStage('Due Diligence')).toBe('DUE_DILIGENCE');
+  });
+
+  it('is case- and punctuation-insensitive', () => {
+    expect(hubspotStageToDealStage('closed-lost')).toBe('CLOSED_LOST');
+  });
+
+  it('returns null for an unrecognised custom stage rather than guessing', () => {
+    expect(hubspotStageToDealStage('Bespoke Client Stage')).toBeNull();
+  });
+
+  /**
+   * "Pass" is standard M&A screening terminology for an advancing deal
+   * ("first pass", "1st pass approval") — the opposite of PASSED (declined).
+   * A bare \bpass\b match would misfile an active deal as rejected.
+   */
+  it('does not treat "First Pass Review" as a declined deal', () => {
+    expect(hubspotStageToDealStage('First Pass Review')).not.toBe('PASSED');
+  });
+
+  it('does not treat "1st Pass Approval" as a declined deal', () => {
+    expect(hubspotStageToDealStage('1st Pass Approval')).not.toBe('PASSED');
+  });
+
+  it('still maps an explicit "Passed" stage to PASSED', () => {
+    expect(hubspotStageToDealStage('Passed')).toBe('PASSED');
+  });
+
+  it('still maps "Declined" and "Rejected" to PASSED', () => {
+    expect(hubspotStageToDealStage('Declined')).toBe('PASSED');
+    expect(hubspotStageToDealStage('Rejected')).toBe('PASSED');
+  });
+
+  it('does not treat "At Risk of Being Lost" as a closed-lost deal', () => {
+    expect(hubspotStageToDealStage('At Risk of Being Lost')).not.toBe('CLOSED_LOST');
+  });
+
+  it('still maps explicit "Closed Lost" / "Closed Won" correctly', () => {
+    expect(hubspotStageToDealStage('Closed Lost')).toBe('CLOSED_LOST');
+    expect(hubspotStageToDealStage('Closed Won')).toBe('CLOSED_WON');
+  });
+});
+
+describe('mapDeal — stage resolution', () => {
+  /**
+   * Deal.stage defaults to INITIAL_REVIEW at the DB level, so a deal whose
+   * HubSpot stage is never mapped silently lands in the wrong pipeline column.
+   */
+  it('maps a resolved HubSpot stage label onto Deal.stage', () => {
+    const out = mapDeal({ id: '9', properties: { dealname: 'X', dealstage: '104512346' } }, 'Closed Won');
+    expect(out.stage).toBe('CLOSED_WON');
+  });
+
+  it('leaves stage null when the HubSpot stage has no equivalent', () => {
+    const out = mapDeal({ id: '9', properties: { dealname: 'X', dealstage: '104512399' } }, 'Bespoke Client Stage');
+    expect(out.stage).toBeNull();
+  });
+
+  it('stores the readable stage label rather than the raw internal id', () => {
+    const out = mapDeal({ id: '9', properties: { dealname: 'X', dealstage: '104512345' } }, 'Due Diligence');
+    expect(out.customFields.dealstage).toBe('Due Diligence');
+  });
+});
+
+describe('mapCompany — web address', () => {
+  it('prefers the website property over the bare domain', () => {
+    const out = mapCompany({ id: '1', properties: { name: 'Acme', website: 'https://acme.com', domain: 'acme.com' } });
+    expect(out.website).toBe('https://acme.com');
+  });
+
+  it('falls back to domain when website is absent', () => {
+    expect(mapCompany({ id: '1', properties: { name: 'Acme', domain: 'acme.com' } }).website).toBe('acme.com');
   });
 });

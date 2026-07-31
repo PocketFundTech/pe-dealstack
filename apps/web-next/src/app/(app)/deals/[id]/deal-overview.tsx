@@ -6,6 +6,7 @@ import { formatRelativeTime } from "@/lib/formatters";
 import { api } from "@/lib/api";
 import type { DealDetail, Activity } from "./deal-detail-shared";
 import { DealAccessTimeline } from "./deal-access-timeline";
+import { HubSpotFieldsCard } from "@/components/HubSpotFieldsCard";
 
 // ---------------------------------------------------------------------------
 // Overview Tab — always-visible left-panel content (Key Risks,
@@ -30,6 +31,8 @@ export function OverviewTab({
   return (
     <div className="flex flex-col gap-3">
       <KeyRisksSection risks={risks} highlights={highlights} />
+
+      <HubSpotFieldsCard properties={deal.hubspotProperties} />
 
       <DealAccessTimeline dealId={deal.id} />
 

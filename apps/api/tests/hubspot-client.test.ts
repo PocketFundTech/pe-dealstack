@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HubSpotClient, MAX_PROPERTIES } from '../src/services/hubspot/client.js';
+import { HubSpotClient, MAX_PROPERTIES, STANDARD_PROPERTIES } from '../src/services/hubspot/client.js';
 
 const mkRes = (status: number, body: unknown, headers: Record<string, string> = {}) => ({
   ok: status >= 200 && status < 300,
@@ -94,6 +94,88 @@ describe('HubSpotClient.listPropertyNames', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mkRes(200, { results: many })));
     const names = await new HubSpotClient('tok').listPropertyNames('contacts');
     expect(names.length).toBe(MAX_PROPERTIES);
+  });
+});
+
+describe('HubSpotClient.listPropertyNames — custom-field detection', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  /**
+   * HubSpot sets hubspotDefined:true on its own built-in properties and OMITS
+   * the key entirely on user-created custom properties (the field is optional
+   * in HubSpot's own SDK typing). A `=== false` check therefore drops every
+   * custom property the client actually cares about.
+   */
+  it('keeps custom properties when HubSpot omits the hubspotDefined key', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mkRes(200, { results: [
+      { name: 'name', hubspotDefined: true },
+      { name: 'fund_vintage' },   // custom — key absent, not false
+      { name: 'sector_focus' },   // custom — key absent, not false
+    ] })));
+    const names = await new HubSpotClient('tok').listPropertyNames('companies');
+    expect(names).toContain('fund_vintage');
+    expect(names).toContain('sector_focus');
+  });
+
+  it('keeps the standard set when capping at MAX_PROPERTIES', async () => {
+    const many = Array.from({ length: MAX_PROPERTIES + 50 }, (_, i) => ({ name: `custom_${i}` }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mkRes(200, { results: many })));
+    const names = await new HubSpotClient('tok').listPropertyNames('contacts');
+    expect(names.length).toBe(MAX_PROPERTIES);
+    // Standard fields must survive the cap — without them every record imports blank.
+    expect(names).toContain('firstname');
+    expect(names).toContain('lastname');
+    expect(names).toContain('email');
+  });
+});
+
+describe('STANDARD_PROPERTIES coverage', () => {
+  it('requests the deal close date', () => {
+    expect(STANDARD_PROPERTIES.deals).toContain('closedate');
+  });
+
+  it('requests company location, size and web fields', () => {
+    expect(STANDARD_PROPERTIES.companies).toEqual(
+      expect.arrayContaining(['website', 'phone', 'city', 'state', 'country', 'numberofemployees', 'annualrevenue', 'lifecyclestage']),
+    );
+  });
+
+  it('requests contact company, mobile and lifecycle fields', () => {
+    expect(STANDARD_PROPERTIES.contacts).toEqual(
+      expect.arrayContaining(['company', 'mobilephone', 'lifecyclestage', 'city', 'state', 'country']),
+    );
+  });
+});
+
+describe('HubSpotClient.listPage associations', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('requests company associations for contacts, not just deals', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mkRes(200, { results: [], paging: undefined }));
+    vi.stubGlobal('fetch', fetchMock);
+    await new HubSpotClient('tok').listPage('contacts', { limit: 20 });
+    expect(fetchMock.mock.calls[0][0] as string).toContain('associations=companies');
+  });
+});
+
+describe('HubSpotClient.listDealStageLabels', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('maps HubSpot internal stage ids to their human labels', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mkRes(200, { results: [
+      { label: 'Sales Pipeline', stages: [
+        { id: '104512345', label: 'Due Diligence' },
+        { id: '104512346', label: 'Closed Won' },
+      ] },
+    ] })));
+    const labels = await new HubSpotClient('tok').listDealStageLabels();
+    expect(labels['104512345']).toBe('Due Diligence');
+    expect(labels['104512346']).toBe('Closed Won');
+  });
+
+  it('returns an empty map when the pipelines call fails, without throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mkRes(403, { message: 'no scope' })));
+    await expect(new HubSpotClient('tok').listDealStageLabels()).resolves.toEqual({});
   });
 });
 

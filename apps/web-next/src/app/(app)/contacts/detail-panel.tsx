@@ -13,6 +13,7 @@ import {
 import { LinkDealModal, ConnectionModal } from "./detail-modals";
 import { IntegrationActivityFeed } from "@/components/integrations/IntegrationActivityFeed";
 import { ContactEmailSummary } from "./ContactEmailSummary";
+import { HubSpotFieldsCard } from "@/components/HubSpotFieldsCard";
 import { ContactAskAI } from "./ContactAskAI";
 import {
   Connection, ContactEnrichment, FollowUpSuggestion,
@@ -263,6 +264,13 @@ export function DetailPanel({
               {!contact.email && !contact.phone && !contact.linkedinUrl && <p className="text-text-muted text-sm italic p-2">No contact information added</p>}
             </div>
           </div>
+
+          {/* HubSpot-imported fields (custom fields, lifecycle stage, etc.) */}
+          {contact.hubspotProperties && (
+            <div className="mb-6">
+              <HubSpotFieldsCard properties={contact.hubspotProperties} />
+            </div>
+          )}
 
           {/* Email Summary (Gmail threads) */}
           <ContactEmailSummary contactId={contactId} />

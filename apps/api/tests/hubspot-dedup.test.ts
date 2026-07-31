@@ -1,5 +1,23 @@
-import { describe, it, expect } from 'vitest';
-import { mergeBlankOnly } from '../src/services/hubspot/dedup.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { mockFrom } = vi.hoisted(() => ({ mockFrom: vi.fn() }));
+vi.mock('../src/supabase.js', () => ({ supabase: { from: mockFrom } }));
+
+import { mergeBlankOnly, mergeForImport, upsertByHubspotId } from '../src/services/hubspot/dedup.js';
+
+function makeChain(overrides: Record<string, unknown> = {}) {
+  const base: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    insert: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    ilike: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockResolvedValue({ data: [] }),
+    maybeSingle: vi.fn().mockResolvedValue({ data: null }),
+  };
+  return Object.assign(base, overrides);
+}
 
 describe('mergeBlankOnly', () => {
   it('fills only blank/null fields on the existing row', () => {
@@ -18,5 +36,99 @@ describe('mergeBlankOnly', () => {
 
   it('ignores incoming null/empty so it cannot blank a populated field', () => {
     expect(mergeBlankOnly({ a: 'keep' }, { a: null })).toEqual({ a: 'keep' });
+  });
+});
+
+describe('mergeForImport', () => {
+  it('fill mode leaves a populated field untouched', () => {
+    expect(mergeForImport({ name: 'Stale Name' }, { name: 'Correct Name' }, 'fill'))
+      .toEqual({ name: 'Stale Name' });
+  });
+
+  it('refresh mode overwrites a populated field from HubSpot', () => {
+    expect(mergeForImport({ name: 'Stale Name' }, { name: 'Correct Name' }, 'refresh'))
+      .toEqual({ name: 'Correct Name' });
+  });
+
+  it('refresh mode still refuses to blank a populated field', () => {
+    expect(mergeForImport({ name: 'Keep Me' }, { name: null }, 'refresh'))
+      .toEqual({ name: 'Keep Me' });
+  });
+
+  it('refresh mode still fills blanks', () => {
+    expect(mergeForImport({ name: '', industry: null }, { name: 'Acme', industry: 'Mfg' }, 'refresh'))
+      .toEqual({ name: 'Acme', industry: 'Mfg' });
+  });
+
+  /**
+   * customFields is written by multiple non-HubSpot sources too (AI follow-up
+   * notes, CSV-import custom columns). Wholesale-replacing it on refresh would
+   * silently delete that data — it must merge key-by-key instead.
+   */
+  it('refresh mode merges a nested plain-object field by key instead of replacing it wholesale', () => {
+    const existing = { customFields: { aiFollowUp: { questions: ['Q1'] }, boardSeats: 2 } };
+    const incoming = { customFields: { source: 'hubspot', dealstage: 'Due Diligence' } };
+    expect(mergeForImport(existing, incoming, 'refresh')).toEqual({
+      customFields: {
+        aiFollowUp: { questions: ['Q1'] },
+        boardSeats: 2,
+        source: 'hubspot',
+        dealstage: 'Due Diligence',
+      },
+    });
+  });
+
+  it('fill mode never touches a nested object field that already has keys', () => {
+    const existing = { customFields: { aiFollowUp: { questions: ['Q1'] } } };
+    const incoming = { customFields: { source: 'hubspot' } };
+    expect(mergeForImport(existing, incoming, 'fill')).toEqual({
+      customFields: { aiFollowUp: { questions: ['Q1'] } },
+    });
+  });
+});
+
+describe('upsertByHubspotId', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('applies the caller\'s mode when the record was already linked by hubspotId', async () => {
+    // hubspotId match succeeds on the first query — this record was created by
+    // a prior HubSpot import, so the caller's mode should apply directly.
+    const hubspotIdMatch = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'row-1', name: 'Stale Name' } }),
+    });
+    const updateChain = makeChain();
+    mockFrom.mockReturnValueOnce(hubspotIdMatch).mockReturnValueOnce(updateChain);
+
+    await upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'Correct Name', hubspotProperties: {} }, { column: 'name', value: 'Correct Name' }, 'refresh');
+
+    expect(updateChain.update).toHaveBeenCalledWith(expect.objectContaining({ name: 'Correct Name' }));
+  });
+
+  it('forces fill mode when the record is adopted by natural key, even if the caller asked for refresh', async () => {
+    // No hubspotId match; falls back to a natural-key (name) match — this
+    // record was created manually by a user, not by a prior import, so it
+    // must never be overwritten on first link regardless of the caller's mode.
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const naturalKeyMatch = makeChain({
+      limit: vi.fn().mockResolvedValue({ data: [{ id: 'row-2', name: 'User Entered Name' }] }),
+    });
+    const updateChain = makeChain();
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(naturalKeyMatch).mockReturnValueOnce(updateChain);
+
+    await upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'HubSpot Name', hubspotProperties: {} }, { column: 'name', value: 'User Entered Name' }, 'refresh');
+
+    // Adopted by natural key ⇒ forced to 'fill' ⇒ the pre-existing name survives.
+    expect(updateChain.update).toHaveBeenCalledWith(expect.objectContaining({ name: 'User Entered Name' }));
+  });
+
+  it('orders the natural-key fallback query so duplicate names resolve deterministically', async () => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const naturalKeyMatch = makeChain({ limit: vi.fn().mockResolvedValue({ data: [] }) });
+    const insertChain = makeChain();
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(naturalKeyMatch).mockReturnValueOnce(insertChain);
+
+    await upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'Acme', hubspotProperties: {} }, { column: 'name', value: 'Acme' });
+
+    expect(naturalKeyMatch.order).toHaveBeenCalledWith('createdAt', { ascending: true });
   });
 });

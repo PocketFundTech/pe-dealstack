@@ -9,6 +9,7 @@ import { runImportBatch } from '../services/hubspot/importEngine.js';
 
 const router = Router();
 const connectSchema = z.object({ token: z.string().trim().min(10) });
+const importSchema = z.object({ mode: z.enum(['fill', 'refresh']).optional() });
 
 const REQUIRED_SCOPES = 'crm.objects.companies.read, crm.objects.contacts.read, crm.objects.deals.read';
 
@@ -70,6 +71,10 @@ router.delete('/connect', async (req: Request, res: Response) => {
 // POST /import → create job + drive batches
 router.post('/import', async (req: Request, res: Response) => {
   const orgId = getOrgId(req);
+  // 'fill' (default) never touches values that already exist locally.
+  // 'refresh' lets HubSpot win for the fields it maps, so a client who fixes
+  // data in HubSpot can re-run and have the corrections land.
+  const mode = importSchema.safeParse(req.body).data?.mode ?? 'fill';
   const { data: conn } = await supabase
     .from('HubSpotConnection').select('accessToken').eq('organizationId', orgId).maybeSingle();
   if (!conn) return res.status(400).json({ error: 'Connect HubSpot before importing' });
@@ -99,7 +104,7 @@ router.post('/import', async (req: Request, res: Response) => {
   void (async () => {
     try {
       let more = true; let i = 0;
-      while (more && i < MAX_BATCHES) { more = await runImportBatch(jobId, token); i += 1; }
+      while (more && i < MAX_BATCHES) { more = await runImportBatch(jobId, token, mode); i += 1; }
     } catch (err) {
       log.error(`[hubspot] import loop crashed: ${(err as Error).message}`);
       await supabase.from('ImportJob').update({ status: 'failed', error: (err as Error).message }).eq('id', jobId);

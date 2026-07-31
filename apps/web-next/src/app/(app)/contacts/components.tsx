@@ -25,6 +25,8 @@ export interface Contact {
   linkedDeals?: LinkedDeal[];
   createdAt: string;
   updatedAt: string;
+  /** Raw HubSpot properties kept verbatim by the importer; absent for non-imported contacts. */
+  hubspotProperties?: Record<string, string | null> | null;
 }
 
 export interface Interaction {
