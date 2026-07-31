@@ -3,7 +3,7 @@
  *
  * Usage:
  *   cd apps/api
- *   npx tsx scripts/extraction-bakeoff.ts <dir-with-pdfs-and-xlsx> [--models claude-fable-5,claude-opus-4-8] [--skip-legacy]
+ *   npx tsx scripts/extraction-bakeoff.ts <dir-with-pdfs-and-xlsx> [--models=claude-fable-5,claude-opus-4-8] [--skip-legacy]
  *
  * For each document, runs:
  *   - legacy: pdf-parse/excel text → classifyFinancials (needs OPENAI_API_KEY or OPENROUTER_API_KEY)
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const dir = args.find((a) => !a.startsWith('--'));
   if (!dir) {
-    console.error('Usage: npx tsx scripts/extraction-bakeoff.ts <dir> [--models m1,m2] [--skip-legacy]');
+    console.error('Usage: npx tsx scripts/extraction-bakeoff.ts <dir> [--models=m1,m2] [--skip-legacy]');
     process.exit(1);
   }
   const modelsArg = args.find((a) => a.startsWith('--models='))?.split('=')[1];
