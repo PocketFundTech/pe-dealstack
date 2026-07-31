@@ -11,6 +11,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
+import { pickGoogleFile, DRIVE_DOCUMENT_MIME_TYPES } from "@/lib/googlePicker";
 import {
   type DealDetail,
   type DocItem,
@@ -187,6 +188,52 @@ export async function uploadDocuments(
   } finally {
     setUploading(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Add a document from Google Drive
+// ---------------------------------------------------------------------------
+
+export interface ImportDriveDocumentDeps {
+  dealId: string;
+  setDriveImporting: Dispatch<SetStateAction<boolean>>;
+  setDocuments: Dispatch<SetStateAction<DocItem[]>>;
+  showToast: ShowToast;
+}
+
+// Opens the Google Picker, then hands the picked file to the server's
+// /documents/from-drive route, which downloads the bytes and runs the SAME
+// pipeline as a manual upload (extraction, VDR folder assignment, RAG, …). The
+// picker call must stay inside the click gesture that invokes this (the SDKs
+// are warmed via preloadGooglePicker in DocumentsTab) so the OAuth popup isn't
+// blocked by the browser.
+export async function importDriveDocument(deps: ImportDriveDocumentDeps): Promise<void> {
+  const { dealId, setDriveImporting, setDocuments, showToast } = deps;
+  let picked;
+  try {
+    picked = await pickGoogleFile({
+      mimeTypes: DRIVE_DOCUMENT_MIME_TYPES,
+      title: "Select a file from Google Drive",
+    });
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : "Google Drive picker failed", "error");
+    return;
+  }
+  if (!picked) return; // user cancelled the picker
+  setDriveImporting(true);
+  try {
+    const doc = await api.post<DocItem>(`/deals/${dealId}/documents/from-drive`, {
+      fileId: picked.fileId,
+    });
+    // The endpoint returns the existing row on a re-import (server-side dedup),
+    // which may already be in the list — guard against a duplicate UI entry.
+    setDocuments((prev) => (prev.some((d) => d.id === doc.id) ? prev : [...prev, doc]));
+    showToast(`Imported "${picked.name}" from Google Drive`, "success");
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : "Google Drive import failed", "error");
+  } finally {
+    setDriveImporting(false);
   }
 }
 
