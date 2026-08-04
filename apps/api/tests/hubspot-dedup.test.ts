@@ -207,4 +207,16 @@ describe('upsertContactInteractionByHubspotId', () => {
       upsertContactInteractionByHubspotId('contact-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'fill'),
     ).rejects.toThrow(/contactId/);
   });
+
+  it('throws instead of silently swallowing a Supabase error on update', async () => {
+    const match = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'ci-1', description: 'Old text' } }),
+    });
+    const updateChain = makeChain({ error: { message: 'connection reset' } });
+    mockFrom.mockReturnValueOnce(match).mockReturnValueOnce(updateChain);
+
+    await expect(
+      upsertContactInteractionByHubspotId('contact-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'refresh'),
+    ).rejects.toThrow(/connection reset/);
+  });
 });
