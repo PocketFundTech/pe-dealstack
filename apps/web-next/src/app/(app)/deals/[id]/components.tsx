@@ -79,6 +79,7 @@ export interface ChatMessage {
   content: string;
   createdAt?: string;
   action?: ChatAction;
+  streaming?: boolean;
 }
 
 export interface Activity {

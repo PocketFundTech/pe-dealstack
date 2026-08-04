@@ -180,8 +180,8 @@ export function ChatTab({
                       <ArtifactActionButton action={msg.action} />
                     )}
                   </div>
-                  {/* Helpful / Copy buttons */}
-                  <AIMessageActions content={msg.content} />
+                  {/* Helpful / Copy buttons — hidden while the message is still streaming in */}
+                  {!msg.streaming && <AIMessageActions content={msg.content} />}
                 </div>
               </div>
             )
