@@ -144,7 +144,17 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
       if (!updated) return false; // cancelled mid-batch
       return true;
     }
-    await saveJob(jobId, { status: 'failed', error: (err as Error).message, finishedAt: new Date().toISOString() });
+    // No more object types to try. If anything else in this job succeeded
+    // (e.g. Companies/Contacts/Deals imported fine but every engagement
+    // type 403'd on a missing scope), don't report the whole job as
+    // failed — that hides a mostly-successful import behind one object
+    // type's error. The error message is preserved either way.
+    const anySucceeded = Object.values(counts).some((c) => c.processed > 0);
+    await saveJob(jobId, {
+      status: anySucceeded ? 'completed' : 'failed',
+      error: (err as Error).message,
+      finishedAt: new Date().toISOString(),
+    });
     return false;
   }
 

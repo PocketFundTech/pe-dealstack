@@ -112,4 +112,58 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
     const updateCall = (advanceChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as { objectCounts: Record<string, unknown> };
     expect(updateCall.objectCounts.companies).toEqual({ processed: 5, created: 5, updated: 0, failed: 0 });
   });
+
+  it('marks the job completed (not failed) when the last object type fails but an earlier type succeeded', async () => {
+    const jobChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: 'job-4', organizationId: 'org-A', status: 'running',
+          objectCounts: { companies: { processed: 5, created: 5, updated: 0, failed: 0 } },
+          currentObject: 'tasks', cursor: null,
+        },
+      }),
+    });
+    const finishChain = makeChain();
+
+    let importJobCalls = 0;
+    mockFrom.mockImplementation(() => {
+      importJobCalls += 1;
+      return importJobCalls === 1 ? jobChain : finishChain;
+    });
+
+    listPage.mockRejectedValue(new Error('403 MISSING_SCOPES'));
+
+    const result = await runImportBatch('job-4', 'tok');
+
+    expect(result).toBe(false);
+    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'completed',
+      error: expect.stringContaining('MISSING_SCOPES'),
+    }));
+  });
+
+  it('still marks the job failed when the last object type fails and nothing else succeeded', async () => {
+    const jobChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: 'job-5', organizationId: 'org-A', status: 'running',
+          objectCounts: {}, currentObject: 'tasks', cursor: null,
+        },
+      }),
+    });
+    const finishChain = makeChain();
+
+    let importJobCalls = 0;
+    mockFrom.mockImplementation(() => {
+      importJobCalls += 1;
+      return importJobCalls === 1 ? jobChain : finishChain;
+    });
+
+    listPage.mockRejectedValue(new Error('403 MISSING_SCOPES'));
+
+    const result = await runImportBatch('job-5', 'tok');
+
+    expect(result).toBe(false);
+    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+  });
 });
