@@ -107,4 +107,8 @@ describe('mapEngagement — associations and missing timestamps', () => {
     expect(mapEngagement('notes', rec({ hs_note_body: 'x' })).date).toBeNull();
     expect(mapEngagement('notes', rec({ hs_note_body: 'x', hs_timestamp: 'not-a-number' })).date).toBeNull();
   });
+
+  it('returns a null date rather than throwing for a numeric string outside Date range', () => {
+    expect(mapEngagement('notes', rec({ hs_note_body: 'x', hs_timestamp: '1e21' })).date).toBeNull();
+  });
 });

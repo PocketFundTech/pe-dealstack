@@ -8,7 +8,12 @@ const INTERACTION_TYPE: Record<EngagementType, InteractionType> = {
 function fromEpochMs(value: string | null | undefined): string | null {
   if (!value) return null;
   const ms = Number(value);
-  if (!Number.isFinite(ms)) return null;
+  // Date's valid range is roughly ±8.64e15ms (~year 275760) — a finite
+  // number outside that range still passes Number.isFinite but throws
+  // RangeError from .toISOString(). Guard explicitly rather than relying
+  // on a downstream try/catch to paper over a string this function should
+  // itself treat as "no usable timestamp."
+  if (!Number.isFinite(ms) || Math.abs(ms) > 8_640_000_000_000_000) return null;
   return new Date(ms).toISOString();
 }
 
