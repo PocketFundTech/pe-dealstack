@@ -130,6 +130,20 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     page = await client.listPage(current, { limit: BATCH, after: job.cursor ?? undefined, properties });
   } catch (err) {
     log.error(`[hubspot] batch fetch failed for ${current}: ${(err as Error).message}`);
+    // A fetch failure for ONE object type (e.g. a missing HubSpot scope for
+    // engagement objects — some portals can't even grant those scopes) must
+    // not discard records already imported for prior object types. Skip this
+    // object type and advance to the next one, mirroring the same
+    // cancel-guarded advance used below for a normally-drained page. Only
+    // fail the whole job if there's no next object type left to try.
+    const nextObject = ORDER[objectIndex + 1] ?? null;
+    if (nextObject) {
+      const { data: updated } = await supabase.from('ImportJob')
+        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running' })
+        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+      if (!updated) return false; // cancelled mid-batch
+      return true;
+    }
     await saveJob(jobId, { status: 'failed', error: (err as Error).message, finishedAt: new Date().toISOString() });
     return false;
   }
