@@ -4,14 +4,39 @@ function isBlank(v: unknown): boolean {
   return v === null || v === undefined || v === '';
 }
 
-/** Returns a copy of `existing` with only its blank fields filled from `incoming`. */
-export function mergeBlankOnly<T extends Record<string, unknown>>(existing: T, incoming: Partial<T>): T {
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * How a re-import treats fields that already hold a value locally.
+ * - `fill`    — only populate blanks (default; never touches existing data)
+ * - `refresh` — HubSpot wins for the fields it maps, so corrections propagate
+ */
+export type ImportMode = 'fill' | 'refresh';
+
+/** Returns a copy of `existing` merged with `incoming` according to `mode`. */
+export function mergeForImport<T extends Record<string, unknown>>(
+  existing: T,
+  incoming: Partial<T>,
+  mode: ImportMode,
+): T {
   const out: Record<string, unknown> = { ...existing };
   for (const [k, v] of Object.entries(incoming)) {
-    if (isBlank(v)) continue;            // never overwrite with a blank incoming value
-    if (isBlank(out[k])) out[k] = v;     // fill only when existing is blank
+    if (isBlank(v)) continue;                          // a blank from HubSpot never erases local data
+    if (mode === 'refresh' || isBlank(out[k])) {
+      // Merge nested objects (e.g. Deal.customFields) key-by-key rather than
+      // replacing wholesale — customFields also holds non-HubSpot data (AI
+      // follow-up notes, CSV-import custom columns) that a refresh must not erase.
+      out[k] = isPlainObject(out[k]) && isPlainObject(v) ? { ...out[k], ...v } : v;
+    }
   }
   return out as T;
+}
+
+/** Returns a copy of `existing` with only its blank fields filled from `incoming`. */
+export function mergeBlankOnly<T extends Record<string, unknown>>(existing: T, incoming: Partial<T>): T {
+  return mergeForImport(existing, incoming, 'fill');
 }
 
 export type UpsertResult = 'created' | 'updated';
@@ -27,6 +52,7 @@ export async function upsertByHubspotId(
   hubspotId: string,
   row: Record<string, unknown>,
   match?: { column: string; value: string | null },
+  mode: ImportMode = 'fill',
 ): Promise<UpsertResult> {
   // 1. Match by hubspotId first.
   let { data: existing } = await supabase
@@ -34,15 +60,24 @@ export async function upsertByHubspotId(
     .eq('organizationId', orgId).eq('hubspotId', hubspotId).maybeSingle();
 
   // 2. Fall back to natural key (case-insensitive) when provided.
+  //    .limit(1) rather than .maybeSingle(): duplicate names are legitimate and
+  //    must not throw PGRST116 and fail the record. .order() makes which
+  //    duplicate gets adopted deterministic instead of Postgres's unspecified
+  //    default order.
+  let adopted = false;
   if (!existing && match?.value) {
     const res = await supabase
       .from(table).select('*')
-      .eq('organizationId', orgId).ilike(match.column, match.value).maybeSingle();
-    existing = res.data ?? null;
+      .eq('organizationId', orgId).ilike(match.column, match.value)
+      .order('createdAt', { ascending: true }).limit(1);
+    existing = (res.data as Array<Record<string, unknown>> | null)?.[0] ?? null;
+    adopted = !!existing;
   }
 
   if (existing) {
-    const merged = mergeBlankOnly(existing as Record<string, unknown>, row);
+    // A record adopted by natural key was created by the user, not by a prior
+    // import — never overwrite their data on first link, whatever the mode.
+    const merged = mergeForImport(existing as Record<string, unknown>, row, adopted ? 'fill' : mode);
     merged.hubspotId = hubspotId;
     merged.hubspotProperties = row.hubspotProperties;
     await supabase.from(table).update(merged).eq('id', (existing as { id: string }).id);

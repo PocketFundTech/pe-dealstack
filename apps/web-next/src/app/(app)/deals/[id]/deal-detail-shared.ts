@@ -65,6 +65,8 @@ export interface DealDetail {
   cachedPeriod?: string | null;
   cachedCurrency?: string | null;
   cachedAt?: string | null;
+  /** Raw HubSpot properties kept verbatim by the importer; null for non-imported deals. */
+  hubspotProperties?: Record<string, string | null> | null;
 }
 
 export interface DocItem {

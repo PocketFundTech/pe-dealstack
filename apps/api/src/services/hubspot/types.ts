@@ -27,10 +27,17 @@ export interface MappedContact {
   hubspotProperties: Record<string, string | null>;
 }
 
+/** Mirrors the Deal.stage enum in apps/api/src/routes/deals-schemas.ts. */
+export type DealStage =
+  | 'INITIAL_REVIEW' | 'DUE_DILIGENCE' | 'IOI_SUBMITTED' | 'LOI_SUBMITTED'
+  | 'NEGOTIATION' | 'CLOSING' | 'PASSED' | 'CLOSED_WON' | 'CLOSED_LOST';
+
 export interface MappedDeal {
   hubspotId: string;
   name: string;
   dealSize: number | null;
+  /** null when the HubSpot stage has no PE OS equivalent — leave the deal alone. */
+  stage: DealStage | null;
   description: string | null;
   associatedCompanyHubspotId: string | null;
   customFields: Record<string, unknown>;
