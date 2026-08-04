@@ -66,7 +66,7 @@ interface HubSpotImportJob {
   error?: string | null;
 }
 
-const HUBSPOT_OBJECTS = ["companies", "contacts", "deals"] as const;
+const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "meetings", "emails", "tasks"] as const;
 
 const POLL_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
@@ -348,7 +348,7 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
         <div>
           <div className="text-sm font-bold text-text-main">HubSpot CRM Import</div>
           <div className="text-xs text-text-muted">
-            One-time import of contacts, companies, and deals from HubSpot.
+            One-time import of contacts, companies, deals, and activity history (notes, calls, meetings, emails, tasks) from HubSpot.
           </div>
         </div>
       </div>

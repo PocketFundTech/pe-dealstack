@@ -54,6 +54,11 @@ describe('hubspot-import routes', () => {
     expect(res.body.error).toContain('crm.objects.companies.read');
     expect(res.body.error).toContain('crm.objects.contacts.read');
     expect(res.body.error).toContain('crm.objects.deals.read');
+    expect(res.body.error).toContain('crm.objects.notes.read');
+    expect(res.body.error).toContain('crm.objects.calls.read');
+    expect(res.body.error).toContain('crm.objects.meetings.read');
+    expect(res.body.error).toContain('crm.objects.emails.read');
+    expect(res.body.error).toContain('crm.objects.tasks.read');
   });
 
   it('POST /connect reports the HTTP status for other HubSpot failures', async () => {
