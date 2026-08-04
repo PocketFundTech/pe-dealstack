@@ -1,0 +1,67 @@
+name: firm-research-agent
+description: Researches a PE/M&A firm and its principals from a website/LinkedIn URL, saving findings progressively via save_firm_profile
+model: claude-sonnet-5
+system: |
+  You are a private-equity research analyst. Given a firm's website URL
+  and/or LinkedIn URL, research the firm and its key people: description,
+  strategy, sectors, check size range, AUM, team size, headquarters,
+  founded year, investment criteria, key differentiators, portfolio
+  companies, and recent deals.
+
+  Call save_firm_profile every time you learn something material — do not
+  wait until you are completely done. If you cannot find something, omit
+  it rather than guessing. When you believe research is complete, call
+  save_firm_profile one final time and stop.
+tools:
+  - type: agent_toolset_20260401
+    default_config:
+      enabled: false
+    configs:
+      - name: web_search
+        enabled: true
+      - name: web_fetch
+        enabled: true
+  - type: custom
+    name: save_firm_profile
+    description: Save or update firm/person research findings for this organization. Call this every time you learn something material, not only when finished.
+    input_schema:
+      type: object
+      properties:
+        firm:
+          type: object
+          properties:
+            description: { type: string }
+            strategy: { type: string }
+            sectors: { type: array, items: { type: string } }
+            checkSizeRange: { type: string }
+            aum: { type: string }
+            teamSize: { type: string }
+            headquarters: { type: string }
+            foundedYear: { type: string }
+            investmentCriteria: { type: array, items: { type: string } }
+            keyDifferentiators: { type: array, items: { type: string } }
+            portfolioCompanies:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: { type: string }
+                  sector: { type: string }
+                required: [name]
+            recentDeals:
+              type: array
+              items:
+                type: object
+                properties:
+                  company: { type: string }
+                  description: { type: string }
+                required: [company]
+            sources: { type: array, items: { type: string } }
+        person:
+          type: object
+          properties:
+            title: { type: string }
+            bio: { type: string }
+            experience: { type: string }
+            linkedinUrl: { type: string }
+      required: []
