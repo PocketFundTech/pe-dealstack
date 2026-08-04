@@ -30,6 +30,7 @@ import onboardingRouter from './routes/onboarding.js';
 import dealImportRouter from './routes/deal-import.js';
 import internalRouter from './routes/internal-usage.js';
 import usageRouter from './routes/usage.js';
+import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import { supabase } from './supabase.js';
 import { authMiddleware } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
@@ -190,6 +191,10 @@ app.use('/api/portfolio/chat', aiLimiter);                 // createReactAgent
 app.use('/api/conversations/*/messages', aiLimiter);       // trackedChatCompletion
 app.use('/api/onboarding/enrich-firm', aiLimiter);         // runFirmResearch (defence-in-depth; has its own 3/hr/org cap)
 app.use('/api/ingest', writeLimiter);
+
+// Mounted ahead of express.json() — webhook signature verification needs
+// the exact request bytes, so this route parses its own raw body.
+app.use('/api/webhooks/managed-agents', express.raw({ type: 'application/json' }), managedAgentsWebhooksRouter);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
