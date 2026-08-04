@@ -109,6 +109,73 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+export type StreamEventHandler = (event: Record<string, unknown>) => void;
+
+async function requestStream(path: string, body: unknown, onEvent: StreamEventHandler): Promise<void> {
+  if (mfaLockoutActive) {
+    triggerMfaLockout("Two-factor authentication is required by your organization");
+  }
+
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: { ...headers, Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+
+  if (res.status === 404) {
+    throw new NotFoundError(`Not found: ${path}`);
+  }
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({} as Record<string, unknown>));
+    const message =
+      (errBody as { error?: string; message?: string }).error ||
+      (errBody as { message?: string }).message ||
+      res.statusText ||
+      `API error ${res.status}`;
+    const code = (errBody as { code?: string }).code;
+
+    if (res.status === 403 && code === "MFA_REQUIRED") {
+      triggerMfaLockout(message);
+    }
+
+    throw new ApiError(message, res.status, code);
+  }
+
+  if (!res.body) return;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (dataLine) {
+        try {
+          onEvent(JSON.parse(dataLine.slice(6)));
+        } catch (err) {
+          console.warn("[api.stream] failed to parse SSE frame:", err);
+        }
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body: unknown) =>
@@ -116,4 +183,5 @@ export const api = {
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  stream: (path: string, body: unknown, onEvent: StreamEventHandler) => requestStream(path, body, onEvent),
 };
