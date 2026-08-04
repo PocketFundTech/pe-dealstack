@@ -1,15 +1,46 @@
 // ─── update_deal_field tool ──────────────────────────────────────
 // Mutates fields on the current Deal row, with special handling for
 // leadPartner / analyst (resolves user IDs and writes DealTeamMember).
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
+import type { ToolEmit } from '../types.js';
 
-export function makeUpdateDealFieldTool(dealId: string, orgId: string) {
-  return tool(
-    async ({ field, value, userName }) => {
+const FIELDS = [
+  'leadPartner', 'analyst', 'source', 'priority', 'industry', 'description',
+  'name', 'currency', 'revenue', 'ebitda', 'dealSize', 'irrProjected', 'mom',
+  'targetCloseDate', 'grossMargin',
+] as const;
+
+export const inputSchema = z.object({
+  field: z.enum(FIELDS),
+  value: z.string().describe('New value. For leadPartner/analyst this can be a user ID, email, or full name — the tool resolves it to a real org member and returns an error if no unique match. For numeric fields (revenue, ebitda, dealSize, irrProjected, mom, grossMargin) pass the number in millions. For targetCloseDate use ISO date (YYYY-MM-DD).'),
+  userName: z.string().optional().describe('Name of user being assigned (for confirmation message)'),
+});
+
+export function makeUpdateDealFieldTool(dealId: string, orgId: string, emit: ToolEmit) {
+  return {
+    type: 'custom' as const,
+    name: 'update_deal_field',
+    description: 'Update a field on the current deal. Use when the user asks to change deal properties like name, metrics, team assignments, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: [...FIELDS] },
+        value: {
+          type: 'string',
+          description: 'New value. For leadPartner/analyst this can be a user ID, email, or full name — the tool resolves it to a real org member and returns an error if no unique match. For numeric fields (revenue, ebitda, dealSize, irrProjected, mom, grossMargin) pass the number in millions. For targetCloseDate use ISO date (YYYY-MM-DD).',
+        },
+        userName: { type: 'string', description: 'Name of user being assigned (for confirmation message)' },
+      },
+      required: ['field', 'value'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ field, value, userName }: z.infer<typeof inputSchema>) => {
       try {
         if (field === 'leadPartner' || field === 'analyst') {
           const role = field === 'leadPartner' ? 'LEAD' : 'MEMBER';
@@ -138,6 +169,7 @@ export function makeUpdateDealFieldTool(dealId: string, orgId: string) {
             description: `${resolvedName || 'Team member'} assigned as ${field === 'leadPartner' ? 'Lead Partner' : 'Analyst'}`,
           });
 
+          emit({ type: 'update', update: { field, value: resolvedUserId, userName: resolvedName } });
           return JSON.stringify({ success: true, field, value: resolvedUserId, userName: resolvedName });
         }
 
@@ -147,7 +179,6 @@ export function makeUpdateDealFieldTool(dealId: string, orgId: string) {
         updateData.updatedAt = new Date().toISOString();
 
         await supabase.from('Deal').update(updateData).eq('id', dealId);
-
         await supabase.from('Activity').insert({
           dealId,
           type: 'STATUS_UPDATED',
@@ -155,24 +186,12 @@ export function makeUpdateDealFieldTool(dealId: string, orgId: string) {
           description: `Changed to: ${value}`,
         });
 
+        emit({ type: 'update', update: { field, value } });
         return JSON.stringify({ success: true, field, value });
       } catch (error) {
         log.error('updateDealField tool error', error);
         return JSON.stringify({ success: false, error: 'Failed to update deal field' });
       }
     },
-    {
-      name: 'update_deal_field',
-      description: 'Update a field on the current deal. Use when the user asks to change deal properties like name, metrics, team assignments, etc.',
-      schema: z.object({
-        field: z.enum([
-          'leadPartner', 'analyst', 'source', 'priority', 'industry', 'description',
-          'name', 'currency', 'revenue', 'ebitda', 'dealSize', 'irrProjected', 'mom',
-          'targetCloseDate', 'grossMargin',
-        ]),
-        value: z.string().describe('New value. For leadPartner/analyst this can be a user ID, email, or full name — the tool resolves it to a real org member and returns an error if no unique match. For numeric fields (revenue, ebitda, dealSize, irrProjected, mom, grossMargin) pass the number in millions. For targetCloseDate use ISO date (YYYY-MM-DD).'),
-        userName: z.string().optional().describe('Name of user being assigned (for confirmation message)'),
-      }),
-    }
-  );
+  };
 }

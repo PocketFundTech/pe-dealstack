@@ -9,7 +9,7 @@ import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { isLLMAvailable } from '../services/llm.js';
-import { runDealChatAgent } from '../services/agents/dealChatAgent/index.js';
+import { runDealChatAgent, runDealChatAgentStreaming } from '../services/agents/dealChatAgent/index.js';
 import { generateFallbackResponse } from '../services/chatHelpers.js';
 
 const router = Router();
@@ -247,17 +247,74 @@ router.post('/:dealId/chat', async (req, res) => {
     const financialContext = buildFinancialMarkdown(financialStatements || []);
     contextParts.push(financialContext);
 
-    // Run the ReAct agent
+    const dealContext = contextParts.join('\n');
+    const userId = req.user?.id || null;
+
+    if (process.env.DEAL_CHAT_ENGINE === 'streaming') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      const abortController = new AbortController();
+      req.on('close', () => abortController.abort());
+
+      const send = (event: Record<string, unknown>) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      let fullText = '';
+      let finalModel = '';
+      let truncated = false;
+      let finalUpdates: any[] | undefined;
+      let finalAction: any;
+
+      try {
+        for await (const event of runDealChatAgentStreaming(
+          { dealId, orgId: deal.organizationId, message, dealContext, history: history.slice(-10) },
+          { signal: abortController.signal },
+        )) {
+          if (event.type === 'text_delta') fullText += event.text;
+          if (event.type === 'update') finalUpdates = [...(finalUpdates ?? []), event.update];
+          if (event.type === 'action') finalAction = event.action;
+          if (event.type === 'done') { finalModel = event.model; truncated = event.truncated; }
+          if (event.type === 'error') truncated = true;
+          send(event);
+        }
+
+        await supabase.from('ChatMessage').insert({ dealId, userId, role: 'user', content: message });
+        await supabase.from('ChatMessage').insert({
+          dealId,
+          userId,
+          role: 'assistant',
+          content: fullText,
+          metadata: {
+            model: finalModel || 'claude-sonnet-5',
+            ...(truncated && { truncated: true }),
+            ...(finalUpdates && { updates: finalUpdates }),
+            ...(finalAction && { action: finalAction }),
+          },
+        });
+
+        await AuditLog.aiChat(req, `Deal: ${deal.name} (streaming)`);
+      } catch (streamErr) {
+        log.error('Deal chat streaming failed after headers sent', streamErr);
+      } finally {
+        res.end();
+      }
+      return;
+    }
+
+    // Run the ReAct agent (legacy path)
     const result = await runDealChatAgent({
       dealId,
       orgId: deal.organizationId,
       message,
-      dealContext: contextParts.join('\n'),
+      dealContext,
       history: history.slice(-10),
     });
-
-    // Save messages to database
-    const userId = req.user?.id || null;
 
     await supabase.from('ChatMessage').insert({
       dealId,

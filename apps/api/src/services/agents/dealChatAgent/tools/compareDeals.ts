@@ -1,14 +1,33 @@
 // ─── compare_deals tool ──────────────────────────────────────────
 // Compare current deal against the rest of the org's portfolio.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+export const inputSchema = z.object({
+  targetDealName: z.string().optional().describe('Name of a specific deal to compare against (e.g., "Neen AI", "Buffer"). Leave empty for general portfolio comparison.'),
+});
+
 export function makeCompareDealsTool(dealId: string, orgId: string) {
-  return tool(
-    async ({ targetDealName }) => {
+  return {
+    type: 'custom' as const,
+    name: 'compare_deals',
+    description: 'Compare the current deal against other deals in the portfolio. Optionally compare with a specific deal by name. Shows metrics side-by-side, portfolio averages, and rankings.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        targetDealName: {
+          type: 'string',
+          description: 'Name of a specific deal to compare against (e.g., "Neen AI", "Buffer"). Leave empty for general portfolio comparison.',
+        },
+      },
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ targetDealName }: z.infer<typeof inputSchema>) => {
       try {
         // Get current deal
         const { data: currentDeal } = await supabase
@@ -95,12 +114,5 @@ export function makeCompareDealsTool(dealId: string, orgId: string) {
         return 'Error comparing deals.';
       }
     },
-    {
-      name: 'compare_deals',
-      description: 'Compare the current deal against other deals in the portfolio. Optionally compare with a specific deal by name. Shows metrics side-by-side, portfolio averages, and rankings.',
-      schema: z.object({
-        targetDealName: z.string().optional().describe('Name of a specific deal to compare against (e.g., "Neen AI", "Buffer"). Leave empty for general portfolio comparison.'),
-      }),
-    }
-  );
+  };
 }
