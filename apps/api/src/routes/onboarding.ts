@@ -7,6 +7,7 @@ import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { extractNameFromDomain } from '../utils/urlHelpers.js';
 import { runWithUsageContext } from '../middleware/usageContext.js';
+import { runFirmResearchViaManagedAgents } from '../services/managedAgents/firmResearchOrchestrator.js';
 import firmProfileRouter from './onboarding-firm.js';
 
 const router = Router();
@@ -347,28 +348,39 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
 
     res.json(result);
 
-    // Fire Phase 2 deep research in background (not awaited).
-    // We wrap in runWithUsageContext so every LLM call inside the background
-    // task is attributed to the correct user/org — AsyncLocalStorage is lost
-    // once the HTTP response has been sent.
+    // Fire deep research in background (not awaited). RESEARCH_ENGINE picks
+    // the legacy LangGraph deep pass or the Managed Agents flow; either way
+    // this never blocks the HTTP response.
     if (result.success && result.firmProfile && (websiteUrl || linkedinUrl)) {
-      void runWithUsageContext(
-        { userId, organizationId: orgId, source: 'background' },
-        async () => {
-          await runDeepResearch({
-            phase1Profile: result.firmProfile!,
-            phase1PersonProfile: result.personProfile,
-            websiteUrl: websiteUrl || '',
-            linkedinUrl: linkedinUrl || '',
-            firmName,
-            userId,
-            organizationId: orgId,
-          }).catch(err => {
-            log.error('Deep research background task failed', { error: err.message });
-            captureAgentError(err, { context: 'runDeepResearch:background' });
-          });
-        },
-      );
+      if (process.env.RESEARCH_ENGINE === 'managed-agents') {
+        void runFirmResearchViaManagedAgents({
+          organizationId: orgId,
+          firmName,
+          websiteUrl: websiteUrl || '',
+          linkedinUrl: linkedinUrl || '',
+        }).catch((err) => {
+          log.error('Managed Agents firm research failed', { error: err.message });
+          captureAgentError(err, { context: 'runFirmResearchViaManagedAgents:background' });
+        });
+      } else {
+        void runWithUsageContext(
+          { userId, organizationId: orgId, source: 'background' },
+          async () => {
+            await runDeepResearch({
+              phase1Profile: result.firmProfile!,
+              phase1PersonProfile: result.personProfile,
+              websiteUrl: websiteUrl || '',
+              linkedinUrl: linkedinUrl || '',
+              firmName,
+              userId,
+              organizationId: orgId,
+            }).catch(err => {
+              log.error('Deep research background task failed', { error: err.message });
+              captureAgentError(err, { context: 'runDeepResearch:background' });
+            });
+          },
+        );
+      }
     }
   } catch (error: any) {
     log.error('Firm enrichment endpoint failed', { error: error.message, stack: error.stack });
@@ -403,6 +415,19 @@ router.get('/research-status', async (req: Request, res: Response) => {
       .single();
 
     const settings = (org?.settings || {}) as Record<string, any>;
+
+    if (process.env.RESEARCH_ENGINE === 'managed-agents') {
+      if (!settings.researchStatus) {
+        return res.json({ phase: 1, status: 'complete', newInsightsCount: 0 });
+      }
+      return res.json({
+        phase: 2,
+        status: settings.researchStatus,
+        newInsightsCount: 0,
+        error: settings.researchStatus === 'failed' ? settings.researchError : undefined,
+      });
+    }
+
     // Self-heal stale 'running' rows: if the background task was killed
     // mid-flight by the Vercel serverless timeout, the status is stuck on
     // 'running' forever. Treat anything older than 5 minutes as failed so the
