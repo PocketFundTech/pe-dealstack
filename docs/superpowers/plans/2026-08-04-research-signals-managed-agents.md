@@ -510,6 +510,10 @@ export async function createSessionAndDrain(params: CreateSessionAndDrainParams)
   const session = await client.beta.sessions.create({
     agent: params.agentId,
     environment_id: params.environmentId,
+    // The webhook handler (Task 8) looks up organizationId from session
+    // metadata to know which org's research to mark failed — it has no
+    // other way to map a session ID back to an org.
+    metadata: { organizationId: params.organizationId },
   });
 
   const usage = { inputTokens: 0, outputTokens: 0 };
@@ -1203,6 +1207,7 @@ vi.mock('../src/services/managedAgents/researchLock.js', () => ({ acquireResearc
 vi.mock('../src/services/managedAgents/config.js', () => ({
   FIRM_RESEARCH_AGENT_ID: 'agent_firm',
   MANAGED_AGENTS_ENVIRONMENT_ID: 'env_1',
+  assertManagedAgentsConfigured: vi.fn(),
 }));
 
 async function getOrchestrator() {
@@ -1323,7 +1328,7 @@ import { createSessionAndDrain } from './session.js';
 import { acquireResearchLock, releaseResearchLock } from './researchLock.js';
 import { recordManagedAgentSessionUsage } from '../usage/trackedManagedAgentSession.js';
 import { saveFirmProfile } from './tools/saveFirmProfile.js';
-import { FIRM_RESEARCH_AGENT_ID, MANAGED_AGENTS_ENVIRONMENT_ID } from './config.js';
+import { FIRM_RESEARCH_AGENT_ID, MANAGED_AGENTS_ENVIRONMENT_ID, assertManagedAgentsConfigured } from './config.js';
 
 export interface RunFirmResearchInput {
   organizationId: string;
@@ -1333,6 +1338,7 @@ export interface RunFirmResearchInput {
 }
 
 export async function runFirmResearchViaManagedAgents(input: RunFirmResearchInput): Promise<void> {
+  assertManagedAgentsConfigured();
   const acquired = await acquireResearchLock(input.organizationId);
   if (!acquired) {
     log.info('Firm research skipped — already running for this org', { organizationId: input.organizationId });
@@ -1499,6 +1505,7 @@ vi.mock('../src/services/usage/trackedLLM.js', () => ({
 vi.mock('../src/services/managedAgents/config.js', () => ({
   SIGNAL_MONITOR_AGENT_ID: 'agent_signal',
   MANAGED_AGENTS_ENVIRONMENT_ID: 'env_1',
+  assertManagedAgentsConfigured: vi.fn(),
 }));
 
 beforeEach(() => {
@@ -1546,7 +1553,7 @@ import { createSessionAndDrain } from './session.js';
 import { recordManagedAgentSessionUsage } from '../usage/trackedManagedAgentSession.js';
 import { listDealsForOrg } from './tools/listDealsForOrg.js';
 import { createSignalNotification } from './tools/createSignalNotification.js';
-import { SIGNAL_MONITOR_AGENT_ID, MANAGED_AGENTS_ENVIRONMENT_ID } from './config.js';
+import { SIGNAL_MONITOR_AGENT_ID, MANAGED_AGENTS_ENVIRONMENT_ID, assertManagedAgentsConfigured } from './config.js';
 
 export interface SignalMonitorRunResult {
   status: 'completed' | 'failed';
@@ -1554,6 +1561,7 @@ export interface SignalMonitorRunResult {
 }
 
 export async function runSignalMonitorViaManagedAgents(organizationId: string): Promise<SignalMonitorRunResult> {
+  assertManagedAgentsConfigured();
   const start = Date.now();
   const result = await createSessionAndDrain({
     agentId: SIGNAL_MONITOR_AGENT_ID,
