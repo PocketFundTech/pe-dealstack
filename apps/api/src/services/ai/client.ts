@@ -118,3 +118,54 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     throw err;
   }
 }
+
+export interface ClaudeStreamOptions {
+  operation: string;
+  role: AiRole;
+  system?: string;
+  messages: unknown[];
+  tools: unknown[];
+  signal?: AbortSignal;
+}
+
+export interface ClaudeStreamHandle {
+  runner: AsyncIterable<AsyncIterable<any>>;
+  recordUsage: (usage: { inputTokens: number; outputTokens: number }, status: 'success' | 'error') => Promise<void>;
+}
+
+export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHandle {
+  const cfg = getModelConfig(opts.role);
+  const client = getAnthropicClient();
+  const start = Date.now();
+
+  const request: Record<string, unknown> = {
+    model: cfg.model,
+    max_tokens: cfg.maxTokens,
+    messages: opts.messages,
+    tools: opts.tools,
+    betas: cfg.betas,
+    stream: true,
+  };
+  if (opts.system) request.system = opts.system;
+  if (cfg.fallbacks) request.fallbacks = cfg.fallbacks;
+  if (opts.signal) request.signal = opts.signal;
+
+  const runner = client.beta.messages.toolRunner(request as never);
+
+  const recordUsage = async (
+    usage: { inputTokens: number; outputTokens: number },
+    status: 'success' | 'error',
+  ): Promise<void> => {
+    await recordUsageEvent({
+      operation: opts.operation,
+      provider: 'anthropic',
+      model: cfg.model,
+      promptTokens: usage.inputTokens,
+      completionTokens: usage.outputTokens,
+      status,
+      durationMs: Date.now() - start,
+    });
+  };
+
+  return { runner, recordUsage };
+}
