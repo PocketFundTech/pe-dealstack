@@ -231,6 +231,8 @@ git commit -m "feat(deal-chat): trackedClaudeStream() — streaming Tool Runner 
 
 The Tool Runner executes each tool's `run()` internally and doesn't surface raw tool-result content back to the caller (unlike the current LangGraph code, which scans `ToolMessage`s after the whole run completes). So the 6 tools whose JSON results today drive `sideEffects`/`updates`/`action` (`addNote`, `triggerFinancialExtraction`, `scrollToSection`, `suggestAction`, `changeDealStage`, `updateDealField`) each take a new `emit: ToolEmit` parameter and call it right where they build their success-path return value — the return value sent back to Claude is unchanged, `emit()` is purely a side-channel to the streaming loop.
 
+**Discovered during execution, not anticipated at plan-writing time:** the SDK's `betaZodTool()` helper calls `z.toJSONSchema()`, a Zod v4-only API. This repo's installed Zod is `3.25.76` — it does ship a v4-compatible module, but only under the `zod/v4` subpath; the SDK's helper does a bare `import * as z from 'zod'`, which resolves to the classic v3 API on this version. `betaZodTool()` is therefore unusable here. Fix (confirmed with the user before proceeding): skip `betaZodTool()` and build each tool as a plain object matching the SDK's `BetaRunnableTool` type directly — `{type: 'custom', name, description, input_schema: <hand-written JSON schema>, run, parse}` — reusing the existing Zod schema only for `parse()` (Zod's own `.parse()` still works fine on 3.x; only the schema→JSON-Schema conversion was broken). This mirrors the hand-written-JSON-schema-alongside-Zod pattern Phase 1's `extractionSchema.ts` already uses, and is self-contained to `dealChatAgent`'s tool files — it does not touch the `zod` dependency or any of the other 68 files in `apps/api` that import it. Every code block below in Tasks 2 and 3 reflects this — there is no `betaZodTool` import anywhere in the final tool files.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
@@ -337,21 +339,35 @@ export type ToolEmit = (event: ToolEmitEvent) => void;
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/addNote.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import type { ToolEmit } from '../types.js';
 
+const inputSchema = z.object({
+  content: z.string().describe('The note content'),
+  type: z.enum(['NOTE_ADDED', 'CALL_LOGGED', 'EMAIL_SENT', 'MEETING_SCHEDULED']).default('NOTE_ADDED').describe('Type of activity'),
+});
+
 export function makeAddNoteTool(dealId: string, _orgId: string, emit: ToolEmit) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'add_note',
     description: 'Add a note, call log, email log, or meeting note to the deal activity feed.',
-    inputSchema: z.object({
-      content: z.string().describe('The note content'),
-      type: z.enum(['NOTE_ADDED', 'CALL_LOGGED', 'EMAIL_SENT', 'MEETING_SCHEDULED']).default('NOTE_ADDED').describe('Type of activity'),
-    }),
-    run: async ({ content, type }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'The note content' },
+        type: {
+          type: 'string',
+          enum: ['NOTE_ADDED', 'CALL_LOGGED', 'EMAIL_SENT', 'MEETING_SCHEDULED'],
+          description: 'Type of activity',
+        },
+      },
+      required: ['content'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ content, type }: z.infer<typeof inputSchema>) => {
       try {
         await supabase.from('Activity').insert({
           dealId,
@@ -366,25 +382,30 @@ export function makeAddNoteTool(dealId: string, _orgId: string, emit: ToolEmit) 
         return JSON.stringify({ success: false, error: 'Failed to add note' });
       }
     },
-  });
+  };
 }
 ```
+
+(`type: 'custom' as const` and the hand-written `input_schema` replace `betaZodTool()`'s auto-conversion — see the note above Step 1. `parse()` still uses the Zod schema directly, since only the schema→JSON-Schema conversion was broken, not Zod's own `.parse()`.)
 
 - [ ] **Step 5: Port `triggerFinancialExtraction.ts`**
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/triggerFinancialExtraction.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import type { ToolEmit } from '../types.js';
 
+const inputSchema = z.object({});
+
 export function makeTriggerFinancialExtractionTool(dealId: string, _orgId: string, emit: ToolEmit) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'trigger_financial_extraction',
     description: 'Check which documents are available for financial extraction and guide the user to trigger it.',
-    inputSchema: z.object({}),
+    input_schema: { type: 'object', properties: {} },
+    parse: (input: unknown) => inputSchema.parse(input),
     run: async () => {
       try {
         const { data: docs } = await supabase
@@ -412,7 +433,7 @@ export function makeTriggerFinancialExtractionTool(dealId: string, _orgId: strin
         return JSON.stringify({ success: false, error: 'Failed to trigger extraction' });
       }
     },
-  });
+  };
 }
 ```
 
@@ -420,20 +441,34 @@ export function makeTriggerFinancialExtractionTool(dealId: string, _orgId: strin
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/navigation.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import type { ToolEmit } from '../types.js';
 
+const suggestActionInputSchema = z.object({
+  actionType: z.enum(['create_memo', 'open_data_room', 'upload_document', 'view_financials', 'change_stage']),
+  label: z.string().describe('Button label text'),
+  description: z.string().optional().describe('Brief explanation of what happens'),
+});
+
 export function makeSuggestActionTool(dealId: string, _orgId: string, emit: ToolEmit) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'suggest_action',
     description: 'Suggest navigation to another page: create memo, open data room, upload document, view financials, change deal stage.',
-    inputSchema: z.object({
-      actionType: z.enum(['create_memo', 'open_data_room', 'upload_document', 'view_financials', 'change_stage']),
-      label: z.string().describe('Button label text'),
-      description: z.string().optional().describe('Brief explanation of what happens'),
-    }),
-    run: async ({ actionType, label, description }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        actionType: {
+          type: 'string',
+          enum: ['create_memo', 'open_data_room', 'upload_document', 'view_financials', 'change_stage'],
+        },
+        label: { type: 'string', description: 'Button label text' },
+        description: { type: 'string', description: 'Brief explanation of what happens' },
+      },
+      required: ['actionType', 'label'],
+    },
+    parse: (input: unknown) => suggestActionInputSchema.parse(input),
+    run: async ({ actionType, label, description }: z.infer<typeof suggestActionInputSchema>) => {
       const urlMap: Record<string, string> = {
         create_memo: `/memo-builder?dealId=${dealId}&fromChat=1`,
         open_data_room: `/data-room/${dealId}`,
@@ -450,21 +485,35 @@ export function makeSuggestActionTool(dealId: string, _orgId: string, emit: Tool
       emit({ type: 'action', action: payload });
       return JSON.stringify(payload);
     },
-  });
+  };
 }
 
+const scrollToSectionInputSchema = z.object({
+  section: z.enum(['financials', 'analysis', 'activity', 'documents', 'risks']).describe('Section to scroll to'),
+});
+
 export function makeScrollToSectionTool(_dealId: string, _orgId: string, emit: ToolEmit) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'scroll_to_section',
     description: 'Scroll the deal page to a specific section. Use when the user asks to see or navigate to financials, analysis, documents, activity, or risks.',
-    inputSchema: z.object({
-      section: z.enum(['financials', 'analysis', 'activity', 'documents', 'risks']).describe('Section to scroll to'),
-    }),
-    run: async ({ section }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        section: {
+          type: 'string',
+          enum: ['financials', 'analysis', 'activity', 'documents', 'risks'],
+          description: 'Section to scroll to',
+        },
+      },
+      required: ['section'],
+    },
+    parse: (input: unknown) => scrollToSectionInputSchema.parse(input),
+    run: async ({ section }: z.infer<typeof scrollToSectionInputSchema>) => {
       emit({ type: 'side_effect', effect: { type: 'scroll_to', section } });
       return JSON.stringify({ type: 'scroll_to', section });
     },
-  });
+  };
 }
 ```
 
@@ -472,24 +521,36 @@ export function makeScrollToSectionTool(_dealId: string, _orgId: string, emit: T
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/changeDealStage.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import type { ToolEmit } from '../types.js';
 
+const STAGES = [
+  'INITIAL_REVIEW', 'DUE_DILIGENCE', 'IOI_SUBMITTED',
+  'LOI_NEGOTIATION', 'CLOSING', 'CLOSED_WON', 'CLOSED_LOST', 'PASSED',
+] as const;
+
+const inputSchema = z.object({
+  stage: z.enum(STAGES),
+  reason: z.string().optional().describe('Optional reason for the stage change'),
+});
+
 export function makeChangeDealStageTool(dealId: string, _orgId: string, emit: ToolEmit) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'change_deal_stage',
     description: 'Change the deal pipeline stage. Use when the user asks to advance, move back, or close a deal. Stages flow: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_NEGOTIATION → CLOSING → CLOSED_WON. Terminal stages: CLOSED_WON, CLOSED_LOST, PASSED.',
-    inputSchema: z.object({
-      stage: z.enum([
-        'INITIAL_REVIEW', 'DUE_DILIGENCE', 'IOI_SUBMITTED',
-        'LOI_NEGOTIATION', 'CLOSING', 'CLOSED_WON', 'CLOSED_LOST', 'PASSED',
-      ]),
-      reason: z.string().optional().describe('Optional reason for the stage change'),
-    }),
-    run: async ({ stage, reason }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        stage: { type: 'string', enum: [...STAGES] },
+        reason: { type: 'string', description: 'Optional reason for the stage change' },
+      },
+      required: ['stage'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ stage, reason }: z.infer<typeof inputSchema>) => {
       try {
         const { data: deal } = await supabase.from('Deal').select('stage').eq('id', dealId).single();
         if (!deal) return JSON.stringify({ success: false, error: 'Deal not found' });
@@ -514,7 +575,7 @@ export function makeChangeDealStageTool(dealId: string, _orgId: string, emit: To
         return JSON.stringify({ success: false, error: 'Failed to change deal stage' });
       }
     },
-  });
+  };
 }
 ```
 
@@ -522,26 +583,42 @@ export function makeChangeDealStageTool(dealId: string, _orgId: string, emit: To
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/updateDealField.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import type { ToolEmit } from '../types.js';
 
+const FIELDS = [
+  'leadPartner', 'analyst', 'source', 'priority', 'industry', 'description',
+  'name', 'currency', 'revenue', 'ebitda', 'dealSize', 'irrProjected', 'mom',
+  'targetCloseDate', 'grossMargin',
+] as const;
+
+const inputSchema = z.object({
+  field: z.enum(FIELDS),
+  value: z.string().describe('New value. For leadPartner/analyst this can be a user ID, email, or full name — the tool resolves it to a real org member and returns an error if no unique match. For numeric fields (revenue, ebitda, dealSize, irrProjected, mom, grossMargin) pass the number in millions. For targetCloseDate use ISO date (YYYY-MM-DD).'),
+  userName: z.string().optional().describe('Name of user being assigned (for confirmation message)'),
+});
+
 export function makeUpdateDealFieldTool(dealId: string, orgId: string, emit: ToolEmit) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'update_deal_field',
     description: 'Update a field on the current deal. Use when the user asks to change deal properties like name, metrics, team assignments, etc.',
-    inputSchema: z.object({
-      field: z.enum([
-        'leadPartner', 'analyst', 'source', 'priority', 'industry', 'description',
-        'name', 'currency', 'revenue', 'ebitda', 'dealSize', 'irrProjected', 'mom',
-        'targetCloseDate', 'grossMargin',
-      ]),
-      value: z.string().describe('New value. For leadPartner/analyst this can be a user ID, email, or full name — the tool resolves it to a real org member and returns an error if no unique match. For numeric fields (revenue, ebitda, dealSize, irrProjected, mom, grossMargin) pass the number in millions. For targetCloseDate use ISO date (YYYY-MM-DD).'),
-      userName: z.string().optional().describe('Name of user being assigned (for confirmation message)'),
-    }),
-    run: async ({ field, value, userName }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: [...FIELDS] },
+        value: {
+          type: 'string',
+          description: 'New value. For leadPartner/analyst this can be a user ID, email, or full name — the tool resolves it to a real org member and returns an error if no unique match. For numeric fields (revenue, ebitda, dealSize, irrProjected, mom, grossMargin) pass the number in millions. For targetCloseDate use ISO date (YYYY-MM-DD).',
+        },
+        userName: { type: 'string', description: 'Name of user being assigned (for confirmation message)' },
+      },
+      required: ['field', 'value'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ field, value, userName }: z.infer<typeof inputSchema>) => {
       try {
         if (field === 'leadPartner' || field === 'analyst') {
           const role = field === 'leadPartner' ? 'LEAD' : 'MEMBER';
@@ -619,7 +696,7 @@ export function makeUpdateDealFieldTool(dealId: string, orgId: string, emit: Too
         return JSON.stringify({ success: false, error: 'Failed to update deal field' });
       }
     },
-  });
+  };
 }
 ```
 
@@ -635,7 +712,7 @@ Expected: PASS (5 tests).
 
 ```bash
 git add apps/api/src/services/agents/dealChatAgent/types.ts apps/api/src/services/agents/dealChatAgent/tools/addNote.ts apps/api/src/services/agents/dealChatAgent/tools/triggerFinancialExtraction.ts apps/api/src/services/agents/dealChatAgent/tools/navigation.ts apps/api/src/services/agents/dealChatAgent/tools/changeDealStage.ts apps/api/src/services/agents/dealChatAgent/tools/updateDealField.ts apps/api/tests/deal-chat-tools-emit.test.ts
-git commit -m "feat(deal-chat): port emit-wired tools to betaZodTool (add_note, trigger_financial_extraction, navigation, change_deal_stage, update_deal_field)"
+git commit -m "feat(deal-chat): port emit-wired tools to BetaRunnableTool objects (add_note, trigger_financial_extraction, navigation, change_deal_stage, update_deal_field)"
 ```
 
 ---
@@ -654,7 +731,7 @@ git commit -m "feat(deal-chat): port emit-wired tools to betaZodTool (add_note, 
 - Modify: `apps/api/src/services/agents/dealChatAgent/tools.ts`
 - Modify: `apps/api/tests/document-delimiters.test.ts:261-300`
 
-These 8 tools never produce `sideEffects`/`updates`/`action` — they return plain markdown strings, so only the wrapper changes; every business-logic line stays byte-identical.
+These 8 tools never produce `sideEffects`/`updates`/`action` — they return plain markdown strings, so only the wrapper changes; every business-logic line stays byte-identical. Like Task 2, these are built as plain `{type: 'custom', name, description, input_schema, run, parse}` objects rather than via `betaZodTool()` — see the note at the top of Task 2 for why.
 
 - [ ] **Step 1: Write the failing test** (extends the existing `document-delimiters.test.ts` block, which currently calls LangChain's `.invoke()`)
 
@@ -686,19 +763,30 @@ Expected: FAIL — `makeSearchDocumentsTool` still returns a LangChain object wi
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/compareDeals.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+const inputSchema = z.object({
+  targetDealName: z.string().optional().describe('Name of a specific deal to compare against (e.g., "Neen AI", "Buffer"). Leave empty for general portfolio comparison.'),
+});
+
 export function makeCompareDealsTool(dealId: string, orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'compare_deals',
     description: 'Compare the current deal against other deals in the portfolio. Optionally compare with a specific deal by name. Shows metrics side-by-side, portfolio averages, and rankings.',
-    inputSchema: z.object({
-      targetDealName: z.string().optional().describe('Name of a specific deal to compare against (e.g., "Neen AI", "Buffer"). Leave empty for general portfolio comparison.'),
-    }),
-    run: async ({ targetDealName }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        targetDealName: {
+          type: 'string',
+          description: 'Name of a specific deal to compare against (e.g., "Neen AI", "Buffer"). Leave empty for general portfolio comparison.',
+        },
+      },
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ targetDealName }: z.infer<typeof inputSchema>) => {
       try {
         const { data: currentDeal } = await supabase
           .from('Deal')
@@ -777,7 +865,7 @@ export function makeCompareDealsTool(dealId: string, orgId: string) {
         return 'Error comparing deals.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -785,21 +873,32 @@ export function makeCompareDealsTool(dealId: string, orgId: string) {
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/draftEmail.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
 import { generateEmailDraft } from '../../emailDrafter/index.js';
 
+const inputSchema = z.object({
+  recipient: z.string().describe('Who the email is for (e.g., "management team", "broker", "legal counsel")'),
+  purpose: z.string().describe('Purpose of the email (e.g., "request additional financials", "schedule site visit", "follow up on LOI")'),
+  tone: z.enum(['formal', 'casual', 'direct']).default('formal').describe('Email tone'),
+});
+
 export function makeDraftEmailTool(dealId: string, orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'draft_email',
     description: 'Draft a professional email related to this deal. Returns subject line, body, and compliance check.',
-    inputSchema: z.object({
-      recipient: z.string().describe('Who the email is for (e.g., "management team", "broker", "legal counsel")'),
-      purpose: z.string().describe('Purpose of the email (e.g., "request additional financials", "schedule site visit", "follow up on LOI")'),
-      tone: z.enum(['formal', 'casual', 'direct']).default('formal').describe('Email tone'),
-    }),
-    run: async ({ recipient, purpose, tone }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        recipient: { type: 'string', description: 'Who the email is for (e.g., "management team", "broker", "legal counsel")' },
+        purpose: { type: 'string', description: 'Purpose of the email (e.g., "request additional financials", "schedule site visit", "follow up on LOI")' },
+        tone: { type: 'string', enum: ['formal', 'casual', 'direct'], description: 'Email tone' },
+      },
+      required: ['recipient', 'purpose'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ recipient, purpose, tone }: z.infer<typeof inputSchema>) => {
       try {
         const result = await generateEmailDraft({
           organizationId: orgId,
@@ -823,7 +922,7 @@ export function makeDraftEmailTool(dealId: string, orgId: string) {
         return 'Failed to draft email. Please try again.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -831,20 +930,29 @@ export function makeDraftEmailTool(dealId: string, orgId: string) {
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/generateMeetingPrep.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
 import { generateMeetingPrep } from '../../meetingPrep/index.js';
 
+const inputSchema = z.object({
+  attendees: z.string().optional().describe('Who the meeting is with (e.g., "CEO of target company")'),
+  topics: z.string().optional().describe('Key topics to cover'),
+});
+
 export function makeGenerateMeetingPrepTool(dealId: string, orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'generate_meeting_prep',
     description: 'Generate a meeting preparation brief for this deal. Includes talking points, questions, risks, and suggested agenda.',
-    inputSchema: z.object({
-      attendees: z.string().optional().describe('Who the meeting is with (e.g., "CEO of target company")'),
-      topics: z.string().optional().describe('Key topics to cover'),
-    }),
-    run: async ({ attendees, topics }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        attendees: { type: 'string', description: 'Who the meeting is with (e.g., "CEO of target company")' },
+        topics: { type: 'string', description: 'Key topics to cover' },
+      },
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ attendees, topics }: z.infer<typeof inputSchema>) => {
       try {
         const brief = await generateMeetingPrep({
           dealId,
@@ -865,7 +973,7 @@ export function makeGenerateMeetingPrepTool(dealId: string, orgId: string) {
         return 'Failed to generate meeting prep. Please try again.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -873,17 +981,20 @@ export function makeGenerateMeetingPrepTool(dealId: string, orgId: string) {
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/getAnalysisSummary.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import { analyzeFinancials } from '../../../analysis/index.js';
 
+const inputSchema = z.object({});
+
 export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'get_analysis_summary',
     description: 'Run and fetch the PE analysis summary: Quality of Earnings score, red flags, key financial ratios. Use when the user asks about QoE, red flags, analysis results, or financial health.',
-    inputSchema: z.object({}),
+    input_schema: { type: 'object', properties: {} },
+    parse: (input: unknown) => inputSchema.parse(input),
     run: async () => {
       try {
         const { data: statements } = await supabase
@@ -932,7 +1043,7 @@ export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
         return 'Error running analysis.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -940,19 +1051,27 @@ export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/getDealActivity.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+const inputSchema = z.object({
+  limit: z.number().optional().describe('Max activities to return (default 15)'),
+});
+
 export function makeGetDealActivityTool(dealId: string, _orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'get_deal_activity',
     description: 'Fetch recent activity timeline for the deal — document uploads, status changes, team updates, chat history, etc.',
-    inputSchema: z.object({
-      limit: z.number().optional().describe('Max activities to return (default 15)'),
-    }),
-    run: async ({ limit }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'Max activities to return (default 15)' },
+      },
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ limit }: z.infer<typeof inputSchema>) => {
       try {
         const { data: activities } = await supabase
           .from('Activity')
@@ -974,7 +1093,7 @@ export function makeGetDealActivityTool(dealId: string, _orgId: string) {
         return 'Error fetching activity.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -982,16 +1101,19 @@ export function makeGetDealActivityTool(dealId: string, _orgId: string) {
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/getDealFinancials.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+const inputSchema = z.object({});
+
 export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'get_deal_financials',
     description: 'Fetch extracted financial statements and deal-level metrics (revenue, EBITDA, IRR, MoM). Use when user asks about financials, numbers, revenue trends, or analysis.',
-    inputSchema: z.object({}),
+    input_schema: { type: 'object', properties: {} },
+    parse: (input: unknown) => inputSchema.parse(input),
     run: async () => {
       try {
         const { data: statements } = await supabase
@@ -1046,7 +1168,7 @@ export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
         return 'Error fetching financial data.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -1054,16 +1176,19 @@ export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/listDocuments.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+const inputSchema = z.object({});
+
 export function makeListDocumentsTool(dealId: string, _orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'list_documents',
     description: 'List all documents uploaded to this deal with file details and AI analysis status.',
-    inputSchema: z.object({}),
+    input_schema: { type: 'object', properties: {} },
+    parse: (input: unknown) => inputSchema.parse(input),
     run: async () => {
       try {
         const { data: docs } = await supabase
@@ -1087,7 +1212,7 @@ export function makeListDocumentsTool(dealId: string, _orgId: string) {
         return 'Error fetching documents.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -1095,21 +1220,30 @@ export function makeListDocumentsTool(dealId: string, _orgId: string) {
 
 ```ts
 // apps/api/src/services/agents/dealChatAgent/tools/searchDocuments.ts
-import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { searchDocumentChunks, buildRAGContext, isRAGEnabled } from '../../../../rag.js';
 import { log } from '../../../../utils/logger.js';
 import { wrapDocumentContent } from '../../guardrails.js';
 
+const inputSchema = z.object({
+  query: z.string().describe('The search query — what information to find in the documents'),
+});
+
 export function makeSearchDocumentsTool(dealId: string, _orgId: string) {
-  return betaZodTool({
+  return {
+    type: 'custom' as const,
     name: 'search_documents',
     description: 'Search through all uploaded deal documents using semantic search. Use this when the user asks about specific information from documents, CIMs, financial reports, etc.',
-    inputSchema: z.object({
-      query: z.string().describe('The search query — what information to find in the documents'),
-    }),
-    run: async ({ query }) => {
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query — what information to find in the documents' },
+      },
+      required: ['query'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ query }: z.infer<typeof inputSchema>) => {
       try {
         if (!isRAGEnabled()) {
           const { data: docs } = await supabase
@@ -1148,7 +1282,7 @@ export function makeSearchDocumentsTool(dealId: string, _orgId: string) {
         return 'Error searching documents.';
       }
     },
-  });
+  };
 }
 ```
 
@@ -1204,7 +1338,7 @@ Expected: PASS (document-delimiters.test.ts's full suite + the 5 emit tests from
 
 ```bash
 git add apps/api/src/services/agents/dealChatAgent/tools/compareDeals.ts apps/api/src/services/agents/dealChatAgent/tools/draftEmail.ts apps/api/src/services/agents/dealChatAgent/tools/generateMeetingPrep.ts apps/api/src/services/agents/dealChatAgent/tools/getAnalysisSummary.ts apps/api/src/services/agents/dealChatAgent/tools/getDealActivity.ts apps/api/src/services/agents/dealChatAgent/tools/getDealFinancials.ts apps/api/src/services/agents/dealChatAgent/tools/listDocuments.ts apps/api/src/services/agents/dealChatAgent/tools/searchDocuments.ts apps/api/src/services/agents/dealChatAgent/tools.ts apps/api/tests/document-delimiters.test.ts
-git commit -m "feat(deal-chat): port remaining 8 plain-string tools to betaZodTool, update tools.ts barrel"
+git commit -m "feat(deal-chat): port remaining 8 plain-string tools to BetaRunnableTool objects, update tools.ts barrel"
 ```
 
 ---
