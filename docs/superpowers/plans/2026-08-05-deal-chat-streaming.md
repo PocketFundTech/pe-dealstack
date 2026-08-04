@@ -23,7 +23,7 @@
 - `apps/web-next/src/app/(app)/deals/[id]/deal-page-handlers.ts` — `sendPrompt` rewrite (streaming-aware, sends history)
 - `apps/web-next/src/app/(app)/deals/[id]/components.tsx` — `ChatMessage` gains `streaming?: boolean`
 - `apps/web-next/src/app/(app)/deals/[id]/deal-tabs.tsx` — gate `<AIMessageActions>` on `!msg.streaming` so Copy/Helpful buttons don't appear on a still-streaming message
-- `apps/api/tests/dealChatAgent-bounds.test.ts` — full rewrite (was LangGraph-specific)
+- `apps/api/tests/dealChatAgentStreaming-bounds.test.ts` — new file (kept `dealChatAgent-bounds.test.ts` untouched — it tests the legacy `runDealChatAgent`, which stays the active default path until the flag flips; overwriting it would drop coverage for still-live code)
 - `apps/api/tests/document-delimiters.test.ts` — update the one block that calls `.invoke()` on `searchDocuments`
 
 **New:**
@@ -1347,14 +1347,14 @@ git commit -m "feat(deal-chat): port remaining 8 plain-string tools to BetaRunna
 
 **Files:**
 - Modify: `apps/api/src/services/agents/dealChatAgent/index.ts`
-- Test: `apps/api/tests/dealChatAgent-bounds.test.ts` (full rewrite — the old version mocks `createReactAgent`, which no longer exists in this code path)
+- Test: `apps/api/tests/dealChatAgentStreaming-bounds.test.ts` (new file — `dealChatAgent-bounds.test.ts` stays untouched, since it tests the legacy `runDealChatAgent`, which remains the active default path until `DEAL_CHAT_ENGINE` flips)
 
 On any terminal failure — genuine error, iteration cap exceeded, or timeout/client-disconnect abort — the generator yields exactly one `error` event and returns, no `done` event. On success it yields `side_effect`/`update`/`action` events (from whatever the tools' `emit()` calls collected) followed by one `done` event. The route (Task 5) is responsible for accumulating `text_delta`s into the persisted message regardless of which terminal event arrives — the generator's job is just to emit correctly-typed events, not to make persistence decisions.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// apps/api/tests/dealChatAgent-bounds.test.ts (full replacement)
+// apps/api/tests/dealChatAgentStreaming-bounds.test.ts (new file)
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let nextRunnerIterations: any[] = [];
@@ -1450,7 +1450,7 @@ describe('runDealChatAgentStreaming bounds', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd apps/api && npx vitest run tests/dealChatAgent-bounds.test.ts
+cd apps/api && npx vitest run tests/dealChatAgentStreaming-bounds.test.ts
 ```
 
 Expected: FAIL — `runDealChatAgentStreaming is not exported`.
@@ -1601,7 +1601,7 @@ export async function* runDealChatAgentStreaming(
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cd apps/api && npx vitest run tests/dealChatAgent-bounds.test.ts
+cd apps/api && npx vitest run tests/dealChatAgentStreaming-bounds.test.ts
 ```
 
 Expected: PASS (4 tests).
@@ -1609,7 +1609,7 @@ Expected: PASS (4 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/api/src/services/agents/dealChatAgent/index.ts apps/api/tests/dealChatAgent-bounds.test.ts
+git add apps/api/src/services/agents/dealChatAgent/index.ts apps/api/tests/dealChatAgentStreaming-bounds.test.ts
 git commit -m "feat(deal-chat): runDealChatAgentStreaming() — Tool Runner streaming loop with bounds"
 ```
 
