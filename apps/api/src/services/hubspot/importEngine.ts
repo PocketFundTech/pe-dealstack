@@ -152,6 +152,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
     await saveJob(jobId, {
       status: anySucceeded ? 'completed' : 'failed',
+      currentObject: null, cursor: null,
       error: (err as Error).message,
       finishedAt: new Date().toISOString(),
     });
