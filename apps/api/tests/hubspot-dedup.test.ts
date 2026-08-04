@@ -15,6 +15,10 @@ function makeChain(overrides: Record<string, unknown> = {}) {
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: [] }),
     maybeSingle: vi.fn().mockResolvedValue({ data: null }),
+    // update()/insert() end the chain on `.eq()`/`insert()` itself (no further
+    // call), so mockReturnThis() makes `await chain...` resolve to `chain`
+    // itself — destructuring `{ error }` off it reads this property.
+    error: null,
   };
   return Object.assign(base, overrides);
 }
@@ -130,5 +134,33 @@ describe('upsertByHubspotId', () => {
     await upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'Acme', hubspotProperties: {} }, { column: 'name', value: 'Acme' });
 
     expect(naturalKeyMatch.order).toHaveBeenCalledWith('createdAt', { ascending: true });
+  });
+
+  /**
+   * Neither the insert nor update path checked Supabase's `{ error }` response
+   * — a NOT NULL violation (e.g. Deal.companyId when company resolution
+   * failed), a connection blip, anything — was silently swallowed and the
+   * record was counted as 'created'/'updated' even though nothing was written.
+   */
+  it('throws when the update call returns a Supabase error, instead of reporting success', async () => {
+    const hubspotIdMatch = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'row-1', name: 'Acme' } }),
+    });
+    const updateChain = makeChain({ error: { message: 'null value in column "companyId" violates not-null constraint' } });
+    mockFrom.mockReturnValueOnce(hubspotIdMatch).mockReturnValueOnce(updateChain);
+
+    await expect(
+      upsertByHubspotId('Deal', 'org-A', 'hs-1', { name: 'Big Deal', hubspotProperties: {} }, { column: 'name', value: 'Big Deal' }),
+    ).rejects.toThrow(/companyId/);
+  });
+
+  it('throws when the insert call returns a Supabase error, instead of reporting success', async () => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const insertChain = makeChain({ error: { message: 'duplicate key value violates unique constraint' } });
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(insertChain);
+
+    await expect(
+      upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'Acme', hubspotProperties: {} }),
+    ).rejects.toThrow(/duplicate key/);
   });
 });

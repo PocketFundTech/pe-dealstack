@@ -21,8 +21,8 @@ export function resetStageLabelCache(): void {
   stageLabelCache.clear();
 }
 
-interface Counters { total: number; processed: number; created: number; updated: number; skipped: number; failed: number; }
-const emptyCounters = (): Counters => ({ total: 0, processed: 0, created: 0, updated: 0, skipped: 0, failed: 0 });
+interface Counters { processed: number; created: number; updated: number; failed: number; }
+const emptyCounters = (): Counters => ({ processed: 0, created: 0, updated: 0, failed: 0 });
 
 async function loadJob(jobId: string) {
   const { data } = await supabase.from('ImportJob').select('*').eq('id', jobId).maybeSingle();
@@ -70,6 +70,26 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
   const counts = { ...job.objectCounts };
   ORDER.forEach((o) => { if (!counts[o]) counts[o] = emptyCounters(); });
 
+  // Deals in a batch commonly share a company — a portfolio CRM has far
+  // fewer companies than deals. Cache both lookups per batch so a shared
+  // company costs one round-trip instead of one per deal.
+  const companyNameCache = new Map<string, string | null>();
+  const companyIdCache = new Map<string, string | null>();
+  async function companyNameForHubspotIdCached(orgId: string, hubspotCompanyId: string | null) {
+    if (!hubspotCompanyId) return null;
+    if (companyNameCache.has(hubspotCompanyId)) return companyNameCache.get(hubspotCompanyId) ?? null;
+    const name = await companyNameForHubspotId(orgId, hubspotCompanyId);
+    companyNameCache.set(hubspotCompanyId, name);
+    return name;
+  }
+  async function resolveCompanyIdCached(orgId: string, name: string | null) {
+    const key = (name ?? 'Unknown Company').toLowerCase();
+    if (companyIdCache.has(key)) return companyIdCache.get(key) ?? null;
+    const id = await resolveCompanyId(orgId, name);
+    companyIdCache.set(key, id);
+    return id;
+  }
+
   // Pick the current object (first not-yet-finished in ORDER).
   const current = (job.currentObject as HubSpotObjectType) ?? ORDER[0];
   const objectIndex = ORDER.indexOf(current);
@@ -108,7 +128,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
         const associatedCompanyId = rec.associations?.companies?.results?.[0]?.id
           ?? rec.properties.associatedcompanyid
           ?? null;
-        const companyName = await companyNameForHubspotId(job.organizationId, associatedCompanyId);
+        const companyName = await companyNameForHubspotIdCached(job.organizationId, associatedCompanyId);
         const m = mapContact(rec, companyName);
         const res = await upsertByHubspotId('Contact', job.organizationId, m.hubspotId, {
           firstName: m.firstName, lastName: m.lastName, email: m.email, phone: m.phone,
@@ -117,9 +137,9 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
         counts.contacts[res] += 1;
       } else {
         const m = mapDeal(rec, stageLabels[rec.properties.dealstage ?? ''] ?? null);
-        const companyName = await companyNameForHubspotId(job.organizationId, m.associatedCompanyHubspotId);
+        const companyName = await companyNameForHubspotIdCached(job.organizationId, m.associatedCompanyHubspotId);
         // Deal requires a companyId — resolve or create the Company row.
-        const companyId = await resolveCompanyId(job.organizationId, companyName);
+        const companyId = await resolveCompanyIdCached(job.organizationId, companyName);
         const res = await upsertByHubspotId('Deal', job.organizationId, m.hubspotId, {
           name: m.name, companyId, dealSize: m.dealSize, description: m.description,
           // Omit when unmapped: Deal.stage is NOT NULL and a null would either

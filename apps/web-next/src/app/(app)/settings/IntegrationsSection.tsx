@@ -52,11 +52,9 @@ const STATUS_BADGE: Record<IntegrationStatus, { bg: string; fg: string; label: s
 // ─── HubSpot types ──────────────────────────────────────────────────
 
 interface HubSpotJobCounts {
-  total: number;
   processed: number;
   created: number;
   updated: number;
-  skipped: number;
   failed: number;
 }
 
