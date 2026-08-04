@@ -1,15 +1,24 @@
 // ─── get_deal_financials tool ─────────────────────────────────────
 // Reads extracted FinancialStatement rows + deal-level metrics and
 // formats them as Markdown for the chat agent.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+const inputSchema = z.object({});
+
 export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
-  return tool(
-    async () => {
+  return {
+    type: 'custom' as const,
+    name: 'get_deal_financials',
+    description: 'Fetch extracted financial statements and deal-level metrics (revenue, EBITDA, IRR, MoM). Use when user asks about financials, numbers, revenue trends, or analysis.',
+    input_schema: { type: 'object', properties: {} },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async () => {
       try {
         // Fetch ALL statements (active + inactive/needs_review) so chat sees what the user sees
         const { data: statements } = await supabase
@@ -72,10 +81,5 @@ export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
         return 'Error fetching financial data.';
       }
     },
-    {
-      name: 'get_deal_financials',
-      description: 'Fetch extracted financial statements and deal-level metrics (revenue, EBITDA, IRR, MoM). Use when user asks about financials, numbers, revenue trends, or analysis.',
-      schema: z.object({}),
-    }
-  );
+  };
 }

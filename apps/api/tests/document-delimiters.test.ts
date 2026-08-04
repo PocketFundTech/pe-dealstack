@@ -290,7 +290,7 @@ describe('dealChatAgent.searchDocuments — wraps each snippet (non-RAG branch)'
     );
 
     const t = makeSearchDocumentsTool('deal-1', 'org-1');
-    const out = await (t as any).invoke({ query: 'revenue' });
+    const out = await t.run({ query: 'revenue' });
 
     expect(typeof out).toBe('string');
     expect(out).toContain('<document name="CIM-Acme.pdf">');

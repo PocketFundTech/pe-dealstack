@@ -1,17 +1,34 @@
 // ─── search_documents tool ────────────────────────────────────────
 // RAG-backed semantic search over deal documents (with naive fallback
 // when RAG is disabled).
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { searchDocumentChunks, buildRAGContext, isRAGEnabled } from '../../../../rag.js';
 import { log } from '../../../../utils/logger.js';
 import { wrapDocumentContent } from '../../guardrails.js';
 
+const inputSchema = z.object({
+  query: z.string().describe('The search query — what information to find in the documents'),
+});
+
 export function makeSearchDocumentsTool(dealId: string, _orgId: string) {
-  return tool(
-    async ({ query }) => {
+  return {
+    type: 'custom' as const,
+    name: 'search_documents',
+    description: 'Search through all uploaded deal documents using semantic search. Use this when the user asks about specific information from documents, CIMs, financial reports, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query — what information to find in the documents' },
+      },
+      required: ['query'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ query }: z.infer<typeof inputSchema>) => {
       try {
         if (!isRAGEnabled()) {
           const { data: docs } = await supabase
@@ -58,12 +75,5 @@ export function makeSearchDocumentsTool(dealId: string, _orgId: string) {
         return 'Error searching documents.';
       }
     },
-    {
-      name: 'search_documents',
-      description: 'Search through all uploaded deal documents using semantic search. Use this when the user asks about specific information from documents, CIMs, financial reports, etc.',
-      schema: z.object({
-        query: z.string().describe('The search query — what information to find in the documents'),
-      }),
-    }
-  );
+  };
 }

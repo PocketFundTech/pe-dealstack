@@ -19,23 +19,24 @@ import { makeDraftEmailTool } from './tools/draftEmail.js';
 import { makeGetAnalysisSummaryTool } from './tools/getAnalysisSummary.js';
 import { makeListDocumentsTool } from './tools/listDocuments.js';
 import { makeSuggestActionTool, makeScrollToSectionTool } from './tools/navigation.js';
+import type { ToolEmit } from './types.js';
 
-/** Create all deal chat tools with dealId/orgId baked in via closures */
-export function getDealChatTools(dealId: string, orgId: string) {
+/** Create all deal chat tools with dealId/orgId baked in via closures. */
+export function getDealChatTools(dealId: string, orgId: string, emit: ToolEmit) {
   return [
     makeSearchDocumentsTool(dealId, orgId),
     makeGetDealFinancialsTool(dealId, orgId),
     makeCompareDealsTool(dealId, orgId),
     makeGetDealActivityTool(dealId, orgId),
-    makeUpdateDealFieldTool(dealId, orgId),
-    makeChangeDealStageTool(dealId, orgId),
-    makeAddNoteTool(dealId, orgId),
-    makeTriggerFinancialExtractionTool(dealId, orgId),
+    makeUpdateDealFieldTool(dealId, orgId, emit),
+    makeChangeDealStageTool(dealId, orgId, emit),
+    makeAddNoteTool(dealId, orgId, emit),
+    makeTriggerFinancialExtractionTool(dealId, orgId, emit),
     makeGenerateMeetingPrepTool(dealId, orgId),
     makeDraftEmailTool(dealId, orgId),
     makeGetAnalysisSummaryTool(dealId, orgId),
     makeListDocumentsTool(dealId, orgId),
-    makeScrollToSectionTool(dealId, orgId),
-    makeSuggestActionTool(dealId, orgId),
+    makeScrollToSectionTool(dealId, orgId, emit),
+    makeSuggestActionTool(dealId, orgId, emit),
   ];
 }
