@@ -1119,6 +1119,268 @@ git commit -m "fix(hubspot): don't fail the whole import job when one object typ
 
 ---
 
+### Task 7: Request engagement scopes + update connect/import UI copy
+
+**Files:**
+- Modify: `apps/api/src/routes/hubspot-import.ts`
+- Modify: `apps/web-next/src/app/(app)/settings/IntegrationsSection.tsx`
+- Test: `apps/api/tests/hubspot-routes.test.ts`
+
+**Why this task exists:** Final review of the whole Phase 2 branch found that `REQUIRED_SCOPES` and the Integrations UI were never updated to mention the engagement-object scopes this feature needs. `REQUIRED_SCOPES` still only lists `crm.objects.companies.read, crm.objects.contacts.read, crm.objects.deals.read` — no org is ever told to grant the 5 new scopes, whether connecting for the first time or troubleshooting a MISSING_SCOPES error. Separately, `IntegrationsSection.tsx` hardcodes `HUBSPOT_OBJECTS = ["companies", "contacts", "deals"]` and copy that says "One-time import of contacts, companies, and deals from HubSpot" — the progress panel never shows a row for notes/calls/meetings/emails/tasks even when they import successfully.
+
+**A caveat worth carrying into the code as a comment:** the exact scope names `crm.objects.notes.read` and `crm.objects.emails.read` were confirmed via HubSpot's community forum during Task 5.5's investigation. `crm.objects.calls.read`, `crm.objects.meetings.read`, and `crm.objects.tasks.read` follow the same consistent naming convention and a community thread title strongly implies `meetings.read` is real, but none of the three were independently confirmed against HubSpot's authoritative scopes reference (it sits behind an auth wall that automated tools couldn't get past). Note this uncertainty in the code so a future reader knows to double-check if a client reports one of these three scope names doesn't appear in their Private App scope picker.
+
+- [ ] **Step 1: Write the failing test**
+
+Open `apps/api/tests/hubspot-routes.test.ts`. Find the existing test:
+
+```typescript
+  it('POST /connect maps MISSING_SCOPES to a message listing the required scopes', async () => {
+    validateToken.mockResolvedValue({ ok: false, status: 403, category: 'MISSING_SCOPES' });
+    mockSupabase.from.mockReturnValue(chain());
+    const res = await request(await buildApp()).post('/api/integrations/hubspot/connect').send({ token: 'scopeless-token' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('crm.objects.companies.read');
+    expect(res.body.error).toContain('crm.objects.contacts.read');
+    expect(res.body.error).toContain('crm.objects.deals.read');
+  });
+```
+
+Replace it with (adds 5 new assertions, keeps the 3 existing ones):
+
+```typescript
+  it('POST /connect maps MISSING_SCOPES to a message listing the required scopes', async () => {
+    validateToken.mockResolvedValue({ ok: false, status: 403, category: 'MISSING_SCOPES' });
+    mockSupabase.from.mockReturnValue(chain());
+    const res = await request(await buildApp()).post('/api/integrations/hubspot/connect').send({ token: 'scopeless-token' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('crm.objects.companies.read');
+    expect(res.body.error).toContain('crm.objects.contacts.read');
+    expect(res.body.error).toContain('crm.objects.deals.read');
+    expect(res.body.error).toContain('crm.objects.notes.read');
+    expect(res.body.error).toContain('crm.objects.calls.read');
+    expect(res.body.error).toContain('crm.objects.meetings.read');
+    expect(res.body.error).toContain('crm.objects.emails.read');
+    expect(res.body.error).toContain('crm.objects.tasks.read');
+  });
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npx vitest run tests/hubspot-routes.test.ts` (from `apps/api/`)
+Expected: FAIL — the 5 new `toContain` assertions fail since `REQUIRED_SCOPES` doesn't include them yet.
+
+- [ ] **Step 3: Implement — `hubspot-import.ts`**
+
+In `apps/api/src/routes/hubspot-import.ts`, replace:
+
+```typescript
+const REQUIRED_SCOPES = 'crm.objects.companies.read, crm.objects.contacts.read, crm.objects.deals.read';
+```
+
+with:
+
+```typescript
+// crm.objects.notes.read and crm.objects.emails.read are confirmed real
+// HubSpot scope names (verified against HubSpot's community forum).
+// crm.objects.calls.read / meetings.read / tasks.read follow the same
+// naming convention but were NOT independently confirmed against HubSpot's
+// authoritative scopes reference — if a client reports one of these three
+// doesn't appear in their Private App scope picker, double-check against
+// HubSpot's current docs before assuming the client's portal is at fault.
+const REQUIRED_SCOPES = 'crm.objects.companies.read, crm.objects.contacts.read, crm.objects.deals.read, '
+  + 'crm.objects.notes.read, crm.objects.calls.read, crm.objects.meetings.read, crm.objects.emails.read, crm.objects.tasks.read';
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npx vitest run tests/hubspot-routes.test.ts`
+Expected: PASS — all tests green.
+
+- [ ] **Step 5: Implement — `IntegrationsSection.tsx`**
+
+In `apps/web-next/src/app/(app)/settings/IntegrationsSection.tsx`, replace:
+
+```typescript
+const HUBSPOT_OBJECTS = ["companies", "contacts", "deals"] as const;
+```
+
+with:
+
+```typescript
+const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "meetings", "emails", "tasks"] as const;
+```
+
+Replace:
+
+```
+            One-time import of contacts, companies, and deals from HubSpot.
+```
+
+with:
+
+```
+            One-time import of contacts, companies, deals, and activity history (notes, calls, meetings, emails, tasks) from HubSpot.
+```
+
+- [ ] **Step 6: Typecheck both apps**
+
+Run (from `apps/api/`): `npx tsc --noEmit`
+Run (from `apps/web-next/`): `npx tsc --noEmit`
+Expected: only pre-existing unrelated errors in both, nothing new.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/api/src/routes/hubspot-import.ts apps/api/tests/hubspot-routes.test.ts apps/web-next/src/app/\(app\)/settings/IntegrationsSection.tsx
+git commit -m "fix(hubspot): request engagement scopes, show them in the import UI"
+```
+
+(Run this commit from the worktree root, `/Users/ganesh/AI CRM/.worktrees/hubspot-engagements`, since the paths above are relative to it — not from `apps/api/`.)
+
+---
+
+### Task 8: Job status should reflect "did anything succeed," not "was this the last object type"
+
+**Files:**
+- Modify: `apps/api/src/services/hubspot/importEngine.ts`
+- Test: `apps/api/tests/hubspot-engine-fetch-failure.test.ts`
+
+**Why this task exists:** Final review found that Task 5.5's fix, combined with `tasks` sitting last in `ORDER`, means a client missing ALL 5 engagement scopes will deterministically see `notes → calls → meetings → emails` skip-and-advance correctly, then `tasks` fail with nowhere left to go — marking the **whole job** `'failed'` even though Companies/Contacts/Deals (and possibly some engagement types) fully succeeded. This isn't a rare edge case; given Task 7 fixes scope messaging for *future* connections, existing already-connected orgs will still hit this exact path until they notice and re-grant scopes. The fix: when the last object type in the chain also fails, check whether *anything* in this job actually succeeded — if so, mark the job `'completed'` (with the error preserved so it's still visible), not `'failed'`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Open `apps/api/tests/hubspot-engine-fetch-failure.test.ts`. Add these two tests inside the existing `describe('runImportBatch — per-object-type fetch failure handling', ...)` block, after the existing three tests (before the closing `});` of the describe block):
+
+```typescript
+  it('marks the job completed (not failed) when the last object type fails but an earlier type succeeded', async () => {
+    const jobChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: 'job-4', organizationId: 'org-A', status: 'running',
+          objectCounts: { companies: { processed: 5, created: 5, updated: 0, failed: 0 } },
+          currentObject: 'tasks', cursor: null,
+        },
+      }),
+    });
+    const finishChain = makeChain();
+
+    let importJobCalls = 0;
+    mockFrom.mockImplementation(() => {
+      importJobCalls += 1;
+      return importJobCalls === 1 ? jobChain : finishChain;
+    });
+
+    listPage.mockRejectedValue(new Error('403 MISSING_SCOPES'));
+
+    const result = await runImportBatch('job-4', 'tok');
+
+    expect(result).toBe(false);
+    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'completed',
+      error: expect.stringContaining('MISSING_SCOPES'),
+    }));
+  });
+
+  it('still marks the job failed when the last object type fails and nothing else succeeded', async () => {
+    const jobChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: 'job-5', organizationId: 'org-A', status: 'running',
+          objectCounts: {}, currentObject: 'tasks', cursor: null,
+        },
+      }),
+    });
+    const finishChain = makeChain();
+
+    let importJobCalls = 0;
+    mockFrom.mockImplementation(() => {
+      importJobCalls += 1;
+      return importJobCalls === 1 ? jobChain : finishChain;
+    });
+
+    listPage.mockRejectedValue(new Error('403 MISSING_SCOPES'));
+
+    const result = await runImportBatch('job-5', 'tok');
+
+    expect(result).toBe(false);
+    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+  });
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run tests/hubspot-engine-fetch-failure.test.ts` (from `apps/api/`)
+Expected: FAIL. The first new test fails because the current code always sets `status: 'failed'` in the terminal branch, regardless of prior successes. The second new test should already pass (it's the pre-existing behavior for the "nothing succeeded" case) — confirm it does, as a sanity check that you haven't mis-set-up the mock.
+
+- [ ] **Step 3: Implement**
+
+In `apps/api/src/services/hubspot/importEngine.ts`, find this (the terminal branch of the fetch-failure catch block, added in Task 5.5):
+
+```typescript
+    const nextObject = ORDER[objectIndex + 1] ?? null;
+    if (nextObject) {
+      const { data: updated } = await supabase.from('ImportJob')
+        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running' })
+        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+      if (!updated) return false; // cancelled mid-batch
+      return true;
+    }
+    await saveJob(jobId, { status: 'failed', error: (err as Error).message, finishedAt: new Date().toISOString() });
+    return false;
+  }
+```
+
+Replace it with:
+
+```typescript
+    const nextObject = ORDER[objectIndex + 1] ?? null;
+    if (nextObject) {
+      const { data: updated } = await supabase.from('ImportJob')
+        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running' })
+        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+      if (!updated) return false; // cancelled mid-batch
+      return true;
+    }
+    // No more object types to try. If anything else in this job succeeded
+    // (e.g. Companies/Contacts/Deals imported fine but every engagement
+    // type 403'd on a missing scope), don't report the whole job as
+    // failed — that hides a mostly-successful import behind one object
+    // type's error. The error message is preserved either way.
+    const anySucceeded = Object.values(counts).some((c) => c.processed > 0);
+    await saveJob(jobId, {
+      status: anySucceeded ? 'completed' : 'failed',
+      error: (err as Error).message,
+      finishedAt: new Date().toISOString(),
+    });
+    return false;
+  }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx vitest run tests/hubspot-engine-fetch-failure.test.ts`
+Expected: PASS — all 5 tests green (3 from Task 5.5 + 2 new).
+
+- [ ] **Step 5: Run the full HubSpot suite to check for regressions**
+
+Run: `npx vitest run tests/hubspot-*.test.ts`
+Expected: PASS — no regressions, including the existing Task 5.5 test asserting the "nothing succeeded, still fails" case still passes with the new `anySucceeded` logic (it should, since `objectCounts: {}` in that test means every type's counter is zero after the `ORDER.forEach` fill).
+
+- [ ] **Step 6: Typecheck**
+
+Run: `npx tsc --noEmit`
+Expected: only pre-existing unrelated errors, nothing new.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/services/hubspot/importEngine.ts tests/hubspot-engine-fetch-failure.test.ts
+git commit -m "fix(hubspot): mark job completed, not failed, when only the last object type errored"
+```
+
+---
+
 ### Task 6: Full regression, push, and PR
 
 **Files:** none (verification + git only)
