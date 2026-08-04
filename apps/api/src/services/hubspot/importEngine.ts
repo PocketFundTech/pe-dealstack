@@ -149,7 +149,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     // type 403'd on a missing scope), don't report the whole job as
     // failed — that hides a mostly-successful import behind one object
     // type's error. The error message is preserved either way.
-    const anySucceeded = Object.values(counts).some((c) => c.processed > 0);
+    const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
     await saveJob(jobId, {
       status: anySucceeded ? 'completed' : 'failed',
       error: (err as Error).message,

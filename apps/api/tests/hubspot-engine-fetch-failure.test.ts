@@ -166,4 +166,30 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
     expect(result).toBe(false);
     expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
   });
+
+  it('marks the job failed, not completed, when a type processed records but every write failed', async () => {
+    const jobChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: 'job-6', organizationId: 'org-A', status: 'running',
+          objectCounts: { companies: { processed: 5, created: 0, updated: 0, failed: 5 } },
+          currentObject: 'tasks', cursor: null,
+        },
+      }),
+    });
+    const finishChain = makeChain();
+
+    let importJobCalls = 0;
+    mockFrom.mockImplementation(() => {
+      importJobCalls += 1;
+      return importJobCalls === 1 ? jobChain : finishChain;
+    });
+
+    listPage.mockRejectedValue(new Error('403 MISSING_SCOPES'));
+
+    const result = await runImportBatch('job-6', 'tok');
+
+    expect(result).toBe(false);
+    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+  });
 });
