@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
 import { generateMeetingPrep } from '../../meetingPrep/index.js';
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   attendees: z.string().optional().describe('Who the meeting is with (e.g., "CEO of target company")'),
   topics: z.string().optional().describe('Key topics to cover'),
 });

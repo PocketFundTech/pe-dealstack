@@ -138,19 +138,25 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
   const client = getAnthropicClient();
   const start = Date.now();
 
-  const request: Record<string, unknown> = {
+  // `stream: true` must stay a literal on this object (not widened through a
+  // Record<string, unknown> or `as never` cast) — toolRunner() is overloaded
+  // on it and picks BetaToolRunner<false> if the literal is lost, which then
+  // fails to structurally match the AsyncIterable<AsyncIterable<...>> shape
+  // this function's callers rely on. Only the heterogeneous fields (messages/
+  // tools/betas/etc., whose real SDK types this codebase doesn't import) are
+  // cast individually so the `stream: true` key stays visible for overload
+  // resolution.
+  const runner = client.beta.messages.toolRunner({
     model: cfg.model,
     max_tokens: cfg.maxTokens,
-    messages: opts.messages,
-    tools: opts.tools,
-    betas: cfg.betas,
+    messages: opts.messages as never,
+    tools: opts.tools as never,
+    betas: cfg.betas as never,
     stream: true,
-  };
-  if (opts.system) request.system = opts.system;
-  if (cfg.fallbacks) request.fallbacks = cfg.fallbacks;
-  if (opts.signal) request.signal = opts.signal;
-
-  const runner = client.beta.messages.toolRunner(request as never);
+    ...(opts.system ? { system: opts.system } : {}),
+    ...(cfg.fallbacks ? { fallbacks: cfg.fallbacks as never } : {}),
+    ...(opts.signal ? { signal: opts.signal as never } : {}),
+  });
 
   const recordUsage = async (
     usage: { inputTokens: number; outputTokens: number },

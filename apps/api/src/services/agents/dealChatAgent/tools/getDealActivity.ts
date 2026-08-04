@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   limit: z.number().optional().describe('Max activities to return (default 15)'),
 });
 

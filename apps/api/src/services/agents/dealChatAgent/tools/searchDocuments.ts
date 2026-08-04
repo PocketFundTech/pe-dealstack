@@ -11,7 +11,7 @@ import { searchDocumentChunks, buildRAGContext, isRAGEnabled } from '../../../..
 import { log } from '../../../../utils/logger.js';
 import { wrapDocumentContent } from '../../guardrails.js';
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   query: z.string().describe('The search query — what information to find in the documents'),
 });
 

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
-const inputSchema = z.object({});
+export const inputSchema = z.object({});
 
 export function makeListDocumentsTool(dealId: string, _orgId: string) {
   return {

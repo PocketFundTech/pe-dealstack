@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
 import { generateEmailDraft } from '../../emailDrafter/index.js';
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   recipient: z.string().describe('Who the email is for (e.g., "management team", "broker", "legal counsel")'),
   purpose: z.string().describe('Purpose of the email (e.g., "request additional financials", "schedule site visit", "follow up on LOI")'),
   tone: z.enum(['formal', 'casual', 'direct']).default('formal').describe('Email tone'),

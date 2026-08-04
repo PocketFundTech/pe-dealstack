@@ -33,7 +33,7 @@ vi.mock('../src/services/llm.js', () => ({
 
 // Tools module — return an empty toolset.
 vi.mock('../src/services/agents/dealChatAgent/tools.js', () => ({
-  getDealChatTools: () => [],
+  getDealChatToolsLegacy: () => [],
 }));
 
 // Logger — silence.

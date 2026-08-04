@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
-const inputSchema = z.object({});
+export const inputSchema = z.object({});
 
 export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
   return {

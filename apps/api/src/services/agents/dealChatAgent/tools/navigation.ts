@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import type { ToolEmit } from '../types.js';
 
-const suggestActionInputSchema = z.object({
+export const suggestActionInputSchema = z.object({
   actionType: z.enum(['create_memo', 'open_data_room', 'upload_document', 'view_financials', 'change_stage']),
   label: z.string().describe('Button label text'),
   description: z.string().optional().describe('Brief explanation of what happens'),
@@ -56,7 +56,7 @@ export function makeSuggestActionTool(dealId: string, _orgId: string, emit: Tool
   };
 }
 
-const scrollToSectionInputSchema = z.object({
+export const scrollToSectionInputSchema = z.object({
   section: z.enum(['financials', 'analysis', 'activity', 'documents', 'risks']).describe('Section to scroll to'),
 });
 

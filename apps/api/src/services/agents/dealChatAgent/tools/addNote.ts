@@ -16,7 +16,7 @@ import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import type { ToolEmit } from '../types.js';
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   content: z.string().describe('The note content'),
   type: z.enum(['NOTE_ADDED', 'CALL_LOGGED', 'EMAIL_SENT', 'MEETING_SCHEDULED']).default('NOTE_ADDED').describe('Type of activity'),
 });

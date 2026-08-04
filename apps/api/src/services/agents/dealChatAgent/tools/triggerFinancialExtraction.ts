@@ -10,7 +10,7 @@ import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import type { ToolEmit } from '../types.js';
 
-const inputSchema = z.object({});
+export const inputSchema = z.object({});
 
 export function makeTriggerFinancialExtractionTool(dealId: string, _orgId: string, emit: ToolEmit) {
   return {

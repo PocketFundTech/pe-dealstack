@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   targetDealName: z.string().optional().describe('Name of a specific deal to compare against (e.g., "Neen AI", "Buffer"). Leave empty for general portfolio comparison.'),
 });
 

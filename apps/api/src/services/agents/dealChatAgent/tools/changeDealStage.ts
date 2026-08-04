@@ -14,7 +14,7 @@ const STAGES = [
   'LOI_NEGOTIATION', 'CLOSING', 'CLOSED_WON', 'CLOSED_LOST', 'PASSED',
 ] as const;
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   stage: z.enum(STAGES),
   reason: z.string().optional().describe('Optional reason for the stage change'),
 });

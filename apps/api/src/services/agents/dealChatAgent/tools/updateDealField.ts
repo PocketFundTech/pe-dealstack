@@ -16,7 +16,7 @@ const FIELDS = [
   'targetCloseDate', 'grossMargin',
 ] as const;
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   field: z.enum(FIELDS),
   value: z.string().describe('New value. For leadPartner/analyst this can be a user ID, email, or full name — the tool resolves it to a real org member and returns an error if no unique match. For numeric fields (revenue, ebitda, dealSize, irrProjected, mom, grossMargin) pass the number in millions. For targetCloseDate use ISO date (YYYY-MM-DD).'),
   userName: z.string().optional().describe('Name of user being assigned (for confirmation message)'),
