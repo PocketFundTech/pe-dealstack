@@ -17,6 +17,11 @@ export async function orgMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
+    // apiKeyMiddleware already resolved organizationId from the key record.
+    if (req.apiKey) {
+      return next();
+    }
+
     if (!req.user?.id) {
       return next();
     }

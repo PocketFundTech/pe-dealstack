@@ -73,6 +73,12 @@ export async function usageContextMiddleware(
   _res: Response,
   next: NextFunction,
 ): Promise<void> {
+  // API-key requests have no auth user to resolve; usage attribution is
+  // JWT-session-only (read-only keys don't hit metered AI endpoints).
+  if (req.apiKey) {
+    return next();
+  }
+
   const authId = req.user?.id;
   const organizationId = req.user?.organizationId;
   if (!authId || !organizationId) {

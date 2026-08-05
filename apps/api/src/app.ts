@@ -59,6 +59,8 @@ import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
+import { apiKeyMiddleware } from './middleware/apiKeyAuth.js';
+import apiKeysRouter from './routes/api-keys.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
 import { orgMiddleware } from './middleware/orgScope.js';
 import { usageContextMiddleware } from './middleware/usageContext.js';
@@ -167,6 +169,10 @@ const rateLimitKeyGenerator = (req: express.Request) => {
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return 'user:' + authHeader.slice(-16);
   }
+  const apiKey = req.headers['x-api-key'];
+  if (typeof apiKey === 'string' && apiKey) {
+    return 'key:' + apiKey.slice(-16);
+  }
   // Fallback to forwarded IP header (Vercel/proxy) or socket address
   return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 'unknown';
 };
@@ -203,6 +209,10 @@ app.use('/api/ai', aiLimiter);
 app.use('/api/memos/*/chat', aiLimiter);
 app.use('/api/memos/*/sections/*/generate', aiLimiter);
 app.use('/api/ingest', writeLimiter);
+
+// API-key auth (machine callers). When x-api-key is present this fully
+// authenticates the request; the JWT middlewares below skip via req.apiKey.
+app.use('/api', apiKeyMiddleware);
 
 app.use(
   express.json({
@@ -355,6 +365,8 @@ app.use('/api/integrations', authMiddleware, orgMiddleware, enforceOrgMfaMiddlew
 // Dashboard mounted alongside the existing isolation-test router (different paths).
 app.use('/api/admin/security', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityDashboardRouter);
 app.use('/api/admin/security', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityRouter);
+// API key management (admin-only via requireRole inside the router)
+app.use('/api/api-keys', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, apiKeysRouter);
 // Auth-scoped self-service routes (MFA bypass active for /api/auth/* in middleware)
 app.use('/api/auth', authMiddleware, authSessionsRouter);
 app.use('/api/auth', authMiddleware, authWorkspaceEmailRouter);

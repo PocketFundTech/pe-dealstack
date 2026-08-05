@@ -16,6 +16,21 @@ Authorization: Bearer <supabase_access_token>
 
 Tokens are obtained through Supabase Auth (login/signup).
 
+### API Keys (read-only, machine callers)
+
+For agents, scripts, and integrations, a read-only API key can be sent instead of a Bearer token:
+
+```
+x-api-key: peos_<48 hex chars>
+```
+
+- Keys authenticate as the org with VIEWER permissions and only allow GET requests (403 on writes).
+- Manage keys (ADMIN only, Bearer auth required):
+  - `POST /api/api-keys` `{ "name": "reporting" }` → returns the raw key **once**
+  - `GET /api/api-keys` → list keys (prefix, last used, creator; never the key itself)
+  - `DELETE /api/api-keys/:id` → revoke
+- Keys are stored as SHA-256 hashes. Creation/revocation are audit-logged (`API_KEY_CREATED` / `API_KEY_REVOKED`).
+
 ### Error Responses
 
 | Code | Description |

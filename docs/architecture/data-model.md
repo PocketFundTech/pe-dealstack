@@ -253,6 +253,19 @@ Append-only security/operations log.
 
 > Schema uses `entityType` / `entityId` (not `resourceType` / `resourceId`).
 
+### ApiKey
+
+Machine-to-machine read-only API keys (`x-api-key` header auth).
+
+| Column | Notes |
+| --- | --- |
+| `organizationId`, `createdBy` | FKs — key is org-scoped; requests act as VIEWER attributed to creator |
+| `name` | display label |
+| `keyHash` | SHA-256 of the raw key (unique) — raw key shown once at creation, never stored |
+| `prefix` | first chars of raw key, for key lists |
+| `scopes` | text[] — default `{read}` (GET-only); `write` reserved |
+| `lastUsedAt`, `revokedAt` | lifecycle |
+
 ### Watchlist
 
 Saved companies a firm wants to track without yet creating a deal.

@@ -16,6 +16,7 @@ import legalDocumentsRouter from './routes/legal-documents.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import authWorkspaceEmailRouter from './routes/auth-workspace-email.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
+import { apiKeyMiddleware } from './middleware/apiKeyAuth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
 import { usageContextMiddleware } from './middleware/usageContext.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -116,6 +117,10 @@ const rateLimitKeyGenerator = (req: express.Request) => {
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return 'user:' + authHeader.slice(-16);
   }
+  const apiKey = req.headers['x-api-key'];
+  if (typeof apiKey === 'string' && apiKey) {
+    return 'key:' + apiKey.slice(-16);
+  }
   return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 'unknown';
 };
 
@@ -151,6 +156,10 @@ app.use('/api/ai', aiLimiter);
 app.use('/api/memos/*/chat', aiLimiter);
 app.use('/api/memos/*/sections/*/generate', aiLimiter);
 app.use('/api/ingest', writeLimiter);
+
+// API-key auth (machine callers). When x-api-key is present this fully
+// authenticates the request; the JWT middlewares below skip via req.apiKey.
+app.use('/api', apiKeyMiddleware);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));

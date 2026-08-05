@@ -33,6 +33,11 @@ export async function authMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
+    // Request already authenticated by apiKeyMiddleware — skip JWT auth.
+    if (req.apiKey) {
+      return next();
+    }
+
     // Get the Authorization header
     const authHeader = req.headers.authorization;
 
@@ -181,6 +186,12 @@ export const enforceOrgMfaMiddleware = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    // API keys are machine credentials — org MFA policy applies to humans.
+    if (req.apiKey) {
+      next();
+      return;
+    }
+
     const user = req.user;
     if (!user) {
       next();
