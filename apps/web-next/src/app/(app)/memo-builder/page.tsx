@@ -116,6 +116,7 @@ function MemoBuilderPageInner() {
   const [pendingDeleteSection, setPendingDeleteSection] = useState<{ id: string; title: string } | null>(null);
   const [pendingDeleteMemo, setPendingDeleteMemo] = useState<PendingDeleteMemo | null>(null);
   const [generatingAll, setGeneratingAll] = useState(false);
+  const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [autoCreating, setAutoCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
@@ -214,6 +215,7 @@ function MemoBuilderPageInner() {
     setAddingSectionLoading,
     setPendingDeleteSection,
     setGeneratingAll,
+    setGenerationStatus,
     setError,
   };
   const handleGenerate = createGenerateSection(sectionDeps);
@@ -295,7 +297,7 @@ function MemoBuilderPageInner() {
     : creatingMemo
     ? "Creating memo..."
     : generatingAll
-    ? "Generating all memo sections..."
+    ? (generationStatus ?? "Generating all memo sections...")
     : null;
 
   return (
