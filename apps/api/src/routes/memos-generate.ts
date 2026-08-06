@@ -7,7 +7,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { generateAllSections } from '../services/agents/memoAgent/index.js';
-import { isLLMAvailable } from '../services/llm.js';
+import { isAnthropicAvailable } from '../services/ai/client.js';
 import { classifyAIError } from '../utils/aiErrors.js';
 
 const router = Router();
@@ -32,7 +32,7 @@ router.post('/:id/generate-all', async (req, res) => {
         code: 'MEMO_MISSING_DEAL',
       });
     }
-    if (!isLLMAvailable()) return res.status(503).json({ error: 'AI service unavailable' });
+    if (!isAnthropicAvailable()) return res.status(503).json({ error: 'AI service unavailable' });
 
     const { sections: generated } = await generateAllSections(memo.dealId, orgId);
 
