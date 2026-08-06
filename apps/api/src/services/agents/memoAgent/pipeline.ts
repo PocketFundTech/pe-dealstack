@@ -1,7 +1,6 @@
 // ─── Memo Agent — Parallel Section Generation Pipeline ───────────────────────
 // Orchestrates parallel LLM calls to generate all IC memo sections at once.
 
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { buildMemoContext, formatContextForLLM, MemoContext } from './context.js';
 import {
   MEMO_SYSTEM_PROMPT,
@@ -9,8 +8,7 @@ import {
   SectionType,
   COMPREHENSIVE_IC_SECTIONS,
 } from './prompts.js';
-import { getChatModel, isLLMAvailable } from '../../llm.js';
-import { MODEL_REASONING } from '../../../utils/aiModels.js';
+import { trackedClaudeMessage, isAnthropicAvailable } from '../../ai/client.js';
 import { log } from '../../../utils/logger.js';
 import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { resolveTimeoutMs } from '../agentBounds.js';
@@ -137,7 +135,6 @@ export async function generateSection(
   }
 
   try {
-    const model = getChatModel(0.7, 2000, 'memo_generation');
     const sectionPrompt = customPrompt ?? promptConfig.prompt;
     const contextText = formatContextForLLM(context);
 
@@ -148,9 +145,8 @@ export async function generateSection(
 
     const userPrompt = `${sectionPrompt}\n\n---\n\n## Deal Context\n\n${contextText}${formatInstruction}`;
 
-    // Bound the LLM call. Direct model.invoke() has no recursionLimit
-    // concept (it's a single call), but AbortSignal + Promise.race still
-    // protects against hung HTTP requests to OpenAI.
+    // Bound the LLM call — AbortSignal is now forwarded all the way to the
+    // in-flight Anthropic request (Task 1), not just raced client-side.
     const timeoutMs = resolveTimeoutMs(SECTION_TIMEOUT_MS, 'MEMO_SECTION_TIMEOUT_MS');
     const abortController = new AbortController();
     let timeoutHandle: NodeJS.Timeout | undefined;
@@ -160,23 +156,24 @@ export async function generateSection(
         reject(new Error(`Memo section ${sectionType} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
     });
-    let response: any;
+    let result: { text: string; model: string };
     try {
-      response = await Promise.race([
-        model.invoke(
-          [new SystemMessage(MEMO_SYSTEM_PROMPT), new HumanMessage(userPrompt)],
-          { signal: abortController.signal },
-        ),
+      result = await Promise.race([
+        trackedClaudeMessage({
+          operation: 'memo_section_generation',
+          role: 'memo',
+          system: MEMO_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userPrompt }],
+          maxTokens: 2000,
+          signal: abortController.signal,
+        }),
         timeoutPromise,
       ]);
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
 
-    const rawText =
-      typeof response.content === 'string'
-        ? response.content
-        : JSON.stringify(response.content);
+    const rawText = result.text;
 
     let content = rawText;
     let tableData: any = undefined;
@@ -208,7 +205,7 @@ export async function generateSection(
       ...(tableData !== undefined ? { tableData } : {}),
       ...(chartConfig !== undefined ? { chartConfig } : {}),
       aiGenerated: true,
-      aiModel: MODEL_REASONING,
+      aiModel: result.model,
       ...(sortOrder !== undefined ? { sortOrder } : {}),
     };
   } catch (err: any) {
@@ -239,7 +236,7 @@ export async function generateAllSections(
   orgId: string,
   sectionTypes?: SectionType[],
 ): Promise<{ sections: GeneratedSection[]; context: MemoContext }> {
-  if (!isLLMAvailable()) {
+  if (!isAnthropicAvailable()) {
     throw new Error('LLM is not available. Check API key configuration.');
   }
 
