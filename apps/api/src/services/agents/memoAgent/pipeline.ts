@@ -273,5 +273,197 @@ export async function generateAllSections(
     `[memoAgent/pipeline] Completed: ${sections.length} total, ${generated} generated, ${failed} failed`,
   );
 
-  return { sections, context };
+  const graded = await critiqueAndRevise(sections, context);
+
+  return { sections: graded, context };
+}
+
+// ─── Critique + Revise (Phase 2-C) ─────────────────────────────────────────
+// One critique pass over the assembled memo, one targeted revise pass if it
+// flags anything. Best-effort — any failure returns the original sections
+// unchanged; a memo is never blocked by a grading failure (same non-blocking
+// precedent as financialAgent/nodes/verifyNode.ts).
+
+const CRITIQUE_TIMEOUT_MS = 30_000;
+const REVISE_TIMEOUT_MS = 30_000;
+
+const CRITIQUE_SYSTEM_PROMPT = `You are grading an Investment Committee memo against a fixed rubric before it reaches an analyst. Score honestly — a 3/5 pass bar is deliberately lenient; only fail a dimension for a real, specific problem.
+
+Score each dimension 1-5 and mark it "pass" at 3 or above:
+- thesis_clarity: does the memo state a clear, consistent investment thesis and recommendation, and do the sections support it rather than contradict it?
+- financial_grounding: do cited numbers match across sections and against the verified deal data provided below? Are they plausible, not fabricated?
+- risk_coverage: are the risks raised substantive and specific to this deal, not generic boilerplate?
+- actionability: is the recommendation clear enough for an IC to act on (BUY/PASS/CONDITIONAL plus rationale), not vague hedging?
+
+For any dimension that fails, name the specific section type(s) that need revision in sectionsNeedingRevision, using the exact section type strings shown in the memo (e.g. "EXECUTIVE_SUMMARY"). If every dimension passes, sectionsNeedingRevision must be empty and overallPass must be true.`;
+
+const REVISE_SYSTEM_PROMPT = `You are revising specific sections of an Investment Committee memo to fix problems a grading pass identified. Keep the same HTML formatting conventions as the rest of the memo (h3 sub-headings, p tags, strong for key metrics). Only return the sections listed as needing revision, using their exact section type string — do not invent new sections or touch ones that weren't flagged. Fix the specific issue described for each section; don't rewrite unrelated content.`;
+
+const CRITIQUE_SCHEMA = {
+  type: 'object',
+  properties: {
+    overallPass: { type: 'boolean' },
+    dimensions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', enum: ['thesis_clarity', 'financial_grounding', 'risk_coverage', 'actionability'] },
+          score: { type: 'integer', minimum: 1, maximum: 5 },
+          pass: { type: 'boolean' },
+          issue: { type: 'string' },
+        },
+        required: ['name', 'score', 'pass'],
+      },
+    },
+    sectionsNeedingRevision: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  required: ['overallPass', 'dimensions', 'sectionsNeedingRevision'],
+};
+
+const REVISE_SCHEMA = {
+  type: 'object',
+  properties: {
+    revisedSections: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['type', 'content'],
+      },
+    },
+  },
+  required: ['revisedSections'],
+};
+
+interface CritiqueVerdict {
+  overallPass: boolean;
+  dimensions: Array<{ name: string; score: number; pass: boolean; issue?: string }>;
+  sectionsNeedingRevision: string[];
+}
+
+interface ReviseResult {
+  revisedSections: Array<{ type: string; content: string }>;
+}
+
+/**
+ * Grade the assembled memo against a fixed rubric; revise only the flagged
+ * sections if it fails. Best-effort — see module comment above.
+ */
+export async function critiqueAndRevise(
+  sections: GeneratedSection[],
+  context: MemoContext,
+): Promise<GeneratedSection[]> {
+  try {
+    const memoText = sections
+      .map((s) => `### Section: ${s.type} (${s.title})\n${s.content}`)
+      .join('\n\n');
+    const contextText = formatContextForLLM(context);
+
+    const critiqueTimeoutMs = resolveTimeoutMs(CRITIQUE_TIMEOUT_MS, 'MEMO_CRITIQUE_TIMEOUT_MS');
+    const critiqueController = new AbortController();
+    let critiqueTimeoutHandle: NodeJS.Timeout | undefined;
+    const critiqueTimeoutPromise = new Promise<never>((_, reject) => {
+      critiqueTimeoutHandle = setTimeout(() => {
+        critiqueController.abort();
+        reject(new Error(`Memo critique timed out after ${critiqueTimeoutMs}ms`));
+      }, critiqueTimeoutMs);
+    });
+
+    let critiqueResult: { text: string };
+    try {
+      critiqueResult = await Promise.race([
+        trackedClaudeMessage({
+          operation: 'memo_critique',
+          role: 'memo',
+          system: CRITIQUE_SYSTEM_PROMPT,
+          messages: [{
+            role: 'user',
+            content: `## Verified Deal Data\n\n${contextText}\n\n## Memo Sections\n\n${memoText}`,
+          }],
+          outputSchema: CRITIQUE_SCHEMA,
+          maxTokens: 2000,
+          signal: critiqueController.signal,
+        }),
+        critiqueTimeoutPromise,
+      ]);
+    } finally {
+      if (critiqueTimeoutHandle) clearTimeout(critiqueTimeoutHandle);
+    }
+
+    const verdict: CritiqueVerdict = JSON.parse(critiqueResult.text);
+
+    if (verdict.overallPass || verdict.sectionsNeedingRevision.length === 0) {
+      log.info('[memoAgent/pipeline] Memo passed critique', {
+        dimensions: verdict.dimensions.map((d) => `${d.name}:${d.score}`),
+      });
+      return sections;
+    }
+
+    log.warn('[memoAgent/pipeline] Memo failed critique, revising flagged sections', {
+      sectionsNeedingRevision: verdict.sectionsNeedingRevision,
+      failedDimensions: verdict.dimensions.filter((d) => !d.pass).map((d) => `${d.name}:${d.issue}`),
+    });
+
+    const flaggedSections = sections.filter((s) => verdict.sectionsNeedingRevision.includes(s.type));
+    if (flaggedSections.length === 0) return sections;
+
+    const issuesText = verdict.dimensions
+      .filter((d) => !d.pass)
+      .map((d) => `- ${d.name}: ${d.issue ?? 'below rubric bar'}`)
+      .join('\n');
+    const flaggedText = flaggedSections
+      .map((s) => `### Section: ${s.type} (${s.title})\n${s.content}`)
+      .join('\n\n');
+
+    const reviseTimeoutMs = resolveTimeoutMs(REVISE_TIMEOUT_MS, 'MEMO_REVISE_TIMEOUT_MS');
+    const reviseController = new AbortController();
+    let reviseTimeoutHandle: NodeJS.Timeout | undefined;
+    const reviseTimeoutPromise = new Promise<never>((_, reject) => {
+      reviseTimeoutHandle = setTimeout(() => {
+        reviseController.abort();
+        reject(new Error(`Memo revise timed out after ${reviseTimeoutMs}ms`));
+      }, reviseTimeoutMs);
+    });
+
+    let reviseResult: { text: string; model: string };
+    try {
+      reviseResult = await Promise.race([
+        trackedClaudeMessage({
+          operation: 'memo_revise',
+          role: 'memo',
+          system: REVISE_SYSTEM_PROMPT,
+          messages: [{
+            role: 'user',
+            content: `## Issues Found\n\n${issuesText}\n\n## Sections Needing Revision\n\n${flaggedText}`,
+          }],
+          outputSchema: REVISE_SCHEMA,
+          maxTokens: 6000,
+          signal: reviseController.signal,
+        }),
+        reviseTimeoutPromise,
+      ]);
+    } finally {
+      if (reviseTimeoutHandle) clearTimeout(reviseTimeoutHandle);
+    }
+
+    const revised: ReviseResult = JSON.parse(reviseResult.text);
+    const revisedByType = new Map(revised.revisedSections.map((r) => [r.type, r.content]));
+
+    return sections.map((s) => {
+      const newContent = revisedByType.get(s.type);
+      if (newContent === undefined) return s; // not flagged, or a hallucinated type — leave untouched
+      return { ...s, content: ensureHtmlFormatting(newContent), aiModel: reviseResult.model };
+    });
+  } catch (err: any) {
+    log.warn(`[memoAgent/pipeline] Critique/revise failed, returning ungraded memo: ${err?.message}`);
+    captureAgentError(err, { agent: 'memoAgent', node: 'pipeline.critique' }, 'warning');
+    return sections;
+  }
 }
