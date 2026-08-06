@@ -109,4 +109,37 @@ describe('trackedClaudeMessage', () => {
     ).rejects.toBeInstanceOf(AIRefusalError);
     expect(recorded[0]).toMatchObject({ status: 'blocked' });
   });
+
+  it('forwards an AbortSignal to the stream request when provided', async () => {
+    nextFinalMessage = okMessage('ok');
+    const { trackedClaudeMessage } = await getClient();
+    const controller = new AbortController();
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      signal: controller.signal,
+    });
+    expect(streamCalls[0].signal).toBe(controller.signal);
+  });
+
+  it('omits signal from the request when not provided', async () => {
+    nextFinalMessage = okMessage('ok');
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    });
+    expect('signal' in streamCalls[0]).toBe(false);
+  });
+});
+
+describe('isAnthropicAvailable', () => {
+  it('is true when ANTHROPIC_API_KEY is set and false when it is not', async () => {
+    const { isAnthropicAvailable } = await getClient();
+    expect(isAnthropicAvailable()).toBe(true); // set in beforeEach
+    delete process.env.ANTHROPIC_API_KEY;
+    expect(isAnthropicAvailable()).toBe(false);
+  });
 });

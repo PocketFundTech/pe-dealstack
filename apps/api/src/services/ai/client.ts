@@ -29,6 +29,11 @@ export function _resetAnthropicClient(): void {
   _client = null;
 }
 
+/** True when ANTHROPIC_API_KEY is configured — cheap check, no client construction. */
+export function isAnthropicAvailable(): boolean {
+  return !!process.env.ANTHROPIC_API_KEY;
+}
+
 export class AIRefusalError extends Error {
   readonly category: string | null;
   constructor(category: string | null) {
@@ -49,6 +54,7 @@ export interface ClaudeCallOptions {
   /** Extra anthropic-beta flags (e.g. files-api-2025-04-14). */
   extraBetas?: string[];
   maxTokens?: number;
+  signal?: AbortSignal;
 }
 
 export interface ClaudeCallResult {
@@ -75,6 +81,7 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
   if (opts.outputSchema) {
     request.output_config = { format: { type: 'json_schema', schema: opts.outputSchema } };
   }
+  if (opts.signal) request.signal = opts.signal;
   // Never send `thinking`: Fable 5 rejects explicit configs; other models
   // use their defaults.
 
