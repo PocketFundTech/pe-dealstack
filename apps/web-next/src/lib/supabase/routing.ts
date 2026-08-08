@@ -17,6 +17,8 @@ const PUBLIC_PAGE_PREFIXES = [
   "/privacy-policy",
   "/terms-of-service",
   "/security",
+  "/portal", // external deal-share portal — token IS the credential
+
   "/pricing",
   "/documentation",
   "/api-reference",
