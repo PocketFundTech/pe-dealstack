@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Deal } from "@/types";
+import { ScorecardBadge } from "./scorecard-badge";
 
 // ---------------------------------------------------------------------------
 // Deal Card (List View)
@@ -162,6 +163,7 @@ export function DealCard({
               </p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
+              <ScorecardBadge scorecard={deal.scorecard} />
               <span
                 className={cn(
                   "px-2 py-1 rounded-md border text-[10px] font-bold uppercase tracking-wider whitespace-nowrap leading-none",

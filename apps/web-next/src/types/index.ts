@@ -15,6 +15,16 @@ export interface AppUser {
   isInternal: boolean;
 }
 
+export interface DealScorecard {
+  overallScore: number;
+  verdict: "GO" | "NO_GO" | "BORDERLINE";
+  qualityScore: number;
+  thesisFitScore: number;
+  reasons: Array<{ kind: "hit" | "miss" | "flag"; text: string }>;
+  scoredAt: string;
+  model: string;
+}
+
 export interface Deal {
   id: string;
   name: string;
@@ -41,6 +51,7 @@ export interface Deal {
   lastDocument?: string;
   lastDocumentUpdated?: string;
   tags?: string[];
+  scorecard?: DealScorecard | null;
 }
 
 export interface DealFilters {

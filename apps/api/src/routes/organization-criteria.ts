@@ -59,8 +59,8 @@ router.get('/criteria', async (req: Request, res: Response) => {
   }
 });
 
-// PUT /api/organizations/criteria
-router.put('/criteria', async (req: Request, res: Response) => {
+// PATCH /api/organizations/criteria
+router.patch('/criteria', async (req: Request, res: Response) => {
   const parsed = dealCriteriaSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid criteria', details: parsed.error.flatten() });

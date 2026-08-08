@@ -67,7 +67,7 @@ describe('GET /api/organizations/criteria', () => {
   });
 });
 
-describe('PUT /api/organizations/criteria', () => {
+describe('PATCH /api/organizations/criteria', () => {
   it('validates and persists criteria into settings.dealCriteria, preserving other settings', async () => {
     orgSettings = { firmProfile: { sectors: ['SaaS'] } };
     const app = await buildApp();
@@ -76,7 +76,7 @@ describe('PUT /api/organizations/criteria', () => {
       dealSizeMin: 5, dealSizeMax: 15, revenueMin: null, revenueMax: null,
       ebitdaMin: 1, hardExclusions: ['startups', 'turnarounds'], thesis: 'Recurring revenue only',
     };
-    const res = await request(app).put('/api/organizations/criteria').send(body);
+    const res = await request(app).patch('/api/organizations/criteria').send(body);
     expect(res.status).toBe(200);
     expect(lastUpdate!.settings.dealCriteria.thesis).toBe('Recurring revenue only');
     expect(lastUpdate!.settings.firmProfile).toEqual({ sectors: ['SaaS'] }); // untouched
@@ -84,7 +84,7 @@ describe('PUT /api/organizations/criteria', () => {
 
   it('rejects an invalid body with 400', async () => {
     const app = await buildApp();
-    const res = await request(app).put('/api/organizations/criteria').send({ dealSizeMin: 'not-a-number' });
+    const res = await request(app).patch('/api/organizations/criteria').send({ dealSizeMin: 'not-a-number' });
     expect(res.status).toBe(400);
   });
 });
