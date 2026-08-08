@@ -14,6 +14,7 @@ import watchlistRouter from './routes/watchlist.js';
 import aiRouter from './routes/ai.js';
 import foldersRouter from './routes/folders.js';
 import usersRouter from './routes/users.js';
+import organizationCriteriaRouter from './routes/organization-criteria.js';
 import chatRouter from './routes/chat.js';
 import notificationsRouter from './routes/notifications.js';
 import ingestRouter from './routes/ingest.js';
@@ -284,6 +285,7 @@ app.use('/api/documents', authMiddleware, orgMiddleware, usageContextMiddleware,
 app.use('/api', authMiddleware, orgMiddleware, usageContextMiddleware, documentsRouter);
 app.use('/api', authMiddleware, orgMiddleware, usageContextMiddleware, foldersRouter);
 app.use('/api/users', authMiddleware, orgMiddleware, usageContextMiddleware, usersRouter);
+app.use('/api/organizations', authMiddleware, orgMiddleware, usageContextMiddleware, organizationCriteriaRouter);
 app.use('/api', authMiddleware, orgMiddleware, usageContextMiddleware, chatRouter);
 app.use('/api/notifications', authMiddleware, orgMiddleware, usageContextMiddleware, notificationsRouter);
 app.use('/api/ingest', authMiddleware, orgMiddleware, usageContextMiddleware, ingestRouter);
