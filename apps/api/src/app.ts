@@ -58,6 +58,7 @@ import hubspotImportRouter from './routes/hubspot-import.js';
 import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import dealsShareRouter from './routes/deals-share.js';
+import portalRouter from './routes/portal.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -293,6 +294,9 @@ app.get('/api', (_req, res) => {
 // ========================================
 // Invitation verify/accept must be public — invitees don't have accounts yet
 app.use('/api/public/invitations', invitationsAcceptRouter);
+// Deal-share portal must be public — external viewers have no accounts;
+// the DealShare token is the credential (see routes/portal.ts).
+app.use('/api/public/portal', portalRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens
