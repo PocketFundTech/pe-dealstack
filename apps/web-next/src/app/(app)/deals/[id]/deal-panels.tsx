@@ -4,6 +4,7 @@ import { useState } from "react";
 import { STAGE_LABELS } from "@/lib/constants";
 import { MeetingPrepModal } from "@/components/deal-actions/MeetingPrepModal";
 import { DraftEmailModal } from "@/components/deal-actions/DraftEmailModal";
+import { ShareDealModal } from "@/components/deal-actions/ShareDealModal";
 import type { TeamMember } from "./deal-detail-shared";
 
 export { EditDealModal } from "./edit-deal-modal";
@@ -26,6 +27,7 @@ export function DealActionsMenu({
   const [open, setOpen] = useState(false);
   const [showMeetingPrep, setShowMeetingPrep] = useState(false);
   const [showDraftEmail, setShowDraftEmail] = useState(false);
+  const [showShare, setShowShare] = useState(false);
 
   return (
     <div className="relative">
@@ -92,6 +94,13 @@ export function DealActionsMenu({
             </button>
             <div className="border-t border-border-subtle my-1" />
             <button
+              onClick={() => { setOpen(false); setShowShare(true); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:bg-primary-light hover:text-primary transition-colors"
+            >
+              <span className="material-symbols-outlined text-[18px]">ios_share</span>
+              Share Deal
+            </button>
+            <button
               onClick={() => {
                 setOpen(false);
                 window.location.href = `/data-room/${dealId}`;
@@ -127,6 +136,13 @@ export function DealActionsMenu({
           dealId={dealId}
           dealName={dealName}
           onClose={() => setShowDraftEmail(false)}
+        />
+      )}
+      {showShare && (
+        <ShareDealModal
+          dealId={dealId}
+          dealName={dealName}
+          onClose={() => setShowShare(false)}
         />
       )}
     </div>
