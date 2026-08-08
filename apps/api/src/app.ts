@@ -15,6 +15,7 @@ import aiRouter from './routes/ai.js';
 import foldersRouter from './routes/folders.js';
 import usersRouter from './routes/users.js';
 import organizationCriteriaRouter from './routes/organization-criteria.js';
+import dealsScorecardRouter from './routes/deals-scorecard.js';
 import chatRouter from './routes/chat.js';
 import notificationsRouter from './routes/notifications.js';
 import ingestRouter from './routes/ingest.js';
@@ -186,6 +187,7 @@ app.use('/api/deals/*/chat', aiLimiter);
 app.use('/api/deals/*/generate-thesis', aiLimiter);       // trackedChatCompletion
 app.use('/api/deals/*/analyze-risks', aiLimiter);          // trackedChatCompletion
 app.use('/api/deals/*/financials/extract', aiLimiter);     // runFinancialAgent
+app.use('/api/deals/*/scorecard', aiLimiter);              // trackedClaudeMessage
 app.use('/api/documents/*/extract-financials', aiLimiter); // runFinancialAgent
 app.use('/api/portfolio/chat', aiLimiter);                 // createReactAgent
 app.use('/api/conversations/*/messages', aiLimiter);       // trackedChatCompletion
@@ -279,6 +281,7 @@ app.use('/api/public/invitations', invitationsAcceptRouter);
 // ========================================
 app.use('/api/deals/import', authMiddleware, orgMiddleware, usageContextMiddleware, dealImportRouter);
 app.use('/api/deals', authMiddleware, orgMiddleware, usageContextMiddleware, dealsRouter);
+app.use('/api/deals', authMiddleware, orgMiddleware, usageContextMiddleware, dealsScorecardRouter);
 app.use('/api/companies', authMiddleware, orgMiddleware, usageContextMiddleware, companiesRouter);
 app.use('/api', authMiddleware, orgMiddleware, usageContextMiddleware, activitiesRouter);
 app.use('/api/documents', authMiddleware, orgMiddleware, usageContextMiddleware, documentsAlertsRouter);

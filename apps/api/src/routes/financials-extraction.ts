@@ -14,6 +14,7 @@ import { runFinancialAgent } from '../services/agents/financialAgent/index.js';
 import type { FileType } from '../services/agents/financialAgent/index.js';
 import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
 import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
+import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -196,6 +197,12 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
       releaseExtractionSlot(orgId);
     }
 
+    // Fire-and-forget: re-score the deal against firm criteria now that
+    // fresh financials exist. Never awaited, never affects this response.
+    if (agentResult.status === 'completed') {
+      void maybeScoreAfterExtraction(dealId, orgId);
+    }
+
     res.json({
       success: agentResult.status === 'completed',
       documentUsed: { id: doc.id, name: doc.name },
@@ -330,6 +337,12 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
       });
     } finally {
       releaseExtractionSlot(orgId);
+    }
+
+    // Fire-and-forget: re-score the deal against firm criteria now that
+    // fresh financials exist. Never awaited, never affects this response.
+    if (agentResult.status === 'completed') {
+      void maybeScoreAfterExtraction(doc.dealId, orgId);
     }
 
     res.json({
