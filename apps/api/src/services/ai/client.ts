@@ -74,8 +74,13 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     model: cfg.model,
     max_tokens: opts.maxTokens ?? cfg.maxTokens,
     messages: opts.messages,
-    betas: [...cfg.betas, ...(opts.extraBetas ?? [])],
   };
+  // Only send betas when non-empty — an empty array serializes to an empty
+  // anthropic-beta header, which the API rejects with a 400
+  // ("Unexpected value(s) for the anthropic-beta header"). Hit in production
+  // by the memo/scorecard roles, whose ModelConfig has no beta flags.
+  const betas = [...cfg.betas, ...(opts.extraBetas ?? [])];
+  if (betas.length > 0) request.betas = betas;
   if (opts.system) request.system = opts.system;
   if (cfg.fallbacks) request.fallbacks = cfg.fallbacks;
   if (opts.outputSchema) {
@@ -158,7 +163,7 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
     max_tokens: cfg.maxTokens,
     messages: opts.messages as never,
     tools: opts.tools as never,
-    betas: cfg.betas as never,
+    ...(cfg.betas.length > 0 ? { betas: cfg.betas as never } : {}),
     stream: true,
     ...(opts.system ? { system: opts.system } : {}),
     ...(cfg.fallbacks ? { fallbacks: cfg.fallbacks as never } : {}),
