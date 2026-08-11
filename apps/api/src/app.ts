@@ -32,6 +32,8 @@ import onboardingRouter from './routes/onboarding.js';
 import dealImportRouter from './routes/deal-import.js';
 import internalRouter from './routes/internal-usage.js';
 import usageRouter from './routes/usage.js';
+import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
+import cronSignalScanRouter from './routes/cron-signal-scan.js';
 import { supabase } from './supabase.js';
 import { authMiddleware } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
@@ -194,6 +196,10 @@ app.use('/api/conversations/*/messages', aiLimiter);       // trackedChatComplet
 app.use('/api/onboarding/enrich-firm', aiLimiter);         // runFirmResearch (defence-in-depth; has its own 3/hr/org cap)
 app.use('/api/ingest', writeLimiter);
 
+// Mounted ahead of express.json() — webhook signature verification needs
+// the exact request bytes, so this route parses its own raw body.
+app.use('/api/webhooks/managed-agents', express.raw({ type: 'application/json' }), managedAgentsWebhooksRouter);
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -310,6 +316,12 @@ app.use('/api/usage', authMiddleware, orgMiddleware, usageContextMiddleware, usa
 // No orgMiddleware — these routes intentionally query across orgs
 // ========================================
 app.use('/api/internal', authMiddleware, internalRouter);
+
+// ========================================
+// Cron Routes (CRON_SECRET bearer check inside the router — no user JWT,
+// so authMiddleware/orgMiddleware don't apply)
+// ========================================
+app.use('/api/cron/signal-scan', cronSignalScanRouter);
 
 // ========================================
 // AI Routes (mixed - some protected, some public)
