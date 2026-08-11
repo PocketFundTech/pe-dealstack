@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "build:api": "npm run build --workspace=@ai-crm/api",
+    "build:api": "npm run build --workspace=@ai-crm/shared && npm run build --workspace=@ai-crm/api",
     "start:prod": "NODE_ENV=production node apps/api/dist/index.js",
     "lint": "turbo run lint",
     "clean": "turbo run clean",

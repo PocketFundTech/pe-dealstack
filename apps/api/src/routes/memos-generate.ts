@@ -38,7 +38,8 @@ async function persistGeneratedSections(memoId: string, generated: GeneratedSect
   };
 
   let completed = 0;
-  const updatePromises: Promise<any>[] = [];
+  // PostgrestFilterBuilder is PromiseLike (thenable), not a real Promise.
+  const updatePromises: PromiseLike<any>[] = [];
   const toInsert: any[] = [];
 
   for (const gen of generated) {

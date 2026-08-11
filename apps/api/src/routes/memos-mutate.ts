@@ -176,7 +176,8 @@ router.post('/', async (req, res) => {
 
         let completed = 0;
         const errors: string[] = [];
-        const updatePromises: Promise<any>[] = [];
+        // PostgrestFilterBuilder is PromiseLike (thenable), not a real Promise.
+  const updatePromises: PromiseLike<any>[] = [];
         for (const gen of generated) {
           const existingSection = existingByType.get(gen.type);
           if (existingSection) {
