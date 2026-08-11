@@ -30,3 +30,10 @@ CREATE TABLE IF NOT EXISTS "DealShareView" (
   "userAgent" text
 );
 CREATE INDEX IF NOT EXISTS "DealShareView_shareId_idx" ON "DealShareView"("shareId");
+
+-- RLS backstop (matches rls-hardening-migration.sql's Option C): enable RLS
+-- with no policies so the browser anon key gets zero rows via PostgREST —
+-- share TOKENS must never be readable client-side. The Express API uses the
+-- service role, which bypasses RLS.
+ALTER TABLE "DealShare"     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "DealShareView" ENABLE ROW LEVEL SECURITY;
