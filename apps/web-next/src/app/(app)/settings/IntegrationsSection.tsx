@@ -66,7 +66,7 @@ interface HubSpotImportJob {
   error?: string | null;
 }
 
-const HUBSPOT_OBJECTS = ["companies", "contacts", "deals"] as const;
+const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "meetings", "emails", "tasks"] as const;
 
 const POLL_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
@@ -348,7 +348,7 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
         <div>
           <div className="text-sm font-bold text-text-main">HubSpot CRM Import</div>
           <div className="text-xs text-text-muted">
-            One-time import of contacts, companies, and deals from HubSpot.
+            One-time import of contacts, companies, deals, and activity history (notes, calls, meetings, emails, tasks) from HubSpot.
           </div>
         </div>
       </div>
@@ -371,8 +371,13 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
             <p className="mt-1 text-xs text-text-muted">
               HubSpot → Settings → Integrations → Private Apps. Under Scopes, grant{" "}
               <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.companies.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code> and{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.deals.read</code>.
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.deals.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.notes.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.calls.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.meetings.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.emails.read</code> and{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.tasks.read</code>.
             </p>
           </div>
           <button

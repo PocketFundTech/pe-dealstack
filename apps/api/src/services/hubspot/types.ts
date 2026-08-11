@@ -4,6 +4,7 @@ export interface HubSpotRecord {
   properties: Record<string, string | null>;
   associations?: {
     companies?: { results: Array<{ id: string }> };
+    contacts?: { results: Array<{ id: string }> };
   };
 }
 
@@ -44,4 +45,21 @@ export interface MappedDeal {
   hubspotProperties: Record<string, string | null>;
 }
 
-export type HubSpotObjectType = 'companies' | 'contacts' | 'deals';
+/** HubSpot's five engagement ("activity") object types. */
+export type EngagementType = 'notes' | 'calls' | 'meetings' | 'emails' | 'tasks';
+
+/** Mirrors the ContactInteraction.type CHECK constraint in contacts-migration.sql. */
+export type InteractionType = 'NOTE' | 'MEETING' | 'CALL' | 'EMAIL' | 'OTHER';
+
+export interface MappedEngagement {
+  hubspotId: string;
+  interactionType: InteractionType;
+  title: string | null;
+  description: string | null;
+  /** ISO timestamp, or null if HubSpot returned no usable timestamp. */
+  date: string | null;
+  /** HubSpot contact ids this engagement is associated with — may be empty. */
+  associatedContactHubspotIds: string[];
+}
+
+export type HubSpotObjectType = 'companies' | 'contacts' | 'deals' | EngagementType;

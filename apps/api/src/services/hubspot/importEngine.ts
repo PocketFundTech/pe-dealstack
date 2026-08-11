@@ -2,10 +2,12 @@ import { supabase } from '../../supabase.js';
 import { log } from '../../utils/logger.js';
 import { HubSpotClient } from './client.js';
 import { mapCompany, mapContact, mapDeal } from './mappers.js';
-import { upsertByHubspotId, type ImportMode } from './dedup.js';
-import type { HubSpotObjectType } from './types.js';
+import { mapEngagement } from './engagementMappers.js';
+import { upsertByHubspotId, upsertContactInteractionByHubspotId, type ImportMode } from './dedup.js';
+import type { EngagementType, HubSpotObjectType } from './types.js';
 
-const ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals'];
+const ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals', 'notes', 'calls', 'meetings', 'emails', 'tasks'];
+const ENGAGEMENT_TYPES: EngagementType[] = ['notes', 'calls', 'meetings', 'emails', 'tasks'];
 const BATCH = 100;
 
 /**
@@ -46,6 +48,17 @@ async function companyNameForHubspotId(orgId: string, hubspotCompanyId: string |
     .from('Company').select('name')
     .eq('organizationId', orgId).eq('hubspotId', hubspotCompanyId).maybeSingle();
   return (data as { name?: string } | null)?.name ?? null;
+}
+
+/**
+ * Resolve a HubSpot contact id → the local Contact's id. Engagements
+ * reference contacts by HubSpot id via the associations API.
+ */
+async function contactIdForHubspotId(orgId: string, hubspotContactId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('Contact').select('id')
+    .eq('organizationId', orgId).eq('hubspotId', hubspotContactId).maybeSingle();
+  return (data as { id?: string } | null)?.id ?? null;
 }
 
 /**
@@ -90,6 +103,14 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     return id;
   }
 
+  const contactIdCache = new Map<string, string | null>();
+  async function contactIdForHubspotIdCached(orgId: string, hubspotContactId: string) {
+    if (contactIdCache.has(hubspotContactId)) return contactIdCache.get(hubspotContactId) ?? null;
+    const id = await contactIdForHubspotId(orgId, hubspotContactId);
+    contactIdCache.set(hubspotContactId, id);
+    return id;
+  }
+
   // Pick the current object (first not-yet-finished in ORDER).
   const current = (job.currentObject as HubSpotObjectType) ?? ORDER[0];
   const objectIndex = ORDER.indexOf(current);
@@ -109,7 +130,32 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     page = await client.listPage(current, { limit: BATCH, after: job.cursor ?? undefined, properties });
   } catch (err) {
     log.error(`[hubspot] batch fetch failed for ${current}: ${(err as Error).message}`);
-    await saveJob(jobId, { status: 'failed', error: (err as Error).message, finishedAt: new Date().toISOString() });
+    // A fetch failure for ONE object type (e.g. a missing HubSpot scope for
+    // engagement objects — some portals can't even grant those scopes) must
+    // not discard records already imported for prior object types. Skip this
+    // object type and advance to the next one, mirroring the same
+    // cancel-guarded advance used below for a normally-drained page. Only
+    // fail the whole job if there's no next object type left to try.
+    const nextObject = ORDER[objectIndex + 1] ?? null;
+    if (nextObject) {
+      const { data: updated } = await supabase.from('ImportJob')
+        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running' })
+        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+      if (!updated) return false; // cancelled mid-batch
+      return true;
+    }
+    // No more object types to try. If anything else in this job succeeded
+    // (e.g. Companies/Contacts/Deals imported fine but every engagement
+    // type 403'd on a missing scope), don't report the whole job as
+    // failed — that hides a mostly-successful import behind one object
+    // type's error. The error message is preserved either way.
+    const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
+    await saveJob(jobId, {
+      status: anySucceeded ? 'completed' : 'failed',
+      currentObject: null, cursor: null,
+      error: (err as Error).message,
+      finishedAt: new Date().toISOString(),
+    });
     return false;
   }
 
@@ -135,7 +181,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
           title: m.title, company: m.company, hubspotProperties: m.hubspotProperties,
         }, { column: 'email', value: m.email }, mode);
         counts.contacts[res] += 1;
-      } else {
+      } else if (current === 'deals') {
         const m = mapDeal(rec, stageLabels[rec.properties.dealstage ?? ''] ?? null);
         const companyName = await companyNameForHubspotIdCached(job.organizationId, m.associatedCompanyHubspotId);
         // Deal requires a companyId — resolve or create the Company row.
@@ -148,6 +194,29 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
           customFields: m.customFields, hubspotProperties: m.hubspotProperties,
         }, { column: 'name', value: m.name }, mode);
         counts.deals[res] += 1;
+      } else {
+        // One of the 5 engagement types (notes/calls/meetings/emails/tasks).
+        const m = mapEngagement(current as EngagementType, rec);
+        const resolvedContactIds = (await Promise.all(
+          m.associatedContactHubspotIds.map((hsId) => contactIdForHubspotIdCached(job.organizationId, hsId)),
+        )).filter((id): id is string => id !== null);
+
+        if (resolvedContactIds.length > 0) {
+          // Fan out: one HubSpot engagement can be associated with several
+          // local contacts (e.g. a multi-person meeting) — write one row each.
+          let anyCreated = false;
+          for (const contactId of resolvedContactIds) {
+            const res = await upsertContactInteractionByHubspotId(contactId, m.hubspotId, {
+              type: m.interactionType, title: m.title, description: m.description,
+              date: m.date ?? new Date().toISOString(),
+            }, mode);
+            if (res === 'created') anyCreated = true;
+          }
+          counts[current][anyCreated ? 'created' : 'updated'] += 1;
+        }
+        // No resolvable local contact: this phase is contact-scoped only
+        // (per spec) — skip silently. `processed` still increments below;
+        // this record contributes to neither created/updated/failed.
       }
     } catch (err) {
       counts[current].failed += 1;

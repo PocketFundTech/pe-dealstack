@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockFrom } = vi.hoisted(() => ({ mockFrom: vi.fn() }));
 vi.mock('../src/supabase.js', () => ({ supabase: { from: mockFrom } }));
 
-import { mergeBlankOnly, mergeForImport, upsertByHubspotId } from '../src/services/hubspot/dedup.js';
+import { mergeBlankOnly, mergeForImport, upsertByHubspotId, upsertContactInteractionByHubspotId } from '../src/services/hubspot/dedup.js';
 
 function makeChain(overrides: Record<string, unknown> = {}) {
   const base: Record<string, unknown> = {
@@ -162,5 +162,61 @@ describe('upsertByHubspotId', () => {
     await expect(
       upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'Acme', hubspotProperties: {} }),
     ).rejects.toThrow(/duplicate key/);
+  });
+});
+
+describe('upsertContactInteractionByHubspotId', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('creates a new ContactInteraction when no existing row matches (contactId, hubspotId)', async () => {
+    const noMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const insertChain = makeChain();
+    mockFrom.mockReturnValueOnce(noMatch).mockReturnValueOnce(insertChain);
+
+    const result = await upsertContactInteractionByHubspotId('contact-1', 'hs-note-1', {
+      type: 'NOTE', title: null, description: 'Called about term sheet', date: '2026-08-01T00:00:00.000Z',
+    }, 'fill');
+
+    expect(result).toBe('created');
+    expect(insertChain.insert).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'contact-1', hubspotId: 'hs-note-1', type: 'NOTE', description: 'Called about term sheet',
+    }));
+  });
+
+  it('updates the existing row when (contactId, hubspotId) already matches', async () => {
+    const match = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'ci-1', description: 'Old text' } }),
+    });
+    const updateChain = makeChain();
+    mockFrom.mockReturnValueOnce(match).mockReturnValueOnce(updateChain);
+
+    const result = await upsertContactInteractionByHubspotId('contact-1', 'hs-note-1', {
+      type: 'NOTE', title: null, description: 'Corrected text', date: '2026-08-01T00:00:00.000Z',
+    }, 'refresh');
+
+    expect(result).toBe('updated');
+    expect(updateChain.update).toHaveBeenCalledWith(expect.objectContaining({ description: 'Corrected text' }));
+  });
+
+  it('throws instead of silently swallowing a Supabase error on insert', async () => {
+    const noMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const insertChain = makeChain({ error: { message: 'null value in column "contactId"' } });
+    mockFrom.mockReturnValueOnce(noMatch).mockReturnValueOnce(insertChain);
+
+    await expect(
+      upsertContactInteractionByHubspotId('contact-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'fill'),
+    ).rejects.toThrow(/contactId/);
+  });
+
+  it('throws instead of silently swallowing a Supabase error on update', async () => {
+    const match = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'ci-1', description: 'Old text' } }),
+    });
+    const updateChain = makeChain({ error: { message: 'connection reset' } });
+    mockFrom.mockReturnValueOnce(match).mockReturnValueOnce(updateChain);
+
+    await expect(
+      upsertContactInteractionByHubspotId('contact-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'refresh'),
+    ).rejects.toThrow(/connection reset/);
   });
 });
