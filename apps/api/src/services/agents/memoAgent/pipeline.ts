@@ -231,13 +231,29 @@ export async function generateSection(
 
 // ─── generateAllSections ──────────────────────────────────────────────────────
 
-export async function generateAllSections(
+export type MemoGenerationStreamEvent =
+  | { type: 'section_start'; sectionType: SectionType; index: number; total: number }
+  | { type: 'section_complete'; sectionType: SectionType; section: GeneratedSection; index: number; total: number }
+  | { type: 'critique_start' }
+  | { type: 'section_revised'; sectionType: SectionType; section: GeneratedSection }
+  | { type: 'done'; sections: GeneratedSection[]; context: MemoContext }
+  | { type: 'error'; message: string };
+
+/**
+ * Streaming counterpart to generateAllSections(). Preserves the existing
+ * batch concurrency (BATCH_SIZE sections in flight at once) but yields a
+ * section_complete event the moment each one finishes, in real completion
+ * order — not gated by waiting for the whole batch like Promise.all does.
+ */
+export async function* generateAllSectionsStreaming(
   dealId: string,
   orgId: string,
   sectionTypes?: SectionType[],
-): Promise<{ sections: GeneratedSection[]; context: MemoContext }> {
+  opts: { signal?: AbortSignal } = {},
+): AsyncGenerator<MemoGenerationStreamEvent> {
   if (!isAnthropicAvailable()) {
-    throw new Error('LLM is not available. Check API key configuration.');
+    yield { type: 'error', message: 'LLM is not available. Check API key configuration.' };
+    return;
   }
 
   const types = sectionTypes ?? COMPREHENSIVE_IC_SECTIONS;
@@ -249,17 +265,40 @@ export async function generateAllSections(
 
   const sections: GeneratedSection[] = [];
 
-  // Process in batches to avoid 429 rate limits
   for (let i = 0; i < types.length; i += BATCH_SIZE) {
-    const batch = types.slice(i, i + BATCH_SIZE);
-    const batchResults = await Promise.all(
-      batch.map((sectionType, batchIndex) =>
-        generateSection(sectionType, context, undefined, i + batchIndex + 1),
-      ),
-    );
-    sections.push(...batchResults);
+    if (opts.signal?.aborted) return;
 
-    // Pause between batches (skip after the last batch)
+    const batch = types.slice(i, i + BATCH_SIZE);
+
+    // Start every section in this batch concurrently — kicking these off
+    // is not gated by yield, so batch concurrency matches the old
+    // Promise.all version exactly. Each promise is tagged with its index
+    // in `pending` so we can identify which one won a given race.
+    const pending = new Map(
+      batch.map((sectionType, batchIndex) => [
+        batchIndex,
+        { sectionType, promise: generateSection(sectionType, context, undefined, i + batchIndex + 1) },
+      ]),
+    );
+
+    for (const { sectionType } of pending.values()) {
+      yield { type: 'section_start', sectionType, index: sections.length + 1, total: types.length };
+    }
+
+    // Yield section_complete in real completion order, not batch order.
+    // generateSection() never rejects (placeholder-on-failure), so this
+    // race is always won by a resolution, never a rejection.
+    while (pending.size > 0) {
+      const entries = [...pending.entries()];
+      const winner = await Promise.race(
+        entries.map(([key, { promise }]) => promise.then((section) => ({ key, section }))),
+      );
+      const { sectionType } = pending.get(winner.key)!;
+      pending.delete(winner.key);
+      sections.push(winner.section);
+      yield { type: 'section_complete', sectionType, section: winner.section, index: sections.length, total: types.length };
+    }
+
     if (i + BATCH_SIZE < types.length) {
       log.debug(`[memoAgent/pipeline] Batch ${Math.floor(i / BATCH_SIZE) + 1} complete, pausing ${BATCH_DELAY_MS}ms`);
       await sleep(BATCH_DELAY_MS);
@@ -268,14 +307,39 @@ export async function generateAllSections(
 
   const generated = sections.filter((s) => s.aiGenerated).length;
   const failed = sections.filter((s) => s.aiModel === 'error').length;
-
   log.info(
     `[memoAgent/pipeline] Completed: ${sections.length} total, ${generated} generated, ${failed} failed`,
   );
 
-  const graded = await critiqueAndRevise(sections, context);
+  if (opts.signal?.aborted) return;
 
-  return { sections: graded, context };
+  yield { type: 'critique_start' };
+  const graded = await critiqueAndRevise(sections, context);
+  for (const section of graded) {
+    const original = sections.find((s) => s.type === section.type);
+    if (original && original.content !== section.content) {
+      yield { type: 'section_revised', sectionType: section.type as SectionType, section };
+    }
+  }
+
+  yield { type: 'done', sections: graded, context };
+}
+
+/**
+ * Non-streaming wrapper — drains generateAllSectionsStreaming() and
+ * returns just the final result. Used by memos-mutate.ts's
+ * create-with-autoGenerate flow, which doesn't need live progress.
+ */
+export async function generateAllSections(
+  dealId: string,
+  orgId: string,
+  sectionTypes?: SectionType[],
+): Promise<{ sections: GeneratedSection[]; context: MemoContext }> {
+  for await (const event of generateAllSectionsStreaming(dealId, orgId, sectionTypes)) {
+    if (event.type === 'error') throw new Error(event.message);
+    if (event.type === 'done') return { sections: event.sections, context: event.context };
+  }
+  throw new Error('Memo generation stream ended without a result');
 }
 
 // ─── Critique + Revise (Phase 2-C) ─────────────────────────────────────────
