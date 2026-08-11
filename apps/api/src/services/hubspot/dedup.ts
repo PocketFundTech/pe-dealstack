@@ -80,10 +80,42 @@ export async function upsertByHubspotId(
     const merged = mergeForImport(existing as Record<string, unknown>, row, adopted ? 'fill' : mode);
     merged.hubspotId = hubspotId;
     merged.hubspotProperties = row.hubspotProperties;
-    await supabase.from(table).update(merged).eq('id', (existing as { id: string }).id);
+    const { error } = await supabase.from(table).update(merged).eq('id', (existing as { id: string }).id);
+    if (error) throw new Error(`HubSpot ${table} update failed: ${error.message}`);
     return 'updated';
   }
 
-  await supabase.from(table).insert({ ...row, organizationId: orgId, hubspotId });
+  const { error } = await supabase.from(table).insert({ ...row, organizationId: orgId, hubspotId });
+  if (error) throw new Error(`HubSpot ${table} insert failed: ${error.message}`);
+  return 'created';
+}
+
+/**
+ * Upsert a HubSpot-imported ContactInteraction. Scoped by contactId, not
+ * organizationId — ContactInteraction has no organizationId column of its
+ * own (it's scoped transitively via Contact). No natural-key fallback:
+ * unlike a Company name or Contact email, there's no meaningful fuzzy match
+ * for an interaction — (contactId, hubspotId) IS the identity.
+ */
+export async function upsertContactInteractionByHubspotId(
+  contactId: string,
+  hubspotId: string,
+  row: Record<string, unknown>,
+  mode: ImportMode,
+): Promise<UpsertResult> {
+  const { data: existing } = await supabase
+    .from('ContactInteraction').select('*')
+    .eq('contactId', contactId).eq('hubspotId', hubspotId).maybeSingle();
+
+  if (existing) {
+    const merged = mergeForImport(existing as Record<string, unknown>, row, mode);
+    merged.hubspotId = hubspotId;
+    const { error } = await supabase.from('ContactInteraction').update(merged).eq('id', (existing as { id: string }).id);
+    if (error) throw new Error(`HubSpot ContactInteraction update failed: ${error.message}`);
+    return 'updated';
+  }
+
+  const { error } = await supabase.from('ContactInteraction').insert({ ...row, contactId, hubspotId });
+  if (error) throw new Error(`HubSpot ContactInteraction insert failed: ${error.message}`);
   return 'created';
 }

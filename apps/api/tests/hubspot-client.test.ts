@@ -179,6 +179,50 @@ describe('HubSpotClient.listDealStageLabels', () => {
   });
 });
 
+describe('STANDARD_PROPERTIES — engagement types', () => {
+  it('requests the note body and timestamp', () => {
+    expect(STANDARD_PROPERTIES.notes).toEqual(expect.arrayContaining(['hs_note_body', 'hs_timestamp']));
+  });
+
+  it('requests call title, body, duration, and direction', () => {
+    expect(STANDARD_PROPERTIES.calls).toEqual(
+      expect.arrayContaining(['hs_call_title', 'hs_call_body', 'hs_call_duration', 'hs_call_direction', 'hs_timestamp']),
+    );
+  });
+
+  it('requests meeting title, body, start/end time, and outcome', () => {
+    expect(STANDARD_PROPERTIES.meetings).toEqual(
+      expect.arrayContaining(['hs_meeting_title', 'hs_meeting_body', 'hs_meeting_start_time', 'hs_meeting_end_time', 'hs_meeting_outcome']),
+    );
+  });
+
+  it('requests email subject, text, and direction', () => {
+    expect(STANDARD_PROPERTIES.emails).toEqual(
+      expect.arrayContaining(['hs_email_subject', 'hs_email_text', 'hs_email_direction', 'hs_timestamp']),
+    );
+  });
+
+  it('requests task subject, body, status, and priority', () => {
+    expect(STANDARD_PROPERTIES.tasks).toEqual(
+      expect.arrayContaining(['hs_task_subject', 'hs_task_body', 'hs_task_status', 'hs_task_priority', 'hs_timestamp']),
+    );
+  });
+});
+
+describe('HubSpotClient.listPage — engagement contact associations', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it.each(['notes', 'calls', 'meetings', 'emails', 'tasks'] as const)(
+    'requests contact associations for %s',
+    async (type) => {
+      const fetchMock = vi.fn().mockResolvedValue(mkRes(200, { results: [], paging: undefined }));
+      vi.stubGlobal('fetch', fetchMock);
+      await new HubSpotClient('tok').listPage(type, { limit: 20 });
+      expect(fetchMock.mock.calls[0][0] as string).toContain('associations=contacts');
+    },
+  );
+});
+
 describe('HubSpotClient.listPage properties override', () => {
   beforeEach(() => vi.restoreAllMocks());
   it('sends the supplied properties list in the query', async () => {
