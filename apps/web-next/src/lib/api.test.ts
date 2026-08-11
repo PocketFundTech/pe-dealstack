@@ -128,6 +128,21 @@ describe("api wrapper", () => {
     ]);
   });
 
+  it("api.stream synthesizes events from a legacy JSON response (engine flag off)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ response: "buffered answer", model: "gpt-4o", updates: [{ field: "stage" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const events: Record<string, unknown>[] = [];
+    await api.stream("/deals/d1/chat", { message: "hi" }, (e) => events.push(e));
+    expect(events[0]).toEqual({ type: "text_delta", text: "buffered answer" });
+    expect(events[1]).toEqual({ type: "update", update: { field: "stage" } });
+    expect(events[events.length - 1]).toMatchObject({ type: "done", response: "buffered answer" });
+  });
+
   it("api.stream handles an SSE frame split across two chunks", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

@@ -222,6 +222,31 @@ async function requestStream(path: string, body: unknown, onEvent: StreamEventHa
     throw new ApiError(message, res.status, code);
   }
 
+  // Legacy-JSON fallback: when the endpoint's streaming engine flag is off
+  // (e.g. DEAL_CHAT_ENGINE unset), the backend answers with one buffered
+  // JSON body instead of SSE frames. Synthesize the equivalent event
+  // sequence so streaming-aware callers render it identically — without
+  // this, the reply is generated and persisted server-side but the UI
+  // shows nothing.
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (body) {
+      if (typeof body.response === "string" && body.response) {
+        onEvent({ type: "text_delta", text: body.response });
+      }
+      for (const update of Array.isArray(body.updates) ? body.updates : []) {
+        onEvent({ type: "update", update });
+      }
+      if (body.action) onEvent({ type: "action", action: body.action });
+      for (const effect of Array.isArray(body.sideEffects) ? body.sideEffects : []) {
+        onEvent({ type: "side_effect", effect });
+      }
+      onEvent({ type: "done", ...body });
+    }
+    return;
+  }
+
   if (!res.body) return;
 
   const reader = res.body.getReader();
