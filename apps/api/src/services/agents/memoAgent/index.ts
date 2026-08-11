@@ -22,14 +22,14 @@ const MEMO_CHAT_RECURSION_LIMIT = 10;
 // ─── Re-exports ───────────────────────────────────────────────────────────────
 
 export { buildMemoContext, formatContextForLLM } from './context.js';
-export { generateAllSections, generateSection } from './pipeline.js';
+export { generateAllSections, generateSection, generateAllSectionsStreaming } from './pipeline.js';
 export {
   COMPREHENSIVE_IC_SECTIONS,
   STANDARD_IC_SECTIONS,
   SEARCH_FUND_SECTIONS,
   SCREENING_NOTE_SECTIONS,
 } from './prompts.js';
-export type { GeneratedSection } from './pipeline.js';
+export type { GeneratedSection, MemoGenerationStreamEvent } from './pipeline.js';
 export type { MemoContext } from './context.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ import {
   SEARCH_FUND_SECTIONS,
   SCREENING_NOTE_SECTIONS,
 } from '../services/agents/memoAgent/index.js';
-import { isLLMAvailable } from '../services/llm.js';
+import { isAnthropicAvailable } from '../services/ai/client.js';
 import { createMemoSchema, updateMemoSchema, SECTION_TYPE_MAP } from './memos-schemas.js';
 
 const router = Router();
@@ -146,7 +146,7 @@ router.post('/', async (req, res) => {
     // Auto-generate section content if requested and AI is available
     let generationStatus = null;
 
-    if (autoGenerate && memoFields.dealId && isLLMAvailable()) {
+    if (autoGenerate && memoFields.dealId && isAnthropicAvailable()) {
       try {
         const presetMap: Record<string, any> = {
           comprehensive: COMPREHENSIVE_IC_SECTIONS,

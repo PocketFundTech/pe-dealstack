@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL'] as const;
+const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => { for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
@@ -60,5 +60,20 @@ describe('getModelConfig', () => {
     expect(cfg.betas).toContain('server-side-fallback-2026-06-01');
     expect(cfg.fallbacks).toEqual([{ model: 'claude-opus-4-8' }]);
     expect(cfg.maxTokens).toBe(16000); // maxTokens stays role-specific
+  });
+
+  it('defaults memo to sonnet 5 with 4000 max tokens and no fallback plumbing', async () => {
+    const { getModelConfig } = await getModels();
+    const cfg = getModelConfig('memo');
+    expect(cfg.model).toBe('claude-sonnet-5');
+    expect(cfg.maxTokens).toBe(4000);
+    expect(cfg.fallbacks).toBeUndefined();
+    expect(cfg.betas).toEqual([]);
+  });
+
+  it('honors the memo env override', async () => {
+    process.env.AI_MEMO_MODEL = 'claude-opus-4-8';
+    const { getModelConfig } = await getModels();
+    expect(getModelConfig('memo').model).toBe('claude-opus-4-8');
   });
 });
