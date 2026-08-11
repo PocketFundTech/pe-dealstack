@@ -6,6 +6,7 @@ import { log } from '../utils/logger.js';
 import { encryptField, decryptField } from '../services/encryption.js';
 import { HubSpotClient } from '../services/hubspot/client.js';
 import { runImportBatch } from '../services/hubspot/importEngine.js';
+import type { ImportMode } from '../services/hubspot/dedup.js';
 
 const router = Router();
 const connectSchema = z.object({ token: z.string().trim().min(10) });
@@ -21,6 +22,33 @@ function tokenRejectionMessage(v: { status: number; category: string | null }): 
   return `HubSpot rejected this token (HTTP ${v.status}). Try regenerating the Private App token.`;
 }
 const MAX_BATCHES = 1000; // safety bound on the drive loop
+const BATCH_SIZE = 100; // mirrors importEngine.ts's BATCH constant
+
+/**
+ * Drive runImportBatch to completion for one job. Exported (rather than
+ * inlined in the route) so the cap-hit path is unit-testable with a small
+ * maxBatches instead of looping the real MAX_BATCHES in a test.
+ */
+export async function driveImport(jobId: string, token: string, mode: ImportMode, maxBatches: number): Promise<void> {
+  try {
+    let more = true; let i = 0;
+    while (more && i < maxBatches) { more = await runImportBatch(jobId, token, mode); i += 1; }
+    if (more) {
+      // Hit the safety cap rather than finishing naturally. Imports are
+      // idempotent (matched by hubspotId), so re-running is safe — it just
+      // reprocesses the records already imported before continuing further.
+      const limit = maxBatches * BATCH_SIZE;
+      await supabase.from('ImportJob').update({
+        status: 'failed',
+        error: `Reached the per-run limit of ${limit.toLocaleString()} records. Click "Import from HubSpot" again to continue — already-imported records won't be duplicated.`,
+        finishedAt: new Date().toISOString(),
+      }).eq('id', jobId);
+    }
+  } catch (err) {
+    log.error(`[hubspot] import loop crashed: ${(err as Error).message}`);
+    await supabase.from('ImportJob').update({ status: 'failed', error: (err as Error).message }).eq('id', jobId);
+  }
+}
 
 /** Map the Supabase auth UUID (req.user.id) to the internal User.id (PK). */
 async function resolveInternalUserId(authId: string | undefined): Promise<string | null> {
@@ -101,15 +129,7 @@ router.post('/import', async (req: Request, res: Response) => {
   // Respond immediately; drive the batches without blocking the response.
   res.status(202).json({ jobId });
 
-  void (async () => {
-    try {
-      let more = true; let i = 0;
-      while (more && i < MAX_BATCHES) { more = await runImportBatch(jobId, token, mode); i += 1; }
-    } catch (err) {
-      log.error(`[hubspot] import loop crashed: ${(err as Error).message}`);
-      await supabase.from('ImportJob').update({ status: 'failed', error: (err as Error).message }).eq('id', jobId);
-    }
-  })();
+  void driveImport(jobId, token, mode, MAX_BATCHES);
 });
 
 // GET /import/:id → status

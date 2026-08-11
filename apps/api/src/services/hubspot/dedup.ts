@@ -80,10 +80,12 @@ export async function upsertByHubspotId(
     const merged = mergeForImport(existing as Record<string, unknown>, row, adopted ? 'fill' : mode);
     merged.hubspotId = hubspotId;
     merged.hubspotProperties = row.hubspotProperties;
-    await supabase.from(table).update(merged).eq('id', (existing as { id: string }).id);
+    const { error } = await supabase.from(table).update(merged).eq('id', (existing as { id: string }).id);
+    if (error) throw new Error(`HubSpot ${table} update failed: ${error.message}`);
     return 'updated';
   }
 
-  await supabase.from(table).insert({ ...row, organizationId: orgId, hubspotId });
+  const { error } = await supabase.from(table).insert({ ...row, organizationId: orgId, hubspotId });
+  if (error) throw new Error(`HubSpot ${table} insert failed: ${error.message}`);
   return 'created';
 }
