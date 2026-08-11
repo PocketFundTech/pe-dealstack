@@ -12,12 +12,14 @@
 import { ChatAnthropic } from '@langchain/anthropic';
 import { isClaudeEnabled } from '../../../../services/anthropic.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import { getTodayIso } from '../../../../utils/dates.js';
 import type { FinancialAgentStateType, AgentStep } from '../state.js';
 import type { ClassifiedStatement } from '../../../financialClassifier.js';
 import { VERIFY_SAMPLE_SIZE } from '../config.js';
 import { recordUsageEvent } from '../../../usage/trackedLLM.js';
 import { enforceUserGate } from '../../../usage/enforcement.js';
+import { withCircuitBreaker } from '../../../aiCircuitBreaker.js';
 
 // ─── Interfaces ──────────────────────────────────────────────
 
@@ -261,6 +263,10 @@ export async function crossVerifyNode(
   const steps: AgentStep[] = [];
   const { statements, rawText } = state;
 
+  if (state.extractionSource === 'claude') {
+    return { steps: [step('crossVerify', 'Skipped — structured-output engine carries in-schema provenance')] };
+  }
+
   // Skip if Claude not configured
   if (!isClaudeEnabled()) {
     steps.push(step('crossVerify', 'Skipping cross-verification — ANTHROPIC_API_KEY not configured'));
@@ -301,14 +307,16 @@ export async function crossVerifyNode(
       // ("FY", "LTM", "current quarter") anchors to wall-clock, not the
       // model's training cutoff.
       const today = getTodayIso();
-      response = await claude.invoke([
+      response = await withCircuitBreaker('anthropic', () =>
+        claude.invoke([
         {
           role: 'system',
           content:
             `You are a financial data verification assistant. Today's date is ${today}. Use this for any relative period inference (FY, LTM, "current quarter", "last N days"). You verify extracted financial values against source documents. Respond ONLY with a valid JSON array — no markdown, no code fences, no explanation.`,
         },
         { role: 'user', content: userPrompt },
-      ]);
+        ]),
+      );
     } catch (err) {
       await recordUsageEvent({
         operation: 'financial_extraction',
@@ -385,6 +393,7 @@ export async function crossVerifyNode(
   } catch (error) {
     // Best-effort — don't block the pipeline
     log.warn('crossVerifyNode: Claude API call failed, continuing without cross-verification', error as object);
+    captureAgentError(error, { agent: 'financialAgent', node: 'crossVerify' }, 'warning');
     steps.push(step('crossVerify', 'Cross-verification encountered an error — continuing without it'));
     return { steps };
   }

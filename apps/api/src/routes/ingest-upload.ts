@@ -3,13 +3,14 @@ import { supabase } from '../supabase.js';
 import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtractor.js';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { extractTextFromWord } from '../services/documentParser.js';
 import { extractTextFromExcel, isExcelFile } from '../services/excelFinancialExtractor.js';
 import { deepExtract, isDeepExtractionAvailable, DeepExtractionResult } from '../services/langExtractClient.js';
 import { AuditLog } from '../services/auditLog.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
-import { getOrgId } from '../middleware/orgScope.js';
+import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { extractTextFromPDF, upload } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
@@ -230,6 +231,14 @@ export async function runIngestFromBuffer(
 
     if (targetDealId) {
       // ─── Update Existing Deal path ───
+      // Verify the caller's org owns this deal before merging extracted data
+      // into it (and dropping a Document row pointing at it). Without this,
+      // a client could ingest a CIM into any tenant's deal.
+      const dealAccess = await verifyDealAccess(targetDealId, orgId);
+      if (!dealAccess) {
+        return { status: 404, body: { error: 'Deal not found' } };
+      }
+
       log.info('Ingest into existing deal', { dealId: targetDealId });
       const result = await mergeIntoExistingDeal(targetDealId, aiData, req.user?.id, documentName);
       deal = result.deal;
@@ -557,7 +566,10 @@ export async function runIngestFromBuffer(
         .then(result => {
           if (result) log.info('Auto multi-doc analysis complete', { dealId: deal.id, conflicts: result.conflicts.length });
         })
-        .catch(err => log.error('Auto multi-doc analysis failed', err));
+        .catch(err => {
+          log.error('Auto multi-doc analysis failed', err);
+          captureAgentError(err, { context: 'multi_doc_analysis:background' });
+        });
     }
 
     // Auto-generate firm-teaser blurbs for newly-created deals. BLOCKS the

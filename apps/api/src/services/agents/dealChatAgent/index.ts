@@ -6,11 +6,31 @@
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { SystemMessage, HumanMessage, AIMessage } from '@langchain/core/messages';
 import { getChatModel, isLLMAvailable } from '../../llm.js';
-import { getDealChatTools } from './tools.js';
+import { getDealChatTools, getDealChatToolsLegacy } from './tools.js';
 import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
 import { classifyAIError } from '../../../utils/aiErrors.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
+import { trackedClaudeStream } from '../../ai/client.js';
+import { getModelConfig } from '../../ai/models.js';
+import type { ToolEmit, ToolEmitEvent } from './types.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// Hard limits on agent execution. Without these, a malformed tool output
+// can loop the ReAct agent up to LangGraph's default 25 iterations
+// (each making an OpenAI call), and slow OpenAI responses can hang
+// past Vercel's 30s function limit while billing continues.
+//
+// Refs: .planning/REMEDIATION_ROADMAP.md Phase 4 Task 4.2
+// Refs: .planning/codebase/CONCERNS.md §3.5, §7.2
+const AGENT_RECURSION_LIMIT = 10;
+const DEFAULT_AGENT_TIMEOUT_MS = 30_000;
+// Allow tests to shorten the timeout; production reads the default.
+function getAgentTimeoutMs(): number {
+  const override = Number(process.env.DEAL_CHAT_AGENT_TIMEOUT_MS);
+  return Number.isFinite(override) && override > 0 ? override : DEFAULT_AGENT_TIMEOUT_MS;
+}
 import { getTodayIso } from '../../../utils/dates.js';
 import { getFirmContextBlock } from '../../firmContextService.js';
 
@@ -203,7 +223,7 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
 
   try {
     const model = getChatModel(0.7, 2500, 'deal_chat');
-    const tools = getDealChatTools(input.dealId, input.orgId, input.userId);
+    const tools = getDealChatToolsLegacy(input.dealId, input.orgId, input.userId);
 
     const agent = createReactAgent({
       llm: model,
@@ -285,7 +305,36 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
       messageCount: messages.length,
     });
 
-    const result = await agent.invoke({ messages });
+    // ─── Bounded invocation ────────────────────────────────────────
+    // 1. recursionLimit caps the ReAct loop at 10 iterations (default 25).
+    // 2. AbortController + Promise.race enforces a hard 30s timeout. The
+    //    signal is passed through to OpenAI so the in-flight HTTP request
+    //    is actually cancelled, not just abandoned.
+    const timeoutMs = getAgentTimeoutMs();
+    const abortController = new AbortController();
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        abortController.abort();
+        reject(new Error(`Deal chat agent timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    let result: any;
+    try {
+      result = await Promise.race([
+        agent.invoke(
+          { messages },
+          {
+            recursionLimit: AGENT_RECURSION_LIMIT,
+            signal: abortController.signal,
+          }
+        ),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
 
     // Extract the final AI response
     const aiMessages = result.messages.filter(
@@ -343,6 +392,7 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
     };
   } catch (error: any) {
     log.error('Deal chat agent error', { message: error.message, stack: error.stack?.slice(0, 500) });
+    captureAgentError(error, { agent: 'dealChatAgent', node: 'invoke' });
 
     // Return specific error message so users know what's wrong
     const errorMsg = error.message || 'Unknown error';
@@ -353,4 +403,144 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
       model: 'error',
     };
   }
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  search_documents: 'Searching documents...',
+  get_deal_financials: 'Pulling financials...',
+  compare_deals: 'Comparing deals...',
+  get_deal_activity: 'Checking activity...',
+  update_deal_field: 'Updating deal...',
+  change_deal_stage: 'Changing stage...',
+  add_note: 'Adding note...',
+  trigger_financial_extraction: 'Checking documents...',
+  generate_meeting_prep: 'Preparing meeting brief...',
+  draft_email: 'Drafting email...',
+  get_analysis_summary: 'Running analysis...',
+  list_documents: 'Listing documents...',
+  scroll_to_section: 'Navigating...',
+  suggest_action: 'Preparing suggestion...',
+};
+
+export type DealChatStreamEvent =
+  | { type: 'tool_start'; tool: string; label: string }
+  | { type: 'text_delta'; text: string }
+  | ToolEmitEvent
+  | { type: 'done'; response: string; model: string; truncated: boolean; updates?: any[]; action?: any; sideEffects?: any[] }
+  | { type: 'error'; message: string };
+
+/**
+ * Streaming counterpart to runDealChatAgent(), used behind
+ * DEAL_CHAT_ENGINE=streaming. Drives the Anthropic Tool Runner directly
+ * instead of LangGraph, yielding SSE-ready events as they happen rather
+ * than returning one buffered result.
+ */
+export async function* runDealChatAgentStreaming(
+  input: DealChatInput,
+  opts: { signal?: AbortSignal } = {},
+): AsyncGenerator<DealChatStreamEvent> {
+  if (!isLLMAvailable()) {
+    yield { type: 'error', message: 'AI service unavailable. Please configure an API key.' };
+    return;
+  }
+
+  const sideEffects: Array<{ type: string; [key: string]: any }> = [];
+  const updates: any[] = [];
+  let action: any = null;
+  const emit: ToolEmit = (event) => {
+    if (event.type === 'side_effect') sideEffects.push(event.effect);
+    if (event.type === 'update') updates.push(event.update);
+    if (event.type === 'action') action = event.action;
+  };
+
+  const tools = getDealChatTools(input.dealId, input.orgId, emit);
+  // Mirror the legacy path's prompt assembly: firm-wide standing context
+  // (when present) above the date-anchored base prompt + guardrails.
+  const today = input.today ?? getTodayIso();
+  const firmContext = await getFirmContextBlock(input.orgId).catch(() => '');
+  const firmContextBlock = firmContext ? `=== FIRM CONTEXT ===\n${firmContext}\n\n` : '';
+  const system = `${firmContextBlock}${buildDealAgentSystemPrompt(today)}\n${SHARED_GUARDRAILS}\n\nCurrent Deal Context:\n${input.dealContext}\n\nDeal ID: ${input.dealId}\nOrganization ID: ${input.orgId}`;
+  const history = (input.history ?? []).slice(-10).map((h) => ({ role: h.role, content: h.content }));
+  const messages = [...history, { role: 'user', content: input.message }];
+
+  const timeoutMs = getAgentTimeoutMs();
+  const internalController = new AbortController();
+  const timeoutHandle = setTimeout(() => internalController.abort(), timeoutMs);
+  const onExternalAbort = () => internalController.abort();
+  opts.signal?.addEventListener('abort', onExternalAbort);
+
+  const cleanup = () => {
+    clearTimeout(timeoutHandle);
+    opts.signal?.removeEventListener('abort', onExternalAbort);
+  };
+
+  let fullText = '';
+  const usage = { inputTokens: 0, outputTokens: 0 };
+
+  const { runner, recordUsage } = trackedClaudeStream({
+    operation: 'deal_chat',
+    role: 'chat',
+    system,
+    messages,
+    tools,
+    signal: internalController.signal,
+  });
+
+  let iterationCount = 0;
+  try {
+    for await (const messageStream of runner) {
+      iterationCount++;
+      if (iterationCount > AGENT_RECURSION_LIMIT) {
+        internalController.abort();
+        cleanup();
+        await recordUsage(usage, 'error');
+        yield { type: 'error', message: 'Reached the maximum number of tool calls for this response. Please try rephrasing or asking a more specific question.' };
+        return;
+      }
+      for await (const event of messageStream as AsyncIterable<any>) {
+        if (event.type === 'message_start') {
+          usage.inputTokens += event.message?.usage?.input_tokens ?? 0;
+        }
+        if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          const toolName = event.content_block.name;
+          yield { type: 'tool_start', tool: toolName, label: TOOL_LABELS[toolName] ?? `Using ${toolName}...` };
+        }
+        if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          fullText += event.delta.text;
+          yield { type: 'text_delta', text: event.delta.text };
+        }
+        if (event.type === 'message_delta' && event.usage) {
+          usage.outputTokens += event.usage.output_tokens ?? 0;
+        }
+      }
+    }
+  } catch (error: any) {
+    cleanup();
+    if (internalController.signal.aborted) {
+      await recordUsage(usage, 'error');
+      yield { type: 'error', message: `Response timed out after ${timeoutMs}ms. Please try again.` };
+      return;
+    }
+    await recordUsage(usage, 'error');
+    captureAgentError(error, { agent: 'dealChatAgent', node: 'stream' });
+    yield { type: 'error', message: classifyAIError(error.message || 'Unknown error') };
+    return;
+  }
+
+  cleanup();
+  await recordUsage(usage, 'success');
+
+  for (const effect of sideEffects) yield { type: 'side_effect', effect };
+  for (const update of updates) yield { type: 'update', update };
+  if (action) yield { type: 'action', action };
+
+  yield {
+    type: 'done',
+    response: fullText || 'I apologize, I was unable to generate a response.',
+    model: getModelConfig('chat').model,
+    truncated: false,
+    ...(updates.length > 0 && { updates }),
+    ...(action && { action }),
+    ...(sideEffects.length > 0 && { sideEffects }),
+  };
 }

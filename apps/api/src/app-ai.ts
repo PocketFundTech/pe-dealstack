@@ -150,6 +150,16 @@ app.use('/api/', generalLimiter);
 app.use('/api/ai', aiLimiter);
 app.use('/api/memos/*/chat', aiLimiter);
 app.use('/api/memos/*/sections/*/generate', aiLimiter);
+// Deal chat invokes a LangGraph ReAct agent — see app.ts for rationale.
+app.use('/api/deals/*/chat', aiLimiter);
+// Task 4.1b: remaining LangGraph / multi-call LLM endpoints — mirror app.ts.
+app.use('/api/deals/*/generate-thesis', aiLimiter);
+app.use('/api/deals/*/analyze-risks', aiLimiter);
+app.use('/api/deals/*/financials/extract', aiLimiter);
+app.use('/api/documents/*/extract-financials', aiLimiter);
+app.use('/api/portfolio/chat', aiLimiter);
+app.use('/api/conversations/*/messages', aiLimiter);
+app.use('/api/onboarding/enrich-firm', aiLimiter);
 app.use('/api/ingest', writeLimiter);
 
 app.use(express.json({ limit: '50mb' }));

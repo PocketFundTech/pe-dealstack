@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { supabase } from '../../../supabase.js';
 import { searchDocumentChunks, buildRAGContext, isRAGEnabled } from '../../../rag.js';
 import { log } from '../../../utils/logger.js';
+import { wrapDocumentContent } from '../guardrails.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -202,12 +203,14 @@ export function getMemoAgentTools(memoId: string, dealId: string, orgId: string)
 
           if (relevant.length === 0) return 'No relevant content found in documents.';
 
+          // Wrap each excerpt in <document> delimiters so the agent
+          // treats it as untrusted external data, not instructions (Task 4.7).
           return relevant.map(d => {
             const text = d.extractedText || '';
             const idx = text.toLowerCase().indexOf(queryLower);
             const start = Math.max(0, idx - 200);
             const end = Math.min(text.length, idx + queryLower.length + 500);
-            return `### ${d.name}\n${text.slice(start, end)}`;
+            return wrapDocumentContent(text.slice(start, end), d.name);
           }).join('\n\n');
         }
 
@@ -219,7 +222,9 @@ export function getMemoAgentTools(memoId: string, dealId: string, orgId: string)
           .select('id, name, type')
           .eq('dealId', dealId);
 
-        return buildRAGContext(searchResults, docs || []);
+        // RAG retrieval concatenates user-uploaded document chunks —
+        // wrap the block as untrusted external data (Task 4.7).
+        return wrapDocumentContent(buildRAGContext(searchResults, docs || []), 'rag-results');
       } catch (error) {
         log.error('searchDocuments tool error', error);
         return 'Error searching documents.';

@@ -5,6 +5,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
+import * as Sentry from '@sentry/node';
 import { log } from '../utils/logger.js';
 
 // Custom error classes for different error types
@@ -240,6 +241,34 @@ export function errorHandler(
 
   // Log error
   logError(appError, req);
+
+  // Report 5xx errors to Sentry with redacted request context.
+  // 4xx errors are user errors (validation, auth, not-found) — not bugs, so
+  // they stay out of Sentry to avoid noise. The Sentry SDK is a no-op when
+  // not initialized (NODE_ENV !== 'production' or SENTRY_DSN unset), so this
+  // block is safe to run in every environment.
+  if (appError.statusCode >= 500) {
+    Sentry.withScope(scope => {
+      scope.setTag('route', `${req.method} ${req.originalUrl}`);
+      scope.setUser({
+        id: req.user?.id,
+        organizationId: req.user?.organizationId,
+      });
+      // Deliberately omit headers and body — they routinely carry secrets
+      // (Authorization, Cookie) or PII (passwords, payment fields).
+      scope.setContext('request', {
+        method: req.method,
+        path: req.path,
+        query: req.query,
+        requestId: req.headers['x-request-id'] || (req as any).requestId,
+        statusCode: appError.statusCode,
+        errorCode: appError.code,
+      });
+      // Pass the original error so Sentry preserves the real stack trace
+      // and message, not the wrapped/sanitized AppError.
+      Sentry.captureException(err);
+    });
+  }
 
   // Send response
   const response = formatErrorResponse(

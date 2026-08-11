@@ -28,17 +28,10 @@ export const STANDARD_PROPERTIES: Record<HubSpotObjectType, string[]> = {
     'dealname', 'amount', 'dealstage', 'pipeline', 'description',
     'closedate', 'createdate', 'dealtype', 'hs_deal_stage_probability',
   ],
-  notes: ['hs_note_body', 'hs_timestamp'],
-  calls: ['hs_call_title', 'hs_call_body', 'hs_timestamp', 'hs_call_duration', 'hs_call_direction'],
-  meetings: ['hs_meeting_title', 'hs_meeting_body', 'hs_meeting_start_time', 'hs_meeting_end_time', 'hs_meeting_outcome', 'hs_timestamp'],
-  emails: ['hs_email_subject', 'hs_email_text', 'hs_timestamp', 'hs_email_direction'],
-  tasks: ['hs_task_subject', 'hs_task_body', 'hs_timestamp', 'hs_task_status', 'hs_task_priority'],
 };
 
 /** Object types whose company association we resolve via the associations API. */
 const COMPANY_ASSOCIATED: HubSpotObjectType[] = ['deals', 'contacts'];
-/** Engagement types whose contact association we resolve via the associations API. */
-const CONTACT_ASSOCIATED: HubSpotObjectType[] = ['notes', 'calls', 'meetings', 'emails', 'tasks'];
 
 export interface ListPage {
   results: HubSpotRecord[];
@@ -136,7 +129,6 @@ export class HubSpotClient {
     const props = opts.properties && opts.properties.length ? opts.properties : STANDARD_PROPERTIES[object];
     params.set('properties', props.join(','));
     if (COMPANY_ASSOCIATED.includes(object)) params.set('associations', 'companies');
-    if (CONTACT_ASSOCIATED.includes(object)) params.set('associations', 'contacts');
     if (opts.after) params.set('after', opts.after);
     const res = await this.requestWithBackoff(`${BASE}/crm/v3/objects/${object}?${params.toString()}`);
     if (!res.ok) {

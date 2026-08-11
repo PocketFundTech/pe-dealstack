@@ -36,7 +36,10 @@ function routeAfterExtract(state: FinancialAgentStateType): string {
 }
 
 /** After validate: route based on status set by validate node */
-function routeAfterValidate(state: FinancialAgentStateType): string {
+export function routeAfterValidate(state: FinancialAgentStateType): string {
+  // Claude engine repairs inside extract (max 1 pass, spec 2026-07-11) —
+  // never route claude output into the GPT self-correct loop.
+  if (state.extractionSource === 'claude') return 'store';
   if (state.status === 'self_correcting') return 'self_correct';
   return 'store'; // 'storing' or anything else → store
 }

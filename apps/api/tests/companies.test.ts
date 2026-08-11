@@ -1,251 +1,315 @@
 /**
- * Companies API Endpoint Tests
+ * Companies API Endpoint Tests — exercises the REAL companiesRouter.
+ *
+ * Prior version of this file used the "mini-app" pattern: an inline
+ * express() app that reproduced route logic against a local mockCompanies
+ * array. That meant the actual handlers in apps/api/src/routes/companies.ts
+ * were never executed — bugs in real handlers (org scoping, supabase shape,
+ * Zod validation paths) would slip through.
+ *
+ * This file mounts the real companiesRouter and exercises it via supertest.
+ * Supabase + orgScope + logger are mocked; the control flow of the actual
+ * handlers runs.
+ *
+ * Mini-app fictions corrected:
+ *   - GET /api/companies "search" query param was a mini-app invention; the
+ *     real handler has no search support. Dropped those scenarios.
+ *   - DELETE returning 404 for unknown id was a mini-app invention; the
+ *     real handler always returns 204 (supabase delete is a no-op for an
+ *     id that doesn't match). Updated assertion accordingly.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import request from 'supertest';
 import express from 'express';
-import { z } from 'zod';
+import request from 'supertest';
 
-// Sample company data
-const mockCompanies = [
-  {
-    id: 'company-1',
-    name: 'Apex Logistics Corp',
-    industry: 'Supply Chain SaaS',
-    description: 'Leading supply chain management platform',
-    website: 'https://apexlogistics.example.com',
-    createdAt: '2024-01-15T10:00:00Z',
-  },
-  {
-    id: 'company-2',
-    name: 'MediCare Plus Inc',
-    industry: 'Healthcare Services',
-    description: 'Healthcare services provider',
-    website: 'https://medicareplus.example.com',
-    createdAt: '2024-01-20T10:00:00Z',
-  },
-];
+// ───── Mocks (MUST be declared before the dynamic import) ─────────
 
-// Create test app
-const createTestApp = () => {
+const mockSupabase = { from: vi.fn() };
+vi.mock('../src/supabase.js', () => ({ supabase: mockSupabase }));
+
+vi.mock('../src/utils/logger.js', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock('../src/middleware/orgScope.js', () => ({
+  getOrgId: () => 'org-A',
+}));
+
+// ───── Test app builder ──────────────────────────────────────────
+
+const buildApp = async () => {
+  const { default: companiesRouter } = await import('../src/routes/companies.js');
   const app = express();
   app.use(express.json());
-
-  // Mock auth middleware
-  app.use((req: any, res, next) => {
-    req.user = { id: 'test-user-id', email: 'test@example.com', role: 'ADMIN' };
+  app.use((req: any, _res, next) => {
+    req.user = {
+      id: 'test-auth-uuid',
+      organizationId: 'org-A',
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    };
     next();
   });
-
-  // GET /api/companies
-  app.get('/api/companies', async (req, res) => {
-    const { search } = req.query;
-
-    let filteredCompanies = [...mockCompanies];
-
-    if (search) {
-      const searchLower = (search as string).toLowerCase();
-      filteredCompanies = filteredCompanies.filter(
-        (c) =>
-          c.name.toLowerCase().includes(searchLower) ||
-          c.industry?.toLowerCase().includes(searchLower)
-      );
-    }
-
-    res.json(filteredCompanies);
-  });
-
-  // GET /api/companies/:id
-  app.get('/api/companies/:id', async (req, res) => {
-    const { id } = req.params;
-    const company = mockCompanies.find((c) => c.id === id);
-
-    if (!company) {
-      return res.status(404).json({ error: 'Company not found' });
-    }
-
-    res.json(company);
-  });
-
-  // POST /api/companies
-  const createCompanySchema = z.object({
-    name: z.string().min(1),
-    industry: z.string().optional(),
-    description: z.string().optional(),
-    website: z.string().url().optional(),
-  });
-
-  app.post('/api/companies', async (req, res) => {
-    try {
-      const data = createCompanySchema.parse(req.body);
-
-      const newCompany = {
-        id: 'new-company-id',
-        ...data,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      res.status(201).json(newCompany);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: 'Validation error', details: error.errors });
-      }
-      res.status(500).json({ error: 'Failed to create company' });
-    }
-  });
-
-  // PATCH /api/companies/:id
-  app.patch('/api/companies/:id', async (req, res) => {
-    const { id } = req.params;
-    const company = mockCompanies.find((c) => c.id === id);
-
-    if (!company) {
-      return res.status(404).json({ error: 'Company not found' });
-    }
-
-    const updatedCompany = { ...company, ...req.body, updatedAt: new Date().toISOString() };
-    res.json(updatedCompany);
-  });
-
-  // DELETE /api/companies/:id
-  app.delete('/api/companies/:id', async (req, res) => {
-    const { id } = req.params;
-    const company = mockCompanies.find((c) => c.id === id);
-
-    if (!company) {
-      return res.status(404).json({ error: 'Company not found' });
-    }
-
-    res.status(204).send();
-  });
-
+  app.use('/api/companies', companiesRouter);
   return app;
 };
 
-describe('Companies API Endpoints', () => {
-  let app: express.Express;
+// ───── Tests ─────────────────────────────────────────────────────
 
+describe('Real /api/companies handlers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    app = createTestApp();
+    mockSupabase.from.mockReset();
   });
 
+  // ── GET /api/companies ─────────────────────────────────────────
   describe('GET /api/companies', () => {
-    it('should return all companies', async () => {
-      const response = await request(app).get('/api/companies');
+    it('returns companies scoped to caller org', async () => {
+      const rows = [
+        {
+          id: 'company-1',
+          name: 'Apex Logistics Corp',
+          industry: 'Supply Chain SaaS',
+          organizationId: 'org-A',
+          createdAt: '2024-01-15T10:00:00Z',
+          deals: [],
+        },
+        {
+          id: 'company-2',
+          name: 'MediCare Plus Inc',
+          industry: 'Healthcare Services',
+          organizationId: 'org-A',
+          createdAt: '2024-01-20T10:00:00Z',
+          deals: [],
+        },
+      ];
+      // Chain: from('Company').select(...).eq('organizationId', orgId).order('name', ...)
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({ data: rows, error: null }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(200);
-      expect(Array.isArray(response.body)).toBe(true);
-      expect(response.body.length).toBe(2);
+      const app = await buildApp();
+      const res = await request(app).get('/api/companies');
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(2);
+      expect(res.body[0].name).toBe('Apex Logistics Corp');
     });
 
-    it('should search companies by name', async () => {
-      const response = await request(app).get('/api/companies?search=Apex');
+    it('returns 500 on supabase error', async () => {
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({ data: null, error: { message: 'db down' } }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(200);
-      expect(response.body.length).toBe(1);
-      expect(response.body[0].name).toBe('Apex Logistics Corp');
-    });
-
-    it('should search companies by industry', async () => {
-      const response = await request(app).get('/api/companies?search=Healthcare');
-
-      expect(response.status).toBe(200);
-      expect(response.body.length).toBe(1);
-      expect(response.body[0].industry).toBe('Healthcare Services');
+      const app = await buildApp();
+      const res = await request(app).get('/api/companies');
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to fetch companies');
     });
   });
 
+  // ── GET /api/companies/:id ─────────────────────────────────────
   describe('GET /api/companies/:id', () => {
-    it('should return a single company by ID', async () => {
-      const response = await request(app).get('/api/companies/company-1');
+    it('returns a single company scoped to caller org', async () => {
+      const company = {
+        id: 'company-1',
+        name: 'Apex Logistics Corp',
+        organizationId: 'org-A',
+        deals: [],
+      };
+      // Chain: from('Company').select(...).eq('id', id).eq('organizationId', orgId).single()
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              single: async () => ({ data: company, error: null }),
+            }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(200);
-      expect(response.body.name).toBe('Apex Logistics Corp');
+      const app = await buildApp();
+      const res = await request(app).get('/api/companies/company-1');
+
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Apex Logistics Corp');
     });
 
-    it('should return 404 for non-existent company', async () => {
-      const response = await request(app).get('/api/companies/non-existent');
+    it('returns 404 when company is not in caller org (PGRST116 → 404)', async () => {
+      // Real handler maps the PGRST116 "no rows" error to a 404. The org check
+      // is enforced by .eq('organizationId', orgId) — a cross-org id returns
+      // no rows and surfaces as 404 (not 403 — prevents enumeration).
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              single: async () => ({ data: null, error: { code: 'PGRST116' } }),
+            }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(404);
-      expect(response.body.error).toBe('Company not found');
+      const app = await buildApp();
+      const res = await request(app).get('/api/companies/non-existent');
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Company not found');
     });
   });
 
+  // ── POST /api/companies ────────────────────────────────────────
   describe('POST /api/companies', () => {
-    it('should create a new company with valid data', async () => {
-      const newCompany = {
+    it('creates a new company with organizationId injected', async () => {
+      const inserted = {
+        id: 'new-company-id',
         name: 'New Tech Corp',
         industry: 'Technology',
         description: 'A new tech company',
         website: 'https://newtech.example.com',
+        organizationId: 'org-A',
+        createdAt: '2026-05-18T00:00:00Z',
       };
+      mockSupabase.from.mockReturnValue({
+        insert: () => ({
+          select: () => ({
+            single: async () => ({ data: inserted, error: null }),
+          }),
+        }),
+      });
 
-      const response = await request(app).post('/api/companies').send(newCompany);
-
-      expect(response.status).toBe(201);
-      expect(response.body.name).toBe('New Tech Corp');
-      expect(response.body.id).toBeDefined();
-    });
-
-    it('should return 400 when name is missing', async () => {
-      const invalidCompany = {
+      const app = await buildApp();
+      const res = await request(app).post('/api/companies').send({
+        name: 'New Tech Corp',
         industry: 'Technology',
-      };
+        description: 'A new tech company',
+        website: 'https://newtech.example.com',
+      });
 
-      const response = await request(app).post('/api/companies').send(invalidCompany);
-
-      expect(response.status).toBe(400);
+      expect(res.status).toBe(201);
+      expect(res.body.name).toBe('New Tech Corp');
+      expect(res.body.organizationId).toBe('org-A');
     });
 
-    it('should validate website URL format', async () => {
-      const invalidCompany = {
-        name: 'Test Company',
-        website: 'not-a-valid-url',
-      };
+    it('returns 400 when name is missing (Zod validation)', async () => {
+      // Validation fires before any supabase call.
+      const app = await buildApp();
+      const res = await request(app)
+        .post('/api/companies')
+        .send({ industry: 'Technology' });
 
-      const response = await request(app).post('/api/companies').send(invalidCompany);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation error');
+    });
 
-      expect(response.status).toBe(400);
+    it('returns 400 when website is not a valid URL (Zod validation)', async () => {
+      const app = await buildApp();
+      const res = await request(app)
+        .post('/api/companies')
+        .send({ name: 'Test', website: 'not-a-valid-url' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation error');
     });
   });
 
+  // ── PATCH /api/companies/:id ───────────────────────────────────
   describe('PATCH /api/companies/:id', () => {
-    it('should update an existing company', async () => {
-      const updates = {
+    it('updates a company scoped to caller org', async () => {
+      const updated = {
+        id: 'company-1',
+        name: 'Apex Logistics Corp',
         description: 'Updated description',
+        organizationId: 'org-A',
+        deals: [],
       };
+      // Chain: from('Company').update(...).eq('id', id).eq('organizationId', orgId).select(...).single()
+      mockSupabase.from.mockReturnValue({
+        update: () => ({
+          eq: () => ({
+            eq: () => ({
+              select: () => ({
+                single: async () => ({ data: updated, error: null }),
+              }),
+            }),
+          }),
+        }),
+      });
 
-      const response = await request(app)
+      const app = await buildApp();
+      const res = await request(app)
         .patch('/api/companies/company-1')
-        .send(updates);
+        .send({ description: 'Updated description' });
 
-      expect(response.status).toBe(200);
-      expect(response.body.description).toBe('Updated description');
+      expect(res.status).toBe(200);
+      expect(res.body.description).toBe('Updated description');
     });
 
-    it('should return 404 for non-existent company', async () => {
-      const response = await request(app)
+    it('returns 404 when company is not in caller org (PGRST116 → 404)', async () => {
+      mockSupabase.from.mockReturnValue({
+        update: () => ({
+          eq: () => ({
+            eq: () => ({
+              select: () => ({
+                single: async () => ({ data: null, error: { code: 'PGRST116' } }),
+              }),
+            }),
+          }),
+        }),
+      });
+
+      const app = await buildApp();
+      const res = await request(app)
         .patch('/api/companies/non-existent')
         .send({ name: 'Updated' });
 
-      expect(response.status).toBe(404);
+      expect(res.status).toBe(404);
     });
   });
 
+  // ── DELETE /api/companies/:id ──────────────────────────────────
   describe('DELETE /api/companies/:id', () => {
-    it('should delete an existing company', async () => {
-      const response = await request(app).delete('/api/companies/company-1');
+    it('returns 204 on successful delete', async () => {
+      // The real handler does NOT 404 on unknown id — supabase delete with
+      // no matching rows is a no-op that returns success. The org filter
+      // protects cross-org access (a non-org-A id simply matches nothing).
+      mockSupabase.from.mockReturnValue({
+        delete: () => ({
+          eq: () => ({
+            eq: () => Promise.resolve({ error: null }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(204);
+      const app = await buildApp();
+      const res = await request(app).delete('/api/companies/company-1');
+
+      expect(res.status).toBe(204);
     });
 
-    it('should return 404 for non-existent company', async () => {
-      const response = await request(app).delete('/api/companies/non-existent');
+    it('returns 500 on supabase error', async () => {
+      mockSupabase.from.mockReturnValue({
+        delete: () => ({
+          eq: () => ({
+            eq: () => Promise.resolve({ error: { message: 'fk violation' } }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(404);
+      const app = await buildApp();
+      const res = await request(app).delete('/api/companies/company-1');
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to delete company');
     });
   });
 });

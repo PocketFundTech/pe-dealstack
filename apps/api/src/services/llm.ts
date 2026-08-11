@@ -18,6 +18,7 @@ import {
 } from '../utils/aiModels.js';
 import { recordUsageEvent } from './usage/trackedLLM.js';
 import { enforceUserGate, UserBlockedError } from './usage/enforcement.js';
+import { withCircuitBreaker } from './aiCircuitBreaker.js';
 import type { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 
 export { UserBlockedError } from './usage/enforcement.js';
@@ -307,7 +308,7 @@ function trackModel(model: BaseChatModel, operation: string, modelName: string):
   const originalInvoke = model.invoke.bind(model);
   model.invoke = async (input: any, options?: any) => {
     await enforceUserGate(operation, modelName, provider);
-    return originalInvoke(input, options);
+    return withCircuitBreaker(provider, () => originalInvoke(input, options));
   };
 
   return model;
@@ -612,6 +613,7 @@ export async function invokeStructured<T extends z.ZodTypeAny>(
   // getExtractionModel would hardcode 0.1, which is wrong for emails / meeting
   // briefs / signal analysis where higher variance is desirable.
   const primaryName = MODELS[config.chatProvider].extraction;
+  const primaryProvider = providerFor(config.chatProvider);
   // method: 'functionCalling' avoids OpenAI's strict json_schema response_format,
   // which Claude (via OpenRouter or direct) historically rejected. Tool use is
   // supported by OpenAI, Anthropic, and Gemini, so one method covers all providers.
@@ -678,10 +680,16 @@ export async function invokeStructured<T extends z.ZodTypeAny>(
 
   // Try primary first.
   try {
-    const primaryCallbacks = [makeUsageHandler(label, primaryName, providerFor(config.chatProvider))];
+    const primaryCallbacks = [makeUsageHandler(label, primaryName, primaryProvider)];
     const primary = createModel(config.chatProvider, primaryName, temperature, maxTokens, primaryCallbacks);
     const tracked = trackModel(primary, label, primaryName);
-    return await tracked.withStructuredOutput(schema, structuredOpts).invoke(messages, invokeOpts);
+    // withStructuredOutput().invoke() bypasses the patched .invoke() on the
+    // base model, so wrap the structured chain in the breaker explicitly.
+    // (Fallback-chain attempts below run unwrapped — they are last-resort,
+    // one-shot tries across providers.)
+    return await withCircuitBreaker(primaryProvider, () =>
+      tracked.withStructuredOutput(schema, structuredOpts).invoke(messages, invokeOpts),
+    );
   } catch (primaryErr: any) {
     let lastErr: any = primaryErr;
     for (const entry of fallbackChain) {

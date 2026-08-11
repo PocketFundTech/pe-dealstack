@@ -121,11 +121,23 @@ router.patch('/:id/sections/:sectionId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-11: bind sectionId to template. Without this, a caller could pass
+    // their own templateId (passes org gate) plus another firm's sectionId
+    // and overwrite that section — e.g. inject a malicious aiPrompt that
+    // runs the next time the target firm regenerates the template.
+    const { data: existing } = await supabase
+      .from('MemoTemplateSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('templateId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { data: section, error } = await supabase
       .from('MemoTemplateSection')
       .update(validation.data)
       .eq('id', sectionId)
-      .eq('templateId', id) // SECURITY: bind the section to the verified template
+      .eq('templateId', id)
       .select()
       .single();
 
@@ -148,11 +160,21 @@ router.delete('/:id/sections/:sectionId', async (req, res) => {
     const { data: tpl } = await supabase.from('MemoTemplate').select('id').eq('id', id).eq('organizationId', orgId).single();
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
+    // F-12: bind sectionId to template. Without this, a caller could delete
+    // a section from any other org's template.
+    const { data: existing } = await supabase
+      .from('MemoTemplateSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('templateId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { error } = await supabase
       .from('MemoTemplateSection')
       .delete()
       .eq('id', sectionId)
-      .eq('templateId', id); // SECURITY: bind the section to the verified template
+      .eq('templateId', id);
 
     if (error) throw error;
 
@@ -179,14 +201,25 @@ router.post('/:id/sections/reorder', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-13: bind each sectionId to this template. Without this, a caller
+    // could reorder any template's sections. Pre-fetch valid IDs and
+    // intersect; additionally chain .eq('templateId', id) on each update.
+    const { data: validSections } = await supabase
+      .from('MemoTemplateSection')
+      .select('id')
+      .eq('templateId', id);
+    const validIds = new Set((validSections || []).map((s: any) => s.id));
+
     // Update each section's sortOrder
-    const updates = validation.data.sections.map(({ id: sectionId, sortOrder }) =>
-      supabase
-        .from('MemoTemplateSection')
-        .update({ sortOrder })
-        .eq('id', sectionId)
-        .eq('templateId', id) // SECURITY: only reorder sections of the verified template
-    );
+    const updates = validation.data.sections
+      .filter(({ id: sectionId }) => validIds.has(sectionId))
+      .map(({ id: sectionId, sortOrder }) =>
+        supabase
+          .from('MemoTemplateSection')
+          .update({ sortOrder })
+          .eq('id', sectionId)
+          .eq('templateId', id)
+      );
 
     await Promise.all(updates);
 

@@ -1,7 +1,10 @@
 /**
  * Extract Node — LangGraph node for the financial extraction agent.
  *
- * Routes the file to the best extraction layer:
+ * EXTRACTION_ENGINE=claude routes to the Claude structured-output engine
+ * (services/extraction/claudeEngine.ts) — see the branch near the top of
+ * the try block below. When the flag is unset (default), routes the file
+ * to the legacy extraction layer:
  *   Excel → xlsx parser → CSV text → AI classifier (MODEL_CLASSIFICATION)
  *   PDF Layer 1 → LlamaParse structured markdown (if configured)
  *   PDF Layer 2 → pdf-parse text → AI classifier (MODEL_CLASSIFICATION)
@@ -21,9 +24,17 @@ import {
 } from '../../../excelFinancialExtractor.js';
 import { parseWithLlama, isLlamaParseEnabled } from '../../../llamaParse.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { ExtractionSource, AgentStep } from '../state.js';
 import { CHUNK_THRESHOLD, MAX_CHUNK_SIZE, MAX_CHUNKS, MAX_TEXT_LENGTH, MIN_TEXT_LENGTH } from '../config.js';
+import { getModelConfig } from '../../../ai/models.js';
+import {
+  getCachedExtraction,
+  putCachedExtraction,
+  hashContent,
+  type CachedExtractionResult,
+} from '../extractionCache.js';
 import { mapWithConcurrencyLimit } from '../../../../utils/limitConcurrency.js';
 
 /** Bounded fan-out for per-sheet classifyFinancials() calls. Three is the
@@ -52,7 +63,7 @@ export async function extractNode(
   state: FinancialAgentStateType,
 ): Promise<Partial<FinancialAgentStateType>> {
   const steps: AgentStep[] = [];
-  const { fileBuffer, fileName, fileType } = state;
+  const { fileBuffer, fileName, fileType, forceExtraction } = state;
 
   if (!fileBuffer || fileBuffer.length === 0) {
     return {
@@ -64,7 +75,132 @@ export async function extractNode(
 
   steps.push(step('extract', `Received ${fileName} (${fileType}, ${(fileBuffer.length / 1024).toFixed(0)}KB)`));
 
+  // ── Cache check (Task 4.9) ──────────────────────────────────
+  // Hash the file buffer so the same bytes — re-uploaded as a new document
+  // or re-extracted via the route — hit the cache regardless of which
+  // extraction layer (Excel/LlamaParse/pdf-parse/Vision) succeeded.
+  const contentHash = hashContent(fileBuffer);
+  // Single source of truth for the engine flag — read once so the cache-key
+  // dimension below and the branch condition later can never drift apart
+  // (two independent reads of the same env var previously re-opened the
+  // exact cross-engine cache-poisoning gap this was written to close).
+  const useClaudeEngine = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude';
+  // Cache key includes the active engine so a document cached by one engine
+  // is never silently served to the other — critical for both the rollout
+  // (flag ON must not skip the new engine due to a stale legacy cache hit)
+  // and rollback (flag OFF must not keep serving claude-flavored cached
+  // state). extractionMode's own doc comment currently describes a fast/deep
+  // split reservation; this field is now overloaded to also carry the engine
+  // dimension — a future fast/deep split will need to compose with this.
+  const engineMode = useClaudeEngine ? 'claude' : 'default';
+  // Also key the cache on the resolved extraction MODEL (not just engine) —
+  // otherwise the documented one-line rollback (AI_EXTRACTION_MODEL override,
+  // e.g. fable-5 → opus-4-8) keeps serving results cached under the old
+  // model for up to the cache's 30-day TTL. Legacy path keeps the existing
+  // default ('tier1') — unaffected, since modelTier is only overridden here
+  // when the claude engine is active.
+  const modelTier = useClaudeEngine ? getModelConfig('extraction').model : undefined;
+
+  if (!forceExtraction) {
+    const cached = await getCachedExtraction({ contentHash, extractionMode: engineMode, modelTier });
+    if (cached) {
+      steps.push(step('extract', `Cache hit — skipping LLM extraction (saved ~$0.75-$1.50)`));
+      return {
+        rawText: cached.rawText,
+        extractionSource: cached.extractionSource,
+        classification: cached.classification,
+        statements: cached.statements,
+        overallConfidence: cached.overallConfidence,
+        warnings: cached.warnings,
+        fromCache: true,
+        status: 'validating',
+        steps,
+      };
+    }
+  } else {
+    steps.push(step('extract', 'forceExtraction=true — bypassing extraction cache'));
+  }
+
+  /** Persist a successful extraction to the cache (best-effort). */
+  const cacheResult = (payload: CachedExtractionResult): void => {
+    if (!payload.classification || payload.statements.length === 0) return;
+    void putCachedExtraction({ contentHash, extractionMode: engineMode, modelTier }, payload).catch(() => {
+      // Errors already logged inside putCachedExtraction; swallow here.
+    });
+  };
+
   try {
+    // ── Claude structured-output engine (Phase 1, EXTRACTION_ENGINE=claude) ──
+    if (useClaudeEngine) {
+      steps.push(step('extract', 'EXTRACTION_ENGINE=claude — using structured-output engine'));
+      const { extractWithClaude } = await import('../../../extraction/claudeEngine.js');
+      const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType });
+
+      if (!engineResult) {
+        return {
+          status: 'failed',
+          error: 'Claude engine could not extract this document (upload failed or the request was declined)',
+          steps: [...steps, step('extract', 'Claude engine returned no result')],
+        };
+      }
+
+      if (engineResult.classification.statements.length === 0) {
+        // Matches the legacy convention (see the Excel/Vision "no financial
+        // data found" paths below): a genuinely empty extraction is a
+        // successful, completed run with zero data — not a pipeline failure.
+        // Deliberately NOT cached: `cacheResult`'s own guard would no-op this
+        // anyway (empty statements), and that's intentional, not an oversight
+        // — an empty claude result isn't reliably distinguishable from a soft
+        // failure (e.g. a scanned page the model couldn't read), so caching
+        // a negative for the 30-day TTL risks permanently poisoning a
+        // document that would extract fine on retry.
+        return {
+          rawText: engineResult.rawText,
+          extractionSource: 'claude',
+          classification: engineResult.classification,
+          statements: [],
+          overallConfidence: 0,
+          warnings: engineResult.classification.warnings.length > 0
+            ? engineResult.classification.warnings
+            : ['No financial data found by the claude engine'],
+          fromCache: false,
+          status: 'validating',
+          steps: [...steps, step('extract', 'Claude engine found no financial statements in the document')],
+        };
+      }
+
+      const { classification, rawText: engineRawText, repairUsed } = engineResult;
+      steps.push(
+        step(
+          'extract',
+          `Claude engine extracted ${classification.statements.length} statement type(s)` +
+            (repairUsed ? ' (repair pass used)' : ''),
+          `tokens in/out: ${engineResult.usage.inputTokens}/${engineResult.usage.outputTokens}`,
+        ),
+      );
+
+      cacheResult({
+        rawText: engineRawText,
+        extractionSource: 'claude',
+        classification,
+        statements: classification.statements,
+        overallConfidence: classification.overallConfidence,
+        warnings: classification.warnings,
+      });
+
+      return {
+        rawText: engineRawText,
+        extractionSource: 'claude',
+        classification,
+        statements: classification.statements,
+        overallConfidence: classification.overallConfidence,
+        warnings: classification.warnings,
+        fromCache: false,
+        status: 'validating',
+        steps,
+      };
+    }
+
     // ── Excel Path ─────────────────────────────────────────────
     if (fileType === 'excel' || isExcelFile(null, fileName)) {
       steps.push(step('extract', 'Detected Excel file — parsing with xlsx'));
@@ -200,6 +336,15 @@ export async function extractNode(
         `Merged ${validResults.length} sheet result${validResults.length === 1 ? '' : 's'}: ${stmtTypes} (${totalPeriods} periods, confidence ${classification.overallConfidence}%)`,
       ));
 
+      cacheResult({
+        rawText: excelText,
+        extractionSource: 'gpt4o',
+        classification,
+        statements: classification.statements,
+        overallConfidence: classification.overallConfidence,
+        warnings: classification.warnings,
+      });
+
       return {
         rawText: excelText,
         extractionSource: 'gpt4o',
@@ -207,6 +352,7 @@ export async function extractNode(
         statements: classification.statements,
         overallConfidence: classification.overallConfidence,
         warnings: classification.warnings,
+        fromCache: false,
         status: 'validating',
         steps,
       };
@@ -251,6 +397,15 @@ export async function extractNode(
             const totalPeriods = llamaClassification.statements.reduce((sum, s) => sum + s.periods.length, 0);
             steps.push(step('extract', `Found: ${stmtTypes} (${totalPeriods} periods, confidence ${llamaClassification.overallConfidence}%)`));
 
+            cacheResult({
+              rawText: llamaResult.text,
+              extractionSource: 'gpt4o',
+              classification: llamaClassification,
+              statements: llamaClassification.statements,
+              overallConfidence: llamaClassification.overallConfidence,
+              warnings: llamaClassification.warnings,
+            });
+
             return {
               rawText: llamaResult.text,
               extractionSource: 'gpt4o',
@@ -258,6 +413,7 @@ export async function extractNode(
               statements: llamaClassification.statements,
               overallConfidence: llamaClassification.overallConfidence,
               warnings: llamaClassification.warnings,
+              fromCache: false,
               status: 'validating',
               steps,
             };
@@ -317,6 +473,15 @@ export async function extractNode(
         const totalPeriods = classification.statements.reduce((sum, s) => sum + s.periods.length, 0);
         steps.push(step('extract', `Found: ${stmtTypes} (${totalPeriods} periods, confidence ${classification.overallConfidence}%)`));
 
+        cacheResult({
+          rawText: pdfText,
+          extractionSource: 'gpt4o',
+          classification,
+          statements: classification.statements,
+          overallConfidence: classification.overallConfidence,
+          warnings: classification.warnings,
+        });
+
         return {
           rawText: pdfText,
           extractionSource: 'gpt4o',
@@ -324,6 +489,7 @@ export async function extractNode(
           statements: classification.statements,
           overallConfidence: classification.overallConfidence,
           warnings: classification.warnings,
+          fromCache: false,
           status: 'validating',
           steps,
         };
@@ -359,6 +525,15 @@ export async function extractNode(
     const totalPeriods = visionClassification.statements.reduce((sum, s) => sum + s.periods.length, 0);
     steps.push(step('extract', `Vision found: ${stmtTypes} (${totalPeriods} periods, confidence ${visionClassification.overallConfidence}%)`));
 
+    cacheResult({
+      rawText: '',
+      extractionSource: 'vision',
+      classification: visionClassification,
+      statements: visionClassification.statements,
+      overallConfidence: visionClassification.overallConfidence,
+      warnings: visionClassification.warnings,
+    });
+
     return {
       rawText: '',
       extractionSource: 'vision',
@@ -366,11 +541,13 @@ export async function extractNode(
       statements: visionClassification.statements,
       overallConfidence: visionClassification.overallConfidence,
       warnings: visionClassification.warnings,
+      fromCache: false,
       status: 'validating',
       steps,
     };
   } catch (err) {
     log.error('Extract node: unexpected error', err);
+    captureAgentError(err, { agent: 'financialAgent', node: 'extract' });
     return {
       status: 'failed',
       error: `Extraction failed: ${err instanceof Error ? err.message : String(err)}`,

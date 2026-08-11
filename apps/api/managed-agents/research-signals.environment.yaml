@@ -1,0 +1,6 @@
+name: research-signals-env
+description: Shared cloud environment for the Firm Research and Signal Monitor Managed Agents. Neither agent needs filesystem/shell access — only web_search, web_fetch, and the custom DB tools declared on each agent.
+config:
+  type: cloud
+  networking:
+    type: unrestricted

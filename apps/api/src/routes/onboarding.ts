@@ -2,9 +2,12 @@ import { Router, Request, Response } from 'express';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { runFirmResearch, runDeepResearch } from '../services/agents/firmResearchAgent/index.js';
+import { markStaleDeepResearchAsFailed } from '../services/agents/firmResearchAgent/deepResearchProgress.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { extractNameFromDomain } from '../utils/urlHelpers.js';
 import { runWithUsageContext, resolveInternalUserId } from '../middleware/usageContext.js';
+import { runFirmResearchViaManagedAgents } from '../services/managedAgents/firmResearchOrchestrator.js';
 import firmProfileRouter from './onboarding-firm.js';
 
 const router = Router();
@@ -180,7 +183,7 @@ router.get('/status', async (req: Request, res: Response) => {
 
     res.json(status);
   } catch (error: any) {
-    console.error('[Onboarding] Failed to get status:', error.message);
+    log.error('Onboarding: failed to get status', { error: error.message });
     res.json(DEFAULT_STATUS);
   }
 });
@@ -223,7 +226,7 @@ router.post('/complete-step', async (req: Request, res: Response) => {
 
     res.json({ success: true, status });
   } catch (error: any) {
-    console.error('[Onboarding] Failed to complete step:', error.message);
+    log.error('Onboarding: failed to complete step', { error: error.message });
     res.status(500).json({ error: 'Failed to update onboarding status' });
   }
 });
@@ -249,7 +252,7 @@ router.post('/welcome-shown', async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('[Onboarding] Failed to mark welcome shown:', error.message);
+    log.error('Onboarding: failed to mark welcome shown', { error: error.message });
     res.status(500).json({ error: 'Failed to update' });
   }
 });
@@ -275,7 +278,7 @@ router.post('/dismiss', async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('[Onboarding] Failed to dismiss:', error.message);
+    log.error('Onboarding: failed to dismiss', { error: error.message });
     res.status(500).json({ error: 'Failed to update' });
   }
 });
@@ -395,29 +398,40 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
 
     res.json(result);
 
-    // Fire Phase 2 deep research in background (not awaited).
-    // We wrap in runWithUsageContext so every LLM call inside the background
-    // task is attributed to the correct user/org — AsyncLocalStorage is lost
-    // once the HTTP response has been sent.
+    // Fire deep research in background (not awaited). RESEARCH_ENGINE picks
+    // the legacy LangGraph deep pass or the Managed Agents flow; either way
+    // this never blocks the HTTP response.
     if (result.success && result.firmProfile && (websiteUrl || linkedinUrl)) {
-      // usageContextMiddleware never ran for this background task, so resolve
-      // the auth UUID to the internal User.id here — UsageEvent.userId is an FK
-      // to User.id and inserting the raw auth UUID fails with FK 23503.
-      const internalUserId = await resolveInternalUserId(userId);
-      void runWithUsageContext(
-        { userId: internalUserId ?? userId, organizationId: orgId, source: 'background' },
-        async () => {
-          await runDeepResearch({
-            phase1Profile: result.firmProfile!,
-            phase1PersonProfile: result.personProfile,
-            websiteUrl: websiteUrl || '',
-            linkedinUrl: linkedinUrl || '',
-            firmName,
-            userId,
-            organizationId: orgId,
-          }).catch(err => log.error('Deep research background task failed', { error: err.message }));
-        },
-      );
+      if (process.env.RESEARCH_ENGINE === 'managed-agents') {
+        void runFirmResearchViaManagedAgents({
+          organizationId: orgId,
+          firmName,
+          websiteUrl: websiteUrl || '',
+          linkedinUrl: linkedinUrl || '',
+        }).catch((err) => {
+          log.error('Managed Agents firm research failed', { error: err.message });
+          captureAgentError(err, { context: 'runFirmResearchViaManagedAgents:background' });
+        });
+      } else {
+        // usageContextMiddleware never ran for this background task, so resolve
+        // the auth UUID to the internal User.id here — UsageEvent.userId is an FK
+        // to User.id and inserting the raw auth UUID fails with FK 23503.
+        const internalUserId = await resolveInternalUserId(userId);
+        void runWithUsageContext(
+          { userId: internalUserId ?? userId, organizationId: orgId, source: 'background' },
+          async () => {
+            await runDeepResearch({
+              phase1Profile: result.firmProfile!,
+              phase1PersonProfile: result.personProfile,
+              websiteUrl: websiteUrl || '',
+              linkedinUrl: linkedinUrl || '',
+              firmName,
+              userId,
+              organizationId: orgId,
+            }).catch(err => log.error('Deep research background task failed', { error: err.message }));
+          },
+        );
+      }
     }
   } catch (error: any) {
     log.error('Firm enrichment endpoint failed', { error: error.message, stack: error.stack });
@@ -452,7 +466,24 @@ router.get('/research-status', async (req: Request, res: Response) => {
       .single();
 
     const settings = (org?.settings || {}) as Record<string, any>;
-    const deepResearch = settings.deepResearch;
+
+    if (process.env.RESEARCH_ENGINE === 'managed-agents') {
+      if (!settings.researchStatus) {
+        return res.json({ phase: 1, status: 'complete', newInsightsCount: 0 });
+      }
+      return res.json({
+        phase: 2,
+        status: settings.researchStatus,
+        newInsightsCount: 0,
+        error: settings.researchStatus === 'failed' ? settings.researchError : undefined,
+      });
+    }
+
+    // Self-heal stale 'running' rows: if the background task was killed
+    // mid-flight by the Vercel serverless timeout, the status is stuck on
+    // 'running' forever. Treat anything older than 5 minutes as failed so the
+    // frontend stops polling. Persists the change back to the org row.
+    const deepResearch = await markStaleDeepResearchAsFailed(orgId, settings);
 
     if (!deepResearch) {
       return res.json({ phase: 1, status: 'complete', newInsightsCount: 0 });
@@ -463,6 +494,7 @@ router.get('/research-status', async (req: Request, res: Response) => {
       status: deepResearch.status,
       newInsightsCount: deepResearch.insightsFound || 0,
       completedAt: deepResearch.completedAt || null,
+      error: deepResearch.status === 'failed' ? deepResearch.error : undefined,
     });
   } catch (error: any) {
     log.error('Research status check failed', { error: error.message });

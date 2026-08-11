@@ -143,10 +143,15 @@ export async function optionalAuthMiddleware(
 
 // Paths that bypass org-level MFA enforcement so users can still enroll
 // their factor, manage sessions, and read their own org/user state.
-// These are checked by `req.path.startsWith(prefix)`.
-const MFA_BYPASS_PATH_PREFIXES: string[] = [
+// The /auth subtree is a prefix bypass (login, enrollment, session routes all
+// live under it); the org/user self-read endpoints are EXACT matches only —
+// a bare startsWith() would also bypass /api/organizations/me-extra or any
+// future leaf under /api/organizations/me/*, silently widening the bypass.
+const MFA_BYPASS_SUBTREES: string[] = [
   '/auth/',           // login/logout/MFA enrollment
   '/api/auth/',
+];
+const MFA_BYPASS_EXACT: string[] = [
   '/organizations/me',
   '/api/organizations/me',
   '/users/me',
@@ -191,7 +196,12 @@ export const enforceOrgMfaMiddleware = async (
     // middleware is mounted in the Express tree (req.path strips the mount
     // prefix; originalUrl preserves the full request path). Strip query string.
     const fullPath = (req.originalUrl || req.url || '').split('?')[0] || '';
-    if (MFA_BYPASS_PATH_PREFIXES.some((p) => fullPath.startsWith(p))) {
+    // Trailing-slash normalization so /api/users/me/ still exact-matches.
+    const normalizedPath = fullPath.replace(/\/+$/, '') || '/';
+    if (
+      MFA_BYPASS_SUBTREES.some((p) => fullPath.startsWith(p)) ||
+      MFA_BYPASS_EXACT.includes(normalizedPath)
+    ) {
       next();
       return;
     }

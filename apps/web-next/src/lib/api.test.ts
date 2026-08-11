@@ -103,4 +103,60 @@ describe("api wrapper", () => {
     const result = await api.delete<undefined>("/deals/d1");
     expect(result).toBeUndefined();
   });
+
+  it("api.stream parses SSE data lines and calls onEvent for each", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"tool_start","tool":"search_documents"}\n\n'));
+        controller.enqueue(encoder.encode('data: {"type":"text_delta","text":"Hi"}\n\n'));
+        controller.enqueue(encoder.encode('data: {"type":"done","response":"Hi"}\n\n'));
+        controller.close();
+      },
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    ) as unknown as typeof fetch;
+
+    const events: unknown[] = [];
+    await api.stream("/deals/d1/chat", { message: "hi" }, (e) => events.push(e));
+
+    expect(events).toEqual([
+      { type: "tool_start", tool: "search_documents" },
+      { type: "text_delta", text: "Hi" },
+      { type: "done", response: "Hi" },
+    ]);
+  });
+
+  it("api.stream handles an SSE frame split across two chunks", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"text_'));
+        controller.enqueue(encoder.encode('delta","text":"ok"}\n\n'));
+        controller.close();
+      },
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const events: unknown[] = [];
+    await api.stream("/deals/d1/chat", { message: "hi" }, (e) => events.push(e));
+
+    expect(events).toEqual([{ type: "text_delta", text: "ok" }]);
+  });
+
+  it("api.stream throws ApiError before reading the body when the response is non-OK", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    await expect(api.stream("/deals/d1/chat", { message: "hi" }, () => {})).rejects.toThrow("boom");
+  });
+
+  it("api.stream throws NotFoundError on 404, same contract as api.get/post", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response("", { status: 404 })) as unknown as typeof fetch;
+    await expect(api.stream("/deals/d1/chat", { message: "hi" }, () => {})).rejects.toBeInstanceOf(NotFoundError);
+  });
 });

@@ -76,11 +76,35 @@ const schemaMap: Record<string, z.ZodObject<any>> = {
 };
 
 /**
+ * Common line-item name aliases → canonical name. Exported so other
+ * extraction engines (e.g. the Claude structured-output engine in
+ * services/extraction/) can dedupe against the same canonical set without
+ * maintaining a second copy that could drift out of sync.
+ */
+export const LINE_ITEM_ALIASES: Record<string, string> = {
+  total_revenue: 'revenue',
+  net_revenue: 'revenue',
+  net_sales: 'revenue',
+  sales: 'revenue',
+  operating_income: 'ebit',
+  operating_profit: 'ebit',
+  cost_of_revenue: 'cogs',
+  cost_of_sales: 'cogs',
+  cost_of_goods: 'cogs',
+  selling_general_admin: 'sga',
+  research_development: 'rd',
+  depreciation_amortization: 'da',
+  total_debt: 'long_term_debt',
+  shareholders_equity: 'total_equity',
+  stockholders_equity: 'total_equity',
+};
+
+/**
  * Validate and normalize line items for a given statement type.
  * Uses .passthrough() so unknown keys are kept (GPT-4o may return extras)
  * but known keys are type-checked.
  *
- * Also normalizes common aliases:
+ * Also normalizes common aliases (see LINE_ITEM_ALIASES):
  * - "total_revenue" → "revenue"
  * - "net_revenue" → "revenue"
  * - "operating_income" → "ebit"
@@ -93,23 +117,7 @@ export function validateLineItems(
   const warnings: string[] = [];
 
   // Normalize common aliases before validation
-  const aliases: Record<string, string> = {
-    total_revenue: 'revenue',
-    net_revenue: 'revenue',
-    net_sales: 'revenue',
-    sales: 'revenue',
-    operating_income: 'ebit',
-    operating_profit: 'ebit',
-    cost_of_revenue: 'cogs',
-    cost_of_sales: 'cogs',
-    cost_of_goods: 'cogs',
-    selling_general_admin: 'sga',
-    research_development: 'rd',
-    depreciation_amortization: 'da',
-    total_debt: 'long_term_debt',
-    shareholders_equity: 'total_equity',
-    stockholders_equity: 'total_equity',
-  };
+  const aliases = LINE_ITEM_ALIASES;
 
   const normalized = { ...lineItems };
   for (const [alias, canonical] of Object.entries(aliases)) {

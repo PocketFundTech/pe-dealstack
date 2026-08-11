@@ -1,14 +1,23 @@
 // ─── list_documents tool ─────────────────────────────────────────
 // List all documents uploaded to the deal with file/AI status.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+export const inputSchema = z.object({});
+
 export function makeListDocumentsTool(dealId: string, _orgId: string) {
-  return tool(
-    async () => {
+  return {
+    type: 'custom' as const,
+    name: 'list_documents',
+    description: 'List all documents uploaded to this deal with file details and AI analysis status.',
+    input_schema: { type: 'object', properties: {} },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async () => {
       try {
         const { data: docs } = await supabase
           .from('Document')
@@ -31,10 +40,5 @@ export function makeListDocumentsTool(dealId: string, _orgId: string) {
         return 'Error fetching documents.';
       }
     },
-    {
-      name: 'list_documents',
-      description: 'List all documents uploaded to this deal with file details and AI analysis status.',
-      schema: z.object({}),
-    }
-  );
+  };
 }

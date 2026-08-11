@@ -22,6 +22,7 @@ import {
   DealViewers,
   FinancialStatusBadge,
 } from "./components";
+import { DealScorecardSection } from "./deal-scorecard-section";
 import { DealTeasers } from "./DealTeasers";
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,9 @@ export function DealPageLeftPanel({
 
         {/* Financial metrics row */}
         <FinancialMetricsRow deal={deal} />
+
+        {/* Deal Scorecard section */}
+        <DealScorecardSection dealId={dealId} initialScorecard={deal.scorecard} />
 
         {/* Financial Statements section */}
         <FinancialStatementsSection dealId={dealId} onFullscreen={onOpenFinancialsFullscreen} />

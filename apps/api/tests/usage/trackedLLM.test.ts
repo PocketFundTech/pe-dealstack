@@ -20,6 +20,16 @@ vi.mock('../../src/services/usage/operationCredits.js', () => ({
   getCreditsForOperation: vi.fn(async (op: string) => (op === 'deal_chat' ? 1 : 5)),
 }));
 
+// recordUsageEvent also writes a customer-visible AI_INFERENCE audit row on
+// success (dynamic import of auditLog) — mock it so insertSpy counts only the
+// UsageEvent insert these tests are about.
+vi.mock('../../src/services/auditLog.js', () => ({
+  logAuditEvent: vi.fn(async () => {}),
+  AUDIT_ACTIONS: { AI_INFERENCE: 'AI_INFERENCE' },
+  RESOURCE_TYPES: { SETTINGS: 'SETTINGS' },
+  SEVERITY: { INFO: 'INFO' },
+}));
+
 import { recordUsageEvent } from '../../src/services/usage/trackedLLM.js';
 import { runWithUsageContext } from '../../src/middleware/usageContext.js';
 import { _resetModelPriceCache } from '../../src/services/usage/modelPrices.js';

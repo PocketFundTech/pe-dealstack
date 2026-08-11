@@ -29,9 +29,12 @@ export function getConfidenceTier(score: number): ConfidenceTier {
 }
 
 export function scoreSourceMatch(sourceQuote: string | undefined, rawText: string): number {
-  if (!sourceQuote) return 20;
+  // Normalize BEFORE the falsy check — a whitespace-only quote is truthy but
+  // carries no real citation; without this, `normalizedText.includes('')` is
+  // always true and a blank quote scores a perfect 100 "match".
+  const normalizedQuote = (sourceQuote ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalizedQuote) return 20;
   if (!rawText) return 40;
-  const normalizedQuote = sourceQuote.replace(/\s+/g, ' ').trim().toLowerCase();
   const normalizedText = rawText.replace(/\s+/g, ' ').toLowerCase();
   if (normalizedText.includes(normalizedQuote)) return 100;
   const partial = normalizedQuote.slice(0, 30);

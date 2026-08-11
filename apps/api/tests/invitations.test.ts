@@ -1,600 +1,604 @@
 /**
- * Invitation Flow Integration Tests
- * Tests invitation creation, verification, acceptance, and security
+ * Invitations API Endpoint Tests — exercises the REAL invitationsRouter.
+ *
+ * Prior versions of this file used the "mini-app" pattern: an inline
+ * express() app that reproduced route logic against a local mockInvitations
+ * array. That meant the actual handlers in apps/api/src/routes/invitations*.ts
+ * were never executed — bugs in real handlers (self-invite checks, org
+ * scoping, inviteUrl decoration, token stripping for accepted/expired rows)
+ * would slip through.
+ *
+ * This file mounts the real invitationsRouter (apps/api/src/routes/invitations.ts)
+ * — which itself sub-mounts invitations-accept.ts — and exercises it via
+ * supertest. Supabase + orgScope + Resend + AuditLog + notification helpers
+ * + onboarding completion are all mocked (those are runtime dependencies,
+ * not handler logic). The control flow of the actual handlers runs.
+ *
+ * The public verify/:token route doesn't require auth, so we build a separate
+ * app via `buildPublicApp()` that doesn't inject `req.user`.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import request from 'supertest';
 import express from 'express';
-import { z } from 'zod';
+import request from 'supertest';
 
-// Sample invitation data
-const mockInvitations = [
-  {
-    id: 'inv-001',
-    email: 'newuser@example.com',
-    firmName: 'Test Firm',
-    role: 'MEMBER',
-    token: 'valid_token_123',
-    status: 'PENDING',
-    invitedBy: 'user-001',
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'inv-002',
-    email: 'expired@example.com',
-    firmName: 'Test Firm',
-    role: 'VIEWER',
-    token: 'expired_token_456',
-    status: 'PENDING',
-    invitedBy: 'user-001',
-    expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), // Expired yesterday
-    createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 'inv-003',
-    email: 'accepted@example.com',
-    firmName: 'Test Firm',
-    role: 'MEMBER',
-    token: 'accepted_token_789',
-    status: 'ACCEPTED',
-    invitedBy: 'user-001',
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-    createdAt: new Date().toISOString(),
-    acceptedAt: new Date().toISOString(),
-  },
-];
+// ───── Mocks (MUST be declared before the dynamic import) ─────────
 
-const mockUsers = [
-  {
-    id: 'user-001',
-    email: 'admin@testfirm.com',
-    name: 'Admin User',
-    firmName: 'Test Firm',
-    role: 'ADMIN',
+const mockSupabase = {
+  from: vi.fn(),
+  auth: {
+    signUp: vi.fn(),
   },
-  {
-    id: 'user-002',
-    email: 'member@testfirm.com',
-    name: 'Member User',
-    firmName: 'Test Firm',
-    role: 'MEMBER',
-  },
-];
+};
+vi.mock('../src/supabase.js', () => ({ supabase: mockSupabase }));
 
-// Create test app
-const createTestApp = () => {
+vi.mock('../src/utils/logger.js', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock('../src/services/auditLog.js', () => ({
+  AuditLog: {
+    log: vi.fn(),
+  },
+}));
+
+vi.mock('../src/routes/notifications.js', () => ({
+  createNotification: vi.fn(),
+}));
+
+vi.mock('../src/routes/onboarding.js', () => ({
+  tryCompleteOnboardingStep: vi.fn(),
+}));
+
+// orgScope helpers — getOrgId returns 'org-A' for this suite.
+vi.mock('../src/middleware/orgScope.js', () => ({
+  getOrgId: () => 'org-A',
+}));
+
+// Resend module — mock at the import level so `new Resend(key)` returns
+// a stub with an `emails.send` method we can assert against. Even though
+// the real router only constructs Resend when RESEND_API_KEY is set, we
+// mock it anyway so the test never accidentally hits real Resend if the
+// env leaks in.
+const resendSend = vi.fn().mockResolvedValue({ data: { id: 'msg-1' }, error: null });
+vi.mock('resend', () => ({
+  Resend: vi.fn().mockImplementation(() => ({
+    emails: { send: resendSend },
+  })),
+}));
+
+// Ensure RESEND_API_KEY is NOT set so the router's `null` branch runs
+// and we don't construct a Resend client (the mock above is a safety net).
+delete process.env.RESEND_API_KEY;
+
+// ───── Test app builders ────────────────────────────────────────────
+
+const buildApp = async () => {
+  const { default: invitationsRouter } = await import('../src/routes/invitations.js');
   const app = express();
   app.use(express.json());
-
-  // Validation schemas
-  const createInvitationSchema = z.object({
-    email: z.string().email(),
-    role: z.enum(['ADMIN', 'MEMBER', 'VIEWER']).default('MEMBER'),
-  });
-
-  const bulkInviteSchema = z.object({
-    emails: z.array(z.string().email()).min(1).max(20),
-    role: z.enum(['ADMIN', 'MEMBER', 'VIEWER']).default('MEMBER'),
-  });
-
-  // Auth middleware
-  let currentUser: typeof mockUsers[0] | null = null;
-  app.use('/api/invitations', (req: any, res, next) => {
-    if (currentUser) {
-      req.user = { id: currentUser.id, email: currentUser.email };
-    }
+  // Fake auth — mirrors what the real authMiddleware would attach.
+  app.use((req: any, _res, next) => {
+    req.user = {
+      id: 'test-auth-uuid',
+      organizationId: 'org-A',
+      role: 'ADMIN',
+      email: 'admin@testfirm.com',
+    };
     next();
   });
-
-  // Set current user for testing
-  (app as any).setUser = (user: typeof mockUsers[0] | null) => {
-    currentUser = user;
-  };
-
-  // GET /api/invitations - List invitations
-  app.get('/api/invitations', (req: any, res) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
-
-    const user = mockUsers.find(u => u.id === req.user.id);
-    if (!user?.firmName) {
-      return res.json([]);
-    }
-
-    const { status } = req.query;
-    let invitations = mockInvitations.filter(i => i.firmName === user.firmName);
-
-    if (status) {
-      invitations = invitations.filter(i => i.status === status);
-    }
-
-    res.json(invitations.map(inv => ({
-      ...inv,
-      inviter: mockUsers.find(u => u.id === inv.invitedBy),
-    })));
-  });
-
-  // POST /api/invitations - Create invitation
-  app.post('/api/invitations', (req: any, res) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
-
-    const validation = createInvitationSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        error: 'Validation failed',
-        details: validation.error.errors,
-      });
-    }
-
-    const user = mockUsers.find(u => u.id === req.user.id);
-    if (!user?.firmName) {
-      return res.status(400).json({ error: 'You must belong to a firm to invite members' });
-    }
-
-    const { email, role } = validation.data;
-
-    // Only ADMIN can invite ADMINs
-    if (role === 'ADMIN' && user.role !== 'ADMIN') {
-      return res.status(403).json({ error: 'Only admins can invite admin users' });
-    }
-
-    // Check if user already exists
-    const existingUser = mockUsers.find(u => u.email === email && u.firmName === user.firmName);
-    if (existingUser) {
-      return res.status(400).json({ error: 'User is already a member of your firm' });
-    }
-
-    // Check for existing pending invitation
-    const existingInvite = mockInvitations.find(
-      i => i.email === email && i.firmName === user.firmName && i.status === 'PENDING'
-    );
-    if (existingInvite) {
-      return res.status(400).json({ error: 'An invitation is already pending for this email' });
-    }
-
-    const newInvitation = {
-      id: `inv-${Date.now()}`,
-      email,
-      firmName: user.firmName,
-      role,
-      token: `token_${Date.now()}`,
-      status: 'PENDING',
-      invitedBy: user.id,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      createdAt: new Date().toISOString(),
-    };
-
-    res.status(201).json({ ...newInvitation, emailSent: true });
-  });
-
-  // POST /api/invitations/bulk - Bulk invite
-  app.post('/api/invitations/bulk', (req: any, res) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
-
-    const validation = bulkInviteSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        error: 'Validation failed',
-        details: validation.error.errors,
-      });
-    }
-
-    const user = mockUsers.find(u => u.id === req.user.id);
-    if (!user?.firmName) {
-      return res.status(400).json({ error: 'You must belong to a firm to invite members' });
-    }
-
-    const { emails, role } = validation.data;
-    const results = emails.map(email => {
-      const existingUser = mockUsers.find(u => u.email === email);
-      if (existingUser) {
-        return { email, status: 'exists' };
-      }
-
-      const existingInvite = mockInvitations.find(
-        i => i.email === email && i.status === 'PENDING'
-      );
-      if (existingInvite) {
-        return { email, status: 'pending' };
-      }
-
-      return { email, status: 'sent' };
-    });
-
-    res.json({
-      total: emails.length,
-      sent: results.filter(r => r.status === 'sent').length,
-      results,
-    });
-  });
-
-  // GET /api/invitations/verify/:token - Verify token (public)
-  app.get('/api/invitations/verify/:token', (req, res) => {
-    const { token } = req.params;
-
-    const invitation = mockInvitations.find(i => i.token === token);
-    if (!invitation) {
-      return res.status(404).json({ error: 'Invalid invitation' });
-    }
-
-    if (new Date(invitation.expiresAt) < new Date()) {
-      return res.status(410).json({ error: 'Invitation has expired' });
-    }
-
-    if (invitation.status !== 'PENDING') {
-      return res.status(410).json({ error: `Invitation has been ${invitation.status.toLowerCase()}` });
-    }
-
-    res.json({
-      valid: true,
-      email: invitation.email,
-      firmName: invitation.firmName,
-      role: invitation.role,
-      inviter: mockUsers.find(u => u.id === invitation.invitedBy),
-    });
-  });
-
-  // POST /api/invitations/accept/:token - Accept invitation (public)
-  app.post('/api/invitations/accept/:token', (req, res) => {
-    const { token } = req.params;
-    const { password, fullName } = req.body;
-
-    if (!password || password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' });
-    }
-
-    const invitation = mockInvitations.find(i => i.token === token);
-    if (!invitation) {
-      return res.status(404).json({ error: 'Invalid invitation' });
-    }
-
-    if (new Date(invitation.expiresAt) < new Date()) {
-      return res.status(410).json({ error: 'Invitation has expired' });
-    }
-
-    if (invitation.status !== 'PENDING') {
-      return res.status(410).json({ error: `Invitation has already been ${invitation.status.toLowerCase()}` });
-    }
-
-    // Simulate user creation
-    const newUser = {
-      id: `user-${Date.now()}`,
-      email: invitation.email,
-      name: fullName || invitation.email.split('@')[0],
-      firmName: invitation.firmName,
-      role: invitation.role,
-    };
-
-    res.json({
-      success: true,
-      message: 'Account created successfully',
-      user: newUser,
-      session: { access_token: 'mock_access_token' },
-    });
-  });
-
-  // DELETE /api/invitations/:id - Revoke invitation
-  app.delete('/api/invitations/:id', (req: any, res) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
-
-    const { id } = req.params;
-    const invitation = mockInvitations.find(i => i.id === id);
-
-    if (!invitation) {
-      return res.status(404).json({ error: 'Invitation not found' });
-    }
-
-    const user = mockUsers.find(u => u.id === req.user.id);
-    if (user?.firmName !== invitation.firmName) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-
-    res.status(204).send();
-  });
-
+  app.use('/api/invitations', invitationsRouter);
   return app;
 };
 
-describe('Invitation API', () => {
-  let app: ReturnType<typeof createTestApp>;
+// For the public verify/:token route — no auth middleware.
+const buildPublicApp = async () => {
+  const { default: invitationsRouter } = await import('../src/routes/invitations.js');
+  const app = express();
+  app.use(express.json());
+  app.use('/api/invitations', invitationsRouter);
+  return app;
+};
 
+// Build an app whose authenticated user is a MEMBER (not ADMIN). Used to
+// verify the "only ADMIN can invite ADMIN" branch.
+const buildMemberApp = async () => {
+  const { default: invitationsRouter } = await import('../src/routes/invitations.js');
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res, next) => {
+    req.user = {
+      id: 'member-auth-uuid',
+      organizationId: 'org-A',
+      role: 'MEMBER',
+      email: 'member@testfirm.com',
+    };
+    next();
+  });
+  app.use('/api/invitations', invitationsRouter);
+  return app;
+};
+
+// ───── Tests ────────────────────────────────────────────────────────
+
+describe('Real /api/invitations handlers', () => {
   beforeEach(() => {
-    app = createTestApp();
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
   });
 
+  // ── GET /api/invitations ───────────────────────────────────────
   describe('GET /api/invitations', () => {
-    it('should return 401 when not authenticated', async () => {
-      const response = await request(app).get('/api/invitations');
-      expect(response.status).toBe(401);
-    });
-
-    it('should return invitations for authenticated user firm', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app).get('/api/invitations');
-
-      expect(response.status).toBe(200);
-      expect(Array.isArray(response.body)).toBe(true);
-      expect(response.body.length).toBeGreaterThan(0);
-    });
-
-    it('should filter by status', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app).get('/api/invitations?status=PENDING');
-
-      expect(response.status).toBe(200);
-      response.body.forEach((inv: any) => {
-        expect(inv.status).toBe('PENDING');
+    it('returns invitations scoped to org and decorates inviteUrl for PENDING only', async () => {
+      const rows = [
+        {
+          id: 'inv-1',
+          email: 'pending@example.com',
+          role: 'MEMBER',
+          status: 'PENDING',
+          firmName: 'Test Firm',
+          organizationId: 'org-A',
+          token: 'tok_pending_1',
+          createdAt: '2026-05-01T00:00:00Z',
+          expiresAt: '2026-12-01T00:00:00Z',
+          acceptedAt: null,
+          inviter: { id: 'u1', name: 'Admin', email: 'admin@testfirm.com', avatar: null },
+        },
+        {
+          id: 'inv-2',
+          email: 'done@example.com',
+          role: 'MEMBER',
+          status: 'ACCEPTED',
+          firmName: 'Test Firm',
+          organizationId: 'org-A',
+          token: 'tok_accepted_2',
+          createdAt: '2026-05-01T00:00:00Z',
+          expiresAt: '2026-12-01T00:00:00Z',
+          acceptedAt: '2026-05-02T00:00:00Z',
+          inviter: { id: 'u1', name: 'Admin', email: 'admin@testfirm.com', avatar: null },
+        },
+      ];
+      // Chain: from('Invitation').select(...).eq('organizationId', orgId).order('createdAt', ...)
+      // Optionally .eq('status', ...) if query has status. The order() resolves the promise.
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            order: () => Promise.resolve({ data: rows, error: null }),
+            eq: () => ({
+              order: () => Promise.resolve({ data: rows, error: null }),
+            }),
+          }),
+        }),
       });
+
+      const app = await buildApp();
+      const res = await request(app).get('/api/invitations');
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(2);
+
+      // PENDING row gets an inviteUrl. Token is stripped from the response.
+      const pending = res.body.find((r: any) => r.id === 'inv-1');
+      expect(pending.inviteUrl).toBeTruthy();
+      expect(pending.inviteUrl).toContain('/accept-invite?token=tok_pending_1');
+      expect(pending.token).toBeUndefined();
+
+      // ACCEPTED row gets null inviteUrl; token is also stripped.
+      const accepted = res.body.find((r: any) => r.id === 'inv-2');
+      expect(accepted.inviteUrl).toBeNull();
+      expect(accepted.token).toBeUndefined();
     });
   });
 
+  // ── POST /api/invitations ──────────────────────────────────────
   describe('POST /api/invitations', () => {
-    it('should return 401 when not authenticated', async () => {
-      const response = await request(app)
-        .post('/api/invitations')
-        .send({ email: 'new@example.com', role: 'MEMBER' });
+    it('creates an invitation and returns inviteUrl', async () => {
+      const currentUser = {
+        id: 'internal-admin-1',
+        name: 'Admin User',
+        email: 'admin@testfirm.com',
+        firmName: 'Test Firm',
+        organizationId: 'org-A',
+        role: 'ADMIN',
+      };
+      const insertedInvite = {
+        id: 'inv-new',
+        email: 'brandnew@example.com',
+        firmName: 'Test Firm',
+        organizationId: 'org-A',
+        role: 'MEMBER',
+        invitedBy: 'internal-admin-1',
+        token: 'fresh-token',
+        expiresAt: '2026-12-01T00:00:00Z',
+        status: 'PENDING',
+      };
 
-      expect(response.status).toBe(401);
-    });
+      // Three different supabase.from() shapes are needed in sequence:
+      //   1. from('User').select(...).eq('authId', user.id).maybeSingle() → currentUser
+      //   2. from('Organization').select('name').eq('id', orgId).single() → { name: 'Test Firm' }
+      //   3. from('User').select('id').eq('email').eq('organizationId').maybeSingle() → null (no existing user)
+      //   4. from('Invitation').select('id').eq(email).eq(orgId).eq(status).maybeSingle() → null
+      //   5. from('Invitation').insert({...}).select().single() → insertedInvite
+      let userSelectCount = 0;
+      mockSupabase.from.mockImplementation((table: string) => {
+        if (table === 'User') {
+          userSelectCount++;
+          // First User select = currentUser lookup; second = existing-user check
+          if (userSelectCount === 1) {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: currentUser, error: null }),
+                }),
+              }),
+            };
+          }
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: null, error: null }),
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'Organization') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { name: 'Test Firm' }, error: null }),
+              }),
+            }),
+          };
+        }
+        if (table === 'Invitation') {
+          return {
+            // existing-pending check
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    maybeSingle: async () => ({ data: null, error: null }),
+                  }),
+                }),
+              }),
+            }),
+            insert: () => ({
+              select: () => ({
+                single: async () => ({ data: insertedInvite, error: null }),
+              }),
+            }),
+          };
+        }
+        throw new Error(`Unexpected table: ${table}`);
+      });
 
-    it('should create invitation with valid data', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
+      const app = await buildApp();
+      const res = await request(app)
         .post('/api/invitations')
         .send({ email: 'brandnew@example.com', role: 'MEMBER' });
 
-      expect(response.status).toBe(201);
-      expect(response.body.email).toBe('brandnew@example.com');
-      expect(response.body.role).toBe('MEMBER');
-      expect(response.body.token).toBeDefined();
-      expect(response.body.status).toBe('PENDING');
+      expect(res.status).toBe(201);
+      expect(res.body.id).toBe('inv-new');
+      expect(res.body.email).toBe('brandnew@example.com');
+      // The handler builds inviteUrl from a freshly-generated 32-byte
+      // hex token via crypto.randomBytes — assert shape, not literal value.
+      expect(res.body.inviteUrl).toMatch(/\/accept-invite\?token=[a-f0-9]{64}$/);
+      // emailSent === false because RESEND_API_KEY is unset → null Resend branch.
+      expect(res.body.emailSent).toBe(false);
     });
 
-    it('should validate email format', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
+    it('returns 400 on Zod validation error (bad email)', async () => {
+      // Validation fires before any supabase call.
+      const app = await buildApp();
+      const res = await request(app)
         .post('/api/invitations')
         .send({ email: 'not-an-email', role: 'MEMBER' });
 
-      expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Validation failed');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation failed');
     });
 
-    it('should validate role enum', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
+    it('returns 400 INVITE_SELF when inviting your own email (req.user.email)', async () => {
+      // Self-invite check fires before any supabase lookup. The authenticated
+      // user's email is 'admin@testfirm.com' (set in buildApp).
+      const app = await buildApp();
+      const res = await request(app)
         .post('/api/invitations')
-        .send({ email: 'test@example.com', role: 'SUPERADMIN' });
+        .send({ email: 'admin@testfirm.com', role: 'MEMBER' });
 
-      expect(response.status).toBe(400);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVITE_SELF');
     });
 
-    it('should prevent non-admins from inviting admins', async () => {
-      (app as any).setUser(mockUsers[1]); // MEMBER user
-      const response = await request(app)
+    it('returns 403 when a non-ADMIN tries to invite an ADMIN', async () => {
+      const memberUser = {
+        id: 'internal-member-1',
+        name: 'Member User',
+        email: 'member@testfirm.com',
+        firmName: 'Test Firm',
+        organizationId: 'org-A',
+        role: 'MEMBER',
+      };
+      mockSupabase.from.mockImplementation((table: string) => {
+        if (table === 'User') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: memberUser, error: null }),
+              }),
+            }),
+          };
+        }
+        if (table === 'Organization') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { name: 'Test Firm' }, error: null }),
+              }),
+            }),
+          };
+        }
+        throw new Error(`Unexpected table: ${table}`);
+      });
+
+      const app = await buildMemberApp();
+      const res = await request(app)
         .post('/api/invitations')
         .send({ email: 'newadmin@example.com', role: 'ADMIN' });
 
-      expect(response.status).toBe(403);
-      expect(response.body.error).toBe('Only admins can invite admin users');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('Only admins');
     });
 
-    it('should prevent duplicate invitations', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
-        .post('/api/invitations')
-        .send({ email: 'newuser@example.com', role: 'MEMBER' }); // Already has pending invitation
+    it('returns 400 INVITE_ALREADY_MEMBER when target is already in the org', async () => {
+      const currentUser = {
+        id: 'internal-admin-1',
+        name: 'Admin User',
+        email: 'admin@testfirm.com',
+        firmName: 'Test Firm',
+        organizationId: 'org-A',
+        role: 'ADMIN',
+      };
+      let userSelectCount = 0;
+      mockSupabase.from.mockImplementation((table: string) => {
+        if (table === 'User') {
+          userSelectCount++;
+          if (userSelectCount === 1) {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: currentUser, error: null }),
+                }),
+              }),
+            };
+          }
+          // 2nd User select: existing member check → returns a row
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: { id: 'existing-member' }, error: null }),
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'Organization') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { name: 'Test Firm' }, error: null }),
+              }),
+            }),
+          };
+        }
+        throw new Error(`Unexpected table: ${table}`);
+      });
 
-      expect(response.status).toBe(400);
-      expect(response.body.error).toContain('pending');
+      const app = await buildApp();
+      const res = await request(app)
+        .post('/api/invitations')
+        .send({ email: 'existing@testfirm.com', role: 'MEMBER' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVITE_ALREADY_MEMBER');
     });
 
-    it('should prevent inviting existing members', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
-        .post('/api/invitations')
-        .send({ email: 'member@testfirm.com', role: 'VIEWER' }); // Existing user
+    it('returns 400 INVITE_ALREADY_PENDING when a pending invitation exists', async () => {
+      const currentUser = {
+        id: 'internal-admin-1',
+        name: 'Admin User',
+        email: 'admin@testfirm.com',
+        firmName: 'Test Firm',
+        organizationId: 'org-A',
+        role: 'ADMIN',
+      };
+      let userSelectCount = 0;
+      mockSupabase.from.mockImplementation((table: string) => {
+        if (table === 'User') {
+          userSelectCount++;
+          if (userSelectCount === 1) {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: currentUser, error: null }),
+                }),
+              }),
+            };
+          }
+          // existing-user check returns null
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: null, error: null }),
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'Organization') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { name: 'Test Firm' }, error: null }),
+              }),
+            }),
+          };
+        }
+        if (table === 'Invitation') {
+          // existing pending invite check returns a row
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    maybeSingle: async () => ({ data: { id: 'inv-pending' }, error: null }),
+                  }),
+                }),
+              }),
+            }),
+          };
+        }
+        throw new Error(`Unexpected table: ${table}`);
+      });
 
-      expect(response.status).toBe(400);
-      expect(response.body.error).toContain('already a member');
+      const app = await buildApp();
+      const res = await request(app)
+        .post('/api/invitations')
+        .send({ email: 'pending@example.com', role: 'MEMBER' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVITE_ALREADY_PENDING');
     });
   });
 
-  describe('POST /api/invitations/bulk', () => {
-    it('should send bulk invitations', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
-        .post('/api/invitations/bulk')
-        .send({
-          emails: ['bulk1@example.com', 'bulk2@example.com'],
-          role: 'MEMBER',
-        });
-
-      expect(response.status).toBe(200);
-      expect(response.body.total).toBe(2);
-      expect(response.body.sent).toBe(2);
-    });
-
-    it('should handle mixed results in bulk invite', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
-        .post('/api/invitations/bulk')
-        .send({
-          emails: ['newuser@example.com', 'fresh@example.com'], // One pending, one new
-          role: 'MEMBER',
-        });
-
-      expect(response.status).toBe(200);
-      expect(response.body.results).toBeDefined();
-    });
-
-    it('should validate minimum 1 email', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app)
-        .post('/api/invitations/bulk')
-        .send({ emails: [], role: 'MEMBER' });
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should validate maximum 20 emails', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const emails = Array.from({ length: 25 }, (_, i) => `email${i}@example.com`);
-      const response = await request(app)
-        .post('/api/invitations/bulk')
-        .send({ emails, role: 'MEMBER' });
-
-      expect(response.status).toBe(400);
-    });
-  });
-
+  // ── GET /api/invitations/verify/:token (public) ────────────────
   describe('GET /api/invitations/verify/:token', () => {
-    it('should verify valid token', async () => {
-      const response = await request(app).get('/api/invitations/verify/valid_token_123');
+    it('returns invitation payload for a valid PENDING token', async () => {
+      const invitation = {
+        id: 'inv-1',
+        email: 'invitee@example.com',
+        firmName: 'Test Firm',
+        organizationId: 'org-A',
+        role: 'MEMBER',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        inviter: { name: 'Admin', avatar: null },
+        organization: { id: 'org-A', name: 'Test Firm', logo: null },
+      };
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({ data: invitation, error: null }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(200);
-      expect(response.body.valid).toBe(true);
-      expect(response.body.email).toBe('newuser@example.com');
-      expect(response.body.firmName).toBe('Test Firm');
-      expect(response.body.role).toBe('MEMBER');
+      const app = await buildPublicApp();
+      const res = await request(app).get('/api/invitations/verify/valid_token_123');
+
+      expect(res.status).toBe(200);
+      expect(res.body.valid).toBe(true);
+      expect(res.body.email).toBe('invitee@example.com');
+      expect(res.body.role).toBe('MEMBER');
+      expect(res.body.firmName).toBe('Test Firm');
     });
 
-    it('should reject invalid token', async () => {
-      const response = await request(app).get('/api/invitations/verify/invalid_token');
+    it('returns 404 for an invalid (unknown) token', async () => {
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({ data: null, error: { code: 'PGRST116' } }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(404);
-      expect(response.body.error).toBe('Invalid invitation');
+      const app = await buildPublicApp();
+      const res = await request(app).get('/api/invitations/verify/nope_token');
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Invalid invitation');
     });
 
-    it('should reject expired token', async () => {
-      const response = await request(app).get('/api/invitations/verify/expired_token_456');
+    it('returns 410 for an expired token', async () => {
+      const invitation = {
+        id: 'inv-exp',
+        email: 'old@example.com',
+        firmName: 'Test Firm',
+        organizationId: 'org-A',
+        role: 'MEMBER',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() - 86400000).toISOString(),
+        inviter: { name: 'Admin', avatar: null },
+        organization: { id: 'org-A', name: 'Test Firm', logo: null },
+      };
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            single: async () => ({ data: invitation, error: null }),
+          }),
+        }),
+      });
 
-      expect(response.status).toBe(410);
-      expect(response.body.error).toContain('expired');
-    });
+      const app = await buildPublicApp();
+      const res = await request(app).get('/api/invitations/verify/expired_token');
 
-    it('should reject already accepted token', async () => {
-      const response = await request(app).get('/api/invitations/verify/accepted_token_789');
-
-      expect(response.status).toBe(410);
-      expect(response.body.error).toContain('accepted');
-    });
-  });
-
-  describe('POST /api/invitations/accept/:token', () => {
-    it('should accept valid invitation with proper password', async () => {
-      const response = await request(app)
-        .post('/api/invitations/accept/valid_token_123')
-        .send({ password: 'securePassword123', fullName: 'New User' });
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.user).toBeDefined();
-      expect(response.body.user.email).toBe('newuser@example.com');
-      expect(response.body.session).toBeDefined();
-    });
-
-    it('should reject password shorter than 8 characters', async () => {
-      const response = await request(app)
-        .post('/api/invitations/accept/valid_token_123')
-        .send({ password: 'short' });
-
-      expect(response.status).toBe(400);
-      expect(response.body.error).toContain('8 characters');
-    });
-
-    it('should reject invalid token', async () => {
-      const response = await request(app)
-        .post('/api/invitations/accept/invalid_token')
-        .send({ password: 'securePassword123' });
-
-      expect(response.status).toBe(404);
-    });
-
-    it('should reject expired token', async () => {
-      const response = await request(app)
-        .post('/api/invitations/accept/expired_token_456')
-        .send({ password: 'securePassword123' });
-
-      expect(response.status).toBe(410);
-      expect(response.body.error).toContain('expired');
-    });
-
-    it('should use email username as default name', async () => {
-      const response = await request(app)
-        .post('/api/invitations/accept/valid_token_123')
-        .send({ password: 'securePassword123' }); // No fullName
-
-      expect(response.status).toBe(200);
-      expect(response.body.user.name).toBeDefined();
+      expect(res.status).toBe(410);
+      expect(res.body.error).toContain('expired');
     });
   });
 
+  // ── DELETE /api/invitations/:id ────────────────────────────────
   describe('DELETE /api/invitations/:id', () => {
-    it('should return 401 when not authenticated', async () => {
-      const response = await request(app).delete('/api/invitations/inv-001');
-      expect(response.status).toBe(401);
+    it('returns 204 when invitation belongs to caller org', async () => {
+      mockSupabase.from.mockReturnValue({
+        // select(...).eq('id', id).eq('organizationId', orgId).single() → row
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: { id: 'inv-1', email: 'x@example.com', organizationId: 'org-A' },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+        // update({status: 'REVOKED'}).eq('id', id).eq('organizationId', orgId) → ok
+        update: () => ({
+          eq: () => ({
+            eq: () => Promise.resolve({ data: null, error: null }),
+          }),
+        }),
+      });
+
+      const app = await buildApp();
+      const res = await request(app).delete('/api/invitations/inv-1');
+
+      expect(res.status).toBe(204);
     });
 
-    it('should revoke invitation', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app).delete('/api/invitations/inv-001');
-      expect(response.status).toBe(204);
+    it('returns 404 when invitation not found in caller org (cross-org blocked)', async () => {
+      // The org check is enforced via the .eq('organizationId', orgId) filter —
+      // an invitation belonging to a different org will not match and the
+      // select returns no rows. The handler turns that into a 404.
+      mockSupabase.from.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              single: async () => ({ data: null, error: { code: 'PGRST116' } }),
+            }),
+          }),
+        }),
+      });
+
+      const app = await buildApp();
+      const res = await request(app).delete('/api/invitations/inv-other-org');
+
+      expect(res.status).toBe(404);
     });
-
-    it('should return 404 for non-existent invitation', async () => {
-      (app as any).setUser(mockUsers[0]);
-      const response = await request(app).delete('/api/invitations/non-existent');
-      expect(response.status).toBe(404);
-    });
-  });
-});
-
-describe('Invitation Security', () => {
-  let app: ReturnType<typeof createTestApp>;
-
-  beforeEach(() => {
-    app = createTestApp();
-  });
-
-  it('should not expose token in list responses', async () => {
-    (app as any).setUser(mockUsers[0]);
-    const response = await request(app).get('/api/invitations');
-
-    // Token should be present (in our mock), but in production
-    // you might want to exclude it from list responses
-    expect(response.status).toBe(200);
-  });
-
-  it('should prevent cross-firm invitation access', async () => {
-    // Create a user from different firm
-    const differentFirmUser = {
-      id: 'user-other',
-      email: 'other@otherfirm.com',
-      name: 'Other User',
-      firmName: 'Other Firm',
-      role: 'ADMIN',
-    };
-
-    // They shouldn't be able to revoke Test Firm invitations
-    (app as any).setUser(differentFirmUser);
-    const response = await request(app).delete('/api/invitations/inv-001');
-    expect(response.status).toBe(403);
-  });
-
-  it('should use cryptographically random tokens', () => {
-    // In the actual implementation, tokens are generated with crypto.randomBytes
-    // This test verifies token length and format
-    const tokenPattern = /^[a-f0-9]{64}$/; // 32 bytes = 64 hex characters
-    // In our mock, we use simpler tokens, but production should use this pattern
   });
 });

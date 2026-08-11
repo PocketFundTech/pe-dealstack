@@ -1,23 +1,11 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyContactAccess, verifyDealAccess } from '../middleware/orgScope.js';
 
 const router = Router();
-
-const chatSchema = z.object({
-  message: z.string().min(1).max(4000),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string().max(8000),
-      })
-    )
-    .max(40)
-    .optional(),
-});
 
 // ─── Validation Schemas ──────────────────────────────────────
 
@@ -45,7 +33,7 @@ const createConnectionSchema = z.object({
 
 // ─── POST /api/contacts/:id/interactions — Add interaction ──
 
-router.post('/:id/interactions', async (req: any, res) => {
+router.post('/:id/interactions', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -93,7 +81,7 @@ router.post('/:id/interactions', async (req: any, res) => {
 
 // ─── POST /api/contacts/:id/deals — Link contact to deal ────
 
-router.post('/:id/deals', async (req: any, res) => {
+router.post('/:id/deals', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -143,7 +131,7 @@ router.post('/:id/deals', async (req: any, res) => {
 
 // ─── DELETE /api/contacts/:contactId/deals/:dealId — Unlink ─
 
-router.delete('/:contactId/deals/:dealId', async (req: any, res) => {
+router.delete('/:contactId/deals/:dealId', async (req: Request, res) => {
   try {
     const { contactId, dealId } = req.params;
     const orgId = getOrgId(req);
@@ -171,7 +159,7 @@ router.delete('/:contactId/deals/:dealId', async (req: any, res) => {
 
 // ─── GET /api/contacts/:id/connections — List connections (bidirectional) ─
 
-router.get('/:id/connections', async (req: any, res) => {
+router.get('/:id/connections', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -212,7 +200,7 @@ router.get('/:id/connections', async (req: any, res) => {
 
 // ─── POST /api/contacts/:id/connections — Create connection ─
 
-router.post('/:id/connections', async (req: any, res) => {
+router.post('/:id/connections', async (req: Request, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
@@ -230,6 +218,15 @@ router.post('/:id/connections', async (req: any, res) => {
 
     if (relatedContactId === id) {
       return res.status(400).json({ error: 'Cannot create a connection to the same contact' });
+    }
+
+    // F-15: verify the related contact is also in the caller's org.
+    // Without this, a user could create a relationship from their own contact
+    // pointing at any other org's contact and the GET handler would echo that
+    // contact's identity (firstName, lastName, company, title) back through the join.
+    const relatedAccess = await verifyContactAccess(relatedContactId, orgId);
+    if (!relatedAccess) {
+      return res.status(404).json({ error: 'Related contact not found' });
     }
 
     const insertData: any = {
@@ -268,7 +265,7 @@ router.post('/:id/connections', async (req: any, res) => {
 
 // ─── DELETE /api/contacts/:id/connections/:connectionId — Remove connection ─
 
-router.delete('/:id/connections/:connectionId', async (req: any, res) => {
+router.delete('/:id/connections/:connectionId', async (req: Request, res) => {
   try {
     const { id, connectionId } = req.params;
     const orgId = getOrgId(req);
@@ -277,22 +274,14 @@ router.delete('/:id/connections/:connectionId', async (req: any, res) => {
       return res.status(404).json({ error: 'Contact not found' });
     }
 
-    // SECURITY: the connection must actually reference the verified contact —
-    // otherwise owning any one contact would let a user delete an arbitrary
-    // ContactRelationship row by id.
-    const { data: conn } = await supabase
-      .from('ContactRelationship')
-      .select('id, contactId, relatedContactId')
-      .eq('id', connectionId)
-      .single();
-    if (!conn || (conn.contactId !== id && conn.relatedContactId !== id)) {
-      return res.status(404).json({ error: 'Connection not found' });
-    }
-
+    // F-16: constrain delete to relationships involving the verified contact.
+    // Without this filter, a caller can delete any ContactRelationship row in
+    // any org just by knowing its id.
     const { error } = await supabase
       .from('ContactRelationship')
       .delete()
-      .eq('id', connectionId);
+      .eq('id', connectionId)
+      .or(`contactId.eq.${id},relatedContactId.eq.${id}`);
 
     if (error) throw error;
 
@@ -302,59 +291,6 @@ router.delete('/:id/connections/:connectionId', async (req: any, res) => {
   } catch (error) {
     log.error('Delete connection error', error);
     res.status(500).json({ error: 'Failed to remove connection' });
-  }
-});
-
-// ─── GET /api/contacts/:id/email-summary — AI summary of email history ─
-// Bounded, org-scoped. Returns { connected:false } (never an error) when Gmail
-// isn't linked. Sub-path of /:id so it's safe from the /:id route in contacts.ts.
-
-router.get('/:id/email-summary', async (req: any, res) => {
-  try {
-    const { id } = req.params;
-    const orgId = getOrgId(req);
-    const contactAccess = await verifyContactAccess(id, orgId);
-    if (!contactAccess) {
-      return res.status(404).json({ error: 'Contact not found' });
-    }
-
-    const authUserId = req.user?.id;
-    if (!authUserId) {
-      return res.json({ connected: false, threadCount: 0, lastContact: null, summary: '', highlights: [] });
-    }
-
-    const { getContactEmailSummary } = await import('../services/gmailContactsService.js');
-    const result = await getContactEmailSummary(orgId, id, authUserId);
-    res.json(result);
-  } catch (error) {
-    log.error('Contact email summary error', error);
-    res.status(500).json({ error: 'Failed to summarize contact emails' });
-  }
-});
-
-// ─── POST /api/contacts/:id/chat — Contact-scoped AI Q&A ─
-
-router.post('/:id/chat', async (req: any, res) => {
-  try {
-    const { id } = req.params;
-    const orgId = getOrgId(req);
-    const contactAccess = await verifyContactAccess(id, orgId);
-    if (!contactAccess) {
-      return res.status(404).json({ error: 'Contact not found' });
-    }
-
-    const validation = chatSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
-    }
-
-    const { message, history } = validation.data;
-    const { chatAboutContact } = await import('../services/contactChatService.js');
-    const result = await chatAboutContact(orgId, id, message, history ?? [], req.user?.id);
-    res.json(result);
-  } catch (error) {
-    log.error('Contact chat error', error);
-    res.status(500).json({ error: 'Failed to chat about contact' });
   }
 });
 

@@ -14,6 +14,7 @@ import { runContactEnrichment } from '../services/agents/contactEnrichment/index
 import { suggestContactFollowUp } from '../services/contactFollowUpSuggester.js';
 import { generateMeetingPrep } from '../services/agents/meetingPrep/index.js';
 import { runSignalMonitor } from '../services/agents/signalMonitor/index.js';
+import { runSignalMonitorViaManagedAgents } from '../services/managedAgents/signalMonitorOrchestrator.js';
 import { generateEmailDraft, getEmailTemplates } from '../services/agents/emailDrafter/index.js';
 import { scanInboxForDeals } from '../services/inboxDealScanService.js';
 
@@ -174,7 +175,10 @@ router.post('/ai/scan-signals', async (req, res) => {
 
     log.info('Scanning deal signals', { orgId });
 
-    const result = await runSignalMonitor(orgId);
+    const result =
+      process.env.SIGNAL_ENGINE === 'managed-agents'
+        ? await runSignalMonitorViaManagedAgents(orgId)
+        : await runSignalMonitor(orgId);
 
     res.json(result);
   } catch (error: any) {

@@ -142,12 +142,29 @@ export function isPrivateUrl(url: string): boolean {
   try {
     const parsed = new URL(normalized);
     const hostname = parsed.hostname.toLowerCase();
+
+    // IPv6 literals — URL.hostname returns them wrapped in [brackets].
+    // Block loopback, link-local (fe80::/10), and unique-local (fc00::/7, covers fc/fd prefixes).
+    if (hostname.startsWith('[') && hostname.endsWith(']')) {
+      const ipv6 = hostname.slice(1, -1);
+      if (
+        ipv6 === '::1' ||              // loopback
+        ipv6 === '::' ||               // unspecified
+        ipv6.startsWith('fe80:') ||    // link-local fe80::/10
+        ipv6.startsWith('fc') ||       // unique-local fc00::/8
+        ipv6.startsWith('fd')          // unique-local fd00::/8
+      ) return true;
+      // Any other IPv6 literal — fall through (rare; public IPv6 is allowed).
+      return false;
+    }
+
     if (
       hostname === 'localhost' ||
       hostname === '127.0.0.1' ||
       hostname.startsWith('127.') ||
       hostname.startsWith('10.') ||
       hostname.startsWith('192.168.') ||
+      hostname.startsWith('169.254.') || // link-local — AWS/GCP/Azure IMDS (169.254.169.254)
       hostname === '0.0.0.0' ||
       hostname.endsWith('.local') ||
       hostname.endsWith('.internal')
@@ -158,6 +175,12 @@ export function isPrivateUrl(url: string): boolean {
     if (parts172[0] === '172') {
       const second = parseInt(parts172[1], 10);
       if (second >= 16 && second <= 31) return true;
+    }
+
+    // Check 100.64.0.0/10 (carrier-grade NAT) — second octet 64..127
+    if (parts172[0] === '100') {
+      const second = parseInt(parts172[1], 10);
+      if (second >= 64 && second <= 127) return true;
     }
 
     return false;

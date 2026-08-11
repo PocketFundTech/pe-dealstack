@@ -1,5 +1,18 @@
 // Shared types and utilities for AI CRM
 
+// ============================================================
+// Canonical enums (single source of truth across apps)
+// ============================================================
+
+/**
+ * System-level role assigned to a user account.
+ *
+ * Canonical definition — both `apps/api` and `apps/web-next` re-export
+ * this from their local `types/index.ts` so import sites don't have to
+ * change when the union evolves. If you add a new role, do it HERE.
+ */
+export type UserRole = 'ADMIN' | 'MEMBER' | 'VIEWER';
+
 // API Response types
 export interface ApiResponse<T> {
   success: boolean;

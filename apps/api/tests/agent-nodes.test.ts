@@ -201,16 +201,16 @@ describe('scoreMathValidation', () => {
     expect(scoreMathValidation(0, 0)).toBe(100);
   });
 
-  it('returns 80 for warnings only (≤2)', async () => {
+  it('returns 90 for warnings only (≤5)', async () => {
     const { scoreMathValidation } = await import('../src/services/compositeConfidence.js');
-    expect(scoreMathValidation(0, 1)).toBe(80);
-    expect(scoreMathValidation(0, 2)).toBe(80);
+    expect(scoreMathValidation(0, 1)).toBe(90);
+    expect(scoreMathValidation(0, 2)).toBe(90);
   });
 
-  it('returns 40 for exactly 1 error (regardless of warnings)', async () => {
+  it('returns 50 for exactly 1 error (regardless of warnings)', async () => {
     const { scoreMathValidation } = await import('../src/services/compositeConfidence.js');
-    expect(scoreMathValidation(1, 0)).toBe(40);
-    expect(scoreMathValidation(1, 3)).toBe(40);
+    expect(scoreMathValidation(1, 0)).toBe(50);
+    expect(scoreMathValidation(1, 3)).toBe(50);
   });
 
   it('returns 20 for multiple errors', async () => {
@@ -219,11 +219,13 @@ describe('scoreMathValidation', () => {
     expect(scoreMathValidation(3, 5)).toBe(20);
   });
 
-  it('returns 40 for warnings count >2 with no errors', async () => {
+  it('returns 90 for ≤5 warnings with no errors (warnings scale with period count)', async () => {
     const { scoreMathValidation } = await import('../src/services/compositeConfidence.js');
-    // 0 errors, 3 warnings → errorCount===0 && warningCount<=2 is false
-    // → falls through to errorCount<=1 check (0 ≤ 1) → returns 40
-    expect(scoreMathValidation(0, 3)).toBe(40);
+    // Warnings come from per-period checks and scale linearly with periods —
+    // a long extraction routinely produces several warnings even when every
+    // cell is correct. 0 errors + ≤5 warnings scores 90; >5 warnings 75.
+    expect(scoreMathValidation(0, 3)).toBe(90);
+    expect(scoreMathValidation(0, 6)).toBe(75);
   });
 });
 

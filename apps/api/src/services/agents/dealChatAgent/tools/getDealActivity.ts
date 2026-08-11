@@ -1,14 +1,30 @@
 // ─── get_deal_activity tool ──────────────────────────────────────
 // Fetches the deal's recent activity timeline.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 
+export const inputSchema = z.object({
+  limit: z.number().optional().describe('Max activities to return (default 15)'),
+});
+
 export function makeGetDealActivityTool(dealId: string, _orgId: string) {
-  return tool(
-    async ({ limit }) => {
+  return {
+    type: 'custom' as const,
+    name: 'get_deal_activity',
+    description: 'Fetch recent activity timeline for the deal — document uploads, status changes, team updates, chat history, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'Max activities to return (default 15)' },
+      },
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ limit }: z.infer<typeof inputSchema>) => {
       try {
         const { data: activities } = await supabase
           .from('Activity')
@@ -34,12 +50,5 @@ export function makeGetDealActivityTool(dealId: string, _orgId: string) {
         return 'Error fetching activity.';
       }
     },
-    {
-      name: 'get_deal_activity',
-      description: 'Fetch recent activity timeline for the deal — document uploads, status changes, team updates, chat history, etc.',
-      schema: z.object({
-        limit: z.number().optional().describe('Max activities to return (default 15)'),
-      }),
-    }
-  );
+  };
 }

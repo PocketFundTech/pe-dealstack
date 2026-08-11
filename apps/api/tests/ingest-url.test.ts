@@ -3,7 +3,7 @@
  * Tests the webScraper service and POST /api/ingest/url endpoint.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
@@ -252,5 +252,150 @@ describe('POST /api/ingest/url', () => {
     expect(response.status).toBe(201);
     expect(response.body.document.mimeType).toBe('text/html');
     expect(response.body.document.name).toContain('Website scrape');
+  });
+});
+
+// ============================================================
+// SSRF Protection — real router mounted with mocked deps
+// ============================================================
+
+vi.mock('../src/supabase.js', () => ({ supabase: { from: vi.fn() } }));
+vi.mock('../src/services/companyResearcher.js', () => ({
+  researchCompany: vi.fn(),
+  buildResearchText: vi.fn(() => ''),
+}));
+vi.mock('../src/services/aiExtractor.js', () => ({
+  extractDealDataFromText: vi.fn(),
+}));
+vi.mock('../src/services/financialValidator.js', () => ({
+  validateFinancials: vi.fn(() => ({ isValid: true, warnings: [] })),
+}));
+vi.mock('../src/services/dealMerger.js', () => ({
+  mergeIntoExistingDeal: vi.fn(),
+  getIconForIndustry: vi.fn(() => 'building'),
+}));
+vi.mock('../src/services/auditLog.js', () => ({
+  AuditLog: { aiIngest: vi.fn() },
+}));
+vi.mock('../src/rag.js', () => ({ embedDocument: vi.fn() }));
+const verifyDealAccess = vi.fn();
+vi.mock('../src/middleware/orgScope.js', () => ({
+  getOrgId: () => 'org-A',
+  verifyDealAccess,
+}));
+vi.mock('../src/routes/notifications.js', () => ({
+  resolveUserId: vi.fn(),
+}));
+vi.mock('../src/routes/ingest-shared.js', () => ({
+  formatValueWithUnit: vi.fn((v: number) => String(v)),
+}));
+vi.mock('../src/utils/logger.js', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+const buildRealRouterApp = async () => {
+  const { default: router } = await import('../src/routes/ingest-url.js');
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res, next) => {
+    req.user = { id: 'u', organizationId: 'org-A' };
+    next();
+  });
+  app.use('/api/ingest', router);
+  return app;
+};
+
+describe('POST /api/ingest/url — SSRF protection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // isPrivateUrl covers: localhost, 127.x, 10.x, 192.168.x, 172.16-31.x,
+  // 169.254/16 (link-local / AWS IMDS), 100.64/10 (CGNAT), 0.0.0.0,
+  // *.local, *.internal, and IPv6 loopback/link-local/unique-local.
+  const blocked = [
+    'http://localhost:6379/',
+    'http://10.0.0.1/',
+    'http://192.168.1.1/admin',
+    'http://127.0.0.1:8080/',
+    'http://172.16.5.5/',
+    'http://169.254.169.254/latest/meta-data/', // AWS IMDS
+    'http://[::1]/',                            // IPv6 loopback
+  ];
+
+  for (const url of blocked) {
+    it(`rejects internal/private URL: ${url}`, async () => {
+      const app = await buildRealRouterApp();
+      const res = await request(app).post('/api/ingest/url').send({ url });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/url|private|internal/i);
+    });
+  }
+
+  it('does not invoke researchCompany for private URLs', async () => {
+    const { researchCompany } = await import('../src/services/companyResearcher.js');
+    const app = await buildRealRouterApp();
+    await request(app).post('/api/ingest/url').send({ url: 'http://10.0.0.5/' });
+    expect(researchCompany).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================
+// F-6 — cross-tenant protection on body `dealId`
+// ============================================================
+
+describe('POST /api/ingest/url — cross-tenant protection (F-6)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+
+    // Make the research pipeline return enough content so the handler
+    // reaches the `if (targetDealId)` branch rather than 400'ing earlier.
+    const { researchCompany, buildResearchText } = await import(
+      '../src/services/companyResearcher.js'
+    );
+    (researchCompany as any).mockResolvedValue({
+      companyWebsite: { scrapedPages: ['page1', 'page2'] },
+    });
+    (buildResearchText as any).mockReturnValue('A'.repeat(500));
+
+    const { extractDealDataFromText } = await import('../src/services/aiExtractor.js');
+    (extractDealDataFromText as any).mockResolvedValue({
+      companyName: { value: 'Acme Corp', confidence: 90 },
+      industry: { value: 'Healthcare', confidence: 80 },
+      description: { value: 'Test', confidence: 90 },
+      currency: 'USD',
+      revenue: { value: 50, confidence: 90 },
+      ebitda: { value: 10, confidence: 90 },
+      ebitdaMargin: { value: 20, confidence: 90 },
+      dealSize: { value: null, confidence: 0 },
+      revenueGrowth: { value: 15, confidence: 80 },
+      employees: { value: 500, confidence: 70 },
+      foundedYear: { value: null, confidence: 0 },
+      headquarters: { value: null, confidence: 0 },
+      keyRisks: [],
+      investmentHighlights: [],
+      summary: 'test',
+      overallConfidence: 85,
+      needsReview: false,
+      reviewReasons: [],
+    });
+  });
+
+  it('returns 404 and does NOT call mergeIntoExistingDeal when dealId is from another org', async () => {
+    verifyDealAccess.mockResolvedValue(null);
+
+    const { mergeIntoExistingDeal } = await import('../src/services/dealMerger.js');
+    const app = await buildRealRouterApp();
+    const res = await request(app)
+      .post('/api/ingest/url')
+      .send({
+        url: 'https://example.com',
+        dealId: '00000000-0000-0000-0000-00000000beef',
+      });
+
+    expect(res.status).toBe(404);
+    expect(verifyDealAccess).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-00000000beef',
+      'org-A',
+    );
+    expect(mergeIntoExistingDeal).not.toHaveBeenCalled();
   });
 });
