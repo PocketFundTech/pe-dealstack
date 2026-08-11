@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { STAGE_LABELS } from "@/lib/constants";
+import type { DealScorecard } from "@/types";
 import { DocumentRow, DocumentAnalysisModal } from "./document-row";
 // ---------------------------------------------------------------------------
 // Types
@@ -44,6 +45,7 @@ export interface DealDetail {
   updatedAt: string;
   documents?: DocItem[];
   team?: TeamMember[];
+  scorecard?: DealScorecard | null;
   activities?: Activity[];
 }
 

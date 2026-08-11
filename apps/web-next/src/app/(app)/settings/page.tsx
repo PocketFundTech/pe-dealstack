@@ -12,6 +12,7 @@ import { ProfileSection, type UserProfile } from "./ProfileSection";
 import { NotificationsSection, DEFAULT_NOTIFICATION_PREFS } from "./NotificationsSection";
 import { TeamSection } from "./TeamSection";
 import { FirmProfileSection } from "./FirmProfileSection";
+import { CriteriaSection } from "./CriteriaSection";
 import { AiUsageSection } from "./AiUsageSection";
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ const NAV_SECTIONS = [
   { id: "notifications", label: "Notifications", icon: "notifications" },
   { id: "team", label: "Team", icon: "group" },
   { id: "firm-profile", label: "Firm Profile", icon: "domain" },
+  { id: "criteria", label: "Investment Criteria", icon: "grading" },
   { id: "ai-usage", label: "AI Usage", icon: "analytics" },
 ] as const;
 
@@ -324,6 +326,8 @@ export default function SettingsPage() {
           <TeamSection />
 
           <FirmProfileSection />
+
+          <CriteriaSection />
 
           <AiUsageSection />
 
