@@ -377,7 +377,8 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
               <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.calls.read</code>,{" "}
               <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.meetings.read</code>,{" "}
               <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.emails.read</code> and{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.tasks.read</code>.
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.tasks.read</code>, plus the matching{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.schemas.*</code> scopes for companies, contacts and deals (needed to import your custom fields).
             </p>
           </div>
           <button
