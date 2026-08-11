@@ -123,6 +123,17 @@ describe('trackedClaudeMessage', () => {
     expect(streamCalls[0].signal).toBe(controller.signal);
   });
 
+  it('omits betas entirely for roles with no beta flags (empty anthropic-beta header 400s)', async () => {
+    nextFinalMessage = okMessage('ok');
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({
+      operation: 'memo_section_generation',
+      role: 'memo',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect('betas' in streamCalls[0]).toBe(false);
+  });
+
   it('omits signal from the request when not provided', async () => {
     nextFinalMessage = okMessage('ok');
     const { trackedClaudeMessage } = await getClient();
