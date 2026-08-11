@@ -3,7 +3,18 @@
  *
  * Generates PE-grade AI commentary from computed analysis results.
  * Uses GPT-4.1 (MODEL_INSIGHTS tier) with a senior PE associate persona.
- * Caches results keyed by analysisHash to avoid repeat calls.
+ *
+ * Caching strategy (3 layers, in order of cost):
+ *   1. In-process LRU (30-min TTL, ~64 deals).  O(1).
+ *   2. Inflight Promise dedup — concurrent requests for the same
+ *      (dealId, analysisHash) share a single LLM call.
+ *   3. Supabase NarrativeInsightCache table (durable across restarts /
+ *      multi-instance deploys). Falls back gracefully if the table or
+ *      migration is missing.
+ *
+ * Without (1) and (2), any user reload or the inline + fullscreen views
+ * mounting in parallel each triggered a fresh LLM call — see the
+ * 21-call burst captured in `/tmp/langsmith_traces.jsonl` (audit/phase1-2).
  */
 
 import crypto from 'crypto';
@@ -31,6 +42,11 @@ export interface InsightsResult {
 }
 
 interface DealContext {
+  /** Internal Deal.id — populated by `getOrGenerateInsights` so the LLM call
+   * trace in LangSmith carries the dealId for filtering/correlation. */
+  dealId?: string;
+  /** Org.id for the deal — used as trace metadata for org-scoped dashboards. */
+  orgId?: string;
   dealName?: string;
   industry?: string;
   dealSize?: number;
@@ -51,12 +67,77 @@ export function computeAnalysisHash(analysis: any): string {
   return crypto.createHash('md5').update(JSON.stringify(stable)).digest('hex');
 }
 
-// ─── Cache ───────────────────────────────────────────────────
+// ─── L1: In-process memory cache ─────────────────────────────
+//
+// Survives until the lambda/process recycles. Bounded so a long-lived
+// instance with many deals doesn't grow unbounded.
+
+const MEMORY_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MEMORY_MAX_ENTRIES = 64;
+
+interface MemoryEntry {
+  insights: InsightsResult;
+  expiresAt: number;
+}
+
+const memoryCache = new Map<string, MemoryEntry>();
+
+function memoryKey(dealId: string, analysisHash: string): string {
+  return `${dealId}:${analysisHash}`;
+}
+
+function memoryGet(dealId: string, analysisHash: string): InsightsResult | null {
+  const key = memoryKey(dealId, analysisHash);
+  const entry = memoryCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    memoryCache.delete(key);
+    return null;
+  }
+  // LRU touch
+  memoryCache.delete(key);
+  memoryCache.set(key, entry);
+  return entry.insights;
+}
+
+function memorySet(dealId: string, analysisHash: string, insights: InsightsResult): void {
+  const key = memoryKey(dealId, analysisHash);
+  memoryCache.set(key, { insights, expiresAt: Date.now() + MEMORY_TTL_MS });
+  // Evict oldest if over capacity (Map iteration order = insertion order)
+  while (memoryCache.size > MEMORY_MAX_ENTRIES) {
+    const oldestKey = memoryCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    memoryCache.delete(oldestKey);
+  }
+}
+
+function memoryDeleteForDeal(dealId: string): void {
+  const prefix = `${dealId}:`;
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(prefix)) memoryCache.delete(key);
+  }
+}
+
+// ─── L2: Inflight request dedup ──────────────────────────────
+//
+// Concurrent callers that hit a cold cache should share one LLM call.
+// Without this, the inline DealAnalysisSection and the AnalysisFullView
+// fullscreen modal both fetch /financials/insights on mount and each
+// independently trigger a fresh generation.
+
+const inflight = new Map<string, Promise<InsightsResult>>();
+
+// ─── L3: Supabase durable cache ──────────────────────────────
 
 export async function getCachedInsights(
   dealId: string,
   analysisHash: string,
 ): Promise<InsightsResult | null> {
+  // L1 fast path
+  const fromMemory = memoryGet(dealId, analysisHash);
+  if (fromMemory) return fromMemory;
+
+  // L3 durable
   try {
     const { data } = await supabase
       .from('NarrativeInsightCache')
@@ -65,7 +146,9 @@ export async function getCachedInsights(
       .eq('analysisHash', analysisHash)
       .single();
 
-    return data?.insights as InsightsResult | null;
+    const insights = (data?.insights as InsightsResult | undefined) ?? null;
+    if (insights) memorySet(dealId, analysisHash, insights);
+    return insights;
   } catch (err) {
     // Cache miss / DB error — caller will regenerate. Log so persistent failures are visible.
     log.warn('narrativeInsights: getCachedInsights failed', { error: err instanceof Error ? err.message : String(err), dealId });
@@ -79,6 +162,10 @@ export async function cacheInsights(
   analysisHash: string,
   insights: InsightsResult,
 ): Promise<void> {
+  // Always populate L1 — survives even if the durable upsert below fails
+  // (e.g. NarrativeInsightCache migration not yet run on this env).
+  memorySet(dealId, analysisHash, insights);
+
   try {
     await supabase
       .from('NarrativeInsightCache')
@@ -95,6 +182,7 @@ export async function cacheInsights(
 }
 
 export async function invalidateCache(dealId: string): Promise<void> {
+  memoryDeleteForDeal(dealId);
   try {
     await supabase
       .from('NarrativeInsightCache')
@@ -102,6 +190,46 @@ export async function invalidateCache(dealId: string): Promise<void> {
       .eq('dealId', dealId);
   } catch (err) {
     log.error('narrativeInsights: invalidateCache failed', err);
+  }
+}
+
+// ─── Coordinated entry point (cache + dedup + generate) ──────
+
+export async function getOrGenerateInsights(
+  dealId: string,
+  orgId: string,
+  analysisHash: string,
+  analysisResult: any,
+  dealContext: DealContext,
+  memory: MemoryContext,
+): Promise<{ insights: InsightsResult; fromCache: boolean }> {
+  // 1. Cache hit?
+  const cached = await getCachedInsights(dealId, analysisHash);
+  if (cached) return { insights: cached, fromCache: true };
+
+  // 2. Inflight dedup — share an in-progress generation if one exists
+  const key = memoryKey(dealId, analysisHash);
+  const existing = inflight.get(key);
+  if (existing) {
+    const insights = await existing;
+    return { insights, fromCache: true };
+  }
+
+  // 3. Cold path — generate, then cache + clear inflight
+  const promise = (async () => {
+    // Inject dealId/orgId into the context so downstream LLM calls trace
+    // with the right deal attribution in LangSmith.
+    const ctxWithIds: DealContext = { ...dealContext, dealId, orgId };
+    const insights = await generateNarrativeInsights(analysisResult, ctxWithIds, memory);
+    cacheInsights(dealId, orgId, analysisHash, insights).catch(() => {});
+    return insights;
+  })();
+  inflight.set(key, promise);
+  try {
+    const insights = await promise;
+    return { insights, fromCache: false };
+  } finally {
+    inflight.delete(key);
   }
 }
 
@@ -299,16 +427,29 @@ Return JSON:
 }`;
 
   try {
-    const response = await trackedChatCompletion('narrative_insights', {
-      model: MODEL_INSIGHTS,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
-      max_tokens: 4000,
-    });
+    const response = await trackedChatCompletion(
+      'narrative_insights',
+      {
+        model: MODEL_INSIGHTS,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.3,
+        max_tokens: 4000,
+      },
+      undefined,
+      {
+        tags: ['narrative_insights', 'analysis', dealContext.industry ?? 'unknown_industry'],
+        traceMeta: {
+          dealId: dealContext.dealId,
+          orgId: dealContext.orgId,
+          dealName: dealContext.dealName,
+          industry: dealContext.industry,
+        },
+      },
+    );
 
     const content = response.choices[0]?.message?.content;
     if (!content) throw new Error('Empty AI response');

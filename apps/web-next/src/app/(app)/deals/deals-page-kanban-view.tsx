@@ -8,7 +8,7 @@ import {
   type MetricKey,
 } from "@/lib/constants";
 import { cn } from "@/lib/cn";
-import type { Deal } from "@/types";
+import type { Deal, FinancialSummariesMap } from "@/types";
 import { KanbanCard } from "./components";
 
 // ---------------------------------------------------------------------------
@@ -22,12 +22,21 @@ export function KanbanView({
   dragOverStage,
   setDragOverStage,
   onDrop,
+  summaries,
+  summariesLoading,
 }: {
   deals: Deal[];
   activeMetrics: MetricKey[];
   dragOverStage: string | null;
   setDragOverStage: (stage: string | null) => void;
   onDrop: (e: DragEvent<HTMLDivElement>, newStage: string) => void;
+  /**
+   * Latest INCOME_STATEMENT summary keyed by dealId. Optional so the
+   * kanban renders before the bulk fetch resolves.
+   */
+  summaries?: FinancialSummariesMap;
+  /** True until the bulk summaries fetch resolves. */
+  summariesLoading?: boolean;
 }) {
   return (
     <div className="flex gap-4 overflow-x-auto pb-4">
@@ -61,7 +70,13 @@ export function KanbanView({
                 onDrop={(e) => onDrop(e, stage)}
               >
                 {stageDeals.map((deal) => (
-                  <KanbanCard key={deal.id} deal={deal} activeMetrics={activeMetrics} />
+                  <KanbanCard
+                    key={deal.id}
+                    deal={deal}
+                    activeMetrics={activeMetrics}
+                    summary={summaries?.[deal.id]}
+                    summariesLoading={summariesLoading}
+                  />
                 ))}
                 {stageDeals.length === 0 && (
                   <div className="text-center py-8 text-text-muted text-sm">

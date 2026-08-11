@@ -13,9 +13,10 @@ import type { Task } from "./components";
 interface TasksModalProps {
   tasks: Task[];
   onClose: () => void;
+  onToggle: (taskId: string, currentStatus: string) => void;
 }
 
-export function TasksModal({ tasks, onClose }: TasksModalProps) {
+export function TasksModal({ tasks, onClose, onToggle }: TasksModalProps) {
   const PRIORITY_ORDER: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
   const sorted = [...tasks].sort((a, b) => {
     const aDone = a.status === "COMPLETED" ? 1 : 0;
@@ -77,7 +78,12 @@ export function TasksModal({ tasks, onClose }: TasksModalProps) {
                 return (
                   <div key={task.id} className="p-4 border border-border-subtle rounded-lg hover:border-primary/30 transition-colors">
                     <div className="flex items-start gap-3">
-                      <input type="checkbox" checked={done} readOnly className="mt-1 size-4 rounded border-gray-300 text-primary" />
+                      <input
+                        type="checkbox"
+                        checked={done}
+                        onChange={() => onToggle(task.id, task.status)}
+                        className="mt-1 size-4 rounded border-gray-300 text-primary cursor-pointer"
+                      />
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className={cn("font-semibold text-text-main", done && "line-through opacity-50")}>{task.title}</span>

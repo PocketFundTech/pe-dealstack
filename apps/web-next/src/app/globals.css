@@ -607,3 +607,13 @@ textarea:focus-visible {
 
 /* Input placeholder */
 .ai-input::placeholder { color: #9CA3AF; }
+
+/* Floating AI button yields to right-side drawers: any overlay drawer that
+   adds the `right-drawer` marker class (e.g. the contacts detail panel)
+   fades the FAB out so it never hovers over panel content. CSS-only via
+   :has() — no state threading between the drawer and the assistant. */
+body:has(.right-drawer) .ai-fab-btn {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}

@@ -254,7 +254,10 @@ export function mergeExtractionResults(results: ClassificationResult[]): Classif
   for (const [statementType, periodMap] of statementMap.entries()) {
     // Determine dominant currency/unitScale from first entry
     const firstEntry = periodMap.values().next().value as PeriodEntry | undefined;
-    const unitScale = (firstEntry?.unitScale ?? 'MILLIONS') as ClassifiedStatement['unitScale'];
+    // Default to ACTUALS rather than MILLIONS when no chunk supplied a unit —
+    // safer because it means "do not multiply" and matches the new
+    // preserve-source-scale policy (financialClassifier.normalizeUnitScale).
+    const unitScale = (firstEntry?.unitScale ?? 'ACTUALS') as ClassifiedStatement['unitScale'];
     const currency = firstEntry?.currency ?? 'USD';
 
     statements.push({

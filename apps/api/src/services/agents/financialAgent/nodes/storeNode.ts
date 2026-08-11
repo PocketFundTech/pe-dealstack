@@ -14,8 +14,18 @@ import { log } from '../../../../utils/logger.js';
 import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { AgentStep } from '../state.js';
-import type { ClassifiedStatement } from '../../../financialClassifier.js';
 import { CLAUDE_NATIVE_PDF_MARKER } from '../../../extraction/claudeEngine.js';
+import {
+  applySourceTextDollarOverride,
+  type ClassificationResult,
+  type ClassifiedStatement,
+  type FinancialPeriod,
+} from '../../../financialClassifier.js';
+import {
+  parsePeriodToYearMonth,
+  getLineItemDollars,
+  REVENUE_KEYS,
+} from '../../../reconciler/shared.js';
 import {
   computeCompositeConfidence,
   getConfidenceTier,
@@ -93,6 +103,166 @@ export function computeSourceMatchAvg(
 }
 
 /**
+ * Pre-write dedup of overlapping annual + monthly periods AND zeroed annual
+ * projections. Mutates each statement's `periods[]` in place.
+ *
+ * Why pre-write (not post-store like the audit-report dedup in
+ * groundTruth.ts): runDeepPass() upserts every period as its own DB row, so
+ * by the time the audit reader collapses overlaps the duplicates already
+ * live in the DB and pollute every other consumer (UI tables,
+ * dealCacheWriteback, cross-doc reconciler). Mirroring groundTruth.ts'
+ * "monthly wins over annual for the same year" rule here keeps the DB clean
+ * intra-document. Cross-document reconciliation is a separate concern.
+ *
+ * Rule C: when multiple monthly periods within a single statement resolve
+ *         to the same (year, month), keep one canonical-label period and
+ *         drop the rest. Runs FIRST so Rule A's overlap detection isn't
+ *         inflated by label-format duplicates of the same source row.
+ * Rule A: when a year has both an annual period and any monthly period,
+ *         drop the annual.
+ * Rule B: when an annual period has revenue == 0 but the same year's
+ *         monthly periods sum to materially non-zero revenue, drop the
+ *         (almost certainly stub) annual.
+ *
+ * Returns one log entry per dropped period so the agent log shows what
+ * happened.
+ */
+const ZERO_ANNUAL_REVENUE_THRESHOLD_USD = 1000;
+
+/** Rank a monthly period label for canonical-keep selection. Lower wins.
+ * Why: ISO `YYYY-MM` is unambiguous; long-form `Mon YYYY` survives any
+ * downstream UI that strips two-digit-year heuristics; short-form `Mon-YY`
+ * is the most likely to be re-parsed wrong by a dumb consumer. */
+function canonicalLabelRank(label: string): number {
+  const trimmed = label.trim();
+  if (/^\d{4}-\d{2}$/.test(trimmed)) return 0;
+  if (/^[A-Za-z]+\s+\d{4}$/.test(trimmed)) return 1;
+  if (/^[A-Za-z]+-\d{2}$/.test(trimmed)) return 2;
+  return 3;
+}
+
+export function dedupAnnualVsMonthly(statements: ClassifiedStatement[]): AgentStep[] {
+  const logs: AgentStep[] = [];
+
+  for (const stmt of statements) {
+    if (stmt.periods.length === 0) continue;
+
+    // ─── Rule C — collapse same-(year,month) duplicates first ────────
+    type ParsedPeriod = { period: FinancialPeriod; year: number; month: number; idx: number };
+    const monthlyByKey = new Map<string, ParsedPeriod[]>();
+    stmt.periods.forEach((period, idx) => {
+      const parsed = parsePeriodToYearMonth(period.period);
+      if (!parsed || parsed.month == null) return;
+      const key = `${parsed.year}-${parsed.month}`;
+      const arr = monthlyByKey.get(key) ?? [];
+      arr.push({ period, year: parsed.year, month: parsed.month, idx });
+      monthlyByKey.set(key, arr);
+    });
+
+    const ruleCDrops = new Set<FinancialPeriod>();
+    for (const [, group] of monthlyByKey) {
+      if (group.length < 2) continue;
+      const sorted = [...group].sort((a, b) => {
+        const r = canonicalLabelRank(a.period.period) - canonicalLabelRank(b.period.period);
+        return r !== 0 ? r : a.idx - b.idx;
+      });
+      const keep = sorted[0];
+      const drops = sorted.slice(1);
+
+      // Warn (don't merge) when retained candidates disagree on any shared
+      // numeric line item — the equal-value case is the common one, so a
+      // mismatch means the upstream extractor is producing inconsistent
+      // numbers under different labels and a human should look.
+      for (const cand of drops) {
+        for (const [field, val] of Object.entries(cand.period.lineItems)) {
+          if (typeof val !== 'number' || !Number.isFinite(val)) continue;
+          const keepVal = keep.period.lineItems[field];
+          if (typeof keepVal !== 'number' || !Number.isFinite(keepVal)) continue;
+          if (keepVal !== val) {
+            logs.push(step(
+              'store',
+              `Same-month dedup mismatch on ${stmt.statementType} ${field} for ${cand.period.period} vs ${keep.period.period}: ${keepVal} vs ${val}`,
+              'Pre-write dedup (Rule C: divergent values; keeping canonical-label).',
+            ));
+          }
+        }
+      }
+
+      for (const cand of drops) {
+        ruleCDrops.add(cand.period);
+        logs.push(step(
+          'store',
+          `Dropped duplicate ${stmt.statementType} period "${cand.period.period}" — same (year, month) as kept "${keep.period.period}"`,
+          'Pre-write dedup (Rule C: same-month-different-label).',
+        ));
+      }
+    }
+    if (ruleCDrops.size > 0) {
+      stmt.periods = stmt.periods.filter(p => !ruleCDrops.has(p));
+    }
+
+    // ─── Rule A / Rule B — annual vs monthly ─────────────────────────
+    // Bucket each period into annual / monthly by parsed shape.
+    type Tagged = { period: FinancialPeriod; year: number; isMonthly: boolean };
+    const tagged: Tagged[] = [];
+    for (const period of stmt.periods) {
+      const parsed = parsePeriodToYearMonth(period.period);
+      if (!parsed) continue;
+      tagged.push({ period, year: parsed.year, isMonthly: parsed.month != null });
+    }
+
+    const yearsWithMonthly = new Set<number>();
+    for (const t of tagged) if (t.isMonthly) yearsWithMonthly.add(t.year);
+
+    // Sum monthly revenue per year (actual dollars) for Rule B.
+    const monthlyRevenueByYear = new Map<number, number>();
+    for (const t of tagged) {
+      if (!t.isMonthly) continue;
+      const rev = getLineItemDollars(t.period.lineItems, REVENUE_KEYS, stmt.unitScale);
+      if (rev == null) continue;
+      monthlyRevenueByYear.set(t.year, (monthlyRevenueByYear.get(t.year) ?? 0) + rev);
+    }
+
+    const periodsToDrop = new Set<FinancialPeriod>();
+
+    for (const t of tagged) {
+      if (t.isMonthly) continue;
+      // Rule A — annual + any monthly for the same year → drop annual.
+      if (yearsWithMonthly.has(t.year)) {
+        periodsToDrop.add(t.period);
+        logs.push(step(
+          'store',
+          `Dropped annual ${stmt.statementType} period "${t.period.period}" — monthly rows present for ${t.year}`,
+          'Pre-write dedup (Rule A: annual/monthly overlap).',
+        ));
+        continue;
+      }
+      // Rule B — annual revenue==0 but monthly sum > threshold → drop annual.
+      const annualRev = getLineItemDollars(t.period.lineItems, REVENUE_KEYS, stmt.unitScale);
+      const monthlyRev = monthlyRevenueByYear.get(t.year);
+      if (
+        annualRev === 0 &&
+        monthlyRev != null &&
+        Math.abs(monthlyRev) > ZERO_ANNUAL_REVENUE_THRESHOLD_USD
+      ) {
+        periodsToDrop.add(t.period);
+        logs.push(step(
+          'store',
+          `Dropped zeroed annual ${stmt.statementType} period "${t.period.period}" — monthly revenue sums to $${Math.round(monthlyRev).toLocaleString()} for ${t.year}`,
+          'Pre-write dedup (Rule B: zero annual + non-zero monthly).',
+        ));
+      }
+    }
+
+    if (periodsToDrop.size > 0) {
+      stmt.periods = stmt.periods.filter(p => !periodsToDrop.has(p));
+    }
+  }
+
+  return logs;
+}
+
+/**
  * LangGraph Store Node
  *
  * Reads: dealId, documentId, statements, classification, rawText, extractionSource
@@ -120,12 +290,29 @@ export async function storeNode(
   steps.push(step('store', `Storing ${stmtTypes} (${totalPeriods} periods) to database`));
 
   try {
+    // Pre-write dedup. Mutates `statements` in place — must run BEFORE
+    // building classificationToStore so runDeepPass never sees the
+    // overlapping annual rows or the zeroed annual projections.
+    const dedupLogs = dedupAnnualVsMonthly(statements);
+    if (dedupLogs.length > 0) {
+      steps.push(...dedupLogs);
+      steps.push(step('store', `Pre-write dedup removed ${dedupLogs.length} period(s)`));
+    }
+
     // Build a ClassificationResult from the current (possibly corrected) statements
-    const classificationToStore = {
+    const classificationToStore: ClassificationResult = {
       statements,
       overallConfidence: state.overallConfidence,
       warnings: state.warnings,
     };
+
+    // Last-mile unit guard: run the source-quote dollar override on the
+    // statements about to be persisted. This is the canonical hook —
+    // catches the path where extraction ran cleanly (no self-correct loop)
+    // but the LLM still mis-tagged a synthesized period (LTM, "Current
+    // Month") whose `_source` quotes literally cite "$1,473" / "~$15,600".
+    // Idempotent on rows that the upstream classifier already corrected.
+    applySourceTextDollarOverride(classificationToStore);
 
     // Compute composite confidence
     const mathScore = scoreMathValidation(
@@ -166,15 +353,36 @@ export async function storeNode(
       ));
     }
 
-    // Confidence-gated storage
-    if (tier === 'very_low') {
-      steps.push(step('store', 'Confidence too low (<60%) — NOT storing. User must review manually.'));
+    // Confidence-aware storage. Previously: tier 'very_low' (<60%) was a hard
+    // refusal — the entire batch was discarded and the user saw nothing. That
+    // silently lost legitimate data when cross-verify flagged a few derived
+    // fields the source genuinely didn't have (e.g., a P&L without an explicit
+    // EBITDA line gets EBITDA flagged → composite drops to ~58 → store
+    // refused). For a 36-month spreadsheet, throwing away every period because
+    // 4 derived fields disagreed is the wrong tradeoff.
+    //
+    // New behaviour: ALWAYS store, but surface the confidence tier as the
+    // mergeStatus so the UI can flag low-confidence extractions for review.
+    // Below ~30% composite (extreme garbage) we still skip — at that point the
+    // extraction is so unreliable that polluting the deal record is worse than
+    // showing nothing.
+    if (compositeScore < 30) {
+      steps.push(step('store', `Composite confidence ${compositeScore}% is critically low — refusing to store. User must re-extract.`));
       return {
         status: 'completed',
         overallConfidence: compositeScore,
-        warnings: [...(state.warnings || []), `Extraction confidence too low (${compositeScore}%). Manual review required.`],
+        warnings: [...(state.warnings || []), `Extraction confidence critically low (${compositeScore}%). Storage skipped.`],
         steps,
       };
+    }
+    if (tier === 'very_low') {
+      // 30-60% — store but flag for review. User can fix individual periods
+      // rather than re-running the whole 5-minute extraction.
+      steps.push(step(
+        'store',
+        `Composite confidence ${compositeScore}% — storing with needs_review flag so you can audit individual periods.`,
+        `Common cause: cross-verify flagged derived fields (EBITDA, margins) the source doesn't actually have. The raw revenue / opex / net income periods are usually fine.`,
+      ));
     }
 
     const result = await runDeepPass({

@@ -4571,7 +4571,7 @@ Let me chronologically analyze the conversation:
      - #7 AI Reports/Templates: PARTIAL
      - #8 Chatbot History: PARTIAL (backend persists, UI issues)
 
-3. **User provided RESEND_API_KEY**: `re_bYfa8qFG_9DwJFAvAJ5naTAc1UM3kCsYb`
+3. **User provided RESEND_API_KEY**: `re_REDACTED` <!-- redacted: leaked key, rotated -->
    - Added to `apps/api/.env`
    - Updated TODO-CALL-FEB19.md with comprehensive status for all 20 items
 
@@ -4638,7 +4638,7 @@ Summary:
      - Current status: P0=3/3✅, P1=3✅+1⚠️+1❌, P2=7❌, P3=5❌
 
    - **`/Users/ganesh/AI CRM/apps/api/.env`**
-     - Added `RESEND_API_KEY=re_bYfa8qFG_9DwJFAvAJ5naTAc1UM3kCsYb` (still needs to be added to Render production env)
+     - Added `RESEND_API_KEY=re_REDACTED` (still needs to be added to Render production env) <!-- redacted: leaked key, rotated -->
 
    - **`/Users/ganesh/AI CRM/apps/web/crm.html`** (1603 lines)
      - Full CRM deals page with filters, sort, search, list+kanban views, bulk actions
@@ -4724,7 +4724,7 @@ Summary:
 6. All User Messages:
    - "download the latest version of code from my git and make our prj upto date"
    - "from the @TODO-CALL-FEB19.md, updte this with whats done and whats remianing, lets start building one by one, dont do all at once, after every task get my approval and then only move to next if i approve!"
-   - "here is RESEND_API_KEY=re_bYfa8qFG_9DwJFAvAJ5naTAc1UM3kCsYb update in env if not present!"
+   - "here is RESEND_API_KEY=re_REDACTED update in env if not present!" <!-- redacted: leaked key, rotated -->
    - "whats next from the list? we have to do?"
    - "lets get it done one by one, take my approval after each task and then only move to next!"
    - "lets move to next" (after #5 source quotes completed)

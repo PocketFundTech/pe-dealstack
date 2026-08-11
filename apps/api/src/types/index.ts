@@ -203,6 +203,7 @@ export type NotificationType =
   | 'AI_INSIGHT'
   | 'TASK_ASSIGNED'
   | 'COMMENT'
+  | 'CONTACT_FOLLOWUP'
   | 'SYSTEM';
 
 export interface Notification {

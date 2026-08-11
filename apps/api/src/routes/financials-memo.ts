@@ -38,12 +38,30 @@ router.get('/deals/:dealId/financials/benchmark', async (req, res) => {
       return res.json({ hasData: false });
     }
 
+    // Normalise stored values to MILLIONS so the deal vs peer comparison
+    // is apples-to-apples regardless of the source-document scale.
+    // unitScale was previously assumed MILLIONS — now it's whatever the
+    // extractor saw on the source (ACTUALS for raw $ figures, THOUSANDS
+    // for tables in '000s, BILLIONS for $B, etc).
+    const toMillions = (val: number | null | undefined, unit: string | null | undefined): number | null => {
+      if (val == null) return null;
+      switch ((unit || 'MILLIONS').toUpperCase()) {
+        case 'BILLIONS':  return val * 1000;
+        case 'MILLIONS':  return val;
+        case 'THOUSANDS': return val / 1000;
+        case 'ACTUALS':   return val / 1_000_000;
+        default:          return val;
+      }
+    };
+
     const dealLi = dealRows[0].lineItems as Record<string, number | null>;
-    const dealRev = dealLi.revenue;
-    const dealEbitda = dealLi.ebitda;
+    const dealUnit = (dealRows[0] as any).unitScale ?? 'MILLIONS';
+    const dealRev = toMillions(dealLi.revenue, dealUnit);
+    const dealEbitda = toMillions(dealLi.ebitda, dealUnit);
     const dealMargin = dealRev && dealEbitda && dealRev > 0 ? (dealEbitda / dealRev) * 100 : null;
-    const dealGrossMargin = dealLi.gross_profit && dealRev && dealRev > 0
-      ? (dealLi.gross_profit / dealRev) * 100 : null;
+    const dealGP = toMillions(dealLi.gross_profit, dealUnit);
+    const dealGrossMargin = dealGP && dealRev && dealRev > 0
+      ? (dealGP / dealRev) * 100 : null;
 
     // Get peer deals in the org. Push the cap down to the DB (instead of
     // fetching all and slicing in-app) so a tenant with thousands of deals
@@ -66,7 +84,7 @@ router.get('/deals/:dealId/financials/benchmark', async (req, res) => {
     for (const peer of allDeals.slice(0, PEER_DEAL_CAP)) {
       const { data: peerRows } = await supabase
         .from('FinancialStatement')
-        .select('lineItems')
+        .select('lineItems, unitScale')
         .eq('dealId', peer.id)
         .eq('isActive', true)
         .eq('statementType', 'INCOME_STATEMENT')
@@ -76,13 +94,15 @@ router.get('/deals/:dealId/financials/benchmark', async (req, res) => {
 
       if (peerRows && peerRows.length > 0) {
         const pli = peerRows[0].lineItems as Record<string, number | null>;
-        const pRev = pli.revenue;
-        const pEbitda = pli.ebitda;
+        const pUnit = (peerRows[0] as any).unitScale ?? 'MILLIONS';
+        const pRev = toMillions(pli.revenue, pUnit);
+        const pEbitda = toMillions(pli.ebitda, pUnit);
+        const pGP = toMillions(pli.gross_profit, pUnit);
         if (pRev && pEbitda && pRev > 0) {
           peerMetrics.push({
             revenue: pRev,
             ebitdaMargin: (pEbitda / pRev) * 100,
-            grossMargin: pli.gross_profit && pRev > 0 ? (pli.gross_profit / pRev) * 100 : null,
+            grossMargin: pGP && pRev > 0 ? (pGP / pRev) * 100 : null,
           });
         }
       }

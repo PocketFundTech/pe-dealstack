@@ -366,13 +366,17 @@ export function ResultDisplay({ result, onReset }: ResultDisplayProps) {
         </div>
       )}
 
-      {/* Review reasons */}
+      {/* Review reasons — strip the trailing "(N% confidence)" parenthetical
+          from each reason. The substring is the per-field score from the
+          fast-pass extractor (aiExtractor.ts), but reads like the OVERALL
+          extraction is at 0% when surfaced verbatim. The overall % is
+          already shown in its own ResultField above. */}
       {result.extraction?.needsReview && result.extraction.reviewReasons && result.extraction.reviewReasons.length > 0 && (
         <div className="mt-4 p-3 rounded-lg bg-yellow-50 border border-yellow-200">
-          <p className="text-xs font-medium text-yellow-800 mb-1">Review needed:</p>
+          <p className="text-xs font-medium text-yellow-800 mb-1">Items needing review:</p>
           <ul className="text-xs text-yellow-700 list-disc list-inside space-y-0.5">
             {result.extraction.reviewReasons.map((r, i) => (
-              <li key={i}>{r}</li>
+              <li key={i}>{r.replace(/\s*\(\d+%\s*confidence\)\s*$/i, "")}</li>
             ))}
           </ul>
         </div>

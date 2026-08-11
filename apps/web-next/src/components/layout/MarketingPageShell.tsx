@@ -105,6 +105,9 @@ export function MarketingPageShell({
             <Link href="/terms-of-service" className="text-sm text-[#64748b] hover:text-primary transition-colors">
               Terms of Service
             </Link>
+            <Link href="/security" className="text-sm text-[#64748b] hover:text-primary transition-colors">
+              Security
+            </Link>
             <a href="mailto:hello@pocket-fund.com" className="text-sm text-[#64748b] hover:text-primary transition-colors">
               Contact
             </a>

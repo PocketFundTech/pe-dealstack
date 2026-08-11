@@ -1,5 +1,6 @@
 "use client";
 
+import { formatFinancialValue, type UnitScale } from "@/lib/formatters";
 import {
   type AnalysisData,
   type KeyMetric,
@@ -63,12 +64,21 @@ function RevenueQualityCard({ rq }: { rq: NonNullable<AnalysisData["revenueQuali
 // EBITDA Bridge (matches legacy renderEBITDABridge)
 // ---------------------------------------------------------------------------
 
-function EBITDABridgeCard({ bridge, }: { bridge: NonNullable<AnalysisData["ebitdaBridge"]> }) {
+function EBITDABridgeCard({
+  bridge,
+  scale,
+  currency,
+}: {
+  bridge: NonNullable<AnalysisData["ebitdaBridge"]>;
+  scale: UnitScale | undefined;
+  currency: string;
+}) {
   const vp = bridge.periods.filter((p) => p.reportedEbitda != null);
   if (!vp.length) return null;
 
   // Collect all unique addback labels across periods
   const allLabels = [...new Set(vp.flatMap((p) => p.addbacks.map((a) => a.label)))];
+  const fmt = (v: number | null | undefined) => formatFinancialValue(v, scale, { currency });
 
   return (
     <AnalysisCard>
@@ -89,7 +99,7 @@ function EBITDABridgeCard({ bridge, }: { bridge: NonNullable<AnalysisData["ebitd
             <tr className="border-b border-gray-100">
               <td className="p-2.5 font-semibold text-gray-800">Reported EBITDA</td>
               {vp.map((p) => (
-                <td key={p.period} className="text-right p-2.5 font-semibold text-gray-800">${p.reportedEbitda}M</td>
+                <td key={p.period} className="text-right p-2.5 font-semibold text-gray-800">{fmt(p.reportedEbitda)}</td>
               ))}
             </tr>
             {allLabels.map((label) => (
@@ -99,7 +109,7 @@ function EBITDABridgeCard({ bridge, }: { bridge: NonNullable<AnalysisData["ebitd
                   const ab = p.addbacks.find((a) => a.label === label);
                   return (
                     <td key={p.period} className="text-right p-2.5" style={{ color: "#059669" }}>
-                      {ab?.amount != null ? `+$${ab.amount}M` : "--"}
+                      {ab?.amount != null ? `+${fmt(ab.amount)}` : "—"}
                     </td>
                   );
                 })}
@@ -109,8 +119,8 @@ function EBITDABridgeCard({ bridge, }: { bridge: NonNullable<AnalysisData["ebitd
               <td className="p-2.5 font-bold" style={{ color: BANKER_BLUE }}>Adjusted EBITDA</td>
               {vp.map((p) => (
                 <td key={p.period} className="text-right p-2.5 font-bold" style={{ color: BANKER_BLUE }}>
-                  ${p.adjustedEbitda}M
-                  {p.adjustmentPct ? <span className="text-[9px] ml-1" style={{ color: "#059669" }}>(+{p.adjustmentPct}%)</span> : null}
+                  {fmt(p.adjustedEbitda)}
+                  {p.adjustmentPct ? <span className="text-[9px] ml-1" style={{ color: "#059669" }}>(+{p.adjustmentPct.toFixed(1)}%)</span> : null}
                 </td>
               ))}
             </tr>
@@ -127,11 +137,13 @@ function EBITDABridgeCard({ bridge, }: { bridge: NonNullable<AnalysisData["ebitd
 
 export function OverviewPanel({ analysis }: { analysis: AnalysisData | null }) {
   const qoe = analysis?.qoe;
+  const scale = (analysis?.unitScale ?? undefined) as UnitScale | undefined;
+  const currency = analysis?.currency ?? "USD";
   const metrics: KeyMetric[] = [];
   if (analysis?.revenueQuality?.revenueCAGR != null)
-    metrics.push({ label: "Revenue CAGR", value: analysis.revenueQuality.revenueCAGR + "%", color: analysis.revenueQuality.revenueCAGR >= 0 ? "#059669" : "#dc2626" });
+    metrics.push({ label: "Revenue CAGR", value: analysis.revenueQuality.revenueCAGR.toFixed(1) + "%", color: analysis.revenueQuality.revenueCAGR >= 0 ? "#059669" : "#dc2626" });
   if (analysis?.cashFlowAnalysis?.avgConversion != null)
-    metrics.push({ label: "FCF Conversion", value: analysis.cashFlowAnalysis.avgConversion + "%", color: analysis.cashFlowAnalysis.avgConversion >= 60 ? "#059669" : "#d97706" });
+    metrics.push({ label: "FCF Conversion", value: analysis.cashFlowAnalysis.avgConversion.toFixed(1) + "%", color: analysis.cashFlowAnalysis.avgConversion >= 60 ? "#059669" : "#d97706" });
   if (analysis?.debtCapacity?.currentLeverage != null)
     metrics.push({ label: "Net Leverage", value: analysis.debtCapacity.currentLeverage + "x", color: analysis.debtCapacity.currentLeverage <= 3 ? "#059669" : "#d97706" });
   if (analysis?.lboScreen?.passesScreen != null)
@@ -180,7 +192,7 @@ export function OverviewPanel({ analysis }: { analysis: AnalysisData | null }) {
       )}
 
       {/* EBITDA Bridge */}
-      {analysis?.ebitdaBridge && <EBITDABridgeCard bridge={analysis.ebitdaBridge} />}
+      {analysis?.ebitdaBridge && <EBITDABridgeCard bridge={analysis.ebitdaBridge} scale={scale} currency={currency} />}
 
       {/* Revenue Quality */}
       {analysis?.revenueQuality && <RevenueQualityCard rq={analysis.revenueQuality} />}

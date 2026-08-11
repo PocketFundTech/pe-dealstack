@@ -50,6 +50,14 @@ vi.mock('../src/services/aiExtractor.js', () => ({
 }));
 
 vi.mock('../src/rag.js', () => ({ embedDocument: vi.fn() }));
+vi.mock('../src/services/documentDedup.js', () => ({
+  findExistingDocument: vi.fn(async () => null),
+  logDuplicateSkip: vi.fn(),
+}));
+vi.mock('../src/services/firmTeaserService.js', () => ({
+  generateTeasersForDeal: vi.fn(async () => {}),
+}));
+
 vi.mock('../src/services/documentParser.js', () => ({ extractTextFromWord: vi.fn() }));
 vi.mock('../src/services/excelFinancialExtractor.js', () => ({
   extractTextFromExcel: vi.fn(),

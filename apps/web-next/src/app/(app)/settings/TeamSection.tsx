@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { InviteTeamModal } from "@/components/layout/InviteTeamModal";
+import { RequireMfaToggle } from "./TeamSection.requireMfa";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -23,7 +24,11 @@ const STATUS_STYLES: Record<string, string> = {
 
 // ─── Component ──────────────────────────────────────────────────────
 
-export function TeamSection() {
+export function TeamSection({
+  onToast,
+}: {
+  onToast: (msg: string, type: "success" | "error") => void;
+}) {
   const [invites, setInvites] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -160,6 +165,7 @@ export function TeamSection() {
               ))}
             </div>
           )}
+          <RequireMfaToggle onToast={onToast} />
         </div>
       </section>
 

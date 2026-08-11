@@ -9,6 +9,7 @@ import {
   type DocItem,
   type Activity,
   type Tab,
+  TABS,
   OverviewTab,
   DocumentsTab,
   ActivityTab,
@@ -22,6 +23,7 @@ import {
   FinancialStatusBadge,
 } from "./components";
 import { DealScorecardSection } from "./deal-scorecard-section";
+import { DealTeasers } from "./DealTeasers";
 
 // ---------------------------------------------------------------------------
 // Left panel — deal content (icon, title, stage pipeline, metadata, financial
@@ -60,6 +62,8 @@ export interface DealPageLeftPanelProps {
   uploading: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  driveImporting: boolean;
+  onImportFromDrive: () => void;
 
   // Fullscreen overlay openers (Financials / Analysis sections)
   onOpenFinancialsFullscreen: () => void;
@@ -83,6 +87,8 @@ export function DealPageLeftPanel({
   uploading,
   fileInputRef,
   onUpload,
+  driveImporting,
+  onImportFromDrive,
   onOpenFinancialsFullscreen,
   onOpenAnalysisFullscreen,
 }: DealPageLeftPanelProps) {
@@ -150,7 +156,7 @@ export function DealPageLeftPanel({
 
         {/* Tabs */}
         <div className="flex items-center gap-1 border-b border-border-subtle mt-1">
-          {(["Overview", "Documents", "Activity"] as const).map((tab) => (
+          {TABS.map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -185,11 +191,18 @@ export function DealPageLeftPanel({
               uploading={uploading}
               fileInputRef={fileInputRef}
               onUpload={onUpload}
+              driveImporting={driveImporting}
+              onImportFromDrive={onImportFromDrive}
             />
           )}
           {activeTab === "Activity" && (
-            <ActivityTab activities={activities} loading={activitiesLoading} />
+            <ActivityTab
+              activities={activities}
+              loading={activitiesLoading}
+              dealId={deal.id}
+            />
           )}
+          {activeTab === "Teaser" && <DealTeasers dealId={dealId} />}
         </div>
       </div>
     </section>

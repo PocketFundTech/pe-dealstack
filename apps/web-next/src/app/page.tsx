@@ -195,6 +195,7 @@ export default function LandingPage() {
             <div className="flex gap-6 text-sm text-slate-400">
               <Link className="hover:text-primary transition-colors" href="/privacy-policy">Privacy Policy</Link>
               <Link className="hover:text-primary transition-colors" href="/terms-of-service">Terms of Service</Link>
+              <Link className="hover:text-primary transition-colors" href="/security">Security</Link>
               <a className="hover:text-primary transition-colors" href="#cta">Contact</a>
             </div>
           </div>

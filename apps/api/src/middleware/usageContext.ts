@@ -27,6 +27,40 @@ export function runWithUsageContext<T>(ctx: UsageContext, fn: () => T): T {
 }
 
 /**
+ * Resolve a Supabase auth UUID (User.authId) to the internal User.id that
+ * UsageEvent.userId is a foreign key to. Returns null if it can't be resolved.
+ *
+ * Use this when starting a background task (where usageContextMiddleware never
+ * ran) so its UsageContext carries the internal id and not the auth UUID — the
+ * latter fails the FK with 23503.
+ */
+export async function resolveInternalUserId(authId: string): Promise<string | null> {
+  if (!authId) return null;
+  const cached = authIdToUserId.get(authId);
+  if (cached) return cached;
+  try {
+    const { data, error } = await supabase
+      .from('User')
+      .select('id')
+      .eq('authId', authId)
+      .single();
+    if (error || !data?.id) {
+      log.warn('resolveInternalUserId: failed to resolve internal User.id', {
+        authId,
+        error: error?.message,
+      });
+      return null;
+    }
+    const internalUserId = data.id as string;
+    authIdToUserId.set(authId, internalUserId);
+    return internalUserId;
+  } catch (err) {
+    log.error('resolveInternalUserId: User lookup threw', { err, authId });
+    return null;
+  }
+}
+
+/**
  * Express middleware. Must run AFTER authMiddleware + orgMiddleware so req.user
  * has both id (Supabase auth UUID) and organizationId populated.
  *
@@ -45,27 +79,9 @@ export async function usageContextMiddleware(
     return next();
   }
 
-  let internalUserId = authIdToUserId.get(authId);
+  const internalUserId = await resolveInternalUserId(authId);
   if (!internalUserId) {
-    try {
-      const { data, error } = await supabase
-        .from('User')
-        .select('id')
-        .eq('authId', authId)
-        .single();
-      if (error || !data?.id) {
-        log.warn('usageContextMiddleware: failed to resolve internal User.id', {
-          authId,
-          error: error?.message,
-        });
-        return next();
-      }
-      internalUserId = data.id as string;
-      authIdToUserId.set(authId, internalUserId);
-    } catch (err) {
-      log.error('usageContextMiddleware: User lookup threw', { err, authId });
-      return next();
-    }
+    return next();
   }
 
   const requestId = (req.headers['x-request-id'] as string) || undefined;

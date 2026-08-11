@@ -60,7 +60,7 @@ export function IngestDealModal({ open, onClose }: IngestDealModalProps) {
             <div className="min-w-0">
               <h3 className="text-base font-bold text-text-main truncate">Ingest Deal Data</h3>
               <p className="text-xs text-text-muted truncate">
-                Upload a document, paste text, or enter a company URL.
+                Upload a document or paste text to create or update a deal.
               </p>
             </div>
           </div>

@@ -6,7 +6,6 @@ import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
-import { tryCompleteOnboardingStep } from './onboarding.js';
 
 // Sub-routers
 import invitationsAcceptRouter from './invitations-accept.js';
@@ -332,7 +331,8 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
     // Onboarding: mark inviteTeamMember step complete (fire-and-forget)
     if (req.user?.id) {
-      tryCompleteOnboardingStep(req.user.id, 'inviteTeamMember');
+      const onboardingUserId = req.user.id;
+      void import('./onboarding.js').then(({ tryCompleteOnboardingStep }) => tryCompleteOnboardingStep(onboardingUserId, 'inviteTeamMember'));
     }
 
     res.status(201).json({

@@ -12,6 +12,7 @@ import { RecentActivityWidget } from "./recent-activity";
 import { TeamPerformanceWidget } from "./team-performance";
 import { DocumentAlertsWidget } from "./document-alerts";
 import { WatchlistWidget } from "./watchlist";
+import { PortfolioSignalsWidget } from "../dashboard-widgets";
 
 // ---------------------------------------------------------------------------
 // Core widget IDs — rendered inline in page.tsx, not via the optional grid.
@@ -36,7 +37,8 @@ export type WidgetId =
   | "recent-activity"
   | "team-performance"
   | "document-alerts"
-  | "watchlist";
+  | "watchlist"
+  | "portfolio-signals";
 
 export interface WidgetMeta {
   id: WidgetId;
@@ -85,8 +87,8 @@ export const CORE_WIDGETS: CoreWidgetMeta[] = [
   },
   {
     id: "ai-deal-signals",
-    title: "AI Deal Signals",
-    description: "AI-powered portfolio risk and opportunity scanner.",
+    title: "Inbox Deal Finder",
+    description: "Scan your Gmail inbox for new deal candidates with AI.",
     icon: "radar",
   },
   {
@@ -176,6 +178,13 @@ export const WIDGETS: WidgetMeta[] = [
     description: "Static EV/EBITDA + EV/Revenue reference table.",
     icon: "insert_chart",
     Component: MarketMultiplesWidget,
+  },
+  {
+    id: "portfolio-signals",
+    title: "Portfolio Signal Monitor",
+    description: "Scan active deals for AI-detected signals (leadership, financial, market shifts).",
+    icon: "radar",
+    Component: PortfolioSignalsWidget,
   },
 ];
 

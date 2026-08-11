@@ -39,6 +39,11 @@ vi.mock('../src/services/auditLog.js', () => ({
     dealDeleted: vi.fn(),
     log: vi.fn(),
   },
+  // Used by deals-list's fire-and-forget DEAL_VIEWED logging.
+  logFromRequest: vi.fn(async () => {}),
+  AUDIT_ACTIONS: { DEAL_VIEWED: 'DEAL_VIEWED' },
+  RESOURCE_TYPES: { DEAL: 'DEAL' },
+  SEVERITY: { INFO: 'INFO' },
 }));
 
 // notifications.js is imported by deals-mutate.ts (createNotification,
@@ -104,10 +109,13 @@ describe('Real /api/deals handlers', () => {
       };
       chain.select = passthrough('select');
       chain.eq = passthrough('eq');
+      chain.is = passthrough('is');   // deletedAt IS NULL soft-delete filter
       chain.ilike = passthrough('ilike');
       chain.gte = passthrough('gte');
       chain.lte = passthrough('lte');
       chain.or = passthrough('or');
+      chain.limit = passthrough('limit');
+      chain.range = passthrough('range');
       chain.order = (...args: unknown[]) => {
         calls.push({ method: 'order', args });
         return Promise.resolve({ data: returned, error: null });
@@ -502,7 +510,12 @@ describe('Real /api/deals handlers', () => {
                 }),
               }),
             }),
-            // Final delete
+            // Soft-delete: update({ deletedAt }).eq(id).eq(orgId)
+            update: () => ({
+              eq: () => ({
+                eq: () => Promise.resolve({ data: null, error: null }),
+              }),
+            }),
             delete: () => ({
               eq: () => ({
                 eq: () => Promise.resolve({ data: null, error: null }),

@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { TrustPosture } from "./SecuritySection.trust";
+import { ActiveSessions } from "./SecuritySection.sessions";
+import { IsolationTest } from "./SecuritySection.isolationTest";
+import { StaffAccessLog } from "./SecuritySection.staffAccessLog";
 
 // ─── Password change ────────────────────────────────────────────────
 
@@ -403,6 +407,10 @@ export function SecuritySection({
       <div className="p-6 space-y-4">
         <PasswordChange onToast={onToast} />
         <MfaSection onToast={onToast} />
+        <TrustPosture />
+        <StaffAccessLog onToast={onToast} />
+        <ActiveSessions onToast={onToast} />
+        <IsolationTest onToast={onToast} />
       </div>
     </section>
   );

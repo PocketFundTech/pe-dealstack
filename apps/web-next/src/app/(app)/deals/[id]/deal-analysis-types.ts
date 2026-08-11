@@ -172,6 +172,13 @@ export interface AnalysisData {
   redFlags?: QoEFlag[];
   periods: string[];
   analyzedAt: string;
+  /**
+   * Unit scale of the dollar values inside the analysis payload. The frontend
+   * passes this to `formatFinancialValue` so MILLIONS/THOUSANDS/ACTUALS/BILLIONS
+   * all render at appropriate human magnitudes.
+   */
+  unitScale?: "ACTUALS" | "THOUSANDS" | "MILLIONS" | "BILLIONS" | null;
+  currency?: string | null;
 }
 
 // ── Insights Data — response from GET /deals/:id/financials/insights ──────
@@ -203,7 +210,20 @@ export interface CrossDocConflict {
   period: string;
   field: string;
   discrepancyPct: number;
-  values: { documentName: string; value: number; isActive?: boolean }[];
+  /**
+   * Each value carries the unitScale it was extracted at; the renderer
+   * normalises to actual dollars before display so a MILLIONS row and a
+   * THOUSANDS row print at the same scale.
+   */
+  values: {
+    documentName: string;
+    value: number;
+    isActive?: boolean;
+    unitScale?: "ACTUALS" | "THOUSANDS" | "MILLIONS" | "BILLIONS" | null;
+  }[];
+  currency?: string | null;
+  /** Fallback unitScale if individual `values[].unitScale` is missing. */
+  unitScale?: "ACTUALS" | "THOUSANDS" | "MILLIONS" | "BILLIONS" | null;
 }
 
 export interface CrossDocData {

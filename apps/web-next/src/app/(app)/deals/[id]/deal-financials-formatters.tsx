@@ -1,32 +1,31 @@
 import { cn } from "@/lib/cn";
-import { getCurrencySymbol } from "@/lib/formatters";
+import {
+  formatFinancialValue,
+  formatPercent,
+  type UnitScale,
+} from "@/lib/formatters";
 
 export function isPctKey(key: string): boolean {
   return key.endsWith("_pct") || key.endsWith("_margin");
 }
 
-export function fmtMoney(val: number | null | undefined, unitScale?: string, currency?: string): string {
-  if (val === null || val === undefined) return "—";
-  const n = Number(val);
-  if (isNaN(n)) return "—";
-  const sym = getCurrencySymbol(currency);
-  const code = (currency || "USD").toUpperCase();
-  if (code === "INR" && unitScale === "MILLIONS") {
-    return sym + (n / 10).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "Cr";
-  }
-  if (code === "INR" && unitScale === "THOUSANDS") {
-    return sym + (n / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "L";
-  }
-  const suffix = unitScale === "MILLIONS" ? "M" : unitScale === "THOUSANDS" ? "K" : "";
-  return sym + n.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + suffix;
+/**
+ * Format a financial line-item value at the most appropriate human scale.
+ * Delegates to `formatFinancialValue` so all callers get the same B/M/K
+ * auto-scaling and unitScale handling.
+ */
+export function fmtMoney(
+  val: number | null | undefined,
+  unitScale?: string | null,
+  currency?: string | null,
+): string {
+  // The legacy server contract emits MILLIONS / THOUSANDS / ACTUALS / BILLIONS;
+  // anything else is treated as ACTUALS by formatFinancialValue.
+  const scale = (unitScale ?? undefined) as UnitScale | undefined;
+  return formatFinancialValue(val, scale, { currency });
 }
 
-export function fmtPct(val: number | null | undefined): string {
-  if (val === null || val === undefined) return "—";
-  const n = Number(val);
-  if (isNaN(n)) return "—";
-  return n.toFixed(1) + "%";
-}
+export const fmtPct = formatPercent;
 
 export function ConfidenceBadge({ confidence }: { confidence?: number | null }) {
   const pct = Math.round(confidence ?? 0);

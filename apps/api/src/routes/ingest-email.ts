@@ -1,17 +1,15 @@
 import { Router } from 'express';
 import { supabase } from '../supabase.js';
-import { extractDealDataFromText } from '../services/aiExtractor.js';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
-import { captureAgentError } from '../utils/sentryHelpers.js';
-import { validateFinancials } from '../services/financialValidator.js';
-import { parseEmailFile, buildDealTextFromEmail } from '../services/emailParser.js';
+import { parseEmailFile } from '../services/emailParser.js';
 import { parseExcelToDealRows } from '../services/excelParser.js';
 import { getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { extractTextFromPDF, upload } from './ingest-shared.js';
-import { resolveUserId } from './notifications.js';
+import { generateTeasersForDeal } from '../services/firmTeaserService.js';
+import { createDealFromEmail } from '../integrations/gmail/autoCreateDeal.js';
 
 const subRouter = Router();
 
@@ -30,125 +28,42 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
 
     log.info('Email ingest starting', { filename: file.originalname });
 
-    // Step 1: Parse email
+    // 1. Parse the .eml.
     const emailData = await parseEmailFile(file.buffer);
     if (!emailData) {
       return res.status(400).json({ error: 'Failed to parse email file' });
     }
 
-    // Step 2: Build text for AI extraction
-    const dealText = buildDealTextFromEmail(emailData);
-    if (dealText.length < 100) {
-      return res.status(400).json({ error: 'Email has insufficient content for deal extraction' });
-    }
-
-    // Step 3: AI extraction
-    const aiData = await extractDealDataFromText(dealText);
-    if (!aiData) {
-      return res.status(400).json({ error: 'Could not extract deal data from email' });
-    }
-
-    // Step 4: Financial validation
-    const financialCheck = validateFinancials({
-      revenue: aiData.revenue.value,
-      ebitda: aiData.ebitda.value,
-      ebitdaMargin: aiData.ebitdaMargin?.value,
-      revenueGrowth: aiData.revenueGrowth?.value,
-      employees: aiData.employees?.value,
+    // 2. Delegate deal creation to the shared helper (same path used by Gmail
+    //    cron sync). The route layer keeps responsibility for attachments,
+    //    audit logging (needs `req`), and the HTTP response shape.
+    const result = await createDealFromEmail({
+      organizationId: orgId,
+      userId: req.user?.id ?? null,
+      source: 'manual_eml',
+      email: {
+        subject: emailData.subject,
+        from: emailData.from,
+        date: emailData.date,
+        bodyText: emailData.bodyText,
+      },
     });
-    if (!financialCheck.isValid) {
-      aiData.needsReview = true;
-      aiData.reviewReasons = [...(aiData.reviewReasons || []), ...financialCheck.warnings];
+
+    if (!result.created) {
+      const msg =
+        result.reason === 'duplicate'
+          ? 'A deal already exists for this email'
+          : result.reason === 'insufficient_content'
+            ? 'Email has insufficient content for deal extraction'
+            : result.reason === 'extraction_failed'
+              ? 'Could not extract deal data from email'
+              : 'Could not create a deal from this email';
+      return res.status(400).json({ error: msg, reason: result.reason, existingDealId: result.dealId });
     }
 
-    // Step 5: Create or find company
-    const companyName = aiData.companyName.value || emailData.subject;
-    const { data: existingCompany } = await supabase
-      .from('Company')
-      .select('id, name')
-      .ilike('name', companyName)
-      .eq('organizationId', orgId)
-      .single();
+    const dealId = result.dealId!;
 
-    let company;
-    if (existingCompany) {
-      company = existingCompany;
-    } else {
-      const { data: newCompany, error: companyError } = await supabase
-        .from('Company')
-        .insert({
-          name: companyName,
-          industry: aiData.industry.value,
-          description: aiData.description.value,
-          organizationId: orgId,
-        })
-        .select()
-        .single();
-      if (companyError) throw companyError;
-      company = newCompany;
-    }
-
-    // Step 6: Create deal
-    const dealIcon = getIconForIndustry(aiData.industry.value);
-    const dealStatus = aiData.needsReview ? 'PENDING_REVIEW' : 'ACTIVE';
-
-    const { data: deal, error: dealError } = await supabase
-      .from('Deal')
-      .insert({
-        name: companyName,
-        companyId: company.id,
-        organizationId: orgId,
-        stage: 'INITIAL_REVIEW',
-        status: dealStatus,
-        industry: aiData.industry.value,
-        description: aiData.description.value,
-        revenue: aiData.revenue.value,
-        ebitda: aiData.ebitda.value,
-        dealSize: aiData.revenue.value,
-        aiThesis: aiData.summary,
-        icon: dealIcon,
-        extractionConfidence: aiData.overallConfidence,
-        needsReview: aiData.needsReview,
-        reviewReasons: aiData.reviewReasons,
-        aiRisks: { keyRisks: aiData.keyRisks || [], investmentHighlights: aiData.investmentHighlights || [] },
-        source: 'email',
-      })
-      .select()
-      .single();
-
-    if (dealError) throw dealError;
-
-    // Step 7: Create document record for email body
-    const { data: document } = await supabase
-      .from('Document')
-      .insert({
-        dealId: deal.id,
-        name: `Email — ${emailData.subject}`,
-        type: 'OTHER',
-        extractedText: dealText,
-        extractedData: {
-          companyName: aiData.companyName,
-          industry: aiData.industry,
-          description: aiData.description,
-          revenue: aiData.revenue,
-          ebitda: aiData.ebitda,
-          ebitdaMargin: aiData.ebitdaMargin,
-          revenueGrowth: aiData.revenueGrowth,
-          employees: aiData.employees,
-          summary: aiData.summary,
-          overallConfidence: aiData.overallConfidence,
-          needsReview: aiData.needsReview,
-          reviewReasons: aiData.reviewReasons,
-        },
-        status: aiData.needsReview ? 'pending_review' : 'analyzed',
-        confidence: aiData.overallConfidence / 100,
-        aiAnalyzedAt: new Date().toISOString(),
-        mimeType: 'message/rfc822',
-      })
-      .select()
-      .single();
-
-    // Step 8: Process PDF attachments
+    // 3. Process PDF attachments (kept route-side; cron path doesn't fetch them).
     const processedAttachments: string[] = [];
     for (const att of emailData.attachments) {
       if (att.contentType === 'application/pdf' && att.size < 50 * 1024 * 1024) {
@@ -156,7 +71,7 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
           const pdfData = await extractTextFromPDF(att.content);
           if (pdfData?.text) {
             await supabase.from('Document').insert({
-              dealId: deal.id,
+              dealId,
               name: att.filename,
               type: 'OTHER',
               extractedText: pdfData.text,
@@ -165,12 +80,8 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
             });
             processedAttachments.push(att.filename);
 
-            // RAG embed the attachment in background
-            embedDocument(deal.id + '-' + att.filename, deal.id, pdfData.text)
-              .catch(err => {
-                log.error('Attachment RAG error', err);
-                captureAgentError(err, { context: 'rag:embed_email_attachment' }, 'warning');
-              });
+            embedDocument(dealId + '-' + att.filename, dealId, pdfData.text)
+              .catch(err => log.error('Attachment RAG error', err));
           }
         } catch (err) {
           log.warn('Attachment processing failed', { filename: att.filename, error: err });
@@ -178,52 +89,28 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
       }
     }
 
-    // Step 9: Log activity
-    await supabase.from('Activity').insert({
-      dealId: deal.id,
-      type: 'DEAL_CREATED',
-      title: 'Deal created from email',
-      description: `From: ${emailData.from}\nSubject: ${emailData.subject}`,
-      metadata: {
-        emailFrom: emailData.from,
-        emailSubject: emailData.subject,
-        emailDate: emailData.date,
-        attachmentsProcessed: processedAttachments,
-      },
-    });
+    // 4. Audit log (route layer holds `req`).
+    await AuditLog.aiIngest(req, `Email — ${emailData.subject}`, dealId);
 
-    // Step 10: Auto-assign creator as analyst
-    if (req.user?.id) {
-      await supabase.from('DealTeamMember').insert({
-        dealId: deal.id,
-        userId: req.user.id,
-        role: 'MEMBER',
-      });
+    // Auto-generate firm-teaser blurbs for the new deal (blocking,
+    // best-effort — never fail ingest on teaser error).
+    try {
+      await generateTeasersForDeal({ dealId, orgId });
+    } catch (teaserErr) {
+      log.error('Email ingest: firm-teaser auto-gen failed', teaserErr, { dealId });
     }
-
-    // Step 11: RAG embed email body in background
-    if (dealText.length > 100) {
-      embedDocument(document?.id || deal.id, deal.id, dealText)
-        .catch(err => {
-          log.error('Email RAG embedding error', err);
-          captureAgentError(err, { context: 'rag:embed_email' }, 'warning');
-        });
-    }
-
-    // Step 11: Audit log
-    await AuditLog.aiIngest(req, `Email — ${emailData.subject}`, deal.id);
 
     log.info('Email ingest complete', {
-      dealId: deal.id,
-      companyName,
-      confidence: aiData.overallConfidence,
+      dealId,
+      companyName: result.companyName,
+      confidence: result.extraction?.overallConfidence,
       attachments: processedAttachments.length,
     });
 
     res.status(201).json({
       success: true,
-      deal,
-      extraction: aiData,
+      deal: { id: dealId, name: result.companyName },
+      extraction: result.extraction,
       email: {
         subject: emailData.subject,
         from: emailData.from,
@@ -323,6 +210,15 @@ subRouter.post('/bulk', upload.single('file'), async (req, res) => {
           .single();
 
         if (dealErr) throw dealErr;
+
+        // Auto-generate firm-teaser blurbs for each imported deal (best-effort;
+        // a teaser failure must not fail the row).
+        try {
+          await generateTeasersForDeal({ dealId: deal.id, orgId });
+        } catch (teaserErr) {
+          log.error('Bulk ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+        }
+
         results.success.push({ companyName: row.companyName, dealId: deal.id });
       } catch (err) {
         log.warn('Row import failed', { companyName: row.companyName, error: (err as any).message });

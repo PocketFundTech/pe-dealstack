@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { supabase } from '../supabase.js';
 import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtractor.js';
 import { embedDocument } from '../rag.js';
@@ -13,6 +13,8 @@ import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerge
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { extractTextFromPDF, upload } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
+import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
+import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 
 const router = Router();
 
@@ -44,16 +46,45 @@ function transformDeepResultToExtractedDealData(result: DeepExtractionResult): E
 
 // POST /api/ingest - Upload document and auto-create deal
 router.post('/', upload.single('file'), async (req, res) => {
+  const uploaded = req.file;
+  if (!uploaded) {
+    return res.status(400).json({ error: 'No file provided' });
+  }
+  const result = await runIngestFromBuffer({
+    buffer: uploaded.buffer,
+    mimeType: uploaded.mimetype,
+    documentName: uploaded.originalname,
+    fileSize: uploaded.size,
+    req,
+  });
+  res.status(result.status).json(result.body);
+});
+
+/**
+ * Shared ingest pipeline: extract text → AI deal extraction → create/merge
+ * deal → store file → create Document → embed. Used by both the multipart
+ * upload route above and the Google Drive ingest route (ingest-drive.ts),
+ * which downloads the user-picked Drive file into a Buffer and calls this
+ * directly. Returns `{ status, body }` instead of writing the response so
+ * every entry point shares identical error handling.
+ *
+ * Reads optional deal-context fields (source, userThesis, priority,
+ * targetTimeline, concerns) and the target `dealId` off `req.body`.
+ */
+export interface IngestBufferInput {
+  buffer: Buffer;
+  mimeType: string;
+  documentName: string;
+  fileSize: number;
+  req: Request;
+}
+
+export async function runIngestFromBuffer(
+  input: IngestBufferInput,
+): Promise<{ status: number; body: unknown }> {
+  const { buffer, mimeType, documentName, fileSize, req } = input;
   try {
     const orgId = getOrgId(req);
-    const file = req.file;
-
-    if (!file) {
-      return res.status(400).json({ error: 'No file provided' });
-    }
-
-    const mimeType = file.mimetype;
-    const documentName = file.originalname;
 
     log.info('Ingest starting', { documentName });
 
@@ -63,14 +94,17 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     if (mimeType === 'application/pdf') {
       log.info('Step 1: Extracting text from PDF (LlamaParse → pdf-parse)', { documentName });
-      const extraction = await extractTextFromPDF(file.buffer, documentName);
+      const extraction = await extractTextFromPDF(buffer, documentName);
       if (!extraction) {
         // Both layers hard-failed (encrypted / malformed). Don't 500 — give the user a hint.
         log.error('PDF extraction failed in both layers', undefined, { documentName });
-        return res.status(422).json({
-          error:
-            "Couldn't extract data from this document. The PDF may be encrypted, password-protected, or malformed — try uploading a different copy.",
-        });
+        return {
+          status: 422,
+          body: {
+            error:
+              "Couldn't extract data from this document. The PDF may be encrypted, password-protected, or malformed — try uploading a different copy.",
+          },
+        };
       }
       extractedText = extraction.text.replace(/\u0000/g, '');
       numPages = extraction.numPages;
@@ -88,39 +122,45 @@ router.post('/', upload.single('file'), async (req, res) => {
           chars: extractedText.trim().length,
           layer: extraction.source,
         });
-        return res.status(422).json({
-          error:
-            "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
-        });
+        return {
+          status: 422,
+          body: {
+            error:
+              "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
+          },
+        };
       }
     } else if (
       mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
       mimeType === 'application/msword'
     ) {
       log.debug('Step 1: Extracting text from Word document');
-      extractedText = await extractTextFromWord(file.buffer);
+      extractedText = await extractTextFromWord(buffer);
       if (!extractedText) {
-        return res.status(400).json({ error: 'Failed to extract text from Word document' });
+        return { status: 400, body: { error: 'Failed to extract text from Word document' } };
       }
       log.debug('Word extracted', { charCount: extractedText.length });
     } else if (mimeType === 'text/plain') {
       log.debug('Step 1: Reading plain text file');
-      extractedText = file.buffer.toString('utf-8');
+      extractedText = buffer.toString('utf-8');
       if (!extractedText || extractedText.trim().length < 50) {
-        return res.status(400).json({ error: 'Text file is too short or empty' });
+        return { status: 400, body: { error: 'Text file is too short or empty' } };
       }
     } else if (isExcelFile(mimeType, documentName)) {
       log.debug('Step 1: Extracting text from Excel');
-      extractedText = extractTextFromExcel(file.buffer);
+      extractedText = extractTextFromExcel(buffer);
       if (!extractedText || extractedText.trim().length < 50) {
-        return res.status(400).json({ error: 'Excel file appears empty or has no readable data' });
+        return { status: 400, body: { error: 'Excel file appears empty or has no readable data' } };
       }
       log.debug('Excel extracted', { charCount: extractedText.length });
     } else {
-      return res.status(400).json({
-        error: 'Unsupported file type for auto-deal creation',
-        supported: ['PDF (.pdf)', 'Word (.docx, .doc)', 'Excel (.xlsx, .xls)', 'Text (.txt)'],
-      });
+      return {
+        status: 400,
+        body: {
+          error: 'Unsupported file type for auto-deal creation',
+          supported: ['PDF (.pdf)', 'Word (.docx, .doc)', 'Excel (.xlsx, .xls)', 'Text (.txt)'],
+        },
+      };
     }
 
     // Step 2: Run AI extraction with confidence scores
@@ -151,10 +191,13 @@ router.post('/', upload.single('file'), async (req, res) => {
         documentName,
         textLength: extractedText.length,
       });
-      return res.status(422).json({
-        error:
-          "Couldn't extract data from this document. The AI couldn't identify any deal information in the text — please verify it's a CIM, teaser, or financial document.",
-      });
+      return {
+        status: 422,
+        body: {
+          error:
+            "Couldn't extract data from this document. The AI couldn't identify any deal information in the text — please verify it's a CIM, teaser, or financial document.",
+        },
+      };
     }
 
     log.debug('AI extraction completed', {
@@ -165,13 +208,15 @@ router.post('/', upload.single('file'), async (req, res) => {
       needsReview: aiData.needsReview,
     });
 
-    // Financial validation
+    // Financial validation — sourceLength enables short-doc bounds
     const financialCheck = validateFinancials({
       revenue: aiData.revenue.value,
       ebitda: aiData.ebitda.value,
       ebitdaMargin: aiData.ebitdaMargin?.value,
       revenueGrowth: aiData.revenueGrowth?.value,
       employees: aiData.employees?.value,
+      dealSize: aiData.dealSize?.value,
+      sourceLength: extractedText.length,
     });
     if (!financialCheck.isValid) {
       aiData.needsReview = true;
@@ -191,7 +236,7 @@ router.post('/', upload.single('file'), async (req, res) => {
       // a client could ingest a CIM into any tenant's deal.
       const dealAccess = await verifyDealAccess(targetDealId, orgId);
       if (!dealAccess) {
-        return res.status(404).json({ error: 'Deal not found' });
+        return { status: 404, body: { error: 'Deal not found' } };
       }
 
       log.info('Ingest into existing deal', { dealId: targetDealId });
@@ -238,6 +283,16 @@ router.post('/', upload.single('file'), async (req, res) => {
       const dealIcon = getIconForIndustry(aiData.industry.value);
       const dealStatus = aiData.needsReview ? 'PENDING_REVIEW' : 'ACTIVE';
 
+      // Per-field confidence floor — values below this don't auto-populate
+      // the Deal table. Same gate as merge path (see dealMerger.ts).
+      const FIELD_FLOOR = 60;
+      const safeRevenue = aiData.revenue.value != null && aiData.revenue.confidence >= FIELD_FLOOR
+        ? aiData.revenue.value : null;
+      const safeEbitda = aiData.ebitda.value != null && aiData.ebitda.confidence >= FIELD_FLOOR
+        ? aiData.ebitda.value : null;
+      const safeDealSize = aiData.dealSize?.value != null && aiData.dealSize.confidence >= FIELD_FLOOR
+        ? aiData.dealSize.value : null;
+
       // User-provided deal context (optional fields from ingest form)
       const userSource = req.body?.source || null;
       const userThesis = req.body?.userThesis || null;
@@ -271,10 +326,10 @@ router.post('/', upload.single('file'), async (req, res) => {
           priority: userPriority,
           industry: aiData.industry.value,
           description: aiData.description.value,
-          revenue: aiData.revenue.value,
-          ebitda: aiData.ebitda.value,
+          revenue: safeRevenue,
+          ebitda: safeEbitda,
           currency: aiData.currency || 'USD',
-          dealSize: aiData.dealSize?.value || null,
+          dealSize: safeDealSize,
           aiThesis: userThesis || aiData.summary,
           icon: dealIcon,
           ...(userSource ? { source: userSource } : {}),
@@ -303,13 +358,13 @@ router.post('/', upload.single('file'), async (req, res) => {
     let fileUrl = null;
 
     const timestamp = Date.now();
-    const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const sanitizedName = documentName.replace(/[^a-zA-Z0-9.-]/g, '_');
     const filePath = `${deal.id}/${timestamp}_${sanitizedName}`;
 
     const { error: uploadError } = await supabase.storage
       .from('documents')
-      .upload(filePath, file.buffer, {
-        contentType: file.mimetype,
+      .upload(filePath, buffer, {
+        contentType: mimeType,
         upsert: false,
       });
 
@@ -324,11 +379,36 @@ router.post('/', upload.single('file'), async (req, res) => {
     // Step 6: Create document record with confidence data
     log.debug('Step 6: Creating document record');
 
+    // Auto-classify by filename + mimeType. Spreadsheets default to
+    // FINANCIALS so the re-extract loop in financials-extraction.ts
+    // (which filters `type IN ('CIM','FINANCIALS')`) picks them up.
     let docType = 'OTHER';
     const lowerName = documentName.toLowerCase();
+    const lowerMime = (mimeType ?? '').toLowerCase();
+    const looksLikeSpreadsheet =
+      lowerName.endsWith('.xlsx') ||
+      lowerName.endsWith('.xls') ||
+      lowerName.endsWith('.csv') ||
+      lowerMime.includes('spreadsheet') ||
+      lowerMime.includes('excel') ||
+      lowerMime === 'text/csv' ||
+      lowerMime === 'application/csv';
+
     if (lowerName.includes('cim') || lowerName.includes('confidential')) docType = 'CIM';
     else if (lowerName.includes('teaser')) docType = 'TEASER';
-    else if (lowerName.includes('financial') || lowerName.includes('model')) docType = 'FINANCIALS';
+    else if (
+      lowerName.includes('financial') ||
+      lowerName.includes('model') ||
+      lowerName.includes('p&l') ||
+      lowerName.includes('p_l') ||
+      lowerName.includes('income') ||
+      lowerName.includes('balance') ||
+      lowerName.includes('cashflow') ||
+      lowerName.includes('cash flow') ||
+      lowerName.includes('master sheet') ||
+      lowerName.includes('mastersheet') ||
+      looksLikeSpreadsheet
+    ) docType = 'FINANCIALS';
     else if (lowerName.includes('loi') || lowerName.includes('letter')) docType = 'LOI';
     else if (lowerName.includes('due diligence') || lowerName.includes('dd')) docType = 'DD_REPORT';
 
@@ -362,48 +442,65 @@ router.post('/', upload.single('file'), async (req, res) => {
       ingestFolderId = folders?.[0]?.id || null;
     }
 
-    const { data: document, error: docError } = await supabase
-      .from('Document')
-      .insert({
+    // Dedup: if a Document with the same (dealId, name, fileSize) already
+    // exists, reuse it instead of creating a duplicate row. Mostly relevant in
+    // the existing-deal (merge) path where users sometimes re-upload the same
+    // file by accident — we don't want a second ingest/extraction pass.
+    const existingDuplicate = await findExistingDocument(deal.id, documentName, fileSize, { requireFileUrl: true });
+    let document: any;
+    if (existingDuplicate) {
+      logDuplicateSkip(existingDuplicate, {
         dealId: deal.id,
-        folderId: ingestFolderId,
         name: documentName,
-        type: docType,
-        fileUrl,
-        fileSize: file.size,
-        mimeType,
-        extractedData: {
-          companyName: aiData.companyName,
-          industry: aiData.industry,
-          description: aiData.description,
-          revenue: aiData.revenue,
-          ebitda: aiData.ebitda,
-          ebitdaMargin: aiData.ebitdaMargin,
-          dealSize: aiData.dealSize,
-          revenueGrowth: aiData.revenueGrowth,
-          employees: aiData.employees,
-          foundedYear: aiData.foundedYear,
-          headquarters: aiData.headquarters,
-          keyRisks: aiData.keyRisks,
-          investmentHighlights: aiData.investmentHighlights,
-          summary: aiData.summary,
-          overallConfidence: aiData.overallConfidence,
-          needsReview: aiData.needsReview,
-          reviewReasons: aiData.reviewReasons,
-        },
-        extractedText,
-        status: aiData.needsReview ? 'pending_review' : 'analyzed',
-        confidence: aiData.overallConfidence / 100,
-        aiAnalyzedAt: new Date().toISOString(),
-      })
-      .select()
-      .single();
+        fileSize,
+        newFileUrl: fileUrl,
+      });
+      document = existingDuplicate;
+    } else {
+      const { data: insertedDoc, error: docError } = await supabase
+        .from('Document')
+        .insert({
+          dealId: deal.id,
+          folderId: ingestFolderId,
+          name: documentName,
+          type: docType,
+          fileUrl,
+          fileSize,
+          mimeType,
+          extractedData: {
+            companyName: aiData.companyName,
+            industry: aiData.industry,
+            description: aiData.description,
+            revenue: aiData.revenue,
+            ebitda: aiData.ebitda,
+            ebitdaMargin: aiData.ebitdaMargin,
+            dealSize: aiData.dealSize,
+            revenueGrowth: aiData.revenueGrowth,
+            employees: aiData.employees,
+            foundedYear: aiData.foundedYear,
+            headquarters: aiData.headquarters,
+            keyRisks: aiData.keyRisks,
+            investmentHighlights: aiData.investmentHighlights,
+            summary: aiData.summary,
+            overallConfidence: aiData.overallConfidence,
+            needsReview: aiData.needsReview,
+            reviewReasons: aiData.reviewReasons,
+          },
+          extractedText,
+          status: aiData.needsReview ? 'pending_review' : 'analyzed',
+          confidence: aiData.overallConfidence / 100,
+          aiAnalyzedAt: new Date().toISOString(),
+        })
+        .select()
+        .single();
 
-    if (docError) {
-      log.error('Document creation error', docError);
-      throw docError;
+      if (docError) {
+        log.error('Document creation error', docError);
+        throw docError;
+      }
+      document = insertedDoc;
+      log.debug('Created document', { name: document.name, id: document.id });
     }
-    log.debug('Created document', { name: document.name, id: document.id });
 
     // Step 7: Trigger RAG embedding in background
     if (extractedText && extractedText.length > 0) {
@@ -475,32 +572,46 @@ router.post('/', upload.single('file'), async (req, res) => {
         });
     }
 
+    // Auto-generate firm-teaser blurbs for newly-created deals. BLOCKS the
+    // response so the teasers are ready when the client renders the deal.
+    // Best-effort: a teaser failure must never fail ingest.
+    if (!isUpdate) {
+      try {
+        await generateTeasersForDeal({ dealId: deal.id, orgId });
+      } catch (teaserErr) {
+        log.error('Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+      }
+    }
+
     log.info('Ingest complete', { dealId: deal.id, isUpdate });
 
-    res.status(isUpdate ? 200 : 201).json({
-      success: true,
-      isUpdate,
-      deal: {
-        ...deal,
-        company: company || deal.company,
+    return {
+      status: isUpdate ? 200 : 201,
+      body: {
+        success: true,
+        isUpdate,
+        deal: {
+          ...deal,
+          company: company || deal.company,
+        },
+        document,
+        extraction: {
+          companyName: aiData.companyName,
+          industry: aiData.industry,
+          currency: aiData.currency || 'USD',
+          revenue: aiData.revenue,
+          ebitda: aiData.ebitda,
+          overallConfidence: aiData.overallConfidence,
+          needsReview: aiData.needsReview,
+          reviewReasons: aiData.reviewReasons,
+        },
       },
-      document,
-      extraction: {
-        companyName: aiData.companyName,
-        industry: aiData.industry,
-        currency: aiData.currency || 'USD',
-        revenue: aiData.revenue,
-        ebitda: aiData.ebitda,
-        overallConfidence: aiData.overallConfidence,
-        needsReview: aiData.needsReview,
-        reviewReasons: aiData.reviewReasons,
-      },
-    });
+    };
   } catch (error) {
     log.error('Ingest error', error);
     const message = error instanceof Error ? error.message : 'Failed to process document';
-    res.status(500).json({ error: 'Failed to process document', message });
+    return { status: 500, body: { error: 'Failed to process document', message } };
   }
-});
+}
 
 export default router;

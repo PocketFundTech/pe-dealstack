@@ -14,6 +14,12 @@ import { log } from '../utils/logger.js';
 import { NotFoundError } from '../middleware/errorHandler.js';
 import type { SortableByDate } from '../types/index.js';
 import { dealsQuerySchema } from './deals-schemas.js';
+import {
+  logFromRequest,
+  AUDIT_ACTIONS,
+  RESOURCE_TYPES,
+  SEVERITY,
+} from '../services/auditLog.js';
 
 const router = Router();
 
@@ -81,7 +87,10 @@ router.get('/', async (req, res) => {
           user:User(id, name, avatar, email)
         )
       `)
-      .eq('organizationId', orgId);
+      .eq('organizationId', orgId)
+      // Hide soft-deleted deals from the main list. They live in /trash until
+      // hard-deleted after the 30-day grace period.
+      .is('deletedAt', null);
 
     // Apply filters
     if (params.stage) query = query.eq('stage', params.stage);
@@ -178,6 +187,16 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
     }
+
+    // Best-effort: log a DEAL_VIEWED event so the per-deal access timeline
+    // has data to show. Fire-and-forget; never block the response.
+    void logFromRequest(req, AUDIT_ACTIONS.DEAL_VIEWED, {
+      resourceType: RESOURCE_TYPES.DEAL,
+      resourceId: data.id,
+      resourceName: data.name ?? null,
+      description: `Viewed deal: ${data.name ?? data.id}`,
+      severity: SEVERITY.INFO,
+    }).catch((err) => log.warn('DEAL_VIEWED audit failed', { err, dealId: data.id }));
 
     res.json(data);
   } catch (error) {

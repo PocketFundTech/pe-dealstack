@@ -72,18 +72,9 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
         };
       }
       if (table === 'Organization' && callIndex === 0) {
-        // existing-org probe → none found
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () =>
-                Promise.resolve({ data: null, error: { code: 'PGRST116' } }),
-            }),
-          }),
-        };
-      }
-      if (table === 'Organization' && callIndex === 1) {
-        // insert
+        // insert — the middleware never probes for an existing org by name
+        // (SECURITY: firmName is user-controlled; a name match would let a
+        // user join another tenant's org).
         insertCount++;
         return {
           insert: () => ({
@@ -126,7 +117,12 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
     );
   });
 
-  it('retries insert once on Postgres 23505 unique-violation, succeeds on 2nd attempt', async () => {
+  it('insert failure (unique violation): no org attached, request continues without crash', async () => {
+    // The old retry-on-23505 loop was removed deliberately: the slug now
+    // embeds a timestamp + random suffix, making collisions ~impossible,
+    // and the security model always creates a fresh org (never attaches by
+    // name). On the residual failure path the middleware degrades
+    // gracefully: no org set, next() still called.
     let insertAttempts = 0;
     installSupabaseHandler((table, callIndex) => {
       if (table === 'User' && callIndex === 0) {
@@ -139,58 +135,27 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
           }),
         };
       }
-      if (table === 'Organization' && callIndex === 0) {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: null, error: { code: 'PGRST116' } }),
-            }),
-          }),
-        };
-      }
-      // Org insert attempts: 1st fails with 23505, 2nd succeeds.
       if (table === 'Organization') {
         return {
           insert: () => ({
             select: () => ({
               single: () => {
                 insertAttempts++;
-                if (insertAttempts === 1) {
-                  return Promise.resolve({ data: null, error: { code: '23505', message: 'duplicate key' } });
-                }
-                return Promise.resolve({ data: { id: 'org-retry-2' }, error: null });
+                return Promise.resolve({ data: null, error: { code: '23505', message: 'duplicate key' } });
               },
             }),
           }),
-        };
-      }
-      if (table === 'User' && callIndex === 1) {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () =>
-                Promise.resolve({ data: { id: 'user-1', organizationId: null }, error: null }),
-            }),
-          }),
-        };
-      }
-      if (table === 'User' && callIndex === 2) {
-        return {
-          update: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }),
         };
       }
       throw new Error(`Unexpected supabase.from(${table}) call #${callIndex}`);
     });
 
     const req = buildReq();
-    await runMiddleware(req);
+    const next = await runMiddleware(req);
 
-    expect(insertAttempts).toBe(2);
-    expect(req.user!.organizationId).toBe('org-retry-2');
-    expect(logWarn).toHaveBeenCalledWith(
-      'Org middleware: slug collision, retrying with new slug',
-      expect.objectContaining({ attempt: 0 })
-    );
+    expect(insertAttempts).toBe(1);
+    expect(req.user!.organizationId).toBeUndefined();
+    expect(next).toHaveBeenCalled();
   });
 
   it('race detected: parallel request set organizationId — uses parallel org, logs race', async () => {
@@ -207,15 +172,6 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
         };
       }
       if (table === 'Organization' && callIndex === 0) {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: () => Promise.resolve({ data: null, error: { code: 'PGRST116' } }),
-            }),
-          }),
-        };
-      }
-      if (table === 'Organization' && callIndex === 1) {
         return {
           insert: () => ({
             select: () => ({

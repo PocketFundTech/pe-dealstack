@@ -31,7 +31,7 @@ No PE OS data is stored on unmanaged servers or developer machines. All producti
 - Encryption key management via environment variables (never stored in code)
 
 ### Data in Transit
-- All connections enforce **TLS 1.2+** (HTTPS only)
+- All traffic encrypted in transit using **TLS 1.2 or higher** (TLS 1.3 negotiated when supported by client). HTTPS enforced via HSTS.
 - **HSTS** headers with 1-year max-age, includeSubDomains, and preload
 - API ↔ Database connections encrypted via Supabase internal networking
 
@@ -59,10 +59,14 @@ No PE OS data is stored on unmanaged servers or developer machines. All producti
 - Cross-organization data access returns 404 (not 403) to prevent resource enumeration
 - **Row-Level Security (RLS)** enabled on all database tables as defense-in-depth
 
-### Organization Isolation
-- 33 API endpoints across 11 route files verified for organization scoping
-- 6 access verification helpers: Deal, Document, Contact, Folder, Conversation, and generic resource checks
-- 34 automated integration tests continuously verify isolation
+### Tenant Isolation
+
+PE OS enforces hard organizational data isolation at the application layer:
+
+- Every database row in scoped tables is tagged with `organizationId`
+- All API route handlers verify access via centralized access-verification helpers (`verifyDealAccess()` / `verifyContactAccess()` / `verifyDocumentAccess()` / `verifyFolderAccess()` / `verifyConversationAccess()`)
+- 268 org-scope verification calls across 45 route files (verified 2026-04-30)
+- 34 automated cross-organization integration tests run on every deploy — these tests actively attempt cross-org reads/writes and verify all are rejected
 - Backend uses a separate service role key (never exposed to clients)
 
 ---
@@ -70,9 +74,16 @@ No PE OS data is stored on unmanaged servers or developer machines. All producti
 ## API Security
 
 ### Rate Limiting
-- General API: 200 requests / 15 minutes
-- AI endpoints: 10 requests / minute
-- Write operations: 30 requests / minute
+
+PE OS enforces three tiers of rate limiting at the API gateway:
+
+| Tier | Endpoint Scope | Limit | Window |
+|------|---------------|-------|--------|
+| General | All `/api/*` requests | 600 | 15 min |
+| AI | `/api/ai/*`, memo chat | 10 | 1 min |
+| Write | All POST/PUT/PATCH/DELETE | 30 | 1 min |
+
+Rate limits are keyed by authenticated user ID (falling back to client IP via `X-Forwarded-For`). Exceeding a limit returns HTTP 429 with `Retry-After` headers.
 
 ### Input Validation
 - All API inputs validated with **Zod schemas** (type-safe, strict validation)
@@ -171,4 +182,4 @@ For security questions or to request a detailed security assessment, contact: **
 
 ---
 
-*Last updated: March 2026*
+*Last updated: April 2026*

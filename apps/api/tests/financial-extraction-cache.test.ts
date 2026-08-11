@@ -245,6 +245,13 @@ vi.mock('../src/services/financialClassifier.js', () => ({
   classifyFinancials: (...args: any[]) => classifyFinancialsMock(...args),
 }));
 
+// extractNode now routes classification through the cross-verified wrapper
+// (main's financialCrossVerify.js) — mock it to the same underlying spy so
+// cache-hit/miss assertions keep counting classifier invocations.
+vi.mock('../src/services/financialCrossVerify.js', () => ({
+  classifyFinancialsCrossVerified: (...args: any[]) => classifyFinancialsMock(...args),
+}));
+
 vi.mock('../src/services/visionExtractor.js', () => ({
   classifyFinancialsVision: (...args: any[]) => classifyVisionMock(...args),
 }));
@@ -256,6 +263,13 @@ vi.mock('../src/services/llamaParse.js', () => ({
 
 vi.mock('../src/services/excelFinancialExtractor.js', () => ({
   extractTextFromExcel: (...args: any[]) => extractTextFromExcelMock(...args),
+  // extractNode now consumes the per-sheet API (main's multi-sheet refactor) —
+  // derive a single synthetic sheet from the same text mock so the cache
+  // assertions keep exercising the classify path.
+  extractSheetsFromExcel: (...args: any[]) => {
+    const text = extractTextFromExcelMock(...args);
+    return text ? [{ name: 'Sheet1', text }] : [];
+  },
   isExcelFile: (...args: any[]) => isExcelFileMock(...args),
 }));
 

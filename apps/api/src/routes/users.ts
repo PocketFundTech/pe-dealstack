@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { requirePermission, PERMISSIONS } from '../middleware/rbac.js';
 import { getOrgId } from '../middleware/orgScope.js';
+import { invalidateUserContext } from '../middleware/authContextCache.js';
 import { AuditLog } from '../services/auditLog.js';
 
 // Sub-routers
@@ -211,6 +212,12 @@ router.patch('/:id', requirePermission(PERMISSIONS.USER_EDIT), async (req: Reque
       throw error;
     }
 
+    // A role/org change must take effect immediately, not after the auth
+    // cache TTL — drop this user's cached context (keyed by their auth UUID).
+    if (user?.authId) {
+      invalidateUserContext(user.authId as string);
+    }
+
     // Audit log - log role changes with higher severity
     if (validation.data.role) {
       await AuditLog.userUpdated(req, user.id, user.email, { roleChanged: true, newRole: validation.data.role });
@@ -274,19 +281,10 @@ router.get('/:id/deals', async (req: Request, res: Response, next: NextFunction)
     const { id } = req.params;
     const orgId = getOrgId(req);
 
-    // F-20: verify the target user belongs to the caller's org before
-    // listing their DealTeamMember rows. Without this gate the endpoint
-    // would return any user's deal participations across orgs (Deal name,
-    // stage, industry, dealSize, irrProjected, Company name + logo).
-    // Mirrors the `GET /api/users/:id` pattern at line 99 above.
-    const { data: targetUser, error: targetErr } = await supabase
-      .from('User')
-      .select('id')
-      .eq('id', id)
-      .eq('organizationId', orgId)
-      .single();
-
-    if (targetErr || !targetUser) {
+    // SECURITY: only expose data for a user in the caller's own organization
+    const { data: targetUser } = await supabase
+      .from('User').select('id').eq('id', id).eq('organizationId', orgId).single();
+    if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
@@ -326,22 +324,15 @@ router.get('/:id/notifications', async (req: Request, res: Response, next: NextF
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
-    const params = userNotificationsQuerySchema.parse(req.query);
 
-    // Verify the target user belongs to the caller's org before reading their
-    // notifications. The dedicated /api/notifications endpoint already does
-    // this; this route was the back door. Return 404 (not 403) to match the
-    // same-org-only enumeration semantics used by /api/users/:id.
-    const { data: targetUser, error: userErr } = await supabase
-      .from('User')
-      .select('id')
-      .eq('id', id)
-      .eq('organizationId', orgId)
-      .single();
-
-    if (userErr || !targetUser) {
+    // SECURITY: only expose notifications for a user in the caller's own org
+    const { data: targetUser } = await supabase
+      .from('User').select('id').eq('id', id).eq('organizationId', orgId).single();
+    if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    const params = userNotificationsQuerySchema.parse(req.query);
 
     let query = supabase
       .from('Notification')

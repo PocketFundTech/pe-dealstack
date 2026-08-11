@@ -9,14 +9,18 @@ import { log } from '../utils/logger.js';
 
 // ─── Output Schema ──────────────────────────────────────────────
 
+// `.nullable().optional()` (rather than bare `.optional()`) is required by
+// OpenAI's strict structured-output mode — it rejects properties marked optional
+// without nullable. The pairing means: field MUST appear in the JSON, but its
+// value may be null. See https://platform.openai.com/docs/guides/structured-outputs
 const FollowUpQuestionSchema = z.object({
   questions: z.array(z.object({
     id: z.string(),
     type: z.enum(['choice', 'text']),
     question: z.string().describe('Short question, under 15 words'),
     reason: z.string().describe('Why this question is relevant, referencing extracted data'),
-    options: z.array(z.string()).optional().describe('3-4 short options for choice questions'),
-    placeholder: z.string().optional().describe('Placeholder text for text questions'),
+    options: z.array(z.string()).nullable().optional().describe('3-4 short options for choice questions'),
+    placeholder: z.string().nullable().optional().describe('Placeholder text for text questions'),
   })).min(3).max(4),
 });
 
@@ -69,8 +73,13 @@ export async function generateFollowUpQuestions(
   }
 
   try {
-    const model = getFastModel(0.7, 800, 'deal_chat');
-    const structuredModel = model.withStructuredOutput(FollowUpQuestionSchema);
+    const model = getFastModel(0.7, 800, 'follow_up_questions');
+    // method: 'functionCalling' avoids strict json_schema mode entirely — gives
+    // the LLM more leeway with optional fields and skips OpenAI's draft-2020 nits.
+    const structuredModel = model.withStructuredOutput(FollowUpQuestionSchema, {
+      method: 'functionCalling',
+      name: 'follow_up_questions',
+    });
 
     const extractionContext = [
       extraction.companyName ? `Company: ${extraction.companyName}` : null,

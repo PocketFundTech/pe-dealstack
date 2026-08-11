@@ -16,7 +16,9 @@ const taskQuerySchema = z.object({
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
   assignedTo: z.string().uuid().optional(),
   dealId: z.string().uuid().optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  // Cap at 500: the dashboard team-performance widget pulls a large page to
+  // aggregate per-assignee task counts in one call (see web-next team-performance).
+  limit: z.coerce.number().int().min(1).max(500).optional().default(50),
   offset: z.coerce.number().int().min(0).optional().default(0),
 });
 

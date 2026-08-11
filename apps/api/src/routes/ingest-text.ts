@@ -10,6 +10,8 @@ import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerge
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { resolveUserId } from './notifications.js';
+import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
+import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 
 const subRouter = Router();
 
@@ -43,13 +45,15 @@ subRouter.post('/text', async (req, res) => {
       return res.status(400).json({ error: 'Could not extract deal data from text. Try providing more detail.' });
     }
 
-    // Financial validation
+    // Financial validation — sourceLength allows tighter bounds on short docs
     const financialCheck = validateFinancials({
       revenue: aiData.revenue.value,
       ebitda: aiData.ebitda.value,
       ebitdaMargin: aiData.ebitdaMargin?.value,
       revenueGrowth: aiData.revenueGrowth?.value,
       employees: aiData.employees?.value,
+      dealSize: aiData.dealSize?.value,
+      sourceLength: text.length,
     });
     if (!financialCheck.isValid) {
       aiData.needsReview = true;
@@ -106,6 +110,20 @@ subRouter.post('/text', async (req, res) => {
       const dealIcon = getIconForIndustry(aiData.industry.value);
       const dealStatus = aiData.needsReview ? 'PENDING_REVIEW' : 'ACTIVE';
 
+      // Per-field confidence floor — values below this don't auto-populate
+      // the Deal table (they remain on the Document.extractedData blob for
+      // manual review). Prevents one-pager teasers / aspirational figures
+      // from overwriting deal-level fields.
+      const FIELD_FLOOR = 60;
+      const safeRevenue = aiData.revenue.value != null && aiData.revenue.confidence >= FIELD_FLOOR
+        ? aiData.revenue.value : null;
+      const safeEbitda = aiData.ebitda.value != null && aiData.ebitda.confidence >= FIELD_FLOOR
+        ? aiData.ebitda.value : null;
+      // dealSize is the EV/transaction value of the deal — NOT revenue.
+      // Only populate from the dedicated dealSize field, never from revenue.
+      const safeDealSize = aiData.dealSize?.value != null && aiData.dealSize.confidence >= FIELD_FLOOR
+        ? aiData.dealSize.value : null;
+
       const { data: newDeal, error: dealError } = await supabase
         .from('Deal')
         .insert({
@@ -116,10 +134,10 @@ subRouter.post('/text', async (req, res) => {
           status: dealStatus,
           industry: aiData.industry.value,
           description: aiData.description.value,
-          revenue: aiData.revenue.value,
-          ebitda: aiData.ebitda.value,
+          revenue: safeRevenue,
+          ebitda: safeEbitda,
           currency: aiData.currency || 'USD',
-          dealSize: aiData.revenue.value,
+          dealSize: safeDealSize,
           aiThesis: aiData.summary,
           icon: dealIcon,
           extractionConfidence: aiData.overallConfidence,
@@ -134,39 +152,58 @@ subRouter.post('/text', async (req, res) => {
       deal = newDeal;
     }
 
-    // Create document record for text source
-    const { data: document } = await supabase
-      .from('Document')
-      .insert({
+    // Use the text's byte length as fileSize so re-pasting the exact same
+    // content matches the dedup triple. (Pasting a different snippet under
+    // the same name = different length = legitimately a new doc.)
+    const textByteLength = Buffer.byteLength(text, 'utf8');
+
+    // Dedup: if a Document with the same (dealId, name, fileSize) already
+    // exists, reuse it rather than inserting a duplicate.
+    const existingTextDuplicate = await findExistingDocument(deal.id, docName, textByteLength);
+    let document: any;
+    if (existingTextDuplicate) {
+      logDuplicateSkip(existingTextDuplicate, {
         dealId: deal.id,
         name: docName,
-        type: 'OTHER',
-        extractedText: text,
-        extractedData: {
-          companyName: aiData.companyName,
-          industry: aiData.industry,
-          description: aiData.description,
-          revenue: aiData.revenue,
-          ebitda: aiData.ebitda,
-          ebitdaMargin: aiData.ebitdaMargin,
-          revenueGrowth: aiData.revenueGrowth,
-          employees: aiData.employees,
-          foundedYear: aiData.foundedYear,
-          headquarters: aiData.headquarters,
-          keyRisks: aiData.keyRisks,
-          investmentHighlights: aiData.investmentHighlights,
-          summary: aiData.summary,
-          overallConfidence: aiData.overallConfidence,
-          needsReview: aiData.needsReview,
-          reviewReasons: aiData.reviewReasons,
-        },
-        status: aiData.needsReview ? 'pending_review' : 'analyzed',
-        confidence: aiData.overallConfidence / 100,
-        aiAnalyzedAt: new Date().toISOString(),
-        mimeType: 'text/plain',
-      })
-      .select()
-      .single();
+        fileSize: textByteLength,
+      });
+      document = existingTextDuplicate;
+    } else {
+      const { data: insertedDoc } = await supabase
+        .from('Document')
+        .insert({
+          dealId: deal.id,
+          name: docName,
+          type: 'OTHER',
+          fileSize: textByteLength,
+          extractedText: text,
+          extractedData: {
+            companyName: aiData.companyName,
+            industry: aiData.industry,
+            description: aiData.description,
+            revenue: aiData.revenue,
+            ebitda: aiData.ebitda,
+            ebitdaMargin: aiData.ebitdaMargin,
+            revenueGrowth: aiData.revenueGrowth,
+            employees: aiData.employees,
+            foundedYear: aiData.foundedYear,
+            headquarters: aiData.headquarters,
+            keyRisks: aiData.keyRisks,
+            investmentHighlights: aiData.investmentHighlights,
+            summary: aiData.summary,
+            overallConfidence: aiData.overallConfidence,
+            needsReview: aiData.needsReview,
+            reviewReasons: aiData.reviewReasons,
+          },
+          status: aiData.needsReview ? 'pending_review' : 'analyzed',
+          confidence: aiData.overallConfidence / 100,
+          aiAnalyzedAt: new Date().toISOString(),
+          mimeType: 'text/plain',
+        })
+        .select()
+        .single();
+      document = insertedDoc;
+    }
 
     // Log activity + assign team (only for new deals)
     if (!isUpdate) {
@@ -204,6 +241,16 @@ subRouter.post('/text', async (req, res) => {
     }
 
     await AuditLog.aiIngest(req, docName, deal.id);
+
+    // Auto-generate firm-teaser blurbs for newly-created deals (blocking,
+    // best-effort — never fail ingest on teaser error).
+    if (!isUpdate) {
+      try {
+        await generateTeasersForDeal({ dealId: deal.id, orgId });
+      } catch (teaserErr) {
+        log.error('Text ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+      }
+    }
 
     log.info('Text ingest complete', { dealId: deal.id, isUpdate });
 

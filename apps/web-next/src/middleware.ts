@@ -7,6 +7,12 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.svg).*)",
+    // Only run the auth middleware on real page navigations. Exclude:
+    //  - api/*    the API verifies its own Bearer JWT on every request, so a
+    //             middleware getUser() round-trip here was pure overhead added
+    //             to EVERY client data fetch.
+    //  - _next/*  framework chunks, images, and RSC data payloads.
+    //  - any path with a file extension (favicon.svg, images, fonts, …).
+    "/((?!api/|_next/static|_next/image|_next/data|favicon.svg|.*\\.).*)",
   ],
 };

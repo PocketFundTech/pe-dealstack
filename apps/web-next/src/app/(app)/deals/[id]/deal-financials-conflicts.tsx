@@ -6,6 +6,10 @@ export interface ConflictVersion {
   documentName: string;
   isActive: boolean;
   lineItems: Record<string, number | null>;
+  /** Original unit scale of this version's source document. */
+  unitScale?: "ACTUALS" | "THOUSANDS" | "MILLIONS" | "BILLIONS" | null;
+  /** ISO currency code, defaults to USD on the server. */
+  currency?: string | null;
   extractionConfidence: number;
   extractionSource: string;
   extractedAt: string;

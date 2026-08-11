@@ -77,24 +77,10 @@ describe('GET /api/activities/:id — cross-tenant protection (F-1)', () => {
       metadata: { extracted: 'value' },
     };
 
-    let activityFetchCount = 0;
     mockSupabase.from.mockImplementation((table: string) => {
       if (table === 'Activity') {
-        activityFetchCount++;
-        // First call (preflight) returns just dealId.
-        // Second call (full select) returns the full row.
-        if (activityFetchCount === 1) {
-          return {
-            select: () => ({
-              eq: () => ({
-                single: async () => ({
-                  data: { id: 'activity-1', dealId: 'deal-from-org-A' },
-                  error: null,
-                }),
-              }),
-            }),
-          };
-        }
+        // Single select('*') — the handler fetches once, then verifies the
+        // parent deal's org before returning.
         return {
           select: () => ({
             eq: () => ({
@@ -151,32 +137,24 @@ describe('GET /api/activities/recent — multi-tenant scoping (F-2)', () => {
     ];
 
     mockSupabase.from.mockImplementation((table: string) => {
-      if (table === 'Deal') {
-        // Pre-fetch of deal IDs for the caller org
-        return {
-          select: () => ({
-            eq: (col: string, val: string) => {
-              expect(col).toBe('organizationId');
-              expect(val).toBe('org-A');
-              return Promise.resolve({ data: dealsForOrgA, error: null });
-            },
-          }),
-        };
-      }
       if (table === 'Activity') {
-        // Activity query — must use .in('dealId', dealIds) for scope
+        // Single query scoped via the Deal!inner join — must filter on
+        // deal.organizationId so cross-tenant rows never leak.
         return {
-          select: () => ({
-            in: (col: string, ids: string[]) => {
-              expect(col).toBe('dealId');
-              expect(ids).toEqual(['deal-A1']);
-              return {
-                order: () => ({
-                  limit: () => Promise.resolve({ data: orgAActivities, error: null }),
-                }),
-              };
-            },
-          }),
+          select: (sel: string) => {
+            expect(sel).toContain('Deal!inner');
+            return {
+              eq: (col: string, val: string) => {
+                expect(col).toBe('deal.organizationId');
+                expect(val).toBe('org-A');
+                return {
+                  order: () => ({
+                    limit: () => Promise.resolve({ data: orgAActivities, error: null }),
+                  }),
+                };
+              },
+            };
+          },
         };
       }
       throw new Error(`Unexpected table: ${table}`);
@@ -191,19 +169,11 @@ describe('GET /api/activities/recent — multi-tenant scoping (F-2)', () => {
 
   it('returns empty array when caller org has no deals', async () => {
     mockSupabase.from.mockImplementation((table: string) => {
-      if (table === 'Deal') {
-        return {
-          select: () => ({
-            eq: () => Promise.resolve({ data: [], error: null }),
-          }),
-        };
-      }
-      // Activity query should NOT be reached (no dealIds → nothing to fetch)
-      // But if it is, return empty to avoid crash.
       if (table === 'Activity') {
+        // Inner join yields no rows when the org owns no deals.
         return {
           select: () => ({
-            in: () => ({
+            eq: () => ({
               order: () => ({
                 limit: () => Promise.resolve({ data: [], error: null }),
               }),

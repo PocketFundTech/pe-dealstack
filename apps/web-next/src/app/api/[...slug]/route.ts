@@ -23,6 +23,15 @@ import { getAiApp, getLiteApp, pickBundle } from "@/lib/api-bundles";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+// Pin this function to Tokyo (hnd1) to co-locate compute with the Supabase
+// Postgres instance in ap-northeast-1. Without this, Vercel defaults the
+// function to iad1 (US-East) while the DB is in Tokyo, so every one of the
+// 3-4 sequential queries per request pays a ~150ms trans-Pacific round trip
+// (500-700ms/request of pure network latency). Co-locating collapses that to
+// single-digit ms. All /api/* traffic (and thus all DB access) flows through
+// this one route handler, so pinning it here covers the whole API.
+export const preferredRegion = "hnd1";
+
 async function handle(req: NextRequest): Promise<Response> {
   try {
     const url = new URL(req.url);

@@ -13,6 +13,8 @@ import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { formatValueWithUnit } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { isPrivateUrl } from '../utils/urlHelpers.js';
+import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
+import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 
 const subRouter = Router();
 
@@ -71,13 +73,15 @@ subRouter.post('/url', async (req, res) => {
       aiData.companyName.confidence = 100;
     }
 
-    // Financial validation
+    // Financial validation — sourceLength allows tighter bounds on short docs
     const financialCheck = validateFinancials({
       revenue: aiData.revenue.value,
       ebitda: aiData.ebitda.value,
       ebitdaMargin: aiData.ebitdaMargin?.value,
       revenueGrowth: aiData.revenueGrowth?.value,
       employees: aiData.employees?.value,
+      dealSize: aiData.dealSize?.value,
+      sourceLength: researchText.length,
     });
     if (!financialCheck.isValid) {
       aiData.needsReview = true;
@@ -153,6 +157,15 @@ subRouter.post('/url', async (req, res) => {
       const dealIcon = getIconForIndustry(aiData.industry.value);
       const dealStatus = aiData.needsReview ? 'PENDING_REVIEW' : 'ACTIVE';
 
+      // Per-field confidence floor — see ingest-text.ts for rationale.
+      const FIELD_FLOOR = 60;
+      const safeRevenue = aiData.revenue.value != null && aiData.revenue.confidence >= FIELD_FLOOR
+        ? aiData.revenue.value : null;
+      const safeEbitda = aiData.ebitda.value != null && aiData.ebitda.confidence >= FIELD_FLOOR
+        ? aiData.ebitda.value : null;
+      const safeDealSize = aiData.dealSize?.value != null && aiData.dealSize.confidence >= FIELD_FLOOR
+        ? aiData.dealSize.value : null;
+
       const { data: newDeal, error: dealError } = await supabase
         .from('Deal')
         .insert({
@@ -163,10 +176,12 @@ subRouter.post('/url', async (req, res) => {
           status: dealStatus,
           industry: aiData.industry.value,
           description: aiData.description.value,
-          revenue: aiData.revenue.value,
-          ebitda: aiData.ebitda.value,
+          revenue: safeRevenue,
+          ebitda: safeEbitda,
           currency: aiData.currency || 'USD',
-          dealSize: aiData.revenue.value,
+          // dealSize is the EV/transaction value of the deal, NOT revenue.
+          // Use the dedicated dealSize extraction field, gated on confidence.
+          dealSize: safeDealSize,
           aiThesis: aiData.summary,
           icon: dealIcon,
           extractionConfidence: aiData.overallConfidence,
@@ -226,45 +241,61 @@ subRouter.post('/url', async (req, res) => {
     overviewSections.push(`*${research.companyWebsite.scrapedPages.length} pages analyzed · ${aiData.overallConfidence}% confidence*`);
 
     const overviewText = overviewSections.join('\n');
+    const overviewDocName = `Deal Overview — ${companyName}.md`;
+    const overviewByteLength = Buffer.byteLength(overviewText, 'utf8');
 
-    const { data: document } = await supabase
-      .from('Document')
-      .insert({
+    // Dedup: if a Deal Overview with the same name+byte-length already exists
+    // for this deal (re-research of the same URL), reuse it.
+    const existingUrlDuplicate = await findExistingDocument(deal.id, overviewDocName, overviewByteLength);
+    let document: any;
+    if (existingUrlDuplicate) {
+      logDuplicateSkip(existingUrlDuplicate, {
         dealId: deal.id,
-        name: `Deal Overview — ${companyName}.md`,
-        type: 'OTHER',
-        fileSize: Buffer.byteLength(overviewText, 'utf8'),
-        extractedText: researchText,
-        extractedData: {
-          companyName: aiData.companyName,
-          industry: aiData.industry,
-          description: aiData.description,
-          revenue: aiData.revenue,
-          ebitda: aiData.ebitda,
-          ebitdaMargin: aiData.ebitdaMargin,
-          revenueGrowth: aiData.revenueGrowth,
-          employees: aiData.employees,
-          foundedYear: aiData.foundedYear,
-          headquarters: aiData.headquarters,
-          keyRisks: aiData.keyRisks,
-          investmentHighlights: aiData.investmentHighlights,
-          summary: aiData.summary,
-          overallConfidence: aiData.overallConfidence,
-          needsReview: aiData.needsReview,
-          reviewReasons: aiData.reviewReasons,
-        },
-        aiAnalysis: overviewText,
-        status: aiData.needsReview ? 'pending_review' : 'analyzed',
-        confidence: aiData.overallConfidence / 100,
-        aiAnalyzedAt: new Date().toISOString(),
-        mimeType: 'text/markdown',
-        metadata: {
-          sourceUrl: url,
-          pagesScraped: research.companyWebsite.scrapedPages,
-        },
-      })
-      .select()
-      .single();
+        name: overviewDocName,
+        fileSize: overviewByteLength,
+      });
+      document = existingUrlDuplicate;
+    } else {
+      const { data: insertedDoc } = await supabase
+        .from('Document')
+        .insert({
+          dealId: deal.id,
+          name: overviewDocName,
+          type: 'OTHER',
+          fileSize: overviewByteLength,
+          extractedText: researchText,
+          extractedData: {
+            companyName: aiData.companyName,
+            industry: aiData.industry,
+            description: aiData.description,
+            revenue: aiData.revenue,
+            ebitda: aiData.ebitda,
+            ebitdaMargin: aiData.ebitdaMargin,
+            revenueGrowth: aiData.revenueGrowth,
+            employees: aiData.employees,
+            foundedYear: aiData.foundedYear,
+            headquarters: aiData.headquarters,
+            keyRisks: aiData.keyRisks,
+            investmentHighlights: aiData.investmentHighlights,
+            summary: aiData.summary,
+            overallConfidence: aiData.overallConfidence,
+            needsReview: aiData.needsReview,
+            reviewReasons: aiData.reviewReasons,
+          },
+          aiAnalysis: overviewText,
+          status: aiData.needsReview ? 'pending_review' : 'analyzed',
+          confidence: aiData.overallConfidence / 100,
+          aiAnalyzedAt: new Date().toISOString(),
+          mimeType: 'text/markdown',
+          metadata: {
+            sourceUrl: url,
+            pagesScraped: research.companyWebsite.scrapedPages,
+          },
+        })
+        .select()
+        .single();
+      document = insertedDoc;
+    }
 
     // Log activity + assign team (only for new deals)
     if (!isUpdate) {
@@ -307,6 +338,16 @@ subRouter.post('/url', async (req, res) => {
     }
 
     await AuditLog.aiIngest(req, `Web Research — ${url}`, deal.id);
+
+    // Auto-generate firm-teaser blurbs for newly-created deals (blocking,
+    // best-effort — never fail ingest on teaser error).
+    if (!isUpdate) {
+      try {
+        await generateTeasersForDeal({ dealId: deal.id, orgId });
+      } catch (teaserErr) {
+        log.error('URL ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+      }
+    }
 
     log.info('URL research ingest complete', { dealId: deal.id, url, isUpdate });
 

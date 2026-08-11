@@ -13,6 +13,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard", href: "/dashboard" },
   { id: "deals", label: "Deals", icon: "work", href: "/deals" },
   { id: "data-room", label: "Data Room", icon: "folder_open", href: "/data-room" },
+  { id: "nda", label: "NDAs", icon: "gavel", href: "/nda" },
   { id: "crm", label: "CRM", icon: "groups", href: "/contacts", memberOnly: true },
   { id: "admin", label: "Admin", icon: "admin_panel_settings", href: "/admin", adminOnly: true },
   { id: "divider", label: "", icon: "", href: "", divider: true },

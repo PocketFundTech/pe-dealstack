@@ -2,10 +2,32 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { cn } from "@/lib/cn";
-import { formatCurrency, formatRelativeTime } from "@/lib/formatters";
+import {
+  formatCurrency,
+  formatHeadlineValue,
+  formatRelativeTime,
+  pickHeadlineMetrics,
+  toActualDollars,
+  type UnitScale,
+} from "@/lib/formatters";
+import { comparePeriodChronologically } from "./deal-financials-period-scope";
 import { STAGE_LABELS } from "@/lib/constants";
 import { api } from "@/lib/api";
-import { type DealDetail, type TeamMember, PIPELINE_STAGES, TERMINAL_STAGES } from "./components";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { type DealDetail, type TeamMember, PIPELINE_STAGES, TERMINAL_STAGES } from "./deal-detail-shared";
+
+// Minimal shape of an income-statement row needed to render the headline
+// Revenue / EBITDA cards. Mirrors the public columns the API returns from
+// /deals/:id/financials. Defined locally so this layout module doesn't depend
+// on the larger FinancialStatement type defined alongside the chart code.
+interface IncomeStatementRow {
+  statementType?: string;
+  period?: string;
+  periodType?: string | null;
+  unitScale?: UnitScale | null;
+  currency?: string | null;
+  lineItems?: Record<string, number | null> | null;
+}
 
 // ---------------------------------------------------------------------------
 // Stage Pipeline
@@ -189,36 +211,166 @@ export function DealMetadataRow({ deal }: { deal: DealDetail }) {
 // ---------------------------------------------------------------------------
 
 export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
-  // Dynamic financial metrics — only show cards with data, prioritized by
-  // relevance. Ported from deal.js renderDynamicMetrics.
-  const hasMarginData = deal.ebitda != null && deal.revenue != null && deal.revenue !== 0;
+  // Headline metrics on the deal page header. Read precedence
+  // (`pickHeadlineMetrics`):
+  //   1) deal.cachedRevenue / cachedEbitda / cachedEbitdaMargin — written
+  //      server-side by dealCacheWriteback. Both rev and ebitda come from
+  //      the SAME picked row in ACTUAL DOLLARS, so the margin is always
+  //      scale-correct. cachedEbitdaMargin is precomputed.
+  //   2) FinancialStatement (latest INCOME_STATEMENT) — carries unitScale +
+  //      currency. Used as fallback while the cache is empty.
+  //   3) Legacy deal.revenue / deal.ebitda (MILLIONS assumed). Last resort,
+  //      and only the source of the historical "11103% margin" display bug
+  //      because rev and ebitda were written by different paths at
+  //      different scales.
+  const cacheHit =
+    deal.cachedRevenue != null ||
+    deal.cachedEbitda != null ||
+    deal.cachedEbitdaMargin != null;
 
-  type MetricDef = { key: string; label: string; value: unknown; formatted: string; badge?: string; extra?: string };
+  const [latestIncome, setLatestIncome] = useState<IncomeStatementRow | null>(null);
+  // True while the /deals/:id/financials request is in flight. Without this,
+  // the legacy `deal.revenue` / `deal.ebitda` columns render first (with a
+  // possibly-wrong margin computed from MILLIONS-assumed values), then snap
+  // to the in-unit FinancialStatement values once the fetch returns — visible
+  // flicker on the EBITDA Margin card especially. Suppressed entirely when
+  // the cache is populated since we don't need the fallback fetch.
+  const [statementLoading, setStatementLoading] = useState<boolean>(
+    Boolean(deal.id) && !cacheHit,
+  );
+
+  useEffect(() => {
+    if (cacheHit) {
+      // Cached fields fully cover Revenue / EBITDA / Margin in actual
+      // dollars. Skip the fallback statement fetch entirely.
+      setStatementLoading(false);
+      setLatestIncome(null);
+      return;
+    }
+    let cancelled = false;
+    setStatementLoading(true);
+    (async () => {
+      try {
+        const data = await api.get<IncomeStatementRow[]>(`/deals/${deal.id}/financials`);
+        if (cancelled) return;
+        const rows = Array.isArray(data) ? data : [];
+        const incomeRows = rows.filter((r) => r.statementType === "INCOME_STATEMENT");
+        if (incomeRows.length === 0) {
+          setLatestIncome(null);
+          return;
+        }
+        // Prefer historical/LTM periods (skip projections). The API uses
+        // HISTORICAL/PROJECTED/LTM; older snapshots may use ACTUAL.
+        const historical = incomeRows.filter(
+          (r) => r.periodType === "HISTORICAL" || r.periodType === "ACTUAL" || r.periodType === "LTM",
+        );
+        const candidates = historical.length > 0 ? historical : incomeRows;
+        // comparePeriodChronologically sorts ascending; reverse to get newest.
+        const sorted = [...candidates].sort((a, b) =>
+          comparePeriodChronologically(b.period, a.period),
+        );
+        setLatestIncome(sorted[0] ?? null);
+      } catch (err) {
+        // Fall back to deal-level fields silently — the income statement
+        // table below renders independently and surfaces its own errors.
+        console.warn("[deal-layout] FinancialMetricsRow income fetch failed:", err);
+        if (!cancelled) setLatestIncome(null);
+      } finally {
+        if (!cancelled) setStatementLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deal.id, cacheHit]);
+
+  // Resolve revenue / EBITDA / margin via the canonical precedence helper.
+  // - cached: ACTUAL DOLLARS, margin precomputed by the server.
+  // - summary: latest INCOME_STATEMENT row at its native unitScale.
+  // - legacy: deal.revenue / deal.ebitda assumed MILLIONS.
+  const summaryShape = latestIncome
+    ? {
+        revenue: latestIncome.lineItems?.revenue ?? null,
+        ebitda: latestIncome.lineItems?.ebitda ?? null,
+        // Use the row's own ebitda_margin_pct when extracted — many rows
+        // have it even when ebitda itself is null, which previously caused
+        // the margin card to disappear on cache-less deals.
+        ebitdaMargin: latestIncome.lineItems?.ebitda_margin_pct ?? null,
+        unitScale: (latestIncome.unitScale as UnitScale | null) ?? "ACTUALS",
+        currency: latestIncome.currency ?? deal.currency ?? null,
+      }
+    : null;
+  const headline = pickHeadlineMetrics(deal, summaryShape);
+
+  const revenueValue = headline.revenue;
+  const revenueFormatted = formatHeadlineValue(headline.revenue, headline);
+
+  const ebitdaValue = headline.ebitda;
+  const ebitdaFormatted = formatHeadlineValue(headline.ebitda, headline);
+
+  // Use the precomputed margin from the helper — when source === "cached"
+  // this is the server's authoritative percentage and bypasses the
+  // mismatched-units arithmetic that produced the historical 11103%
+  // display bug.
+  const marginPct = headline.ebitdaMargin;
+  const hasMarginData = marginPct != null;
+
+  // The revenue / EBITDA / margin cards depend on the FinancialStatement
+  // fetch. Mark them so the render block can swap in a skeleton placeholder
+  // until the fetch settles, instead of flashing the legacy-computed value.
+  type MetricDef = {
+    key: string;
+    label: string;
+    value: unknown;
+    formatted: string;
+    badge?: string;
+    extra?: string;
+    loading?: boolean;
+  };
   const allMetrics: MetricDef[] = [
     {
       key: "revenue",
       label: "Revenue (LTM)",
-      value: deal.revenue,
-      formatted: formatCurrency(deal.revenue, deal.currency),
+      // Keep the card visible during load (so the row doesn't reflow when
+      // data arrives) by treating loading as "has data".
+      value: statementLoading ? "loading" : revenueValue,
+      formatted: revenueFormatted,
+      loading: statementLoading,
     },
     {
       key: "ebitdaMargin",
       label: "EBITDA Margin",
-      value: hasMarginData ? deal.ebitda : null,
-      formatted: hasMarginData ? ((deal.ebitda! / deal.revenue!) * 100).toFixed(0) + "%" : "\u2014",
+      // Was: `hasMarginData ? ebitdaValue : null`. With Speedy hitting the
+      // legacy-margin fallthrough, marginPct = 50.1 but ebitdaValue is null
+      // (summary's ebitda was null); the downstream `value != null` filter
+      // then dropped the card entirely. Use marginPct as the truthy gate so
+      // the card renders whenever a usable margin exists.
+      value: statementLoading ? "loading" : marginPct,
+      formatted: marginPct != null ? marginPct.toFixed(0) + "%" : "\u2014",
+      loading: statementLoading,
     },
     {
       key: "ebitda",
       label: "EBITDA",
-      value: deal.ebitda,
-      formatted: formatCurrency(deal.ebitda, deal.currency),
+      value: statementLoading ? "loading" : ebitdaValue,
+      formatted: ebitdaFormatted,
+      loading: statementLoading,
     },
     {
       key: "dealSize",
       label: "Deal Size",
       value: deal.dealSize,
       formatted: formatCurrency(deal.dealSize, deal.currency),
-      extra: deal.dealSize && deal.ebitda ? `~${(deal.dealSize / deal.ebitda).toFixed(1)}x EBITDA Multiple` : undefined,
+      // EBITDA Multiple = dealSize / ebitda. Both must share a scale so the
+      // ratio is meaningful — `deal.dealSize` is MILLIONS by convention,
+      // while headline.ebitda may be ACTUALS (cached) or unitScale-tagged
+      // (summary). Normalise both to actual dollars before dividing.
+      extra: (() => {
+        const dealSizeActual = toActualDollars(deal.dealSize, "MILLIONS");
+        const ebitdaActual = toActualDollars(headline.ebitda, headline.unitScale);
+        if (!dealSizeActual || !ebitdaActual) return undefined;
+        return `~${(dealSizeActual / ebitdaActual).toFixed(1)}x EBITDA Multiple`;
+      })(),
     },
     {
       key: "irr",
@@ -270,16 +422,29 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
         >
           <p className="text-[10px] text-text-muted font-semibold uppercase tracking-wider">{m.label}</p>
           <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-xl font-bold text-text-main leading-none tabular-nums">{m.formatted}</span>
-            {m.badge && (
+            {m.loading ? (
+              // Shimmer placeholder while the FinancialStatement fetch is in
+              // flight. Sized to the same line-height as the formatted value
+              // so the card doesn't pop when real data arrives.
+              <Skeleton.Line width={84} height={20} />
+            ) : (
+              <span className="text-xl font-bold text-text-main leading-none tabular-nums">{m.formatted}</span>
+            )}
+            {!m.loading && m.badge && (
               <span className="text-[10px] font-bold text-secondary bg-secondary-light border border-secondary/20 px-1.5 py-0.5 rounded">
                 {m.badge}
               </span>
             )}
           </div>
-          {m.extra && <p className="text-[10px] text-text-muted font-medium mt-1.5">{m.extra}</p>}
-          {/* Visual confidence indicators -- matches legacy mini charts */}
-          {m.key === "revenue" && (
+          {!m.loading && m.extra && <p className="text-[10px] text-text-muted font-medium mt-1.5">{m.extra}</p>}
+          {/* Visual confidence indicators -- matches legacy mini charts.
+              Suppressed during load so the mini-bar / margin bar don't render
+              with stale-fallback data. Reserve the same 8px height so card
+              heights stay constant between loading and loaded states. */}
+          {m.loading && (m.key === "revenue" || m.key === "ebitdaMargin") && (
+            <div className="h-8 mt-2 w-full" aria-hidden="true" />
+          )}
+          {!m.loading && m.key === "revenue" && (
             <div className="h-8 mt-2 w-full flex items-end gap-1 opacity-80">
               <div className="flex-1 bg-secondary/60 h-[40%] rounded-t-sm" />
               <div className="flex-1 bg-secondary/60 h-[50%] rounded-t-sm" />
@@ -288,13 +453,13 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
               <div className="flex-1 bg-secondary h-[80%] rounded-t-sm" />
             </div>
           )}
-          {m.key === "ebitdaMargin" && deal.ebitda != null && deal.revenue != null && deal.revenue !== 0 && (
+          {!m.loading && m.key === "ebitdaMargin" && marginPct != null && (
             <div className="h-8 mt-2 w-full flex items-center">
               <div className="w-full h-2 bg-border-subtle rounded-full overflow-hidden">
                 <div
                   className="h-full rounded-full transition-all"
                   style={{
-                    width: `${Math.min(Math.round((deal.ebitda! / deal.revenue!) * 100), 100)}%`,
+                    width: `${Math.min(Math.round(marginPct), 100)}%`,
                     backgroundColor: "#003366",
                   }}
                 />

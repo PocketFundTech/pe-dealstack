@@ -12,6 +12,7 @@ import { getChatModel, getFastModel, isLLMAvailable } from '../services/llm.js';
 import { AICache } from '../services/aiCache.js';
 import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
+import { getFirmContextBlock } from '../services/firmContextService.js';
 
 const subRouter = Router();
 
@@ -174,7 +175,12 @@ subRouter.post('/portfolio/chat', async (req, res) => {
       tools,
     });
 
-    const systemPrompt = `You are an AI portfolio assistant for a Private Equity firm. You have tools to query the firm's deal pipeline and portfolio data.
+    // Firm-wide standing context (single AI-generated firm-context doc). Empty
+    // when none generated yet — guard and prepend nothing.
+    const firmContext = await getFirmContextBlock(orgId);
+    const firmContextBlock = firmContext ? `=== FIRM CONTEXT ===\n${firmContext}\n\n` : '';
+
+    const systemPrompt = `${firmContextBlock}You are an AI portfolio assistant for a Private Equity firm. You have tools to query the firm's deal pipeline and portfolio data.
 
 RULES:
 - ALWAYS use tools to get data before answering — never guess or assume

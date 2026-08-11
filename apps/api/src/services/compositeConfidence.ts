@@ -43,9 +43,16 @@ export function scoreSourceMatch(sourceQuote: string | undefined, rawText: strin
 }
 
 export function scoreMathValidation(errorCount: number, warningCount: number): number {
+  // 0 errors = passing math, regardless of how many warnings. Warnings come
+  // from per-period checks (yoy growth, ebit math, etc.) and scale linearly
+  // with the number of periods — a 36-month extraction routinely produces
+  // 10+ warnings even when every individual cell is correct. Previously this
+  // function returned 40 for any extraction with >2 warnings, which dragged
+  // the composite confidence into very_low and silently discarded the data.
   if (errorCount === 0 && warningCount === 0) return 100;
-  if (errorCount === 0 && warningCount <= 2) return 80;
-  if (errorCount <= 1) return 40;
+  if (errorCount === 0 && warningCount <= 5) return 90;
+  if (errorCount === 0) return 75;
+  if (errorCount <= 1) return 50;
   return 20;
 }
 

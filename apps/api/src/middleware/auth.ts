@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
+import { getCachedOrgMfa, setCachedOrgMfa } from './authContextCache.js';
 
 // User type for authenticated requests
 export interface AuthUser {
@@ -139,6 +140,117 @@ export async function optionalAuthMiddleware(
     next();
   }
 }
+
+// Paths that bypass org-level MFA enforcement so users can still enroll
+// their factor, manage sessions, and read their own org/user state.
+// The /auth subtree is a prefix bypass (login, enrollment, session routes all
+// live under it); the org/user self-read endpoints are EXACT matches only —
+// a bare startsWith() would also bypass /api/organizations/me-extra or any
+// future leaf under /api/organizations/me/*, silently widening the bypass.
+const MFA_BYPASS_SUBTREES: string[] = [
+  '/auth/',           // login/logout/MFA enrollment
+  '/api/auth/',
+];
+const MFA_BYPASS_EXACT: string[] = [
+  '/organizations/me',
+  '/api/organizations/me',
+  '/users/me',
+  '/api/users/me',
+];
+
+async function userHasVerifiedMfa(userId: string): Promise<boolean> {
+  try {
+    // Use Supabase admin client to list factors for this user.
+    // The exact API may vary by SDK version — adjust if needed.
+    const adminAuth: any = (supabase as any).auth?.admin;
+    if (!adminAuth?.mfa?.listFactors) return false;
+    const { data, error } = await adminAuth.mfa.listFactors({ userId });
+    if (error) return false;
+    const factors = (data?.factors || []) as Array<{ status?: string }>;
+    return factors.some((f) => f.status === 'verified');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Org-level MFA enforcement middleware.
+ * If the user's organization has `requireMFA = true`, blocks API access for
+ * users without a verified MFA factor. Bypasses paths needed for enrollment
+ * and self-service so users can still get into compliance.
+ * Must run after authMiddleware (and ideally orgMiddleware).
+ */
+export const enforceOrgMfaMiddleware = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user) {
+      next();
+      return;
+    }
+
+    // Use originalUrl so the bypass list works regardless of where this
+    // middleware is mounted in the Express tree (req.path strips the mount
+    // prefix; originalUrl preserves the full request path). Strip query string.
+    const fullPath = (req.originalUrl || req.url || '').split('?')[0] || '';
+    // Trailing-slash normalization so /api/users/me/ still exact-matches.
+    const normalizedPath = fullPath.replace(/\/+$/, '') || '/';
+    if (
+      MFA_BYPASS_SUBTREES.some((p) => fullPath.startsWith(p)) ||
+      MFA_BYPASS_EXACT.includes(normalizedPath)
+    ) {
+      next();
+      return;
+    }
+
+    const orgId = user.organizationId;
+    if (!orgId) {
+      next();
+      return;
+    }
+
+    // Short-TTL cache: requireMFA is looked up on every request, but changes
+    // rarely. On a miss we hit the DB and cache the result (see authContextCache).
+    let requireMFA = getCachedOrgMfa(orgId);
+    if (requireMFA === undefined) {
+      const { data: org, error: orgErr } = await supabase
+        .from('Organization')
+        .select('requireMFA')
+        .eq('id', orgId)
+        .single();
+
+      if (orgErr || !org) {
+        next(); // fail-open on transient lookup error (not cached)
+        return;
+      }
+      requireMFA = !!org.requireMFA;
+      setCachedOrgMfa(orgId, requireMFA);
+    }
+
+    if (!requireMFA) {
+      next();
+      return;
+    }
+
+    const hasMfa = await userHasVerifiedMfa(user.id);
+    if (hasMfa) {
+      next();
+      return;
+    }
+
+    res.status(403).json({
+      error: 'Two-factor authentication is required by your organization',
+      code: 'MFA_REQUIRED',
+    });
+    return;
+  } catch (err) {
+    log.error('enforceOrgMfaMiddleware error', err as any);
+    next(); // fail-open on errors — don't lock users out on transient bugs
+  }
+};
 
 /**
  * Role-based access control middleware

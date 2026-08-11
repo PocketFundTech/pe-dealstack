@@ -167,36 +167,24 @@ router.post('/deals/:dealId/activities', async (req, res) => {
   }
 });
 
-// GET /api/activities/recent - Get recent activities across caller's org deals
-// Registered BEFORE `/activities/:id` so Express doesn't match `recent` as a
-// path parameter (without this, /recent silently hits the :id handler).
+// GET /api/activities/recent - Get recent activities across the caller's org.
+// NOTE: must be registered BEFORE '/activities/:id' or Express matches "recent"
+// as an :id value and this handler becomes unreachable.
 router.get('/activities/recent', async (req, res) => {
   try {
-    const { limit } = recentActivitiesQuerySchema.parse(req.query);
     const orgId = getOrgId(req);
+    const { limit } = recentActivitiesQuerySchema.parse(req.query);
 
-    // Pre-fetch deal IDs for this org, then filter activities at the DB layer.
-    // Avoids the "load N rows globally, filter in JS" anti-pattern (which can
-    // silently drop the caller's own activities when other tenants are busier).
-    const { data: deals, error: dealsErr } = await supabase
-      .from('Deal')
-      .select('id')
-      .eq('organizationId', orgId);
-
-    if (dealsErr) throw dealsErr;
-
-    const dealIds = (deals || []).map((d: { id: string }) => d.id);
-    if (dealIds.length === 0) {
-      return res.json([]);
-    }
-
+    // SECURITY: scope to the caller's org via the parent Deal. The inner join
+    // drops any activity whose deal is not in this org, so no cross-tenant rows
+    // leak into the feed.
     const { data, error } = await supabase
       .from('Activity')
       .select(`
         *,
-        deal:Deal(id, name, icon, industry)
+        deal:Deal!inner(id, name, icon, industry)
       `)
-      .in('dealId', dealIds)
+      .eq('deal.organizationId', orgId)
       .order('createdAt', { ascending: false })
       .limit(limit);
 
@@ -215,23 +203,6 @@ router.get('/activities/:id', async (req, res) => {
     const { id } = req.params;
     const orgId = getOrgId(req);
 
-    // Resolve the activity's dealId first, then verify the deal belongs to caller's org.
-    // Returns 404 (not 403) to prevent enumeration of activity ids across tenants.
-    const { data: activityRef, error: refError } = await supabase
-      .from('Activity')
-      .select('id, dealId')
-      .eq('id', id)
-      .single();
-
-    if (refError || !activityRef?.dealId) {
-      return res.status(404).json({ error: 'Activity not found' });
-    }
-
-    const dealAccess = await verifyDealAccess(activityRef.dealId, orgId);
-    if (!dealAccess) {
-      return res.status(404).json({ error: 'Activity not found' });
-    }
-
     const { data, error } = await supabase
       .from('Activity')
       .select('*')
@@ -243,6 +214,13 @@ router.get('/activities/:id', async (req, res) => {
         return res.status(404).json({ error: 'Activity not found' });
       }
       throw error;
+    }
+
+    // SECURITY: activities are deal-owned — confirm the parent deal is in the
+    // caller's org before returning (otherwise any user could read any activity
+    // by id, leaking deal names / prior field values / mentions across tenants).
+    if (!data?.dealId || !(await verifyDealAccess(data.dealId, orgId))) {
+      return res.status(404).json({ error: 'Activity not found' });
     }
 
     res.json(data);
@@ -258,22 +236,14 @@ router.delete('/activities/:id', async (req, res) => {
     const { id } = req.params;
     const orgId = getOrgId(req);
 
-    // F-14: resolve the activity's dealId first, then verify the deal belongs
-    // to caller's org. Without this check any user could wipe another firm's
-    // audit trail with `DELETE /api/activities/<uuid>`. 404 (not 403) to
-    // prevent enumeration.
-    const { data: activityRef, error: refError } = await supabase
+    // SECURITY: verify the activity's parent deal is in the caller's org before
+    // deleting — otherwise any user could delete any tenant's activity by id.
+    const { data: existing } = await supabase
       .from('Activity')
       .select('id, dealId')
       .eq('id', id)
       .single();
-
-    if (refError || !activityRef?.dealId) {
-      return res.status(404).json({ error: 'Activity not found' });
-    }
-
-    const dealAccess = await verifyDealAccess(activityRef.dealId, orgId);
-    if (!dealAccess) {
+    if (!existing?.dealId || !(await verifyDealAccess(existing.dealId, orgId))) {
       return res.status(404).json({ error: 'Activity not found' });
     }
 

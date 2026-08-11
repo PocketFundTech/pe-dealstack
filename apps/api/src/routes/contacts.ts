@@ -10,9 +10,41 @@ import contactsConnectionsRouter from './contacts-connections.js';
 
 const router = Router();
 
+// Postgres unique-violation error code. The partial unique index
+// idx_contact_email_org_unique (see contact-email-unique-migration.sql)
+// enforces one contact per (lower(email), organizationId); a 23505 from an
+// insert is mapped to HTTP 409 as a race fallback for the pre-insert lookup.
+const PG_UNIQUE_VIOLATION = '23505';
+
 // Mount sub-routers
 router.use('/', contactsInsightsRouter);
 router.use('/', contactsConnectionsRouter);
+
+// Look up an existing contact in the org by case-insensitive email match.
+// Returns the contact id when a duplicate exists, else null. Empty/missing
+// emails never dedupe (a contact without an email can always be created).
+async function findContactIdByEmail(orgId: string, email: string | null | undefined): Promise<string | null> {
+  const normalized = (email || '').trim();
+  if (!normalized) return null;
+
+  // ilike treats % and _ as LIKE wildcards. Emails can legitimately contain
+  // underscores, so escape both to force a literal (case-insensitive) match.
+  const escaped = normalized.replace(/([%_\\])/g, '\\$1');
+
+  const { data, error } = await supabase
+    .from('Contact')
+    .select('id')
+    .eq('organizationId', orgId)
+    .ilike('email', escaped)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    // Surface the failure to the caller rather than silently allowing a dupe.
+    throw error;
+  }
+  return data?.id ?? null;
+}
 
 // ─── Validation Schemas ──────────────────────────────────────
 
@@ -29,6 +61,17 @@ const createContactSchema = z.object({
   linkedinUrl: z.string().max(500).optional().or(z.literal('')),
   notes: z.string().max(5000).optional().or(z.literal('')),
   tags: z.array(z.string().max(50)).max(20).optional(),
+  // Follow-up reminder. Accept an ISO 8601 datetime (with or without offset)
+  // or a date-only string (YYYY-MM-DD), or null to clear (PATCH).
+  followUpAt: z
+    .union([
+      z.string().datetime({ offset: true }),
+      z.string().datetime(),
+      z.string().date(),
+    ])
+    .nullable()
+    .optional(),
+  followUpNote: z.string().max(500).optional().or(z.literal('')),
 });
 
 const updateContactSchema = createContactSchema.partial();
@@ -232,6 +275,16 @@ router.post('/', async (req: Request, res) => {
 
     const orgId = getOrgId(req);
 
+    // Reject duplicates by case-insensitive email within the org. Empty emails
+    // are allowed through (a contact without an email never dedupes).
+    const existingContactId = await findContactIdByEmail(orgId, data.email);
+    if (existingContactId) {
+      return res.status(409).json({
+        error: 'A contact with this email already exists',
+        existingContactId,
+      });
+    }
+
     const { data: contact, error } = await supabase
       .from('Contact')
       .insert({
@@ -245,6 +298,8 @@ router.post('/', async (req: Request, res) => {
         linkedinUrl: data.linkedinUrl || null,
         notes: data.notes || null,
         tags: data.tags || [],
+        followUpAt: data.followUpAt || null,
+        followUpNote: data.followUpNote || null,
         createdBy: req.user?.id,
         organizationId: orgId,
       })
@@ -252,6 +307,16 @@ router.post('/', async (req: Request, res) => {
       .single();
 
     if (error) {
+      // Race fallback: two concurrent inserts (e.g. a double-clicked Gmail
+      // suggestion) can both pass the lookup above. The DB's partial unique
+      // index then rejects the loser with 23505 — map it to the same 409.
+      if (error.code === PG_UNIQUE_VIOLATION) {
+        const raceWinnerId = await findContactIdByEmail(orgId, data.email);
+        return res.status(409).json({
+          error: 'A contact with this email already exists',
+          existingContactId: raceWinnerId,
+        });
+      }
       log.error('Supabase insert error', { code: error.code, message: error.message, details: error.details, hint: error.hint });
       return res.status(500).json({ error: 'Failed to create contact', details: error.message });
     }
@@ -307,6 +372,9 @@ router.patch('/:id', async (req: Request, res) => {
     if (data.linkedinUrl !== undefined) updates.linkedinUrl = data.linkedinUrl || null;
     if (data.notes !== undefined) updates.notes = data.notes || null;
     if (data.tags !== undefined) updates.tags = data.tags;
+    // followUpAt: accept an ISO string to set, or explicit null to clear.
+    if (data.followUpAt !== undefined) updates.followUpAt = data.followUpAt ?? null;
+    if (data.followUpNote !== undefined) updates.followUpNote = data.followUpNote || null;
 
     const orgId = getOrgId(req);
 
@@ -365,9 +433,43 @@ router.post('/import', async (req: Request, res) => {
 
     const orgId = getOrgId(req);
     const { contacts } = validation.data;
-    const results = { success: 0, failed: 0, errors: [] as string[] };
+    const results = {
+      success: 0,
+      failed: 0,
+      errors: [] as string[],
+      skippedDuplicates: 0,
+      duplicateEmails: [] as string[],
+    };
+
+    // Load every email already in the org once, so we can dedupe the batch in
+    // memory (case-insensitive) instead of one round-trip per row.
+    const { data: existing, error: existingError } = await supabase
+      .from('Contact')
+      .select('email')
+      .eq('organizationId', orgId)
+      .not('email', 'is', null);
+
+    if (existingError) throw existingError;
+
+    // Tracks both pre-existing emails and ones inserted earlier in THIS batch,
+    // so two rows with the same email don't both get created.
+    const seenEmails = new Set<string>(
+      (existing || [])
+        .map((row) => (row.email || '').trim().toLowerCase())
+        .filter((e) => e.length > 0),
+    );
 
     for (const c of contacts) {
+      const normalizedEmail = (c.email || '').trim().toLowerCase();
+
+      // Skip (don't fail) rows whose email already exists in the org or earlier
+      // in this batch. Rows without an email are always imported.
+      if (normalizedEmail && seenEmails.has(normalizedEmail)) {
+        results.skippedDuplicates++;
+        results.duplicateEmails.push(c.email || '');
+        continue;
+      }
+
       const { error } = await supabase
         .from('Contact')
         .insert({
@@ -386,20 +488,35 @@ router.post('/import', async (req: Request, res) => {
         });
 
       if (error) {
+        // The DB unique index is the source of truth: a concurrent import could
+        // still collide. Treat that as a skipped duplicate, not a failure.
+        if (error.code === PG_UNIQUE_VIOLATION) {
+          results.skippedDuplicates++;
+          results.duplicateEmails.push(c.email || '');
+          continue;
+        }
         results.failed++;
         results.errors.push(`${c.firstName} ${c.lastName}: ${error.message}`);
       } else {
         results.success++;
+        if (normalizedEmail) seenEmails.add(normalizedEmail);
       }
     }
 
-    log.info('Contacts import complete', { total: contacts.length, success: results.success, failed: results.failed });
+    log.info('Contacts import complete', {
+      total: contacts.length,
+      success: results.success,
+      failed: results.failed,
+      skippedDuplicates: results.skippedDuplicates,
+    });
 
     res.status(201).json({
       success: true,
       imported: results.success,
       failed: results.failed,
       errors: results.errors,
+      skippedDuplicates: results.skippedDuplicates,
+      duplicateEmails: results.duplicateEmails,
     });
   } catch (error) {
     log.error('Import contacts error', error);

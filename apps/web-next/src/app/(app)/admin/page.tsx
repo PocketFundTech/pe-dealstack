@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUser } from "@/providers/UserProvider";
-import { api } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { formatCurrency } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
 import { ResourceAllocation } from "./ResourceAllocation";
 import { TaskTable } from "./TaskTable";
 import { UpcomingReviews } from "./UpcomingReviews";
 import { ActivityFeed } from "./ActivityFeed";
+import { SecurityDashboard } from "./SecurityDashboard";
 import {
   AssignDealModal,
   CreateTaskModal,
@@ -28,11 +29,7 @@ type OverdueFilter = "ALL" | "OVERDUE";
 
 export default function AdminPage() {
   const { user } = useUser();
-  const [teamMembers, setTeamMembers] = useState<AdminTeamMember[]>([]);
-  const [deals, setDeals] = useState<AdminDeal[]>([]);
-  const [tasks, setTasks] = useState<AdminTask[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState(Date.now());
+  const [lastUpdated, setLastUpdated] = useState(() => Date.now());
   const [externalTaskFilter, setExternalTaskFilter] = useState<OverdueFilter | undefined>();
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [openModal, setOpenModal] = useState<
@@ -43,45 +40,43 @@ export default function AdminPage() {
   const canManage = role === ADMIN_MANAGEMENT_ROLE;
   const canView = ADMIN_VISIBLE_ROLES.has(role);
 
+  // Read-only dashboard data via the shared stale-while-revalidate cache, so
+  // returning to /admin renders instantly from cache and revalidates in the
+  // background instead of re-running the three fetches and showing a spinner.
+  const enabled = !!user && canView;
+  const teamQuery = useApiQuery<AdminTeamMember[] | { users: AdminTeamMember[] }>(
+    "/users?isActive=true",
+    { enabled },
+  );
+  const dealsQuery = useApiQuery<AdminDeal[] | { deals: AdminDeal[] }>("/deals", { enabled });
+  const tasksQuery = useApiQuery<{ tasks: AdminTask[] }>("/tasks?limit=100", { enabled });
+
+  const teamMembers = useMemo<AdminTeamMember[]>(() => {
+    const v = teamQuery.data;
+    return v === undefined ? [] : Array.isArray(v) ? v : v.users || [];
+  }, [teamQuery.data]);
+  const deals = useMemo<AdminDeal[]>(() => {
+    const v = dealsQuery.data;
+    return v === undefined ? [] : Array.isArray(v) ? v : v.deals || [];
+  }, [dealsQuery.data]);
+  const tasks = useMemo<AdminTask[]>(() => tasksQuery.data?.tasks || [], [tasksQuery.data]);
+
+  // Spinner until the user is known and the first load of all three settles.
+  const loading = !user || teamQuery.isLoading || dealsQuery.isLoading || tasksQuery.isLoading;
+
+  const refresh = useCallback(() => {
+    setLastUpdated(Date.now());
+    return Promise.allSettled([
+      teamQuery.refetch(),
+      dealsQuery.refetch(),
+      tasksQuery.refetch(),
+    ]);
+  }, [teamQuery, dealsQuery, tasksQuery]);
+
   const showToast = useCallback((message: string, type: "success" | "error") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 4000);
   }, []);
-
-  const loadAll = useCallback(async () => {
-    try {
-      const [teamRes, dealsRes, tasksRes] = await Promise.allSettled([
-        api.get<AdminTeamMember[] | { users: AdminTeamMember[] }>("/users?isActive=true"),
-        api.get<AdminDeal[] | { deals: AdminDeal[] }>("/deals"),
-        api.get<{ tasks: AdminTask[] }>("/tasks?limit=100"),
-      ]);
-      if (teamRes.status === "fulfilled") {
-        const v = teamRes.value;
-        setTeamMembers(Array.isArray(v) ? v : v.users || []);
-      } else {
-        console.warn("[admin] team load failed:", teamRes.reason);
-      }
-      if (dealsRes.status === "fulfilled") {
-        const v = dealsRes.value;
-        setDeals(Array.isArray(v) ? v : v.deals || []);
-      } else {
-        console.warn("[admin] deals load failed:", dealsRes.reason);
-      }
-      if (tasksRes.status === "fulfilled") {
-        setTasks(tasksRes.value.tasks || []);
-      } else {
-        console.warn("[admin] tasks load failed:", tasksRes.reason);
-      }
-    } finally {
-      setLastUpdated(Date.now());
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (user && !canView) return;
-    loadAll();
-  }, [user, canView, loadAll]);
 
   // Tick "Last updated" label every minute for freshness
   useEffect(() => {
@@ -148,7 +143,7 @@ export default function AdminPage() {
   };
 
   const refreshAfterAction = () => {
-    loadAll();
+    refresh();
   };
 
   return (
@@ -279,6 +274,7 @@ export default function AdminPage() {
           />
         </div>
         <div className="xl:col-span-1 space-y-6">
+          <SecurityDashboard />
           <ActivityFeed />
           <UpcomingReviews
             tasks={tasks}

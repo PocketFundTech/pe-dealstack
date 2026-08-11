@@ -142,6 +142,67 @@ export async function getDocumentDownloadUrl(documentId: string): Promise<string
   }
 }
 
+/**
+ * Trigger a document download in the browser. Handles two response shapes
+ * from /api/documents/:id/download:
+ *   1. application/pdf binary — server streamed a watermarked PDF; we save
+ *      it as a blob and trigger a download.
+ *   2. application/json — server returned `{ url, name }` for a passthrough
+ *      file (non-PDF or oversized PDF); we navigate to the signed URL.
+ *
+ * Returns true on success, false on failure.
+ */
+export async function downloadDocument(
+  documentId: string,
+  fallbackName = "document",
+): Promise<boolean> {
+  try {
+    const res = await api.getRaw(`/documents/${documentId}/download`);
+    if (!res.ok) {
+      console.warn("[vdr] download failed:", res.status);
+      return false;
+    }
+
+    const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+
+    if (contentType.includes("application/pdf")) {
+      // Watermarked PDF binary path
+      const blob = await res.blob();
+      const filename = parseFilenameFromContentDisposition(
+        res.headers.get("content-disposition"),
+      ) ?? `${fallbackName}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      return true;
+    }
+
+    // Passthrough JSON path
+    const data = (await res.json()) as { url?: string; name?: string };
+    if (!data.url) {
+      console.warn("[vdr] download response missing url");
+      return false;
+    }
+    window.location.href = data.url;
+    return true;
+  } catch (err) {
+    console.warn("[vdr] download failed:", err);
+    return false;
+  }
+}
+
+function parseFilenameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  // matches:  attachment; filename="my doc.pdf"
+  const match = value.match(/filename\s*=\s*"?([^";]+)"?/i);
+  return match?.[1] ?? null;
+}
+
 export async function fetchFolderInsights(
   folderId: string,
 ): Promise<APIFolderInsight | null> {

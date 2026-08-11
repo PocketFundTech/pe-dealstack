@@ -13,7 +13,7 @@ import {
   fetchAllDeals,
   fetchDocuments,
   generateInsights,
-  getDocumentDownloadUrl,
+  downloadDocument,
   linkDocumentToDeal,
   renameDocument,
   renameFolder,
@@ -167,10 +167,11 @@ export function createFileClick(deps: { showToast: ToastFn }) {
   const { showToast } = deps;
   return async (file: VDRFile) => {
     try {
-      const url = await getDocumentDownloadUrl(file.id);
-      if (url) {
-        window.open(url, "_blank", "noopener,noreferrer");
-      } else {
+      // PDFs come back from the API watermarked (viewer email + timestamp +
+      // IP stamped on every page). Other file types pass through unchanged.
+      // downloadDocument handles both response shapes.
+      const ok = await downloadDocument(file.id, file.name);
+      if (!ok) {
         showToast(`Unable to load document: ${file.name}`, "error");
       }
     } catch (err) {

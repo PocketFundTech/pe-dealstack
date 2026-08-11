@@ -333,6 +333,12 @@ export default function LoginPage() {
                       Sign up
                     </Link>
                   </p>
+                  <p className="text-xs text-slate-400 mt-3">
+                    <Link href="/security" className="hover:text-primary transition-colors inline-flex items-center gap-1">
+                      Your data is secured
+                      <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                    </Link>
+                  </p>
                 </div>
               </div>
             </>

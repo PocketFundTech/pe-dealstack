@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/node';
-import express from 'express';
+import express, { type Request } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -21,12 +21,42 @@ import tasksRouter from './routes/tasks.js';
 import contactsRouter from './routes/contacts.js';
 import exportRouter from './routes/export.js';
 import dealImportRouter from './routes/deal-import.js';
+import hubspotImportRouter from './routes/hubspot-import.js';
 import internalRouter from './routes/internal-usage.js';
 import usageRouter from './routes/usage.js';
+import auditExportRouter from './routes/audit-export.js';
+import organizationsRouter from './routes/organizations.js';
+import orgStaffWebhookRouter from './routes/org-staff-webhook.js';
+import authSessionsRouter from './routes/auth-sessions.js';
+import authWorkspaceEmailRouter from './routes/auth-workspace-email.js';
+import adminSecurityRouter from './routes/admin-security.js';
+import adminSecurityDashboardRouter from './routes/admin-security-dashboard.js';
+import dealAccessTimelineRouter from './routes/deal-access-timeline.js';
+import integrationsRouter from './routes/integrations.js';
+import integrationsPublicRouter from './routes/integrations-public.js';
+import { registerProvider } from './integrations/_platform/registry.js';
+import { granolaProvider } from './integrations/granola/index.js';
+import { gmailProvider } from './integrations/gmail/index.js';
+import { googleCalendarProvider } from './integrations/googleCalendar/index.js';
+import { outlookProvider } from './integrations/outlook/index.js';
+import { microsoft365Provider } from './integrations/microsoft365/index.js';
+import legalDocumentsRouter from './routes/legal-documents.js';
+import legalDocEsignRouter from './routes/legal-doc-esign.js';
+import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
+import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
+// (disabled — see banner below)
+// import legalDocWebhooksRouter from './routes/legal-doc-webhooks.js';
+import dealsTrashRouter from './routes/deals-trash.js';
+import dealsTeasersRouter from './routes/deals-teasers.js';
+import firmTeaserRouter from './routes/firm-teaser.js';
+import firmContextRouter from './routes/firm-context.js';
+import graphsRouter from './routes/graphs.js';
+import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import { supabase } from './supabase.js';
-import { authMiddleware } from './middleware/auth.js';
+import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
 import { usageContextMiddleware } from './middleware/usageContext.js';
+import { staffAccessLogger } from './middleware/staffAccessLogger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { log } from './utils/logger.js';
@@ -141,7 +171,16 @@ const generalLimiter = rateLimit({
 
 app.use('/api/', generalLimiter);
 
-app.use(express.json({ limit: '50mb' }));
+app.use(
+  express.json({
+    limit: '50mb',
+    // Capture raw bytes for webhook HMAC verification — provider signatures
+    // are computed over the raw body, not parsed JSON.
+    verify: (req, _res, buf) => {
+      (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Request ID for error correlation
@@ -205,33 +244,95 @@ app.get('/api', (_req, res) => {
 // Invitation verify/accept must be public -- invitees don't have accounts yet
 app.use('/api/public/invitations', invitationsAcceptRouter);
 
+// Integration webhooks + OAuth callbacks + cron must be public — providers
+// POST/GET here without an auth header. Auth is enforced via signed state
+// tokens (callbacks), per-provider signature verification (webhooks), or
+// shared CRON_SECRET (cron). MUST be mounted BEFORE the authenticated
+// /api/integrations router below — Express matches routes in registration order.
+app.use('/api/integrations', integrationsPublicRouter);
+
+// Dropbox Sign eSignature webhook — provider POSTs signed-document events here
+// with no auth header (authenticity = HMAC event_hash, verified in the route).
+// MUST be mounted BEFORE the authenticated routers below.
+app.use('/api/webhooks', dropboxSignWebhookRouter);
+
+// ─── DISABLED UNTIL PROD (Drive push signature detection) ───────────────
+// files.watch push needs a GCP-domain-verified HTTPS callback; *.vercel.app
+// cannot be verified, so push never fires on preview/Vercel. Active detection
+// now runs via on-demand polling (legalDocSignaturePollService +
+// POST /legal-documents/check-signatures). RE-ENABLE before prod — see
+// docs/nda-signature-detection-setup.md "Enabling push in production".
+// ────────────────────────────────────────────────────────────────────────
+// Public: Google Drive POSTs NDA-signature notifications here with no auth header.
+// Identity = signed channel token (X-Goog-Channel-Token) + resourceId match.
+// app.use('/api/webhooks/legal-docs', legalDocWebhooksRouter);
+
 // ========================================
 // Protected Routes (require authentication + org resolution)
 // ========================================
-app.use('/api/deals/import', authMiddleware, orgMiddleware, usageContextMiddleware, dealImportRouter);
-app.use('/api/deals', authMiddleware, orgMiddleware, usageContextMiddleware, dealsRouter);
-app.use('/api/companies', authMiddleware, orgMiddleware, usageContextMiddleware, companiesRouter);
-app.use('/api', authMiddleware, orgMiddleware, usageContextMiddleware, activitiesRouter);
-app.use('/api/documents', authMiddleware, orgMiddleware, usageContextMiddleware, documentsAlertsRouter);
-app.use('/api', authMiddleware, orgMiddleware, usageContextMiddleware, documentsRouter);
-app.use('/api', authMiddleware, orgMiddleware, usageContextMiddleware, foldersRouter);
-app.use('/api/users', authMiddleware, orgMiddleware, usageContextMiddleware, usersRouter);
-app.use('/api/notifications', authMiddleware, orgMiddleware, usageContextMiddleware, notificationsRouter);
-app.use('/api/templates', authMiddleware, orgMiddleware, usageContextMiddleware, templatesRouter);
+app.use('/api/deals/import', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealImportRouter);
+// access-timeline mounted BEFORE the generic dealsRouter so /:dealId/access-timeline matches first
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealAccessTimelineRouter);
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTrashRouter);
+// financials-timeseries mounted BEFORE dealsRouter so /:dealId/financials/timeseries matches first
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
+// Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
+// generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsRouter);
+app.use('/api/firm-teaser', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmTeaserRouter);
+app.use('/api/firm-context', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmContextRouter);
+app.use('/api/companies', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, companiesRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, activitiesRouter);
+app.use('/api/documents', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsAlertsRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
+app.use('/api/users', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
+app.use('/api/notifications', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
+app.use('/api/templates', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, templatesRouter);
+// CustomGraph CRUD — /api/graphs and /api/deals/:dealId/graphs
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, graphsRouter);
 // Authenticated invitation routes (list, create, revoke, resend)
-app.use('/api/invitations', authMiddleware, orgMiddleware, usageContextMiddleware, invitationsRouter);
-app.use('/api/audit', authMiddleware, orgMiddleware, usageContextMiddleware, auditRouter);
-app.use('/api/tasks', authMiddleware, orgMiddleware, usageContextMiddleware, tasksRouter);
-app.use('/api/export', authMiddleware, orgMiddleware, usageContextMiddleware, exportRouter);
-app.use('/api/contacts', authMiddleware, orgMiddleware, usageContextMiddleware, contactsRouter);
-app.use('/api/watchlist', authMiddleware, orgMiddleware, usageContextMiddleware, watchlistRouter);
+app.use('/api/invitations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, invitationsRouter);
+// audit-export must be mounted BEFORE the generic auditRouter so /export.csv matches first
+app.use('/api/audit', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditExportRouter);
+app.use('/api/audit', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditRouter);
+// staff-access-webhook router mounted BEFORE generic organizationsRouter so /me/staff-access-webhook matches first
+app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, orgStaffWebhookRouter);
+app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationsRouter);
+app.use('/api/tasks', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, tasksRouter);
+app.use('/api/export', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, exportRouter);
+app.use('/api/contacts', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, contactsRouter);
+app.use('/api/watchlist', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, watchlistRouter);
+// hubspot import mounted BEFORE the generic integrationsRouter so /hubspot/* isn't
+// swallowed by integrationsRouter's /:provider/connect catch-all.
+app.use('/api/integrations/hubspot', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, hubspotImportRouter);
+app.use('/api/integrations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, integrationsRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
+
+// Admin security: dashboard router mounted BEFORE the isolation-test router (different paths but ordered for clarity)
+app.use('/api/admin/security', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityDashboardRouter);
+app.use('/api/admin/security', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityRouter);
+
+// Auth-scoped self-service routes (MFA bypass active for /api/auth/* in middleware)
+app.use('/api/auth', authMiddleware, authSessionsRouter);
+app.use('/api/auth', authMiddleware, authWorkspaceEmailRouter);
 
 // User-facing usage rollup (org-scoped)
-app.use('/api/usage', authMiddleware, orgMiddleware, usageContextMiddleware, usageRouter);
+app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);
 
 // Internal admin (Pocket Fund team only — gate is inside the router via requireInternalAdmin)
 // Note: NO orgMiddleware — internal routes intentionally query across orgs.
 app.use('/api/internal', authMiddleware, internalRouter);
+
+// Register integration providers (must execute before any request)
+registerProvider(granolaProvider);
+registerProvider(gmailProvider);
+registerProvider(googleCalendarProvider);
+registerProvider(outlookProvider);
+registerProvider(microsoft365Provider);
 
 // Sentry error handler (must be before custom error handler)
 if (process.env.SENTRY_DSN) {

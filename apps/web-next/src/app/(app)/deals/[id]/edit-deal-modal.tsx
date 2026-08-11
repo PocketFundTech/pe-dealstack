@@ -4,12 +4,16 @@ import { useEffect, useState } from "react";
 import { STAGE_LABELS, STAGES } from "@/lib/constants";
 import { CURRENCY_SYMBOLS, formatCurrency, getCurrencySymbol } from "@/lib/formatters";
 import { api } from "@/lib/api";
-import type { DealDetail } from "./components";
+import type { DealDetail } from "./deal-detail-shared";
 
 // Ported from deal-edit.js (showEditDealModal + saveDealChangesFromModal).
 // Stored deal values are in millions of the original currency; the unit selector
 // lets the user enter values in $/K/M/B (or for INR, ₹/L/Cr) and we convert
-// back to millions on save.
+// back to millions on save. The rest of the codebase (deal-layout, kanban
+// cards, dashboard, CSV export, ...) all treat `deal.revenue|ebitda|dealSize`
+// as millions and feed them straight into `formatCurrency`, so we must keep
+// storing at MILLIONS — only the *displayed* input value changes when the
+// user toggles the unit dropdown.
 
 type Unit = "$" | "K" | "M" | "B";
 
@@ -31,6 +35,20 @@ function naturalToMillions(value: string, unit: Unit): number | null {
     case "M": return num;
     case "K": return num / 1000;
     case "$": return num / 1_000_000;
+  }
+}
+
+// Re-render the input string so it represents the same millions amount
+// expressed in `unit`. Used when the user toggles the unit dropdown — we
+// preserve the underlying value rather than reinterpreting whatever number
+// is currently in the input.
+function millionsToValueForUnit(valueInMillions: number | null, unit: Unit): string {
+  if (valueInMillions == null) return "";
+  switch (unit) {
+    case "B": return String(parseFloat((valueInMillions / 1000).toPrecision(10)));
+    case "M": return String(parseFloat(valueInMillions.toPrecision(10)));
+    case "K": return String(parseFloat((valueInMillions * 1000).toPrecision(10)));
+    case "$": return String(parseFloat((valueInMillions * 1_000_000).toPrecision(10)));
   }
 }
 
@@ -60,7 +78,26 @@ function CurrencyInput({
   const [unit, setUnit] = useState<Unit>(initial.unit);
   const labels = unitLabels(currency);
 
-  useEffect(() => { onChange(naturalToMillions(value, unit)); }, [value, unit]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Single source of truth: the millions number derived from the currently
+  // entered (value, unit) pair. Pushed to the parent on any change so save
+  // gets the latest figure, and used for the "Currently: …" preview so it
+  // reflects in-flight edits rather than the original prop.
+  const liveMillions = naturalToMillions(value, unit);
+  useEffect(() => { onChange(liveMillions); }, [liveMillions]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toggling the unit dropdown should NOT reinterpret the typed number as a
+  // different magnitude — it should re-express the same underlying millions
+  // value in the new unit. e.g. value=5, unit=M → switch to K → value=5000,
+  // unit=K. Both represent $5M. If the input is empty we just swap the unit.
+  const handleUnitChange = (next: Unit) => {
+    if (next === unit) return;
+    if (liveMillions == null) {
+      setUnit(next);
+      return;
+    }
+    setValue(millionsToValueForUnit(liveMillions, next));
+    setUnit(next);
+  };
 
   return (
     <div>
@@ -68,7 +105,7 @@ function CurrencyInput({
       <div className="flex gap-1.5">
         <select
           value={unit}
-          onChange={(e) => setUnit(e.target.value as Unit)}
+          onChange={(e) => handleUnitChange(e.target.value as Unit)}
           className="px-2 py-2 border border-border-subtle rounded-lg text-sm bg-gray-50 font-medium text-text-secondary shrink-0 focus:ring-2 focus:ring-primary/20 focus:border-primary"
           style={{ width: 70 }}
         >
@@ -88,7 +125,7 @@ function CurrencyInput({
         />
       </div>
       <p className="text-[10px] text-text-muted mt-1">
-        {valueInMillions != null ? `Currently: ${formatCurrency(valueInMillions, currency)}` : "No value set"}
+        {liveMillions != null ? `Currently: ${formatCurrency(liveMillions, currency)}` : "No value set"}
       </p>
     </div>
   );

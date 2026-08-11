@@ -1,5 +1,7 @@
 // Shared types + helpers for the global AI Assistant FAB/drawer.
 
+import { createClient } from "@/lib/supabase/client";
+
 export type ContextType = "deal" | "dashboard" | "contacts" | "deals" | "memo" | "general";
 
 export interface ChatContext {
@@ -11,6 +13,88 @@ export interface ChatContext {
 export interface ChatMessage {
   role: "assistant" | "user";
   content: string;
+  /**
+   * Proposed actions attached to an assistant turn (navigate / draftEmail /
+   * mutation chips). Only ever set on assistant messages. Persisted so chips
+   * survive a reload, but a confirmed/executed mutation is best-effort — the
+   * user can re-confirm if they reload mid-flight.
+   */
+  actions?: Action[];
+}
+
+// ── Assistant actions (proposed by the backend, executed client-side) ────────
+// Contract shared with the API. `navigate` and `draftEmail` are inert (no
+// server call); mutations carry `needsConfirm: true` and an endpoint to hit.
+
+export type ActionType =
+  | "navigate"
+  | "draftEmail"
+  | "createTask"
+  | "changeStage"
+  | "addNote";
+
+export interface NavigatePayload {
+  href: string;
+}
+
+export interface DraftEmailPayload {
+  to?: string;
+  subject?: string;
+  body: string;
+}
+
+export interface MutationPayload {
+  endpoint: string;
+  method: "post" | "patch";
+  body?: Record<string, unknown>;
+}
+
+export interface Action {
+  type: ActionType;
+  label: string;
+  needsConfirm: boolean;
+  payload: NavigatePayload | DraftEmailPayload | MutationPayload | Record<string, unknown>;
+}
+
+export function isNavigateAction(
+  a: Action,
+): a is Action & { payload: NavigatePayload } {
+  return a.type === "navigate" && typeof (a.payload as NavigatePayload)?.href === "string";
+}
+
+export function isDraftEmailAction(
+  a: Action,
+): a is Action & { payload: DraftEmailPayload } {
+  return a.type === "draftEmail" && typeof (a.payload as DraftEmailPayload)?.body === "string";
+}
+
+export function isMutationAction(
+  a: Action,
+): a is Action & { payload: MutationPayload } {
+  const p = a.payload as MutationPayload;
+  return (
+    (a.type === "createTask" || a.type === "changeStage" || a.type === "addNote") &&
+    typeof p?.endpoint === "string" &&
+    (p?.method === "post" || p?.method === "patch")
+  );
+}
+
+// How many recent turns to send to the backend as conversation memory.
+// The backend re-caps this (last ~8 turns / bounded chars); we send a small
+// window to keep the request light.
+export const MAX_HISTORY_TURNS_SENT = 8;
+
+/**
+ * Build the bounded `history` payload for an /ai/chat request from the local
+ * message list. Excludes the just-sent user message (caller passes the list
+ * BEFORE appending it), drops the synthetic welcome message, and caps to the
+ * most recent MAX_HISTORY_TURNS_SENT turns.
+ */
+export function buildHistoryPayload(messages: ChatMessage[]): ChatMessage[] {
+  return messages
+    .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .slice(-MAX_HISTORY_TURNS_SENT)
+    .map((m) => ({ role: m.role, content: m.content }));
 }
 
 export interface ChatResponse {
@@ -19,6 +103,8 @@ export interface ChatResponse {
   reply?: string;
   content?: string;
   error?: string;
+  model?: string;
+  actions?: Action[];
 }
 
 export interface SuggestedPrompt {
@@ -149,4 +235,154 @@ const PROMPTS_BY_CONTEXT: Record<ContextType, SuggestedPrompt[]> = {
 
 export function getSuggestedPrompts(ctx: ChatContext): SuggestedPrompt[] {
   return PROMPTS_BY_CONTEXT[ctx.type] ?? PROMPTS_BY_CONTEXT.general;
+}
+
+// ── Streaming chat (SSE over fetch) ──────────────────────────────────────────
+// We use fetch + ReadableStream rather than EventSource because the endpoint
+// needs POST (message/context/history body) AND an Authorization header, which
+// EventSource can't send. Auth-header derivation mirrors lib/api.ts so we stay
+// in sync with how every other request authenticates.
+
+const STREAM_PATH = "/api/ai/chat/stream";
+
+async function streamAuthHeaders(): Promise<HeadersInit> {
+  const supabase = createClient();
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) return { "Content-Type": "application/json" };
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+export interface StreamCallbacks {
+  /** Incremental assistant text — append to the in-progress bubble. */
+  onToken: (text: string) => void;
+  /** Tool activity — show/hide a transient indicator. */
+  onTool: (tool: string, status: "running" | "done") => void;
+  /** Final payload — finalize text + stash actions. */
+  onDone: (full: string, actions: Action[], model?: string) => void;
+  /** Server-emitted error event. */
+  onError: (message: string) => void;
+}
+
+export interface StreamRequest {
+  message: string;
+  context: ContextType;
+  history: ChatMessage[];
+}
+
+/**
+ * POST to the streaming chat endpoint and drive the callbacks as SSE events
+ * arrive. Resolves `true` once the stream has been consumed end-to-end (the
+ * caller should NOT fall back). Resolves `false` when the response isn't
+ * streamable (non-OK status or missing body) — the caller should then fall
+ * back to the non-streaming endpoint. Throws if the request can't be
+ * established (network error); the caller's catch handles fallback there too.
+ *
+ * SSE framing: events are separated by a blank line. Within an event block we
+ * read `event:` and `data:` lines; `data:` may span multiple lines (joined with
+ * "\n" per the spec). On a blank line we dispatch the accumulated event.
+ */
+export async function streamChat(
+  req: StreamRequest,
+  cb: StreamCallbacks,
+): Promise<boolean> {
+  const headers = await streamAuthHeaders();
+  const res = await fetch(STREAM_PATH, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(req),
+  });
+
+  if (res.status === 401) {
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+  if (!res.ok || !res.body) {
+    // Not streamable (404, 5xx, or no body) — signal fallback.
+    return false;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const dispatch = (rawEvent: string) => {
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of rawEvent.split("\n")) {
+      if (line.startsWith(":")) continue; // SSE comment / heartbeat
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).replace(/^ /, ""));
+      }
+    }
+    if (dataLines.length === 0) return;
+    const dataStr = dataLines.join("\n");
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(dataStr) as Record<string, unknown>;
+    } catch {
+      // Malformed data line — skip rather than crash the stream loop.
+      return;
+    }
+
+    switch (eventName) {
+      case "token": {
+        const text = typeof data.text === "string" ? data.text : "";
+        if (text) cb.onToken(text);
+        break;
+      }
+      case "tool": {
+        const tool = typeof data.tool === "string" ? data.tool : "";
+        const status = data.status === "done" ? "done" : "running";
+        if (tool) cb.onTool(tool, status);
+        break;
+      }
+      case "done": {
+        const full = typeof data.response === "string" ? data.response : "";
+        const actions = Array.isArray(data.actions) ? (data.actions as Action[]) : [];
+        const model = typeof data.model === "string" ? data.model : undefined;
+        cb.onDone(full, actions, model);
+        break;
+      }
+      case "error": {
+        const message =
+          typeof data.message === "string" ? data.message : "The assistant hit an error.";
+        cb.onError(message);
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Split on blank line (event boundary). Normalise CRLF first.
+    let idx: number;
+    buffer = buffer.replace(/\r\n/g, "\n");
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      if (rawEvent.trim()) dispatch(rawEvent);
+    }
+  }
+
+  // Flush any trailing event without a terminating blank line.
+  const tail = buffer.trim();
+  if (tail) dispatch(tail);
+
+  // The stream was consumed end-to-end (callbacks fired for any events seen).
+  // Returning true tells the caller NOT to run the non-streaming fallback.
+  return true;
 }

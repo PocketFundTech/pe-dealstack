@@ -6,7 +6,7 @@ import { markStaleDeepResearchAsFailed } from '../services/agents/firmResearchAg
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { extractNameFromDomain } from '../utils/urlHelpers.js';
-import { runWithUsageContext } from '../middleware/usageContext.js';
+import { runWithUsageContext, resolveInternalUserId } from '../middleware/usageContext.js';
 import { runFirmResearchViaManagedAgents } from '../services/managedAgents/firmResearchOrchestrator.js';
 import firmProfileRouter from './onboarding-firm.js';
 
@@ -283,6 +283,50 @@ router.post('/dismiss', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/onboarding/firm-inputs
+// Persists the Firm Profile source inputs (website / LinkedIn / notes) onto
+// Organization.settings WITHOUT running the research agent — so what the user
+// typed survives reloads and is available to a later "Research firm" run. Writes
+// the SAME top-level keys the Firm Profile UI reads + the research save node sets.
+router.post('/firm-inputs', async (req: Request, res: Response) => {
+  let orgId: string;
+  try {
+    orgId = getOrgId(req);
+  } catch {
+    return res.status(400).json({ error: 'Organization not set up yet' });
+  }
+
+  const websiteUrl = typeof req.body.websiteUrl === 'string' ? req.body.websiteUrl.trim() : undefined;
+  const linkedinUrl = typeof req.body.linkedinUrl === 'string' ? req.body.linkedinUrl.trim() : undefined;
+  const documentText = typeof req.body.documentText === 'string' ? req.body.documentText.slice(0, 20000) : undefined;
+
+  try {
+    const { data: org, error: fetchError } = await supabase
+      .from('Organization')
+      .select('settings')
+      .eq('id', orgId)
+      .single();
+    if (fetchError) throw fetchError;
+
+    const existingSettings = (org?.settings || {}) as Record<string, any>;
+    const updatedSettings = { ...existingSettings };
+    if (websiteUrl !== undefined) updatedSettings.firmWebsite = websiteUrl;
+    if (linkedinUrl !== undefined) updatedSettings.firmLinkedin = linkedinUrl;
+    if (documentText !== undefined) updatedSettings.firmDocText = documentText;
+
+    const { error: updateError } = await supabase
+      .from('Organization')
+      .update({ settings: updatedSettings })
+      .eq('id', orgId);
+    if (updateError) throw updateError;
+
+    res.json({ success: true });
+  } catch (error: any) {
+    log.error('Onboarding firm-inputs save failed', { error: error.message, orgId });
+    res.status(500).json({ error: 'Failed to save firm inputs' });
+  }
+});
+
 // POST /api/onboarding/enrich-firm
 // Runs firm research agent → scrapes, searches, synthesizes, verifies, saves
 router.post('/enrich-firm', async (req: Request, res: Response) => {
@@ -291,8 +335,13 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
     const { websiteUrl, linkedinUrl } = req.body;
-    if (!websiteUrl && !linkedinUrl) {
-      return res.status(400).json({ error: 'Provide at least a websiteUrl or linkedinUrl' });
+    // Firm-provided doc/notes is a valid standalone source (a profile can be
+    // built from it even with no website/LinkedIn). Capped to bound token cost.
+    const documentText = typeof req.body.documentText === 'string'
+      ? req.body.documentText.slice(0, 20000)
+      : '';
+    if (!websiteUrl && !linkedinUrl && !documentText) {
+      return res.status(400).json({ error: 'Provide at least a websiteUrl, linkedinUrl, or firm document/notes' });
     }
 
     // Try to resolve org — but don't block if it's not available yet (new users)
@@ -340,6 +389,7 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
       websiteUrl: websiteUrl || '',
       linkedinUrl: linkedinUrl || '',
       firmName,
+      documentText,
       userId,
       organizationId: orgId,
     });
@@ -363,8 +413,12 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
           captureAgentError(err, { context: 'runFirmResearchViaManagedAgents:background' });
         });
       } else {
+        // usageContextMiddleware never ran for this background task, so resolve
+        // the auth UUID to the internal User.id here — UsageEvent.userId is an FK
+        // to User.id and inserting the raw auth UUID fails with FK 23503.
+        const internalUserId = await resolveInternalUserId(userId);
         void runWithUsageContext(
-          { userId, organizationId: orgId, source: 'background' },
+          { userId: internalUserId ?? userId, organizationId: orgId, source: 'background' },
           async () => {
             await runDeepResearch({
               phase1Profile: result.firmProfile!,
@@ -374,10 +428,7 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
               firmName,
               userId,
               organizationId: orgId,
-            }).catch(err => {
-              log.error('Deep research background task failed', { error: err.message });
-              captureAgentError(err, { context: 'runDeepResearch:background' });
-            });
+            }).catch(err => log.error('Deep research background task failed', { error: err.message }));
           },
         );
       }

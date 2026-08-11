@@ -1,12 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useUser } from "@/providers/UserProvider";
 import { cn } from "@/lib/cn";
 import { LiveFeed } from "./LiveFeed";
 import { Leaderboard } from "./Leaderboard";
-import { CostBreakdown } from "./CostBreakdown";
+
+// CostBreakdown renders chart.js — only shown on its own tab, so load it
+// lazily to keep chart.js out of this admin page's initial bundle.
+const CostBreakdown = dynamic(
+  () => import("./CostBreakdown").then((m) => m.CostBreakdown),
+  { ssr: false },
+);
 
 type Tab = "feed" | "leaderboard" | "breakdown";
 

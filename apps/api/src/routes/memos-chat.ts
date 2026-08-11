@@ -9,6 +9,7 @@ import { runMemoChatAgent } from '../services/agents/memoAgent/index.js';
 import { isLLMAvailable } from '../services/llm.js';
 import { MODEL_REASONING } from '../utils/aiModels.js';
 import { classifyAIErrorObject } from '../utils/aiErrors.js';
+import { getFirmContextBlock } from '../services/firmContextService.js';
 
 const router = Router();
 
@@ -21,6 +22,8 @@ const generateSectionSchema = z.object({
 });
 
 const chatMessageSchema = z.object({
+  // Cap chat input — an unbounded body goes straight into the LLM prompt
+  // (cost + prompt-stuffing vector). 10k chars ≈ a very long user message.
   content: z.string().min(1).max(10_000),
   sectionId: z.string().uuid().optional(),
   activeSectionId: z.string().uuid().optional(),
@@ -81,11 +84,8 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
 
     if (memoError) throw memoError;
 
-    // Get section — F-10: bind sectionId to memo. Without this, a caller
-    // could pass their own memoId (passes the org gate) plus a sectionId from
-    // any other org's memo. AI runs on caller's context but writes the output
-    // to the target org's section — incl. a prompt-injection payload via
-    // customPrompt.
+    // Get section — bound to the verified memo (SECURITY: prevents reading a
+    // section that belongs to a memo in another org)
     const { data: section, error: sectionError } = await supabase
       .from('MemoSection')
       .select('*')
@@ -133,6 +133,11 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
 
     const context = contextParts.join('\n');
 
+    // Firm-wide standing context (single AI-generated firm-context doc). Empty
+    // when none generated yet — guard and inject nothing.
+    const firmContext = await getFirmContextBlock(orgId);
+    const firmContextBlock = firmContext ? `=== FIRM CONTEXT ===\n${firmContext}\n\n` : '';
+
     // Build section-specific prompt
     const sectionPrompt = customPrompt ||
       `Generate content for the "${section.title}" section of this investment committee memo.
@@ -145,7 +150,7 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
     const response = await trackedChatCompletion('memo_generation', {
       model: MODEL_REASONING,
       messages: [
-        { role: 'system', content: MEMO_ANALYST_PROMPT },
+        { role: 'system', content: `${firmContextBlock}${MEMO_ANALYST_PROMPT}` },
         { role: 'system', content: `Context:\n${context}` },
         { role: 'user', content: sectionPrompt }
       ],
@@ -155,8 +160,7 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
 
     const generatedContent = response.choices[0].message.content;
 
-    // Update section — F-10: bind sectionId to memo on the write as well,
-    // defense-in-depth alongside the fetch above.
+    // Update section
     const { data: updatedSection, error: updateError } = await supabase
       .from('MemoSection')
       .update({
@@ -167,7 +171,7 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
         updatedAt: new Date().toISOString(),
       })
       .eq('id', sectionId)
-      .eq('memoId', id)
+      .eq('memoId', id) // SECURITY: bind the update to the verified memo
       .select()
       .single();
 

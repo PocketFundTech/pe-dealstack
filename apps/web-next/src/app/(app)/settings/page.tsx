@@ -11,9 +11,13 @@ import { type PrefsState } from "./PreferencesSection";
 import { ProfileSection, type UserProfile } from "./ProfileSection";
 import { NotificationsSection, DEFAULT_NOTIFICATION_PREFS } from "./NotificationsSection";
 import { TeamSection } from "./TeamSection";
+import { FirmContextSection } from "./FirmContextSection";
 import { FirmProfileSection } from "./FirmProfileSection";
 import { CriteriaSection } from "./CriteriaSection";
+import { FirmTeaserSection } from "./FirmTeaserSection";
 import { AiUsageSection } from "./AiUsageSection";
+import { IntegrationsSection } from "./IntegrationsSection";
+import { NDATemplatesSection } from "./NDATemplatesSection";
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -22,8 +26,11 @@ const NAV_SECTIONS = [
   { id: "security", label: "Security", icon: "shield" },
   { id: "notifications", label: "Notifications", icon: "notifications" },
   { id: "team", label: "Team", icon: "group" },
+  { id: "firm-context", label: "Firm Context", icon: "menu_book" },
   { id: "firm-profile", label: "Firm Profile", icon: "domain" },
   { id: "criteria", label: "Investment Criteria", icon: "grading" },
+  { id: "firm-teaser", label: "Firm Teaser", icon: "auto_awesome" },
+  { id: "integrations", label: "Integrations", icon: "extension" },
   { id: "ai-usage", label: "AI Usage", icon: "analytics" },
 ] as const;
 
@@ -323,11 +330,19 @@ export default function SettingsPage() {
             markChanged={markChanged}
           />
 
-          <TeamSection />
+          <TeamSection onToast={showToast} />
+
+          <FirmContextSection />
 
           <FirmProfileSection />
 
           <CriteriaSection />
+
+          <FirmTeaserSection />
+
+          <IntegrationsSection onToast={showToast} />
+
+          <NDATemplatesSection />
 
           <AiUsageSection />
 

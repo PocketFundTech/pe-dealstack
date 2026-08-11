@@ -6,6 +6,28 @@ import { log } from '../utils/logger.js';
 
 const router = Router();
 
+// ─── GET /api/contacts/insights/gmail-suggestions — Suggest contacts from Gmail ─
+// Bounded, org-scoped scan of the user's recent Gmail correspondents. Returns
+// { connected:false } (never an error) when Gmail isn't linked. Namespaced under
+// /insights so the `/:id` route in contacts.ts can't shadow it.
+
+router.get('/insights/gmail-suggestions', async (req: any, res) => {
+  try {
+    const orgId = getOrgId(req);
+    const authUserId = req.user?.id;
+    if (!authUserId) {
+      return res.json({ connected: false, scanned: 0, suggestions: [] });
+    }
+    const days = Number(req.query.days) || undefined;
+    const { scanCorrespondents } = await import('../services/gmailContactsService.js');
+    const result = await scanCorrespondents(orgId, authUserId, days as number);
+    res.json(result);
+  } catch (error) {
+    log.error('Gmail suggestions error', error);
+    res.status(500).json({ error: 'Failed to scan Gmail for contact suggestions' });
+  }
+});
+
 // ─── GET /api/contacts/insights/timeline — Recent interactions across all contacts ─
 
 router.get('/insights/timeline', async (req: Request, res) => {
@@ -133,6 +155,62 @@ router.get('/insights/stale', async (req: Request, res) => {
   } catch (error) {
     log.error('Stale contacts error', error);
     res.status(500).json({ error: 'Failed to check stale contacts' });
+  }
+});
+
+// ─── GET /api/contacts/insights/follow-ups — Due & upcoming follow-ups ─
+
+router.get('/insights/follow-ups', async (req: any, res) => {
+  try {
+    const orgId = getOrgId(req);
+    // Window for "upcoming" follow-ups (default 7 days ahead).
+    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 90);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const horizonIso = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+
+    const fields = 'id, firstName, lastName, type, company, email, followUpAt, followUpNote, lastContactedAt';
+
+    // Overdue: followUpAt <= now
+    const { data: overdueRows, error: errOverdue } = await supabase
+      .from('Contact')
+      .select(fields)
+      .eq('organizationId', orgId)
+      .not('followUpAt', 'is', null)
+      .lte('followUpAt', nowIso)
+      .order('followUpAt', { ascending: true })
+      .limit(50);
+    if (errOverdue) throw errOverdue;
+
+    // Upcoming: now < followUpAt <= horizon
+    const { data: upcomingRows, error: errUpcoming } = await supabase
+      .from('Contact')
+      .select(fields)
+      .eq('organizationId', orgId)
+      .gt('followUpAt', nowIso)
+      .lte('followUpAt', horizonIso)
+      .order('followUpAt', { ascending: true })
+      .limit(50);
+    if (errUpcoming) throw errUpcoming;
+
+    const overdue = (overdueRows || []).map((c: any) => ({
+      ...c,
+      daysOverdue: Math.floor((now.getTime() - new Date(c.followUpAt).getTime()) / 86400000),
+    }));
+    const upcoming = (upcomingRows || []).map((c: any) => ({
+      ...c,
+      daysUntil: Math.ceil((new Date(c.followUpAt).getTime() - now.getTime()) / 86400000),
+    }));
+
+    res.json({
+      overdue,
+      upcoming,
+      counts: { overdue: overdue.length, upcoming: upcoming.length },
+      windowDays: days,
+    });
+  } catch (error) {
+    log.error('Follow-ups error', error);
+    res.status(500).json({ error: 'Failed to load follow-ups' });
   }
 });
 

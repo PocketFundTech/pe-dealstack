@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { ChatAction } from "./components";
+import type { ChatAction } from "./deal-detail-shared";
 
 // ---------------------------------------------------------------------------
 // Artifact action button — rendered below an AI message when the backend

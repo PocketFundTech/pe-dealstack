@@ -11,6 +11,8 @@ import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { isLLMAvailable } from '../services/llm.js';
 import { runDealChatAgent, runDealChatAgentStreaming } from '../services/agents/dealChatAgent/index.js';
 import { generateFallbackResponse } from '../services/chatHelpers.js';
+import { getTodayIso } from '../utils/dates.js';
+import { formatDealHeadline } from '../utils/financialFormat.js';
 
 const router = Router();
 
@@ -40,6 +42,8 @@ interface FinancialRow {
   statementType: string;
   period: string;
   lineItems: Record<string, number | null> | null;
+  unitScale?: string | null;
+  currency?: string | null;
 }
 
 const STATEMENT_LABELS: Record<string, string> = {
@@ -53,20 +57,60 @@ function buildFinancialMarkdown(statements: FinancialRow[]): string {
     return '\n=== VERIFIED FINANCIAL DATA ===\nNo extracted financial data available yet. Use get_deal_financials tool or ask the user to upload financial documents.';
   }
 
-  // Group by statement type
-  const grouped: Record<string, { period: string; data: Record<string, number | null> }[]> = {};
+  // Group by statement type. Track the unit scale + currency of each
+  // statement so the agent prompt tells the LLM what scale the numbers
+  // are stored in (formerly hard-coded as "$M USD" — wrong when the
+  // source was in actuals / thousands / billions).
+  //
+  // Default unitScale is ACTUALS (matches `normalizeUnitScale` in
+  // financialClassifier.ts — the safest fallback because it means "do
+  // not multiply"). Defaulting to MILLIONS would silently inflate values
+  // 1,000,000× whenever a row was inserted without a unitScale set.
+  const grouped: Record<string, { period: string; data: Record<string, number | null>; unitScale: string; currency: string }[]> = {};
   for (const stmt of statements) {
     if (!stmt.lineItems) continue;
     const data = stmt.lineItems as Record<string, number | null>;
     if (!grouped[stmt.statementType]) grouped[stmt.statementType] = [];
-    grouped[stmt.statementType].push({ period: stmt.period, data });
+    grouped[stmt.statementType].push({
+      period: stmt.period,
+      data,
+      unitScale: (stmt.unitScale ?? 'ACTUALS').toUpperCase(),
+      currency: stmt.currency ?? 'USD',
+    });
   }
 
-  const sections: string[] = ['\n=== VERIFIED FINANCIAL DATA (Source of Truth — All values in $M USD) ==='];
+  // Header reflects the actual scales present rather than assuming MILLIONS.
+  // Spell out the multiplier so the LLM can convert correctly when echoing
+  // values to the user — e.g. "ACTUALS USD (raw dollars)" makes it unambiguous
+  // that "6900" means $6,900, not $6,900M.
+  const scaleGloss = (label: string): string => {
+    switch (label.split(' ')[0]) {
+      case 'ACTUALS':  return ' (raw dollars — multiply by 1)';
+      case 'THOUSANDS': return ' (each unit = 1,000)';
+      case 'MILLIONS':  return ' (each unit = 1,000,000)';
+      case 'BILLIONS':  return ' (each unit = 1,000,000,000)';
+      default:          return '';
+    }
+  };
+  const allScales = new Set<string>();
+  for (const entries of Object.values(grouped)) {
+    for (const e of entries) allScales.add(`${e.unitScale} ${e.currency}`);
+  }
+  const scaleHeader = allScales.size === 1
+    ? [...allScales][0] + scaleGloss([...allScales][0])
+    : 'mixed scales — see per-statement labels below';
+  const sections: string[] = [`\n=== VERIFIED FINANCIAL DATA (Source of Truth — values in ${scaleHeader}) ===`];
 
   for (const [type, entries] of Object.entries(grouped)) {
     const label = STATEMENT_LABELS[type] || type;
     const periods = entries.map(e => e.period);
+
+    // Per-statement scale label (covers the multi-statement case where one
+    // statement is in MILLIONS but another came from a doc in ACTUALS).
+    const stmtScales = new Set(entries.map(e => `${e.unitScale} ${e.currency}`));
+    const stmtScaleSuffix = stmtScales.size === 1
+      ? ` (values in ${[...stmtScales][0]}${scaleGloss([...stmtScales][0])})`
+      : '';
 
     // Collect all unique metric keys across periods (preserving insertion order)
     const metricKeys: string[] = [];
@@ -91,7 +135,7 @@ function buildFinancialMarkdown(statements: FinancialRow[]): string {
       return `| ${key} | ${cells.join(' | ')} |`;
     });
 
-    sections.push(`\n### ${label}\n${header}\n${divider}\n${rows.join('\n')}`);
+    sections.push(`\n### ${label}${stmtScaleSuffix}\n${header}\n${divider}\n${rows.join('\n')}`);
   }
 
   return sections.join('\n');
@@ -120,11 +164,16 @@ router.post('/:dealId/chat', async (req, res) => {
       return res.status(404).json({ error: 'Deal not found' });
     }
 
-    // Get deal with basic context (agent fetches details on demand via tools)
+    // Get deal with basic context (agent fetches details on demand via tools).
+    // Pull the cached* columns alongside the legacy ones so formatDealHeadline
+    // can render at the right unit (cached fields are ACTUAL DOLLARS, legacy
+    // are MILLIONS by convention — see dealCacheWriteback.ts).
     const { data: deal, error: dealError } = await supabase
       .from('Deal')
       .select(`
         id, name, stage, status, industry, dealSize, revenue, ebitda,
+        currency, cachedRevenue, cachedEbitda, cachedEbitdaMargin,
+        cachedPeriod, cachedCurrency,
         irrProjected, mom, aiThesis, description, source, organizationId,
         company:Company(id, name, description),
         teamMembers:DealTeamMember(role, user:User(id, name, email, title))
@@ -139,7 +188,8 @@ router.post('/:dealId/chat', async (req, res) => {
       throw dealError;
     }
 
-    // Check AI availability
+    // Check AI availability (lazy-load LLM stack so lite bundle stays light)
+    const { isLLMAvailable } = await import('../services/llm.js');
     if (!isLLMAvailable()) {
       return res.json({
         response: generateFallbackResponse(message, deal),
@@ -147,13 +197,25 @@ router.post('/:dealId/chat', async (req, res) => {
       });
     }
 
-    // Build lightweight deal context (agent tools fetch details on demand)
+    // Build lightweight deal context (agent tools fetch details on demand).
+    // Headline metrics are formatted via formatDealHeadline so the rendered
+    // string honours the actual stored scale: $6,900 ACTUALS renders as
+    // "$6.9K", not "$6,900M". The previous code hardcoded "M" which silently
+    // misrepresented every non-MILLIONS deal in the agent's context.
     const contextParts = [`Deal: ${deal.name}`];
     contextParts.push(`Stage: ${deal.stage}, Status: ${deal.status}`);
     if (deal.industry) contextParts.push(`Industry: ${deal.industry}`);
-    if (deal.dealSize) contextParts.push(`Deal Size: $${deal.dealSize}M`);
-    if (deal.revenue) contextParts.push(`Revenue: $${deal.revenue}M`);
-    if (deal.ebitda) contextParts.push(`EBITDA: $${deal.ebitda}M`);
+    const headline = formatDealHeadline(deal);
+    if (headline.dealSize) contextParts.push(`Deal Size: ${headline.dealSize}`);
+    if (headline.revenue) {
+      const periodNote = headline.cachedPeriod ? ` (${headline.cachedPeriod})` : '';
+      contextParts.push(`Revenue: ${headline.revenue}${periodNote}`);
+    }
+    if (headline.ebitda) {
+      const periodNote = headline.cachedPeriod ? ` (${headline.cachedPeriod})` : '';
+      contextParts.push(`EBITDA: ${headline.ebitda}${periodNote}`);
+    }
+    if (headline.ebitdaMargin) contextParts.push(`EBITDA Margin: ${headline.ebitdaMargin}`);
     if (deal.irrProjected) contextParts.push(`Projected IRR: ${deal.irrProjected}%`);
     if (deal.mom) contextParts.push(`MoM: ${deal.mom}x`);
     if (deal.source) contextParts.push(`Deal Source: ${deal.source}`);
@@ -198,20 +260,31 @@ router.post('/:dealId/chat', async (req, res) => {
 
       const firmProfile = (orgData?.settings as any)?.firmProfile;
       if (firmProfile) {
+        // Stored firm-profile fields (see routes/onboarding-firm.ts +
+        // settings/FirmProfileSection.tsx): firmName, description, headquarters,
+        // founded, aum, investmentFocus, sectorFocus, dealSize, notableDeals,
+        // teamSize, website. Some list-like fields (investmentFocus, sectorFocus,
+        // notableDeals) may be stored as either a string or a string[].
+        const asText = (v: unknown): string | null => {
+          if (Array.isArray(v)) return v.filter(Boolean).join(', ') || null;
+          if (typeof v === 'string') return v.trim() || null;
+          return null;
+        };
+
         contextParts.push('\n=== YOUR FIRM CONTEXT ===');
-        if (firmProfile.description) contextParts.push(`Firm: ${firmProfile.description}`);
-        if (firmProfile.strategy) contextParts.push(`Strategy: ${firmProfile.strategy}`);
-        if (firmProfile.sectors?.length) contextParts.push(`Sectors: ${firmProfile.sectors.join(', ')}`);
-        if (firmProfile.checkSizeRange) contextParts.push(`Check Size: ${firmProfile.checkSizeRange}`);
-        if (firmProfile.investmentCriteria) contextParts.push(`Investment Criteria: ${firmProfile.investmentCriteria}`);
-        if (firmProfile.portfolioCompanies?.length) {
-          const names = firmProfile.portfolioCompanies.map((c: any) => c.name).join(', ');
-          contextParts.push(`Portfolio: ${names}`);
-        }
-        if (firmProfile.recentDeals?.length) {
-          const deals = firmProfile.recentDeals.map((d: any) => d.title).join(', ');
-          contextParts.push(`Recent Deals: ${deals}`);
-        }
+        if (firmProfile.firmName) contextParts.push(`Firm: ${firmProfile.firmName}`);
+        if (firmProfile.description) contextParts.push(`About: ${firmProfile.description}`);
+        const strategy = asText(firmProfile.investmentFocus);
+        if (strategy) contextParts.push(`Strategy: ${strategy}`);
+        const sectors = asText(firmProfile.sectorFocus);
+        if (sectors) contextParts.push(`Sectors: ${sectors}`);
+        if (firmProfile.dealSize) contextParts.push(`Check Size: ${firmProfile.dealSize}`);
+        if (firmProfile.aum) contextParts.push(`AUM: ${firmProfile.aum}`);
+        const notableDeals = asText(firmProfile.notableDeals);
+        if (notableDeals) contextParts.push(`Notable Deals: ${notableDeals}`);
+        if (firmProfile.headquarters) contextParts.push(`Headquarters: ${firmProfile.headquarters}`);
+        if (firmProfile.founded) contextParts.push(`Founded: ${firmProfile.founded}`);
+        if (firmProfile.teamSize) contextParts.push(`Team Size: ${firmProfile.teamSize}`);
       }
 
       // Also inject person context if available
@@ -235,7 +308,7 @@ router.post('/:dealId/chat', async (req, res) => {
     // Markdown tables so the agent can do math without tool calls.
     const { data: financialStatements, error: finError } = await supabase
       .from('FinancialStatement')
-      .select('statementType, period, lineItems')
+      .select('statementType, period, lineItems, unitScale, currency')
       .eq('dealId', dealId)
       .order('statementType')
       .order('period', { ascending: true });
@@ -273,7 +346,7 @@ router.post('/:dealId/chat', async (req, res) => {
 
       try {
         for await (const event of runDealChatAgentStreaming(
-          { dealId, orgId: deal.organizationId, message, dealContext, history: history.slice(-10) },
+          { dealId, orgId: deal.organizationId, message, dealContext, history: history.slice(-10), today: getTodayIso(), userId: userId ?? undefined },
           { signal: abortController.signal },
         )) {
           if (event.type === 'text_delta') fullText += event.text;
@@ -314,6 +387,8 @@ router.post('/:dealId/chat', async (req, res) => {
       message,
       dealContext,
       history: history.slice(-10),
+      today: getTodayIso(),
+      userId: userId ?? undefined,
     });
 
     await supabase.from('ChatMessage').insert({

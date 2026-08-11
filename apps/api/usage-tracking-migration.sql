@@ -100,7 +100,7 @@ INSERT INTO public."ModelPrice" (model, provider, "inputPricePer1M", "outputPric
   ('openai/gpt-4o-mini',           'openrouter', 0.1500,  0.6000),
   ('openai/gpt-4.1',               'openrouter', 2.0000,  8.0000),
   ('openai/gpt-4.1-mini',          'openrouter', 0.4000,  1.6000),
-  ('anthropic/claude-sonnet-4.5',  'openrouter', 3.0000, 15.0000),
+  ('anthropic/claude-sonnet-4.6',  'openrouter', 3.0000, 15.0000),
   ('anthropic/claude-haiku-4.5',   'openrouter', 1.0000,  5.0000),
   ('anthropic/claude-opus-4',      'openrouter',15.0000, 75.0000),
   -- Google Gemini direct

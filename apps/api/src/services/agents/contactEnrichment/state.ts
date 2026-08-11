@@ -57,4 +57,6 @@ export interface EnrichmentResult {
   sources: string[];
   steps: Array<{ timestamp: string; node: string; message: string }>;
   error?: string | null;
+  // SUGGESTION ONLY — the agent never writes followUpAt. Null when no contact data.
+  suggestedFollowUp: { date?: string; action?: string } | null;
 }

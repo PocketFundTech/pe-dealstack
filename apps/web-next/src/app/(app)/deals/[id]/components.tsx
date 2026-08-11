@@ -1,124 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { STAGE_LABELS } from "@/lib/constants";
-import type { DealScorecard } from "@/types";
+import { isGooglePickerConfigured, preloadGooglePicker } from "@/lib/googlePicker";
 import { DocumentRow, DocumentAnalysisModal } from "./document-row";
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface AssignedUser {
-  id: string;
-  name: string;
-  avatar?: string;
-  email?: string;
-  title?: string;
-}
-
-export interface DealDetail {
-  id: string;
-  name: string;
-  companyName?: string;
-  stage: string;
-  industry?: string;
-  dealSize?: number;
-  currency?: string;
-  revenue?: number;
-  ebitda?: number;
-  irrProjected?: number;
-  mom?: number;
-  targetReturn?: number;
-  evMultiple?: number;
-  priority?: string;
-  status?: string;
-  aiThesis?: string;
-  aiRisks?: { keyRisks?: string[]; investmentHighlights?: string[] };
-  description?: string;
-  assignee?: string;
-  assignedUser?: AssignedUser | null;
-  company?: { name?: string } | null;
-  source?: string;
-  icon?: string;
-  createdAt: string;
-  updatedAt: string;
-  documents?: DocItem[];
-  team?: TeamMember[];
-  scorecard?: DealScorecard | null;
-  activities?: Activity[];
-}
-
-export interface DocItem {
-  id: string;
-  name: string;
-  type?: string;
-  fileSize?: number;
-  fileUrl?: string;
-  aiAnalysis?: string;
-  createdAt: string;
-  url?: string;
-}
-
-export interface TeamMember {
-  id: string;
-  name: string;
-  email?: string;
-  avatar?: string;
-  role?: string;
-}
-
-export interface ChatAction {
-  type: string;
-  label: string;
-  description?: string;
-  url: string;
-}
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  createdAt?: string;
-  action?: ChatAction;
-  streaming?: boolean;
-}
-
-export interface Activity {
-  id: string;
-  type?: string;
-  action: string;
-  title?: string;
-  description?: string;
-  userName?: string;
-  user?: { name?: string };
-  createdAt: string;
-  metadata?: Record<string, unknown>;
-}
+import { PIPELINE_STAGES, type DocItem } from "./deal-detail-shared";
 
 // ---------------------------------------------------------------------------
-// Stage pipeline config (matches the constants used in the old app)
+// Shared types + constants live in the leaf module `deal-detail-shared.ts`
+// (no components, no cycles). Re-exported here so the existing barrel
+// consumers (page.tsx, deal-page-*.tsx) keep working unchanged, while the
+// page's sub-components import them directly from the leaf to avoid the
+// import cycle that produced the production-only React error #130.
 // ---------------------------------------------------------------------------
 
-// Matches the Deal.stage zod enum in apps/api/src/routes/deals.ts:54-56:
-// INITIAL_REVIEW / DUE_DILIGENCE / IOI_SUBMITTED / LOI_SUBMITTED /
-// NEGOTIATION / CLOSING / PASSED / CLOSED_WON / CLOSED_LOST.
-// The visible pipeline is the 6 in-flight stages; terminal states
-// (PASSED / CLOSED_WON / CLOSED_LOST) render as final and disable stage
-// changes in StageChangeModal.
-export const PIPELINE_STAGES = [
-  { key: "INITIAL_REVIEW", label: "Initial Review", icon: "search" },
-  { key: "DUE_DILIGENCE", label: "Due Diligence", icon: "fact_check" },
-  { key: "IOI_SUBMITTED", label: "IOI Submitted", icon: "description" },
-  { key: "LOI_SUBMITTED", label: "LOI Submitted", icon: "verified" },
-  { key: "NEGOTIATION", label: "Negotiation", icon: "handshake" },
-  { key: "CLOSING", label: "Closing", icon: "gavel" },
-];
-
-export const TERMINAL_STAGES = ["PASSED", "CLOSED_WON", "CLOSED_LOST"];
-
-export const TABS = ["Overview", "Documents", "Activity"] as const;
-export type Tab = (typeof TABS)[number];
+export type {
+  AssignedUser,
+  DealDetail,
+  DocItem,
+  TeamMember,
+  ChatAction,
+  ChatMessage,
+  Activity,
+  Tab,
+} from "./deal-detail-shared";
+export { PIPELINE_STAGES, TERMINAL_STAGES, TABS } from "./deal-detail-shared";
 
 // ---------------------------------------------------------------------------
 // Re-export layout components from deal-layout.tsx
@@ -141,16 +48,28 @@ export function DocumentsTab({
   uploading,
   fileInputRef,
   onUpload,
+  driveImporting,
+  onImportFromDrive,
 }: {
   documents: DocItem[];
   uploading: boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  driveImporting: boolean;
+  onImportFromDrive: () => void;
 }) {
   // Modal state for AI-only docs (those without a backing file). Lifted here
   // so the modal renders alongside the row list and can be opened from either
   // the row click or the inline action button.
   const [analysisDoc, setAnalysisDoc] = useState<DocItem | null>(null);
+
+  // Warm the Google Picker SDKs when this tab mounts so the "Google Drive"
+  // popup opens reliably on first click (see preloadGooglePicker's docblock).
+  useEffect(() => {
+    if (isGooglePickerConfigured) preloadGooglePicker();
+  }, []);
+
+  const busy = uploading || driveImporting;
 
   return (
     <div className="flex flex-col gap-4">
@@ -158,7 +77,7 @@ export function DocumentsTab({
         <h3 className="text-sm font-semibold text-text-main">
           Documents ({documents.length})
         </h3>
-        <div>
+        <div className="flex items-center gap-2">
           <input
             ref={fileInputRef}
             type="file"
@@ -166,9 +85,21 @@ export function DocumentsTab({
             className="hidden"
             onChange={onUpload}
           />
+          {isGooglePickerConfigured && (
+            <button
+              onClick={onImportFromDrive}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-text-secondary bg-white border border-border-subtle rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {driveImporting ? "progress_activity" : "add_to_drive"}
+              </span>
+              {driveImporting ? "Importing..." : "Google Drive"}
+            </button>
+          )}
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
+            disabled={busy}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-60"
             style={{ backgroundColor: "#003366" }}
           >

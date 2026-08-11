@@ -1,7 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
-import { generateFolderInsights } from '../services/folderInsightsGenerator.js';
 import { getOrgId, verifyFolderAccess } from '../middleware/orgScope.js';
 
 const router = Router();
@@ -136,6 +135,7 @@ router.post('/folders/:id/generate-insights', async (req: Request, res: Response
     });
 
     // 5. Call AI to generate insights
+    const { generateFolderInsights } = await import('../services/folderInsightsGenerator.js');
     const insights = await generateFolderInsights(
       folder.name,
       {

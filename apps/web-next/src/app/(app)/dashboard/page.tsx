@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useUser } from "@/providers/UserProvider";
 import { api } from "@/lib/api";
+import { onDealsChanged } from "@/lib/appEvents";
+import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { cn } from "@/lib/cn";
 import { WelcomeModal } from "@/components/onboarding/WelcomeModal";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
@@ -20,12 +22,16 @@ import {
   PortfolioAllocation,
 } from "./components";
 import { TasksModal } from "./dashboard-modals";
-import { ActivePrioritiesWidget, MyTasksWidget, AiDealSignalsWidget } from "./dashboard-widgets";
+import { ActivePrioritiesWidget, MyTasksWidget, AiDealSignalsWidget, type InboxScanResult } from "./dashboard-widgets";
 import { CustomizeDashboardModal } from "./widgets/customize-modal";
 import { DraggableWidget } from "./widgets/draggable-widget";
 import { useVisibleWidgets } from "./widgets/useVisibleWidgets";
 import { useToast } from "@/providers/ToastProvider";
 import type { WidgetId, CoreWidgetId } from "./widgets/registry";
+
+// Drop a persisted inbox scan older than this — candidates reference live Gmail
+// emails, so a stale result isn't worth re-surfacing on the next visit.
+const INBOX_SCAN_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
 export default function DashboardPage() {
   const { user } = useUser();
@@ -35,7 +41,22 @@ export default function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
-  const [signalResult, setSignalResult] = useState<{ signals?: Array<{ title: string; description: string; severity: string; signalType: string; dealName: string; suggestedAction: string }>; processedCount?: number } | null>(null);
+  const [signalResult, setSignalResult] = useState<InboxScanResult | null>(() => {
+    // Re-hydrate the last scan so found candidates persist across remounts and
+    // navigation instead of resetting to the empty prompt. Ignore results past
+    // the max age since they reference live emails.
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEYS.inboxScanResult);
+      if (!raw) return null;
+      const env = JSON.parse(raw) as { savedAt?: number; result?: InboxScanResult };
+      if (!env?.result || !env.savedAt) return null;
+      if (Date.now() - env.savedAt > INBOX_SCAN_MAX_AGE_MS) return null;
+      return env.result;
+    } catch {
+      return null;
+    }
+  });
   const [stageModal, setStageModal] = useState<{ label: string; stages: string[] } | null>(null);
   const [tasksModalOpen, setTasksModalOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -87,41 +108,69 @@ export default function DashboardPage() {
     draggingCoreRef.current = null;
   }, []);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [dealsRes, tasksRes] = await Promise.allSettled([
-          api.get<Deal[] | { deals: Deal[] }>("/deals?limit=100&sortBy=updatedAt&sortOrder=desc"),
-          api.get<{ tasks: Task[] } | Task[]>("/tasks?limit=20"),
-        ]);
-        if (dealsRes.status === "fulfilled") {
-          // API returns plain array; handle both formats for safety
-          const rawDeals = Array.isArray(dealsRes.value)
-            ? dealsRes.value
-            : (dealsRes.value as { deals: Deal[] }).deals || [];
-          setAllDeals(rawDeals);
-          // Active Priorities: filter active, sort by priority (HIGH first) — matches legacy loadActivePriorities
-          const PRIORITY_ORDER: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
-          const activeForPriorities = rawDeals
-            .filter((d) => d.status !== "ARCHIVED" && d.status !== "PASSED")
-            .sort((a, b) => (PRIORITY_ORDER[a.priority || ""] ?? 99) - (PRIORITY_ORDER[b.priority || ""] ?? 99))
-            .slice(0, 5);
-          setDeals(activeForPriorities);
-        } else {
-          console.warn("[dashboard] failed to load deals:", dealsRes.reason);
-        }
-        if (tasksRes.status === "fulfilled") {
-          const t = tasksRes.value;
-          setTasks(Array.isArray(t) ? t : t.tasks || []);
-        } else {
-          console.warn("[dashboard] failed to load tasks:", tasksRes.reason);
-        }
-      } catch (err) {
-        console.warn("[dashboard] load error:", err);
-      } finally { setLoading(false); }
-    }
-    load();
+  const loadDashboard = useCallback(async () => {
+    try {
+      const [dealsRes, tasksRes] = await Promise.allSettled([
+        api.get<Deal[] | { deals: Deal[] }>("/deals?limit=100&sortBy=updatedAt&sortOrder=desc"),
+        api.get<{ tasks: Task[] } | Task[]>("/tasks?limit=20"),
+      ]);
+      if (dealsRes.status === "fulfilled") {
+        // API returns plain array; handle both formats for safety
+        const rawDeals = Array.isArray(dealsRes.value)
+          ? dealsRes.value
+          : (dealsRes.value as { deals: Deal[] }).deals || [];
+        setAllDeals(rawDeals);
+        // Active Priorities: filter active, sort by priority (HIGH first) — matches legacy loadActivePriorities
+        const PRIORITY_ORDER: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+        const activeForPriorities = rawDeals
+          .filter((d) => d.status !== "ARCHIVED" && d.status !== "PASSED")
+          .sort((a, b) => (PRIORITY_ORDER[a.priority || ""] ?? 99) - (PRIORITY_ORDER[b.priority || ""] ?? 99))
+          .slice(0, 5);
+        setDeals(activeForPriorities);
+      } else {
+        console.warn("[dashboard] failed to load deals:", dealsRes.reason);
+      }
+      if (tasksRes.status === "fulfilled") {
+        const t = tasksRes.value;
+        setTasks(Array.isArray(t) ? t : t.tasks || []);
+      } else {
+        console.warn("[dashboard] failed to load tasks:", tasksRes.reason);
+      }
+    } catch (err) {
+      console.warn("[dashboard] load error:", err);
+    } finally { setLoading(false); }
   }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  // Refresh when a deal is ingested/updated elsewhere (e.g. a Google Drive
+  // import via the ingest modal) so stats + priorities stay current without a
+  // manual reload. loadDashboard never re-shows the skeleton, so this is silent.
+  useEffect(() => {
+    const off = onDealsChanged(() => loadDashboard());
+    return () => off();
+  }, [loadDashboard]);
+
+  // Persist the scan result (only while it still has candidates worth keeping)
+  // so the Inbox Deal Finder re-shows them after the modal is closed or the page
+  // is revisited, instead of falling back to the empty prompt.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (signalResult?.connected && signalResult.candidates.length > 0) {
+        window.localStorage.setItem(
+          STORAGE_KEYS.inboxScanResult,
+          JSON.stringify({ savedAt: Date.now(), result: signalResult }),
+        );
+      } else {
+        window.localStorage.removeItem(STORAGE_KEYS.inboxScanResult);
+      }
+    } catch (err) {
+      console.warn("[dashboard] failed to persist inbox scan result:", err);
+    }
+  }, [signalResult]);
 
   // Esc exits layout edit mode — mirrors onKeyDown in layout-editor.js
   useEffect(() => {
@@ -436,7 +485,7 @@ export default function DashboardPage() {
       />
 
       {tasksModalOpen && (
-        <TasksModal tasks={tasks} onClose={() => setTasksModalOpen(false)} />
+        <TasksModal tasks={tasks} onClose={() => setTasksModalOpen(false)} onToggle={toggleTask} />
       )}
     </div>
   );

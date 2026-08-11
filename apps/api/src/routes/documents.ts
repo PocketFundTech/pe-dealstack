@@ -4,11 +4,7 @@ import { z } from 'zod';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess, verifyDocumentAccess, verifyFolderAccess } from '../middleware/orgScope.js';
-import { getSignedDownloadUrl, extractStoragePath } from '../utils/storage.js';
-import { extractTextFromPDF } from '../services/pdfExtractor.js';
-import { excelToMarkdown } from '../services/excelToMarkdown.js';
-import { isExcelFile } from '../services/excelFinancialExtractor.js';
-import { embedDocument } from '../rag.js';
+import { getSignedDownloadUrl, extractStoragePath, downloadFileBuffer } from '../utils/storage.js';
 
 // Sub-routers
 import documentsUploadRouter from './documents-upload.js';
@@ -50,6 +46,30 @@ const documentsQuerySchema = z.object({
   search: z.string().max(200).optional(),
 });
 
+// Resolve Document.uploadedBy → { id, name, avatar } via a batched query and
+// attach it as `uploader` (null when unknown). This replaces the PostgREST
+// embed `uploader:User!uploadedBy(...)`, which 500s with PGRST200 because
+// Document.uploadedBy has no FK to User (see vdr-schema.sql). Once the FK is
+// added by foreign-keys-migration.sql the embed would work too, but resolving
+// it here keeps the endpoint correct regardless of DB constraint state.
+async function attachUploaders<T extends { uploadedBy?: string | null }>(
+  rows: T[],
+): Promise<Array<T & { uploader: { id: string; name: string | null; avatar: string | null } | null }>> {
+  const ids = [...new Set(
+    rows.map((d) => d.uploadedBy).filter((id): id is string => !!id),
+  )];
+  if (ids.length === 0) {
+    return rows.map((d) => ({ ...d, uploader: null }));
+  }
+  const { data: users, error } = await supabase
+    .from('User')
+    .select('id, name, avatar')
+    .in('id', ids);
+  if (error) throw error;
+  const byId = new Map((users || []).map((u: any) => [u.id, u]));
+  return rows.map((d) => ({ ...d, uploader: byId.get(d.uploadedBy as string) ?? null }));
+}
+
 // ─── GET /api/deals/:dealId/documents — List documents for a deal ───
 
 router.get('/deals/:dealId/documents', async (req, res) => {
@@ -63,11 +83,14 @@ router.get('/deals/:dealId/documents', async (req, res) => {
 
     const { type, folderId, tags, search } = documentsQuerySchema.parse(req.query);
 
+    // NOTE: `uploader` is resolved with a separate query rather than the
+    // PostgREST embed `uploader:User!uploadedBy(...)`. Document.uploadedBy has
+    // no FK to User (see vdr-schema.sql), so the embed raises PGRST200 and 500s.
+    // The folder embed is kept — its FK (Document.folderId → Folder) exists.
     let query = supabase
       .from('Document')
       .select(`
         *,
-        uploader:User!uploadedBy(id, name, avatar),
         folder:Folder!folderId(id, name)
       `)
       .eq('dealId', dealId)
@@ -93,8 +116,10 @@ router.get('/deals/:dealId/documents', async (req, res) => {
 
     if (error) throw error;
 
+    const rows = await attachUploaders(data || []);
+
     // Filter by tags if provided (client-side for now)
-    let filteredData = data || [];
+    let filteredData = rows;
     if (tags) {
       const tagArray = (tags as string).split(',');
       filteredData = filteredData.filter((doc: any) =>
@@ -124,10 +149,7 @@ router.get('/folders/:folderId/documents', async (req, res) => {
 
     let query = supabase
       .from('Document')
-      .select(`
-        *,
-        uploader:User!uploadedBy(id, name, avatar)
-      `)
+      .select('*')
       .eq('folderId', folderId)
       .order('createdAt', { ascending: false });
 
@@ -143,7 +165,7 @@ router.get('/folders/:folderId/documents', async (req, res) => {
 
     if (error) throw error;
 
-    res.json(data || []);
+    res.json(await attachUploaders(data || []));
   } catch (error) {
     log.error('Error fetching folder documents', error);
     res.status(500).json({ error: 'Failed to fetch documents' });
@@ -214,7 +236,6 @@ router.patch('/documents/:id', async (req, res) => {
       .eq('id', id)
       .select(`
         *,
-        uploader:User!uploadedBy(id, name, avatar),
         folder:Folder!folderId(id, name)
       `)
       .single();
@@ -226,7 +247,8 @@ router.patch('/documents/:id', async (req, res) => {
       throw error;
     }
 
-    res.json(document);
+    const [withUploader] = await attachUploaders([document]);
+    res.json(withUploader);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation error', details: error.errors });
@@ -292,6 +314,10 @@ router.delete('/documents/:id', async (req, res) => {
 
 // ─── GET /api/documents/:id/download — Get signed download URL ───
 
+// 25 MB cap on watermarking — beyond this, fall back to passthrough so the
+// serverless function doesn't OOM trying to load the whole PDF in memory.
+const WATERMARK_MAX_BYTES = 25 * 1024 * 1024;
+
 router.get('/documents/:id/download', async (req, res) => {
   try {
     const { id } = req.params;
@@ -303,7 +329,7 @@ router.get('/documents/:id/download', async (req, res) => {
 
     const { data: doc, error: fetchError } = await supabase
       .from('Document')
-      .select('fileUrl, name')
+      .select('fileUrl, name, mimeType, fileSize')
       .eq('id', id)
       .single();
 
@@ -315,22 +341,70 @@ router.get('/documents/:id/download', async (req, res) => {
       return res.status(404).json({ error: 'No file associated with this document' });
     }
 
-    // Generate a time-limited signed URL (1 hour expiry)
+    const isPdf = (doc.mimeType ?? '').toLowerCase() === 'application/pdf' ||
+      (doc.name ?? '').toLowerCase().endsWith('.pdf');
+    const sizeOk =
+      typeof doc.fileSize !== 'number' || doc.fileSize <= WATERMARK_MAX_BYTES;
+    const viewerEmail = req.user?.email ?? 'unknown@pocket-fund.com';
+    const viewerIp = req.ip ?? null;
+
+    if (isPdf && sizeOk) {
+      try {
+        const storagePath = extractStoragePath(doc.fileUrl);
+        const buffer = await downloadFileBuffer(storagePath);
+        if (!buffer) {
+          throw new Error('Storage download returned null');
+        }
+        const { watermarkPdf } = await import('../services/pdfWatermark.js');
+        const stamped = await watermarkPdf(buffer, {
+          email: viewerEmail,
+          ip: viewerIp,
+          timestamp: new Date(),
+        });
+
+        // Audit-log the download as watermarked
+        AuditLog.documentDownloaded(req, id, doc.name, {
+          watermarked: true,
+        }).catch(() => {});
+
+        const safeName = (doc.name ?? 'document.pdf').replace(/"/g, '');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+        res.setHeader('X-Watermarked', '1');
+        res.setHeader('Content-Length', String(stamped.length));
+        return res.end(stamped);
+      } catch (wmErr) {
+        // Fall through to the passthrough JSON response so the user still
+        // gets their file. Log so we can investigate failures.
+        log.warn('PDF watermark failed; falling back to passthrough', {
+          docId: id,
+          err: wmErr instanceof Error ? wmErr.message : String(wmErr),
+        });
+      }
+    }
+
+    // Passthrough: non-PDF, oversized PDF, or watermark error.
     const signedUrl = await getSignedDownloadUrl(doc.fileUrl);
     if (!signedUrl) {
       return res.status(500).json({ error: 'Failed to generate download URL' });
     }
 
-    // Audit log: track document access
-    AuditLog.documentDownloaded(req, id, doc.name).catch(() => {});
+    AuditLog.documentDownloaded(req, id, doc.name, {
+      watermarked: false,
+      watermarkSkipReason: !isPdf
+        ? 'not_pdf'
+        : !sizeOk
+          ? 'size_limit'
+          : 'fallback',
+    }).catch(() => {});
 
-    res.json({
+    return res.json({
       url: signedUrl,
       name: doc.name,
     });
   } catch (error) {
     log.error('Error getting download URL', error);
-    res.status(500).json({ error: 'Failed to get download URL' });
+    return res.status(500).json({ error: 'Failed to get download URL' });
   }
 });
 
@@ -374,7 +448,10 @@ router.post('/documents/:id/analyze', async (req, res) => {
     const buffer = Buffer.from(await fileData.arrayBuffer());
     let extractedText: string | null = null;
 
-    // Route by file type
+    // Route by file type (lazy-load parsers so lite bundle stays light)
+    const { extractTextFromPDF } = await import('../services/pdfExtractor.js');
+    const { excelToMarkdown } = await import('../services/excelToMarkdown.js');
+    const { isExcelFile } = await import('../services/excelFinancialExtractor.js');
     if (doc.mimeType === 'application/pdf') {
       const pdfResult = await extractTextFromPDF(buffer);
       extractedText = pdfResult?.text?.replace(/\u0000/g, '') || null;
@@ -403,6 +480,7 @@ router.post('/documents/:id/analyze', async (req, res) => {
     if (updateError) throw updateError;
 
     // Trigger RAG embedding (fire-and-forget)
+    const { embedDocument } = await import('../rag.js');
     embedDocument(id, doc.dealId, extractedText).catch(err =>
       log.error('RAG re-analyze embed error', err)
     );

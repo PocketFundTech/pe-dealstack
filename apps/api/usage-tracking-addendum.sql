@@ -34,7 +34,15 @@ INSERT INTO public."OperationCredits" (operation, credits, description) VALUES
 
   -- Gemini embeddings (RAG). High-volume, low-cost; default to small credit.
   ('gemini_embed_doc',        2,  'Gemini embedding of a document''s chunks (ingest)'),
-  ('gemini_embed_query',      1,  'Gemini embedding of a single RAG query')
+  ('gemini_embed_query',      1,  'Gemini embedding of a single RAG query'),
+
+  -- Quantitative reconciler Phase 2 LLM calls (all MODEL_INSIGHTS / Tier 2).
+  -- Sized vs multi_doc_analysis (10) and narrative_insights (6) by max_tokens
+  -- and synthesis complexity.
+  ('cim_claim_extraction',          10, 'Reconciler: extract verifiable claims from CIM/teaser narrative'),
+  ('reconciler_material_findings',  10, 'Reconciler: synthesize material diligence findings'),
+  ('reconciler_extraction_feedback', 6, 'Reconciler: audit prior extraction quality vs ground truth'),
+  ('reconciler_recommended_actions', 6, 'Reconciler: produce prioritized buyer diligence to-do list')
 ON CONFLICT (operation) DO UPDATE SET
   credits     = EXCLUDED.credits,
   description = EXCLUDED.description;

@@ -16,11 +16,16 @@ export interface GeneratedQuery {
 
 export const MAX_PRIMARY_QUERIES = 12;
 
-const QuerySchema = z.array(z.object({
-  query: z.string(),
-  category: z.enum(['person', 'deals', 'portfolio', 'reputation', 'social', 'network']),
-  reason: z.string(),
-}));
+// Anthropic/OpenAI tool input schemas must have a top-level type of "object",
+// so the array of queries is wrapped in an object rather than passed as a bare
+// z.array (which serialises to type "array" and is rejected with a 400).
+const QuerySchema = z.object({
+  queries: z.array(z.object({
+    query: z.string(),
+    category: z.enum(['person', 'deals', 'portfolio', 'reputation', 'social', 'network']),
+    reason: z.string(),
+  })),
+});
 
 export async function generateQueries(
   firmProfile: FirmProfile | null,
@@ -58,7 +63,7 @@ Generate 8-12 targeted follow-up search queries.`;
       new SystemMessage(systemPrompt),
       new HumanMessage(userPrompt),
     ], { maxTokens: 1500, temperature: 0.3, label: 'deepResearch.queries' });
-    return (result as GeneratedQuery[]).slice(0, MAX_PRIMARY_QUERIES);
+    return (result.queries as GeneratedQuery[]).slice(0, MAX_PRIMARY_QUERIES);
   } catch (error) {
     log.error('Deep research: query generation failed', { error: (error as Error).message });
     return [];

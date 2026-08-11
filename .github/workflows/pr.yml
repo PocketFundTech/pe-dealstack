@@ -5,6 +5,16 @@ on:
     branches:
       - main
 
+# Explicit minimum permissions. Default workflow token was tightened by
+# GitHub in 2024 — runs from PR authors who aren't repo owners can fail
+# at actions/checkout when the token doesn't have explicit `contents: read`.
+# Declaring it here avoids that failure mode without granting any extra
+# write access. Pull-request: read is needed so the checkout action can
+# resolve the PR's head SHA correctly.
+permissions:
+  contents: read
+  pull-requests: read
+
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true

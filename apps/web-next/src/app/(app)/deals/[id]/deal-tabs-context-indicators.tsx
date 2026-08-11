@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/cn";
-import type { DocItem } from "./components";
+import type { DocItem } from "./deal-detail-shared";
 
 // ---------------------------------------------------------------------------
 // Context Document Indicators (colored doc circles in chat header)

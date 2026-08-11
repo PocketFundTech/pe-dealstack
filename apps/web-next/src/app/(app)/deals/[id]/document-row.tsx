@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useToast } from "@/providers/ToastProvider";
 import { formatRelativeTime, formatFileSize, getDocIcon } from "@/lib/formatters";
-import type { DocItem } from "./components";
+import type { DocItem } from "./deal-detail-shared";
 
 // ---------------------------------------------------------------------------
 // Document row — ported from deal-documents.js (updateDocumentsList +
@@ -34,17 +34,37 @@ export function DocumentRow({ doc, onShowAnalysis }: DocumentRowProps) {
   const aiOnly = isAIOnlyDoc(doc);
 
   /**
-   * Fetch a signed URL for the doc. Returns null on failure (and surfaces a
-   * toast). Mirrors fetchAndPreviewDocument in deal-documents.js:90-105.
+   * Fetch the document. PDFs come back as a watermarked binary stream (with
+   * the viewer's email + timestamp + IP stamped on every page); other types
+   * still come back as a JSON URL pointer. Returns either:
+   *   - { kind: "blob", url, filename }  for watermarked PDFs (caller revokes
+   *     the URL after use)
+   *   - { kind: "passthrough", url }     for non-PDFs / oversized PDFs
+   *   - null on failure
    */
-  async function fetchSignedUrl(): Promise<string | null> {
+  type DocResource =
+    | { kind: "blob"; url: string; filename: string }
+    | { kind: "passthrough"; url: string };
+
+  async function fetchDocResource(): Promise<DocResource | null> {
     try {
-      const data = await api.get<{ url?: string }>(`/documents/${doc.id}/download`);
+      const res = await api.getRaw(`/documents/${doc.id}/download`);
+      if (!res.ok) {
+        showToast("Could not load document", "error");
+        return null;
+      }
+      const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+      if (ct.includes("application/pdf")) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        return { kind: "blob", url, filename: doc.name };
+      }
+      const data = (await res.json()) as { url?: string };
       if (!data?.url) {
         showToast("Could not generate preview URL", "error");
         return null;
       }
-      return data.url;
+      return { kind: "passthrough", url: data.url };
     } catch (err) {
       console.error("[doc-row] download URL failed", err);
       showToast("Failed to load document", "error");
@@ -84,8 +104,17 @@ export function DocumentRow({ doc, onShowAnalysis }: DocumentRowProps) {
     }
     setBusy(true);
     try {
-      const url = await fetchSignedUrl();
-      if (url) window.open(url, "_blank", "noopener,noreferrer");
+      const resource = await fetchDocResource();
+      if (!resource) return;
+      // For both shapes, open in a new tab. For PDFs this is the watermarked
+      // blob URL (browser previews inline); for other types it's the signed
+      // URL (browser previews or downloads based on its own settings).
+      window.open(resource.url, "_blank", "noopener,noreferrer");
+      // If we created a blob URL, revoke it after the new tab has had a
+      // chance to load it. 60s is plenty for the browser to fetch the bytes.
+      if (resource.kind === "blob") {
+        setTimeout(() => URL.revokeObjectURL(resource.url), 60_000);
+      }
     } finally {
       setBusy(false);
     }
@@ -104,20 +133,24 @@ export function DocumentRow({ doc, onShowAnalysis }: DocumentRowProps) {
     }
     setBusy(true);
     try {
-      const url = await fetchSignedUrl();
-      if (!url) return;
-      // Trigger a download via a temporary <a download>. Browsers honour the
-      // attribute when the URL is same-origin or the response carries the
-      // appropriate Content-Disposition header — Supabase signed URLs include
-      // it for direct download, so this works for our pipeline.
+      const resource = await fetchDocResource();
+      if (!resource) return;
       const a = document.createElement("a");
-      a.href = url;
-      a.download = doc.name;
+      a.href = resource.url;
+      a.download = resource.kind === "blob" ? resource.filename : doc.name;
       a.rel = "noopener";
-      a.target = "_blank";
+      // Passthrough URLs go to a new tab so the browser shows the download
+      // dialog without leaving the page. Blob URLs are same-origin, so the
+      // download attribute works directly on the current tab.
+      if (resource.kind === "passthrough") {
+        a.target = "_blank";
+      }
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      if (resource.kind === "blob") {
+        setTimeout(() => URL.revokeObjectURL(resource.url), 60_000);
+      }
     } finally {
       setBusy(false);
     }

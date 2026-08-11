@@ -25,6 +25,16 @@ describe("isAppRouteRequiringAuth", () => {
     expect(isAppRouteRequiringAuth("/accept-invite/tok_abc123")).toBe(false);
   });
 
+  it("lets public marketing/legal pages through unauthenticated", () => {
+    expect(isAppRouteRequiringAuth("/privacy-policy")).toBe(false);
+    expect(isAppRouteRequiringAuth("/terms-of-service")).toBe(false);
+    expect(isAppRouteRequiringAuth("/security")).toBe(false);
+    expect(isAppRouteRequiringAuth("/pricing")).toBe(false);
+    expect(isAppRouteRequiringAuth("/portal/some-share-token")).toBe(false);
+    expect(isAppRouteRequiringAuth("/documentation")).toBe(false);
+    expect(isAppRouteRequiringAuth("/help-center")).toBe(false);
+  });
+
   it("lets API and Next internals pass through", () => {
     expect(isAppRouteRequiringAuth("/api/deals")).toBe(false);
     expect(isAppRouteRequiringAuth("/api/ai/market-sentiment")).toBe(false);

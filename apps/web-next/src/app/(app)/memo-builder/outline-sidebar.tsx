@@ -1,5 +1,6 @@
 "use client";
 
+import { LegalDocsPanel } from "@/components/memo-builder/LegalDocsPanel";
 import { cn } from "@/lib/cn";
 import type { MemoSection } from "./components";
 
@@ -9,6 +10,8 @@ interface MemoOutlineSidebarProps {
   setActiveSection: (id: string | null) => void;
   onAddSection: () => void;
   templateName?: string;
+  /** When set, render a compact NDA/legal-docs list near the bottom. */
+  dealId?: string;
 }
 
 export function MemoOutlineSidebar({
@@ -17,6 +20,7 @@ export function MemoOutlineSidebar({
   setActiveSection,
   onAddSection,
   templateName,
+  dealId,
 }: MemoOutlineSidebarProps) {
   return (
     <aside className="hidden md:flex w-64 bg-slate-50 border-r border-slate-200 flex-col shrink-0">
@@ -107,6 +111,8 @@ export function MemoOutlineSidebar({
             All citations are verified against the data room.
           </p>
         </div>
+
+        {dealId && <LegalDocsPanel dealId={dealId} />}
       </div>
     </aside>
   );

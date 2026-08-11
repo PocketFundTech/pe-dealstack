@@ -1,14 +1,24 @@
 /**
  * excelToMarkdown.ts
  *
- * Converts an Excel workbook into LLM-optimized Markdown tables.
- * Reuses sheet-scoring logic from excelFinancialExtractor.ts.
- * Output is stored in Document.extractedText for RAG + AI chat context.
+ * Converts an Excel workbook into LLM-optimized Markdown tables for the
+ * chat-RAG path (Document.extractedText). Uses the SAME structured-grid
+ * reader as `excelFinancialExtractor.ts`, so chat answers and extraction
+ * answers can no longer diverge on what a workbook says.
+ *
+ * Background: pre-Phase-3-P5 this module re-implemented its own grid
+ * walk that did NOT call `expandMerges`. Result: extraction saw "FY 2024"
+ * filling every month column under it, while chat saw "FY 2024" only in
+ * the top-left and blanks under each month. A user could ask "what was
+ * Q3 FY 2024 revenue?" and get a stale chat answer that disagreed with
+ * the extraction value sitting in FinancialStatement rows. Both paths
+ * now consume `readStructuredGrid`, so they agree on shape and content.
  */
 
 import XLSX from 'xlsx';
 import { log } from '../utils/logger.js';
 import { scoreSheet, detectUnitScale, SKIP_PATTERNS } from './excelFinancialExtractor.js';
+import { readStructuredGrid } from './excelGridReader.js';
 
 /**
  * Convert an Excel buffer to Markdown tables.
@@ -71,55 +81,129 @@ export function excelToMarkdown(buffer: Buffer): string | null {
 }
 
 /**
+ * Pick the header row from a rectangular grid.
+ *
+ * Heuristic: walk the first few rows, score each by the fraction of cells
+ * that look like header text (non-empty AND not purely numeric). Return
+ * the index of the highest-scoring row, with a tiebreaker preferring the
+ * EARLIER row (Excel users put banners above headers, not below).
+ *
+ * Why a heuristic instead of "row 0 is the header": real exports often
+ * lead with a title row ("Q3 2024 Earnings Pack") or a unit declaration
+ * ("$ in thousands"), and the actual column labels (Jan-24, Feb-24, …)
+ * sit two or three rows down. The previous implementation blindly took
+ * `cleanRows[0]`, which produced Markdown tables with one-column headers
+ * spanning the title cell — useless for embeddings.
+ *
+ * Mirrors what the financial extractor's structured walk produces: it
+ * doesn't pick a header but emits all rows in order, leaving header
+ * detection to the LLM. We do that detection here because Markdown
+ * tables NEED a header row syntactically.
+ *
+ * Search window: only the first 8 non-empty rows. Beyond that we'd
+ * almost certainly be picking a data row by accident.
+ */
+function pickHeaderRowIndex(rows: string[][]): number {
+  if (rows.length === 0) return 0;
+
+  const SEARCH_LIMIT = Math.min(rows.length, 8);
+  let bestIdx = 0;
+  let bestScore = -1;
+
+  for (let i = 0; i < SEARCH_LIMIT; i++) {
+    const row = rows[i];
+    let nonEmpty = 0;
+    let textLike = 0;
+    for (const cell of row) {
+      if (cell === '') continue;
+      nonEmpty++;
+      // "Text-like" = the cell is not purely a number. Period labels
+      // ("Jan-24", "Q3 FY24"), section names, unit hints all qualify.
+      // Pure numbers don't (those belong in data rows).
+      if (!/^-?[\d,]+(\.\d+)?$/.test(cell)) textLike++;
+    }
+    // Header-quality score: prefer rows that are mostly non-empty AND
+    // mostly text. Tiebreaker on earlier index handled by strict >.
+    const fillRate = nonEmpty / row.length;
+    const textRate = nonEmpty > 0 ? textLike / nonEmpty : 0;
+    const score = fillRate * 0.4 + textRate * 0.6;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+
+  return bestIdx;
+}
+
+/**
  * Convert a single sheet to a Markdown table with a heading.
  * Returns null if the sheet has no meaningful data.
  */
 function sheetToMarkdownTable(sheet: XLSX.WorkSheet, sheetName: string): string | null {
-  // Get rows as arrays (header: 1 = array-of-arrays mode)
-  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    blankrows: false,
-  });
-
-  // Filter out empty/formatting rows
-  const cleanRows = rows.filter(row => {
-    const joined = row.map(String).join('').trim();
-    if (joined.length < 2) return false;
-    if (/^[-_=\s]+$/.test(joined)) return false;
-    return true;
-  });
-
+  // Same merge-aware, padded, filtered grid that the financial
+  // extractor consumes. This is the contract that keeps chat and
+  // extraction agreeing on what the workbook says.
+  const cleanRows = readStructuredGrid(sheet);
   if (cleanRows.length < 2) return null; // need header + at least 1 data row
 
-  // Detect unit scale
-  const unitHint = detectUnitScale(sheet);
+  // Detect unit scale (sheet was already merge-expanded by
+  // readStructuredGrid; detectUnitScale walks the original sheet
+  // object so it sees the broadcast year/unit banners too).
+  const unitHint = detectUnitScale(sheet, sheetName);
 
-  // Find max column count for consistent table width
-  const maxCols = Math.max(...cleanRows.map(r => r.length));
+  // Grid is rectangular post-readStructuredGrid, so every row has the
+  // same length — no need to recompute maxCols defensively.
+  const maxCols = cleanRows[0].length;
 
-  // First non-empty row = header
-  const headerRow = cleanRows[0];
-  const dataRows = cleanRows.slice(1);
+  const headerIdx = pickHeaderRowIndex(cleanRows);
+  const headerRow = cleanRows[headerIdx];
+  // Anything BEFORE the header (title rows, unit-declaration rows) is
+  // dropped — it's not part of the tabular data the LLM needs to embed.
+  const dataRows = cleanRows.slice(headerIdx + 1);
 
-  // Pad rows to maxCols and escape pipe characters
-  const escapeCell = (val: any): string => {
-    if (val === null || val === undefined || val === '') return '—';
-    return String(val).replace(/\|/g, '\\|').trim();
+  if (dataRows.length === 0) return null;
+
+  // Markdown body cell renderer: empty -> em-dash so the embedding
+  // chunker doesn't see consecutive empty pipes that compress to a
+  // single token. Pipe inside the cell value gets escaped so it
+  // doesn't break the table structure.
+  const escapeBodyCell = (val: string): string => {
+    if (val === '') return '—';
+    return val.replace(/\|/g, '\\|').trim();
   };
 
-  const padRow = (row: any[]): string[] => {
-    const padded = Array(maxCols).fill('');
-    for (let i = 0; i < Math.min(row.length, maxCols); i++) {
-      padded[i] = escapeCell(row[i]);
+  // Header cells render empty as a literal blank, NOT em-dash. Empty
+  // header cells happen when row 0 has a title in column A and the
+  // remaining columns are blank — we still want those columns to
+  // appear in the table so column alignment survives. The emitter
+  // produces "|  |" for an empty header cell.
+  const escapeHeaderCell = (val: string): string => {
+    if (val === '') return '';
+    return val.replace(/\|/g, '\\|').trim();
+  };
+
+  const padHeader = (row: string[]): string[] => {
+    const out: string[] = [];
+    for (let i = 0; i < maxCols; i++) {
+      out.push(escapeHeaderCell(row[i] ?? ''));
     }
-    return padded;
+    return out;
   };
 
-  const header = `| ${padRow(headerRow).join(' | ')} |`;
-  const divider = `|${padRow(headerRow).map(() => '---').join('|')}|`;
+  const padBody = (row: string[]): string[] => {
+    const out: string[] = [];
+    for (let i = 0; i < maxCols; i++) {
+      out.push(escapeBodyCell(row[i] ?? ''));
+    }
+    return out;
+  };
+
+  const header = `| ${padHeader(headerRow).join(' | ')} |`;
+  const divider = `|${Array(maxCols).fill('---').join('|')}|`;
   const body = dataRows
-    .map(row => `| ${padRow(row).join(' | ')} |`)
+    .map(row => `| ${padBody(row).join(' | ')} |`)
     .join('\n');
 
   let section = `## Sheet: ${sheetName}`;

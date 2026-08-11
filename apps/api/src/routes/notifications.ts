@@ -24,7 +24,7 @@ export async function resolveUserId(authId: string): Promise<string | null> {
 // Validation schemas
 const createNotificationSchema = z.object({
   userId: z.string().uuid(),
-  type: z.enum(['DEAL_UPDATE', 'DOCUMENT_UPLOADED', 'MENTION', 'AI_INSIGHT', 'TASK_ASSIGNED', 'COMMENT', 'SYSTEM']),
+  type: z.enum(['DEAL_UPDATE', 'DOCUMENT_UPLOADED', 'MENTION', 'AI_INSIGHT', 'TASK_ASSIGNED', 'COMMENT', 'SYSTEM', 'CONTACT_FOLLOWUP']),
   title: z.string().min(1).max(255),
   message: z.string().optional(),
   dealId: z.string().uuid().optional(),
@@ -37,7 +37,7 @@ const updateNotificationSchema = z.object({
 
 const notificationsQuerySchema = z.object({
   userId: z.string().uuid(),
-  type: z.enum(['DEAL_UPDATE', 'DOCUMENT_UPLOADED', 'MENTION', 'AI_INSIGHT', 'TASK_ASSIGNED', 'COMMENT', 'SYSTEM']).optional(),
+  type: z.enum(['DEAL_UPDATE', 'DOCUMENT_UPLOADED', 'MENTION', 'AI_INSIGHT', 'TASK_ASSIGNED', 'COMMENT', 'SYSTEM', 'CONTACT_FOLLOWUP']).optional(),
   isRead: z.enum(['true', 'false']).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   offset: z.coerce.number().int().min(0).optional(),
@@ -477,5 +477,143 @@ export async function notifyDealTeam(
     }
   }
 }
+
+// ─── Contact follow-up reminders ───────────────────────────────────────────
+//
+// Scans contacts whose `followUpAt` is due (<= now) and creates a
+// CONTACT_FOLLOWUP notification per contact for the given user. Routes through
+// createNotification() so user prefs are honoured. Deduped: we skip any contact
+// that already has an UNREAD CONTACT_FOLLOWUP notification for this user.
+//
+// Notification has no contactId column, so we encode the contact id in the
+// message with a stable [contact:<id>] marker. That marker is (a) the dedupe
+// key and (b) lets the client deep-link to the contact.
+
+const CONTACT_FOLLOWUP_TYPE = 'CONTACT_FOLLOWUP';
+const CONTACT_MARKER_RE = /\[contact:([0-9a-f-]{36})\]/i;
+
+function contactMarker(contactId: string): string {
+  return `[contact:${contactId}]`;
+}
+
+function contactDisplayName(c: { firstName?: string | null; lastName?: string | null; email?: string | null }): string {
+  const name = `${c.firstName || ''} ${c.lastName || ''}`.trim();
+  return name || c.email || 'a contact';
+}
+
+/**
+ * Generate CONTACT_FOLLOWUP notifications for a user's org-scoped contacts whose
+ * follow-up is due. Returns a summary of what happened.
+ *
+ * @param orgId          organization scope (contacts are org-scoped)
+ * @param internalUserId internal User table UUID (NOT the Supabase auth UUID —
+ *                       resolve via resolveUserId() first)
+ */
+export async function generateContactFollowUpReminders(
+  orgId: string,
+  internalUserId: string,
+): Promise<{ created: number; skipped: number; due: number }> {
+  const nowIso = new Date().toISOString();
+
+  // Due contacts: followUpAt set and <= now, scoped to the org.
+  const { data: dueContacts, error: dueErr } = await supabase
+    .from('Contact')
+    .select('id, firstName, lastName, email, company, followUpAt, followUpNote')
+    .eq('organizationId', orgId)
+    .not('followUpAt', 'is', null)
+    .lte('followUpAt', nowIso)
+    .order('followUpAt', { ascending: true })
+    .limit(100);
+
+  if (dueErr) {
+    log.error('generateContactFollowUpReminders: failed to load due contacts', dueErr);
+    throw dueErr;
+  }
+
+  const due = dueContacts || [];
+  if (due.length === 0) {
+    return { created: 0, skipped: 0, due: 0 };
+  }
+
+  // Existing UNREAD CONTACT_FOLLOWUP notifications for this user → dedupe set.
+  const { data: existing, error: existingErr } = await supabase
+    .from('Notification')
+    .select('message')
+    .eq('userId', internalUserId)
+    .eq('type', CONTACT_FOLLOWUP_TYPE)
+    .eq('isRead', false);
+
+  if (existingErr) {
+    log.error('generateContactFollowUpReminders: failed to load existing notifications', existingErr);
+    throw existingErr;
+  }
+
+  const alreadyNotified = new Set<string>();
+  for (const n of existing || []) {
+    const m = typeof n.message === 'string' ? n.message.match(CONTACT_MARKER_RE) : null;
+    if (m) alreadyNotified.add(m[1].toLowerCase());
+  }
+
+  let created = 0;
+  let skipped = 0;
+
+  for (const c of due) {
+    if (alreadyNotified.has(String(c.id).toLowerCase())) {
+      skipped++;
+      continue;
+    }
+
+    const name = contactDisplayName(c);
+    const noteSuffix = c.followUpNote ? ` — ${c.followUpNote}` : '';
+    const companySuffix = c.company ? ` (${c.company})` : '';
+
+    const notification = await createNotification({
+      userId: internalUserId,
+      type: CONTACT_FOLLOWUP_TYPE,
+      title: `Follow up with ${name}`,
+      // The [contact:<id>] marker is the dedupe key + deep-link anchor.
+      message: `Your follow-up with ${name}${companySuffix} is due${noteSuffix} ${contactMarker(c.id)}`,
+    });
+
+    if (notification) {
+      created++;
+      alreadyNotified.add(String(c.id).toLowerCase());
+    } else {
+      // createNotification returns null on pref opt-out OR insert error.
+      skipped++;
+    }
+  }
+
+  return { created, skipped, due: due.length };
+}
+
+// POST /api/notifications/generate-follow-up-reminders
+// On-demand reminder generation. Mirrors the NDA on-demand polling pattern
+// (POST /legal-documents/check-signatures) — no cron is wired here.
+//
+// FOLLOW-UP: a scheduled cron to run this automatically is intentionally NOT
+// wired. Cron/webhook scheduling is env-fragile and disabled outside prod in
+// this codebase (see CLAUDE.md re: Drive files.watch / NDA push detection).
+// Re-enable on the verified custom domain alongside the other push jobs.
+router.post('/generate-follow-up-reminders', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = getOrgId(req);
+
+    const authId = req.user?.id;
+    if (!authId) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const internalUserId = await resolveUserId(authId);
+    if (!internalUserId) {
+      return res.status(403).json({ error: 'User not found in this organization' });
+    }
+
+    const result = await generateContactFollowUpReminders(orgId, internalUserId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;

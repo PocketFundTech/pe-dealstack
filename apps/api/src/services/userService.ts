@@ -35,59 +35,47 @@ export async function findOrCreateUser(authUser: {
     const title = authUser.user_metadata?.title as string | undefined;
     let organizationId: string | null = null;
 
-    // Resolve or create Organization from firmName
+    // Create the Organization from firmName.
+    // SECURITY: never attach a new signup to an EXISTING organization by name.
+    // firmName comes from user-controlled signup metadata (user_metadata.firm_name),
+    // so matching an existing org by name would let an attacker join another
+    // tenant's organization simply by signing up with that firm's name. Every
+    // fresh signup creates its own org; teammates join an existing org only via
+    // the invitation flow (which carries the real organizationId).
     if (authUser.firmName) {
-      // Check if Organization with this name already exists
-      const { data: existingOrg } = await supabase
-        .from('Organization')
-        .select('id')
-        .eq('name', authUser.firmName)
-        .single();
+      const baseSlug = authUser.firmName
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .substring(0, 100) || 'org';
+      const mkSlug = () => `${baseSlug}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
-      if (existingOrg) {
-        organizationId = existingOrg.id;
-      } else {
-        // Create new Organization with unique slug
-        const baseSlug = authUser.firmName
-          .toLowerCase()
-          .replace(/[^a-z0-9\s-]/g, '')
-          .replace(/\s+/g, '-')
-          .substring(0, 100);
-        const uniqueSlug = `${baseSlug || 'org'}-${Date.now().toString(36)}`;
-
-        const { data: newOrg, error: orgError } = await supabase
+      // The slug carries a timestamp + random suffix, so collisions are near
+      // impossible; on the rare 23505 we retry with a fresh slug rather than
+      // ever falling back to a name lookup.
+      let orgRow: { id: string } | null = null;
+      for (let attempt = 0; attempt < 3 && !orgRow; attempt++) {
+        const { data, error: orgError } = await supabase
           .from('Organization')
-          .insert({
-            name: authUser.firmName,
-            slug: uniqueSlug,
-          })
-          .select()
+          .insert({ name: authUser.firmName, slug: mkSlug() })
+          .select('id')
           .single();
-
-        if (orgError) {
-          log.error('Failed to create organization', orgError);
-          // If slug conflict, try to find existing org by name and use that
-          if (orgError.code === '23505') {
-            const { data: fallbackOrg } = await supabase
-              .from('Organization')
-              .select('id')
-              .eq('name', authUser.firmName)
-              .single();
-            if (fallbackOrg) {
-              organizationId = fallbackOrg.id;
-              log.info('Using existing organization after slug conflict', { orgId: fallbackOrg.id });
-            } else {
-              throw orgError;
-            }
-          } else {
-            throw orgError;
-          }
+        if (!orgError && data) {
+          orgRow = data;
+          break;
         }
-        organizationId = newOrg.id;
-        log.info('Organization created on signup', { orgId: newOrg.id, name: authUser.firmName });
-        // Sample deal is now created during onboarding (POST /api/onboarding/create-demo-deal)
-        // instead of auto-creating on signup
+        if (orgError && orgError.code !== '23505') {
+          log.error('Failed to create organization', orgError);
+          throw orgError;
+        }
       }
+      if (!orgRow) {
+        throw new Error('Failed to create organization after repeated slug collisions');
+      }
+      organizationId = orgRow.id;
+      log.info('Organization created on signup', { orgId: orgRow.id, name: authUser.firmName });
+      // Sample deal is created during onboarding (POST /api/onboarding/create-demo-deal),
+      // not auto-created on signup.
     }
 
     const { data: newUser, error: createError } = await supabase

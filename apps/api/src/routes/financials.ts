@@ -3,6 +3,31 @@ import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
+import { comparePeriodChronologically } from '../utils/periodChrono.js';
+import { refreshDealCache } from '../services/dealCacheWriteback.js';
+import { correctMistaggedUnitScale } from '../utils/financialFormat.js';
+
+/**
+ * Sweep an array of FinancialStatement rows in place, correcting any
+ * `unitScale` whose `lineItems._source` quotes indicate the value is
+ * actually raw dollars (the "DMpro LTM/Current Month" stale-row bug
+ * where pre-fix extractions tagged $1,473 / $15,600 as MILLIONS). Pure
+ * read-time safety net — does NOT touch the DB.
+ */
+function correctRowsUnitScale<
+  T extends { unitScale?: unknown; lineItems?: Record<string, unknown> | null },
+>(rows: T[] | null | undefined): void {
+  if (!rows) return;
+  for (const row of rows) {
+    const corrected = correctMistaggedUnitScale(
+      row.unitScale as string | null | undefined,
+      row.lineItems,
+    );
+    if (corrected !== row.unitScale) {
+      row.unitScale = corrected;
+    }
+  }
+}
 
 // Sub-routers
 import financialsExtractionRouter from './financials-extraction.js';
@@ -23,7 +48,7 @@ const patchStatementSchema = z.object({
   period: z.string().optional(),
   periodType: z.enum(['HISTORICAL', 'PROJECTED', 'LTM']).optional(),
   currency: z.string().optional(),
-  unitScale: z.enum(['MILLIONS', 'THOUSANDS', 'ACTUALS']).optional(),
+  unitScale: z.enum(['MILLIONS', 'THOUSANDS', 'ACTUALS', 'BILLIONS']).optional(),
 });
 
 // ─── Pagination (Task 5.3.3) ──────────────────────────────────
@@ -64,6 +89,10 @@ router.get('/deals/:dealId/financials', async (req, res) => {
       .range(offset, offset + limit - 1);
 
     if (error) throw error;
+
+    // Read-time safety net: correct any stale rows whose unitScale doesn't
+    // match the raw-dollar amount in their _source quote before serving.
+    correctRowsUnitScale(statements);
 
     // Preserve legacy array response shape (clients depend on `Array.isArray`)
     // while also exposing pagination on the response headers so future clients
@@ -106,15 +135,17 @@ router.get('/deals/:dealId/financials/summary', async (req, res) => {
     if (incomeRows && incomeRows.length === PAGINATION_MAX) {
       log.warn('financials summary hit row cap', { dealId, cap: PAGINATION_MAX });
     }
+    // Read-time safety net (see GET /deals/:dealId/financials).
+    correctRowsUnitScale(incomeRows);
 
     if (!incomeRows || incomeRows.length === 0) {
       return res.json({ hasData: false, periods: [] });
     }
 
-    // Latest historical period for the headline numbers
+    // Latest historical period for the headline numbers (descending so [0] is newest)
     const historical = incomeRows
       .filter(r => r.periodType === 'HISTORICAL')
-      .sort((a, b) => b.period.localeCompare(a.period));
+      .sort((a, b) => comparePeriodChronologically(b.period, a.period));
 
     const latest = historical[0];
     const li = (row: any, key: string) =>
@@ -212,6 +243,9 @@ router.patch('/deals/:dealId/financials/:statementId', async (req, res) => {
       .single();
 
     if (updateError) throw updateError;
+
+    // Refresh cache so deal headline stays in sync with the row just edited.
+    await refreshDealCache(dealId);
 
     res.json(updated);
   } catch (err) {

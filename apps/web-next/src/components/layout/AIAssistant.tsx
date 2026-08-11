@@ -8,16 +8,23 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { useParams, usePathname } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { api, NotFoundError } from "@/lib/api";
+import { useToast } from "@/providers/ToastProvider";
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import {
+  buildHistoryPayload,
   detectContext,
   getWelcomeMessage,
+  isMutationAction,
+  isNavigateAction,
+  streamChat,
+  type Action,
   type ChatContext,
   type ChatMessage,
   type ChatResponse,
   type ContextType,
+  type MutationPayload,
 } from "./ai-assistant-shared";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 
@@ -64,6 +71,25 @@ function saveHistory(ctx: ChatContext, messages: ChatMessage[]) {
   }
 }
 
+// Friendly progress labels for known tool names. Unknown tools fall back to a
+// title-cased version so the indicator is never empty.
+const TOOL_LABELS: Record<string, string> = {
+  searchDocuments: "Searching documents",
+  searchDeals: "Searching deals",
+  searchContacts: "Searching contacts",
+  getDeal: "Loading deal",
+  getPortfolio: "Reading portfolio",
+  draftEmail: "Drafting email",
+  webSearch: "Searching the web",
+};
+
+function toolLabel(tool: string): string {
+  if (TOOL_LABELS[tool]) return TOOL_LABELS[tool];
+  // camelCase → spaced, capitalised first word.
+  const spaced = tool.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 // ── FAB style (drawer styles live in AIAssistantDrawer.tsx) ──────────────────
 
 const fabStyle: CSSProperties = {
@@ -98,6 +124,8 @@ function isHiddenRoute(pathname: string): boolean {
 export function AIAssistant() {
   const pathname = usePathname();
   const params = useParams();
+  const router = useRouter();
+  const { showToast } = useToast();
 
   const context = useMemo<ChatContext>(
     () => detectContext(pathname, params as Record<string, string | string[] | undefined>),
@@ -109,6 +137,12 @@ export function AIAssistant() {
   const [isLoading, setIsLoading] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const [fabHover, setFabHover] = useState(false);
+  // Transient label for in-flight tool activity (e.g. "Searching documents…").
+  // null when no tool is running.
+  const [toolActivity, setToolActivity] = useState<string | null>(null);
+  // True once the first token of a streamed reply has landed — lets the drawer
+  // swap the typing dots for the live assistant bubble.
+  const [isStreaming, setIsStreaming] = useState(false);
 
   // Track which context's history is currently loaded so we re-hydrate when
   // the user navigates between contexts while the drawer is open.
@@ -167,47 +201,240 @@ export function AIAssistant() {
 
   // ── Send message ───────────────────────────────────────────────────────────
 
+  // Replace the last (in-progress) assistant bubble. Used to append streamed
+  // tokens and to write the final text/actions or an error message.
+  const updateLastAssistant = useCallback(
+    (mutate: (prev: ChatMessage) => ChatMessage) => {
+      setMessages((prev) => {
+        if (prev.length === 0 || prev[prev.length - 1].role !== "assistant") return prev;
+        const next = prev.slice();
+        next[next.length - 1] = mutate(next[next.length - 1]);
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Non-streaming fallback: hit the plain /ai/chat endpoint and write the
+  // result (text + actions) into the placeholder assistant bubble.
+  const runFallback = useCallback(
+    async (trimmed: string, priorMessages: ChatMessage[]) => {
+      const data = await api.post<ChatResponse>("/ai/chat", {
+        message: trimmed,
+        context: context.type,
+        history: buildHistoryPayload(priorMessages),
+      });
+      const rawText =
+        data.response || data.message || data.reply || data.content ||
+        "I received your message but couldn't generate a response.";
+      const aiText =
+        typeof rawText === "string"
+          ? rawText
+          : (rawText as unknown as { message?: string; error?: string })?.message ??
+            (rawText as unknown as { message?: string; error?: string })?.error ??
+            JSON.stringify(rawText);
+      updateLastAssistant((m) => ({
+        ...m,
+        content: aiText,
+        actions: Array.isArray(data.actions) ? data.actions : undefined,
+      }));
+    },
+    [context.type, updateLastAssistant],
+  );
+
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || isLoading) return;
 
-      setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+      // Capture the conversation so far (before this turn) for memory, then
+      // append the new user message AND an empty assistant placeholder we
+      // stream into. The functional updater gives us the live list even though
+      // `messages` in this closure may be stale.
+      let priorMessages: ChatMessage[] = [];
+      setMessages((prev) => {
+        priorMessages = prev;
+        return [
+          ...prev,
+          { role: "user", content: trimmed },
+          { role: "assistant", content: "" },
+        ];
+      });
       setIsLoading(true);
+      setIsStreaming(false);
+      setToolActivity(null);
 
-      try {
-        let data: ChatResponse;
-        if (context.type === "deal" && context.dealId) {
-          data = await api.post<ChatResponse>(`/deals/${context.dealId}/chat`, {
+      // The per-deal branch keeps its existing non-streaming behaviour.
+      if (context.type === "deal" && context.dealId) {
+        try {
+          const data = await api.post<ChatResponse>(`/deals/${context.dealId}/chat`, {
             message: trimmed,
           });
-        } else {
-          data = await api.post<ChatResponse>("/ai/chat", {
+          const rawText =
+            data.response || data.message || data.reply || data.content ||
+            "I received your message but couldn't generate a response.";
+          const aiText =
+            typeof rawText === "string"
+              ? rawText
+              : (rawText as unknown as { message?: string })?.message ?? JSON.stringify(rawText);
+          updateLastAssistant((m) => ({ ...m, content: aiText }));
+        } catch (err) {
+          const errContent =
+            err instanceof NotFoundError
+              ? "The AI assistant service isn't available yet. Please check back soon."
+              : "Sorry, I couldn't connect to the AI service. Please check your connection and try again.";
+          updateLastAssistant((m) => ({ ...m, content: errContent }));
+        } finally {
+          setIsLoading(false);
+          setIsStreaming(false);
+          setToolActivity(null);
+        }
+        return;
+      }
+
+      // Global / non-deal path: try streaming, fall back to /ai/chat.
+      let streamSucceeded = false;
+      let streamProducedText = false;
+      let streamErrored = false;
+      try {
+        const ok = await streamChat(
+          {
             message: trimmed,
             context: context.type,
-          });
+            history: buildHistoryPayload(priorMessages),
+          },
+          {
+            onToken: (tok) => {
+              streamProducedText = true;
+              setIsStreaming(true);
+              setToolActivity(null);
+              updateLastAssistant((m) => ({ ...m, content: m.content + tok }));
+            },
+            onTool: (tool, status) => {
+              setToolActivity(status === "running" ? `${toolLabel(tool)}…` : null);
+            },
+            onDone: (full, actions) => {
+              streamSucceeded = true;
+              setToolActivity(null);
+              updateLastAssistant((m) => ({
+                ...m,
+                // Prefer the authoritative full text; fall back to accumulated.
+                content: full || m.content,
+                actions: actions.length > 0 ? actions : undefined,
+              }));
+            },
+            onError: (message) => {
+              streamErrored = true;
+              setToolActivity(null);
+              updateLastAssistant((m) => ({
+                ...m,
+                content: message || "Sorry, the assistant hit an error.",
+              }));
+            },
+          },
+        );
+        // streamChat returns false when the body isn't streamable → fall back.
+        if (!ok) {
+          await runFallback(trimmed, priorMessages);
+          streamSucceeded = true;
         }
-
-        const rawText =
-          data.response || data.message || data.reply || data.content ||
-          "I received your message but couldn't generate a response.";
-        const aiText = typeof rawText === "string"
-          ? rawText
-          : (rawText as unknown as { message?: string; error?: string })?.message
-            ?? (rawText as unknown as { message?: string; error?: string })?.error
-            ?? JSON.stringify(rawText);
-
-        setMessages((prev) => [...prev, { role: "assistant", content: aiText }]);
-      } catch (err) {
-        const errContent = err instanceof NotFoundError
-          ? "The AI assistant service isn't available yet. Please check back soon."
-          : "Sorry, I couldn't connect to the AI service. Please check your connection and try again.";
-        setMessages((prev) => [...prev, { role: "assistant", content: errContent }]);
+      } catch (streamErr) {
+        // The stream request couldn't be established (network, unauthorized
+        // already redirects). If a server `error` event already wrote a
+        // message, leave it; otherwise try the non-streaming endpoint so the
+        // user is never left with a dead spinner.
+        if (!streamErrored && !streamProducedText) {
+          try {
+            await runFallback(trimmed, priorMessages);
+            streamSucceeded = true;
+          } catch (fallbackErr) {
+            const errContent =
+              fallbackErr instanceof NotFoundError
+                ? "The AI assistant service isn't available yet. Please check back soon."
+                : "Sorry, I couldn't connect to the AI service. Please check your connection and try again.";
+            updateLastAssistant((m) => ({ ...m, content: errContent }));
+          }
+        } else {
+          console.warn("[layout/AIAssistant] stream ended with error:", streamErr);
+        }
       } finally {
+        // If the stream ended without a `done`/`error`/token and without
+        // falling back (e.g. empty stream), surface a graceful message rather
+        // than an empty bubble.
+        if (!streamSucceeded && !streamErrored && !streamProducedText) {
+          updateLastAssistant((m) =>
+            m.content
+              ? m
+              : { ...m, content: "I couldn't generate a response. Please try again." },
+          );
+        }
         setIsLoading(false);
+        setIsStreaming(false);
+        setToolActivity(null);
       }
     },
-    [isLoading, context],
+    [isLoading, context, updateLastAssistant, runFallback],
+  );
+
+  // ── Action execution ─────────────────────────────────────────────────────
+  // navigate → router push (inert), draftEmail → handled in the drawer (copy),
+  // mutations → confirmed then POST/PATCH the given endpoint with toast feedback.
+
+  const executeMutation = useCallback(
+    async (action: Action) => {
+      if (!isMutationAction(action)) return;
+      const payload = action.payload as MutationPayload;
+      try {
+        if (payload.method === "patch") {
+          await api.patch(payload.endpoint, payload.body ?? {});
+        } else {
+          await api.post(payload.endpoint, payload.body ?? {});
+        }
+        showToast(action.label, "success", { title: "Done" });
+      } catch (err) {
+        const message =
+          err instanceof NotFoundError
+            ? "That action isn't available yet."
+            : err instanceof Error
+              ? err.message
+              : "The action failed. Please try again.";
+        showToast(message, "error", { title: "Action failed" });
+      }
+    },
+    [showToast],
+  );
+
+  const handleNavigate = useCallback(
+    (href: string) => {
+      router.push(href);
+      closeDrawer();
+    },
+    [router, closeDrawer],
+  );
+
+  const handleCopyDraft = useCallback(
+    (textToCopy: string) => {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        navigator.clipboard
+          .writeText(textToCopy)
+          .then(() => showToast("Draft copied to clipboard", "success"))
+          .catch((err) => {
+            console.warn("[layout/AIAssistant] clipboard write failed:", err);
+            showToast("Couldn't copy — select and copy manually.", "warning");
+          });
+      } else {
+        showToast("Clipboard unavailable — select and copy manually.", "warning");
+      }
+    },
+    [showToast],
+  );
+
+  // Stable wrapper so the drawer can treat navigate as an action click too.
+  const handleActionClick = useCallback(
+    (action: Action) => {
+      if (isNavigateAction(action)) handleNavigate(action.payload.href);
+    },
+    [handleNavigate],
   );
 
   const handleSend = useCallback(() => {
@@ -255,11 +482,16 @@ export function AIAssistant() {
           context={context}
           messages={messages}
           isLoading={isLoading}
+          isStreaming={isStreaming}
+          toolActivity={toolActivity}
           inputValue={inputValue}
           setInputValue={setInputValue}
           onClose={closeDrawer}
           onSend={handleSend}
           onSendPrompt={handleSendPrompt}
+          onActionClick={handleActionClick}
+          onConfirmMutation={executeMutation}
+          onCopyDraft={handleCopyDraft}
         />
       )}
     </>

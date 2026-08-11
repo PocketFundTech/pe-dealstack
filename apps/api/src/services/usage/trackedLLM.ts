@@ -111,6 +111,39 @@ export async function recordUsageEvent(input: RecordUsageEventInput): Promise<vo
         operation: input.operation,
       });
     }
+
+    // Customer-visible AI inference audit trail. One row per successful AI
+    // call so admins can see *what AI saw and when* in their audit feed.
+    // Skip errors — they're tracked in UsageEvent metadata instead.
+    if (input.status === 'success') {
+      try {
+        const auditMod = await import('../auditLog.js');
+        await auditMod.logAuditEvent({
+          action: auditMod.AUDIT_ACTIONS.AI_INFERENCE,
+          organizationId: ctx.organizationId,
+          userId: ctx.userId,
+          resourceType: auditMod.RESOURCE_TYPES.SETTINGS,
+          resourceId: ctx.organizationId,
+          description: `AI inference: ${input.operation}`,
+          severity: auditMod.SEVERITY.INFO,
+          metadata: {
+            operation: input.operation,
+            model: input.model ?? null,
+            provider: input.provider,
+            promptTokens,
+            completionTokens,
+            totalTokens,
+            costUsd,
+            durationMs: input.durationMs ?? null,
+            requestId: ctx.requestId,
+          },
+        });
+      } catch (auditErr) {
+        log.warn('recordUsageEvent: AI_INFERENCE audit write failed', {
+          err: auditErr instanceof Error ? auditErr.message : String(auditErr),
+        });
+      }
+    }
   } catch (err) {
     log.error('recordUsageEvent: threw', {
       err: err instanceof Error ? { message: err.message } : err,

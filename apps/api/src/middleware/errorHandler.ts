@@ -176,7 +176,19 @@ function logError(err: any, req: Request): void {
 
   // Log at appropriate level
   if (err.statusCode >= 500) {
-    log.error('Server error', err, errorContext);
+    // For unknown 500s, the appError message is scrubbed to a generic string;
+    // surface the ORIGINAL error (attached as `cause`) so logs are diagnosable.
+    const original = (err as any).cause;
+    log.error('Server error', err, {
+      ...errorContext,
+      ...(original
+        ? {
+            originalMessage: original?.message,
+            originalCode: original?.code,
+            originalStack: original?.stack,
+          }
+        : {}),
+    });
   } else if (err.statusCode >= 400) {
     log.warn('Client error', { ...errorContext, message: err.message });
   }
@@ -220,6 +232,11 @@ export function errorHandler(
       'INTERNAL_ERROR'
     );
     appError.isOperational = false;
+    // Preserve the ORIGINAL error so logError can record its real
+    // message/stack/code. Without this, production scrubs the message to the
+    // generic string at BOTH the response and the log, making 500s impossible
+    // to diagnose. The response stays generic; only the server log gets the truth.
+    (appError as any).cause = err;
   }
 
   // Log error

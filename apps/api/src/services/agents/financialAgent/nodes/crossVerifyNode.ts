@@ -9,9 +9,11 @@
  * Gracefully degrades if ANTHROPIC_API_KEY is not set.
  */
 
-import { anthropic, isClaudeEnabled } from '../../../../services/anthropic.js';
+import { ChatAnthropic } from '@langchain/anthropic';
+import { isClaudeEnabled } from '../../../../services/anthropic.js';
 import { log } from '../../../../utils/logger.js';
 import { captureAgentError } from '../../../../utils/sentryHelpers.js';
+import { getTodayIso } from '../../../../utils/dates.js';
 import type { FinancialAgentStateType, AgentStep } from '../state.js';
 import type { ClassifiedStatement } from '../../../financialClassifier.js';
 import { VERIFY_SAMPLE_SIZE } from '../config.js';
@@ -71,12 +73,28 @@ const TOP_FIELDS = [
   'interest_expense',
 ] as const;
 
+/** Per-field metadata captured alongside the value, so the verifier knows what scale to interpret each value at. */
+interface FieldMeta {
+  unitScale: string;
+  currency: string;
+}
+
 /**
  * Collect top financial values from the latest period across all statements.
- * Returns a flat key-value map of field → value (millions).
+ * Returns the value map plus a parallel metadata map (unitScale/currency per field)
+ * so the verifier prompt can tell Claude what scale each value is at.
+ *
+ * Each field is taken from the FIRST statement that defines it (statements are
+ * usually ordered IS → BS → CF, so revenue/ebitda come from IS, total_assets
+ * from BS, etc.) — meaning the metadata reflects the actual statement that
+ * produced that value.
  */
-function collectTopValues(statements: ClassifiedStatement[]): Record<string, number | null> {
+function collectTopValues(statements: ClassifiedStatement[]): {
+  values: Record<string, number | null>;
+  meta: Record<string, FieldMeta>;
+} {
   const values: Record<string, number | null> = {};
+  const meta: Record<string, FieldMeta> = {};
 
   for (const stmt of statements) {
     if (!stmt.periods || stmt.periods.length === 0) continue;
@@ -88,25 +106,38 @@ function collectTopValues(statements: ClassifiedStatement[]): Record<string, num
     for (const field of TOP_FIELDS) {
       if (field in lineItems && !(field in values)) {
         values[field] = lineItems[field] ?? null;
+        meta[field] = { unitScale: stmt.unitScale, currency: stmt.currency };
       }
     }
   }
 
-  return values;
+  return { values, meta };
 }
 
 /**
  * Build the user prompt for Claude to verify extracted values.
+ *
+ * Each value is annotated with its source statement's unitScale + currency so
+ * Claude verifies AT THE STATED SCALE rather than assuming MILLIONS. A startup
+ * with revenue stored as 6700 at unitScale ACTUALS is correct — the verifier
+ * must not flag it as "should be 0.0067 millions".
  */
 function buildVerifyPrompt(
   extractedValues: Record<string, number | null>,
+  meta: Record<string, FieldMeta>,
   sourceTextSample: string,
 ): string {
   const valueLines = Object.entries(extractedValues)
-    .map(([k, v]) => `  ${k}: ${v === null ? 'null' : v}`)
+    .map(([k, v]) => {
+      const m = meta[k];
+      const scaleLabel = m
+        ? ` (unitScale: ${m.unitScale}, currency: ${m.currency})`
+        : '';
+      return `  ${k}: ${v === null ? 'null' : v}${scaleLabel}`;
+    })
     .join('\n');
 
-  return `EXTRACTED VALUES (in millions USD unless otherwise stated):
+  return `EXTRACTED VALUES (verify against source — values are at the unitScale stated for each field, do NOT assume MILLIONS):
 ${valueLines}
 
 ---
@@ -116,8 +147,13 @@ ${sourceTextSample}
 
 ---
 
-For each extracted value above, verify it against the source text.
-Return ONLY a JSON array — no markdown, no explanation:
+For each extracted value above, verify it against the source text — interpreted at its stated unitScale.
+- unitScale "MILLIONS": value 125.3 means $125.3M
+- unitScale "THOUSANDS": value 125300 means $125,300K = $125.3M
+- unitScale "ACTUALS": value 6700 means $6,700 (six thousand seven hundred dollars). Small-business / startup numbers are correct at this scale — do NOT flag them as needing conversion.
+- unitScale "BILLIONS": value 1.5 means $1.5B
+
+Return ONLY a JSON array — no markdown, no explanation. your_value MUST be expressed at the SAME unitScale as the field shown above (do not silently rescale):
 [
   {
     "field": "revenue",
@@ -131,10 +167,10 @@ Return ONLY a JSON array — no markdown, no explanation:
 ]
 
 Rules:
-- If you can confirm the value from the source, set verified=true and your_value to the same number
-- If you find a discrepancy, set verified=false, your_value to what YOU see in the source, and issue to a short description
+- If you can confirm the value from the source (interpreted at the stated unitScale), set verified=true and your_value to the same number
+- If you find a discrepancy, set verified=false, your_value to what YOU see in the source EXPRESSED AT THE STATED unitScale, and issue to a short description
 - If the field is null and you cannot find it either, set verified=true, your_value=null, issue=null
-- If the field is null but you CAN find the value, set verified=false, your_value to what you found, issue="Value exists in source but was not extracted"
+- If the field is null but you CAN find the value, set verified=false, your_value to what you found (at the stated unitScale), issue="Value exists in source but was not extracted"
 - confidence: 90-100 = clearly stated, 70-89 = implied, 50-69 = uncertain`;
 }
 
@@ -232,7 +268,7 @@ export async function crossVerifyNode(
   }
 
   // Skip if Claude not configured
-  if (!isClaudeEnabled() || !anthropic) {
+  if (!isClaudeEnabled()) {
     steps.push(step('crossVerify', 'Skipping cross-verification — ANTHROPIC_API_KEY not configured'));
     return { steps };
   }
@@ -249,27 +285,37 @@ export async function crossVerifyNode(
     return { steps };
   }
 
-  const extractedValues = collectTopValues(statements);
+  const { values: extractedValues, meta: fieldMeta } = collectTopValues(statements);
   const fieldCount = Object.keys(extractedValues).length;
 
   steps.push(step('crossVerify', `Sending ${fieldCount} financial value(s) to Claude Haiku for cross-verification`));
 
   try {
     const sourceTextSample = rawText.slice(0, VERIFY_SAMPLE_SIZE);
-    const userPrompt = buildVerifyPrompt(extractedValues, sourceTextSample);
+    const userPrompt = buildVerifyPrompt(extractedValues, fieldMeta, sourceTextSample);
 
     await enforceUserGate('financial_extraction', 'claude-haiku-4-5-20251001', 'anthropic');
     const start = Date.now();
-    let message;
+    const claude = new ChatAnthropic({
+      model: 'claude-haiku-4-5-20251001',
+      maxTokens: 2000,
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    });
+    let response;
     try {
-      message = await withCircuitBreaker('anthropic', () =>
-        anthropic!.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2000,
-          system:
-            'You are a financial data verification assistant. You verify extracted financial values against source documents. Respond ONLY with a valid JSON array — no markdown, no code fences, no explanation.',
-          messages: [{ role: 'user', content: userPrompt }],
-        }),
+      // Today's date is computed fresh per call so relative-period reasoning
+      // ("FY", "LTM", "current quarter") anchors to wall-clock, not the
+      // model's training cutoff.
+      const today = getTodayIso();
+      response = await withCircuitBreaker('anthropic', () =>
+        claude.invoke([
+        {
+          role: 'system',
+          content:
+            `You are a financial data verification assistant. Today's date is ${today}. Use this for any relative period inference (FY, LTM, "current quarter", "last N days"). You verify extracted financial values against source documents. Respond ONLY with a valid JSON array — no markdown, no code fences, no explanation.`,
+        },
+        { role: 'user', content: userPrompt },
+        ]),
       );
     } catch (err) {
       await recordUsageEvent({
@@ -284,7 +330,7 @@ export async function crossVerifyNode(
       });
       throw err;
     }
-    const claudeUsage = (message as any)?.usage;
+    const claudeUsage = response.usage_metadata;
     await recordUsageEvent({
       operation: 'financial_extraction',
       model: 'claude-haiku-4-5-20251001',
@@ -295,18 +341,29 @@ export async function crossVerifyNode(
       durationMs: Date.now() - start,
     });
 
-    const content = message.content[0];
-    if (!content || content.type !== 'text') {
+    const responseText = response.text;
+    if (!responseText || typeof responseText !== 'string') {
       steps.push(step('crossVerify', 'Cross-verification skipped — unexpected response format from Claude'));
       return { steps };
     }
 
+    // Strip markdown code fences before parsing. The system prompt asks for
+    // raw JSON, but Claude Haiku occasionally wraps the array in ```json …
+    // ``` anyway — JSON.parse choked on the leading backtick and the whole
+    // cross-verify pass got skipped. Same defensive strip used in
+    // memos-suggest.ts. Cheap and idempotent for already-clean responses.
+    const cleanedText = responseText
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
     let claudeResults: ClaudeVerification[];
     try {
-      claudeResults = JSON.parse(content.text) as ClaudeVerification[];
+      claudeResults = JSON.parse(cleanedText) as ClaudeVerification[];
     } catch (err) {
       steps.push(step('crossVerify', 'Cross-verification skipped — could not parse Claude response as JSON'));
-      log.warn('crossVerifyNode: JSON parse failure', { raw: content.text.slice(0, 200), error: err instanceof Error ? err.message : String(err) });
+      log.warn('crossVerifyNode: JSON parse failure', { raw: responseText.slice(0, 200), error: err instanceof Error ? err.message : String(err) });
       return { steps };
     }
 

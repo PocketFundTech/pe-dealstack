@@ -31,6 +31,7 @@ export const WIDGET_CATEGORY: Record<WidgetId, string> = {
   "team-performance":   "team",
   "document-alerts":    "documents",
   "market-multiples":   "market",
+  "portfolio-signals":  "portfolio",
 };
 
 // Core widgets that are not "coming soon" have CoreWidgetId; "market-sentiment"

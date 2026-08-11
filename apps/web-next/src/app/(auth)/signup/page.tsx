@@ -339,6 +339,11 @@ export default function SignupPage() {
             </Link>
             .
           </p>
+          <p className="text-[11px] text-center text-text-muted mt-2">
+            <Link href="/security" className="hover:text-primary transition-colors">
+              Your data is secured →
+            </Link>
+          </p>
 
           {/* Stats row */}
           <div className="mt-8 pt-6 border-t border-border-subtle grid grid-cols-3 gap-4 text-center">

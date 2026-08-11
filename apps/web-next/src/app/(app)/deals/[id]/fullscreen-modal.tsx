@@ -19,7 +19,7 @@
 // rest of the app and avoids global DOM-juggling.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/providers/ToastProvider";
@@ -186,7 +186,15 @@ function AnalysisFullView({ dealId }: { dealId: string }) {
   const [error, setError] = useState(false);
   const [noData, setNoData] = useState(false);
 
+  // Strict Mode double-invokes effects in dev — without this guard the
+  // /financials/insights endpoint was being hit twice on every fullscreen
+  // open (and the inline DealAnalysisSection separately fires its own
+  // request, which the server now dedupes).
+  const inFlightRef = useRef(false);
+
   useEffect(() => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -233,6 +241,7 @@ function AnalysisFullView({ dealId }: { dealId: string }) {
         if (!cancelled) setError(true);
       } finally {
         if (!cancelled) setLoading(false);
+        inFlightRef.current = false;
       }
     })();
     return () => {

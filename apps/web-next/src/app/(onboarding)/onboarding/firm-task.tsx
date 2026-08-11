@@ -8,6 +8,7 @@ import { TaskModalShell } from "./task-modal-shell";
 import { AUM_OPTIONS, DEFAULT_SECTORS, FirmData } from "./types";
 import { EnrichmentResponse, matchAumBucket, matchSectors } from "./enrichment-types";
 import { ProfileReportModal } from "./profile-report-modal";
+import { TeaserSeedCard } from "./teaser-seed-card";
 
 // Firm task modal — form for website/linkedin + fund size + sectors.
 // Ported from OnboardingTasks._renderers.firm + _hydrators.firm in
@@ -252,6 +253,10 @@ export function FirmTaskModal({
           </button>
         </div>
       )}
+
+      {/* Optional, skippable: seed the firm's first Firm Teaser profile.
+          Independent of "Mark as done" — never blocks onboarding completion. */}
+      <TeaserSeedCard />
 
       {showReport && enrichResult && (
         <ProfileReportModal result={enrichResult} onClose={() => setShowReport(false)} />

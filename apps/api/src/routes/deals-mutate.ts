@@ -11,7 +11,6 @@ import { requirePermission, PERMISSIONS } from '../middleware/rbac.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
-import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, notifyDealTeam, resolveUserId } from './notifications.js';
 import { createDealSchema, updateDealSchema } from './deals-schemas.js';
 
@@ -100,10 +99,7 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_CREATE), async (req, res) =>
             dealId: deal.id,
           });
         }
-      }).catch(err => {
-        log.error('Notification error (deal create)', err);
-        captureAgentError(err, { context: 'notification:deal_create' }, 'warning');
-      });
+      }).catch(err => log.error('Notification error (deal create)', err));
     }
 
     // Auto-archive sample deals when user creates their first real deal
@@ -226,10 +222,7 @@ router.patch('/:id', async (req, res) => {
           ? `Deal "${deal.name}" stage changed to ${data.stage}`
           : `Deal "${deal.name}" was updated`;
         notifyDealTeam(deal.id, 'DEAL_UPDATE', title, undefined, internalId || undefined);
-      }).catch(err => {
-        log.error('Notification error (deal update)', err);
-        captureAgentError(err, { context: 'notification:deal_update' }, 'warning');
-      });
+      }).catch(err => log.error('Notification error (deal update)', err));
     }
 
     res.json(deal);
@@ -250,7 +243,7 @@ router.delete('/:id', requirePermission(PERMISSIONS.DEAL_DELETE), async (req, re
 
     const { data: deal } = await supabase
       .from('Deal')
-      .select('name')
+      .select('name, "deletedAt"')
       .eq('id', id)
       .eq('organizationId', orgId)
       .single();
@@ -259,36 +252,15 @@ router.delete('/:id', requirePermission(PERMISSIONS.DEAL_DELETE), async (req, re
       return res.status(404).json({ error: 'Deal not found' });
     }
 
-    // Delete child records in correct order (FK constraints don't have ON DELETE CASCADE)
-    await supabase.from('DocumentChunk').delete().eq('dealId', id);
-    await supabase.from('Document').delete().eq('dealId', id);
-
-    const { data: folders } = await supabase.from('Folder').select('id').eq('dealId', id);
-    if (folders && folders.length > 0) {
-      const folderIds = folders.map(f => f.id);
-      // Batched .in() delete — was a per-folder loop (N+1 round-trips).
-      await supabase.from('FolderInsight').delete().in('folderId', folderIds);
-    }
-
-    await supabase.from('Folder').delete().eq('dealId', id);
-    await supabase.from('ChatMessage').delete().eq('dealId', id);
-    await supabase.from('Conversation').delete().eq('dealId', id);
-    await supabase.from('Activity').delete().eq('dealId', id);
-    await supabase.from('DealTeamMember').delete().eq('dealId', id);
-
-    const { data: memos } = await supabase.from('Memo').select('id').eq('dealId', id);
-    if (memos && memos.length > 0) {
-      const memoIds = memos.map(m => m.id);
-      // Batched .in() delete — was a per-memo loop (N+1 round-trips).
-      await supabase.from('MemoSection').delete().in('memoId', memoIds);
-    }
-    await supabase.from('Memo').delete().eq('dealId', id);
-    await supabase.from('Notification').delete().eq('dealId', id);
-
-    // Finally, delete the deal itself
+    // Soft-delete: set deletedAt instead of hard-deleting. Child records
+    // (Document, Folder, Memo, etc.) stay intact. After the 30-day window
+    // expires, a separate cleanup process can hard-delete them.
+    // The deals list query filters on deletedAt IS NULL so soft-deleted
+    // deals are hidden from the main UI but remain available in /trash.
+    const deletedAt = new Date().toISOString();
     const { error } = await supabase
       .from('Deal')
-      .delete()
+      .update({ deletedAt })
       .eq('id', id)
       .eq('organizationId', orgId);
 
@@ -296,7 +268,7 @@ router.delete('/:id', requirePermission(PERMISSIONS.DEAL_DELETE), async (req, re
 
     await AuditLog.dealDeleted(req, id, deal?.name || 'Unknown');
 
-    log.info('Deal deleted with cascade', { dealId: id, dealName: deal.name });
+    log.info('Deal soft-deleted', { dealId: id, dealName: deal.name });
     res.status(204).send();
   } catch (error) {
     log.error('Error deleting deal', error);

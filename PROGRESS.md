@@ -85,6 +85,114 @@ While building the claude engine's storeNode scoring, a latent bug was found in 
 | `apps/api/src/services/compositeConfidence.ts` | Fixed whitespace-only-citation scoring bug (legacy + claude) |
 | `apps/api/scripts/extraction-bakeoff.ts` | **New** — legacy-vs-claude operator bake-off harness |
 | `apps/api/phase1-claude-extraction-migration.sql` | **New, not yet run** — `extractionSource` CHECK constraint + `ModelPrice` seeds |
+---
+
+### Session 67 — April 30, 2026
+
+#### Goal
+Add Google Calendar as the third provider — same OAuth credentials as Gmail, separate Integration row.
+
+#### What shipped
+- Calendar HTTP client (`apps/api/src/integrations/googleCalendar/client.ts`): OAuth helpers reusing `GOOGLE_CLIENT_ID/SECRET`, paginated `listEventsBetween` with `singleEvents=true&orderBy=startTime` (recurring events expanded), `getUserInfo`. AbortSignal.timeout on every HTTP call.
+- Calendar event → `IntegrationActivity` mapper: handles both `dateTime` and all-day `date` formats, computes durationSeconds, captures attendees + organizer + location + status + htmlLink in metadata. type='CALENDAR_EVENT'.
+- `googleCalendarProvider`: full IntegrationProvider in OAuth mode. Each user can connect Gmail and Calendar independently — separate Integration rows under separate provider IDs.
+- sync window: -30d to +30d each tick (re-upserts handle reschedules / attendee additions correctly via UNIQUE on integrationId,source,externalId).
+- 9 new tests across `tests/integrations/googleCalendar/` (client 4, mapper 4, sync 1). All green.
+
+#### Decisions
+- **No pre-meeting brief generation in V1.** Calendar events are stored as IntegrationActivity rows; the brief feature (LLM-generated context summary 1h before meeting) is a separate follow-up that builds on the data we now have.
+- **No Calendar push notifications (channels.watch).** V1 polls every 6h via the existing cron; push is a future phase.
+
+---
+
+### Session 66 — April 30, 2026
+
+#### Goal
+Add Gmail as the second provider in the Integrations Platform — first real OAuth flow on top of the platform.
+
+#### What shipped
+- Gmail HTTP client (`apps/api/src/integrations/gmail/client.ts`): OAuth helpers (`buildAuthorizeUrl` / `exchangeCode` / `refreshAccessToken`), `getUserInfo`, paginated `listMessagesSince` with `q=after:<unix> (from:OR to:OR cc: …)` pre-filter to known org contacts, `getMessage` with metadata-only headers (Subject/From/To/Cc/Date/Message-ID/In-Reply-To). All HTTP bounded by AbortSignal.timeout.
+- Gmail message → `IntegrationActivity` mapper (`mapper.ts`): parses `"Name" <email>` headers, normalizes addresses, extracts threading metadata (threadId, Message-ID, In-Reply-To). type='EMAIL'. summary = Gmail's snippet (no LLM in V1 — pre-filter at the API level is the relevance signal).
+- `gmailProvider`: full IntegrationProvider in OAuth mode. initiateAuth returns `mode: 'oauth'` + Google authorize URL with signed state. handleCallback verifies state, exchanges code, fetches userinfo, encrypts tokens, upserts Integration row. sync refreshes access token if within 60s of expiry, fetches the org's Contact emails, calls listMessagesSince with that filter, runs the matcher per message, upserts IntegrationActivity. handleWebhook is a no-op (Gmail Pub/Sub push deferred).
+- 11 new tests across `tests/integrations/gmail/` (client 6, mapper 4, sync 1). All green.
+
+#### Decisions
+- **No LLM relevance classifier in V1.** The Gmail API q-filter constraining to known org-contact emails is the relevance signal. Saves cost and latency. Deeper classification can land later if needed.
+- Gmail Pub/Sub push notifications deferred to a later phase. V1 polls every 6h via the existing cron.
+- Token refresh re-stores the *original* refresh token because Google omits `refresh_token` on subsequent refresh responses.
+
+#### New env vars
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — created at console.cloud.google.com.
+- Authorized redirect URI to register: `${APP_URL}/api/integrations/oauth/gmail/callback`.
+
+---
+
+### Session 65 — April 30, 2026
+
+#### Goal
+Wire Granola as the first real provider in the Integrations Platform, with a separate AI agent for meeting transcripts.
+
+#### What shipped
+- 3 Phase 0 review follow-ups: raw webhook body capture (req.rawBody), per-integration sync timeout + bounded concurrency in syncAll, Integration timestamp fields as ISO strings (matching Supabase wire format).
+- New IntegrationActivity table — separate from the existing Activity table so the human-action audit log stays clean. UNIQUE on (source, externalId) for idempotent re-sync; dealIds/contactIds are UUID[] columns with GIN indexes for fast WHERE col @> ARRAY[id] containment lookups.
+- New meeting transcript agent (apps/api/src/services/agents/meetingTranscriptAgent/) — distinct from the financial agent. Single GPT-4.1-mini call with json_object response format and Zod schema validation. Returns: summary, keyTopics, actionItems, decisions, openQuestions, mentionedNumbers, nextSteps, sentiment. ~$0.001-0.005 per transcript.
+- IntegrationProvider extended with optional connectWithApiKey() and InitiateAuthResult.mode discriminator ('oauth' | 'api_key') so the platform supports both auth styles.
+- New Granola provider module (apps/api/src/integrations/granola/): types, HTTP client (validateKey, listNotesSince with cursor pagination + 429 retry, getNoteWithTranscript), note→IntegrationActivity mapper (calls the transcript agent inline), provider implementation registered at app boot.
+- New API endpoints: POST /api/integrations/:provider/api-key (validates + encrypts the key), GET /api/integrations/activities?dealId=…|?contactId=… (org-scoped, ordered by occurredAt DESC, uses GIN indexes).
+- Settings UI: paste-key modal that opens when /connect returns mode: 'api_key'. Shows the provider's instructions + helpUrl, surfaces validation errors inline (plan-required, invalid key), Esc/Enter/click-outside wired.
+- Tests: 33 in tests/integrations/ (was 18 after Phase 0 hardening), 4 in tests/agents/, all green.
+
+#### Reality vs. spec
+The original integrations spec assumed Granola exposed third-party OAuth + meeting.transcript.ready webhooks. Research against docs.granola.ai confirmed neither exists. Granola issues only Personal API keys (Business/Enterprise plans), no webhooks. Phase 1 ships paste-key + 6h polling architecture; the webhook code path stays intact for Phase 2+ providers (Gmail, Calendar).
+
+#### Caveats
+- Connecting Granola requires a Business or Enterprise plan; Free/Pro users see a clear "plan not supported" error from validation.
+- Sync runs every 6 hours via Vercel cron + on-demand via POST /api/integrations/:id/sync. No real-time push.
+- Transcript agent runs on every transcript with matched attendees. Cost: ~$0.001-0.005 per transcript on MODEL_FAST (gpt-4.1-mini). For a firm doing 100 deal-relevant meetings/month, ~$0.10-$0.50/month.
+- Frontend rendering of IntegrationActivity rows on deal/contact pages is NOT in this phase — the API endpoints exist (GET /api/integrations/activities), but the deal.html/contact pages haven't been wired up yet. Next phase.
+- IntegrationActivity table needs to be applied via apps/api/integration-activity-migration.sql before any sync runs against staging/prod.
+
+#### Branch
+feature/integrations-platform — Phase 0 + 3 hardening fixes + Phase 1 Granola, all on the same branch. Suggested merge order: Phase 0 commits + hardening fixes can be cherry-picked or merged first; Phase 1 can follow as a second PR.
+
+---
+
+### Session 64 — April 30, 2026
+
+#### Goal: Integrations Platform Phase 0 (foundations)
+
+Built the shared platform that future provider integrations (Granola → Gmail → Calendar → Outbound) plug into. No user-visible feature ships yet; the Settings → Integrations page renders 5 cards but every "Connect" returns 404 because no real provider is registered. Phase 1 (Granola) wires the first one.
+
+---
+
+#### What shipped
+
+- **DB:** `Integration` + `IntegrationEvent` tables; extended `Notification.type` CHECK constraint
+- **`apps/api/src/integrations/_platform/`:** types, encrypted tokenStore, OAuth helpers (state signing + code exchange), provider registry, webhook router (with dedupe), sync engine (with 3-strikes failure notification), Contact/Deal email matcher
+- **`apps/api/src/integrations/_mock/`:** mock provider used by integration tests
+- **`apps/api/src/routes/integrations.ts`:** list / connect / disconnect / sync / events (all auth + org-scoped)
+- **`apps/api/src/routes/integrations-public.ts`:** webhook receivers + OAuth callbacks + cron (no auth, signature-verified per provider)
+- **Vercel cron:** `/api/integrations/_cron/sync-all` every 6h (accepts `Authorization: Bearer` or `x-cron-secret`)
+- **Settings → Integrations UI:** card grid for 5 providers, [Connect]/[Disconnect] CTAs, sync activity placeholder
+- **Tests:** 15 vitest tests across tokenStore, oauth, webhookRouter, syncEngine, matcher, routes, smoke
+
+---
+
+#### Bugs caught during execution (and fixed)
+
+1. **Migration unquoted camelCase columns** — Postgres folds those to lowercase, would have broken every Supabase JS query downstream. Fixed by quoting all camelCase identifiers + adding `public.` schema prefix.
+2. **OAuth callback behind authMiddleware** — providers redirect unauthenticated browsers, so it had to move to a public router (split out as `integrations-public.ts`).
+3. **Cron handler only checked `x-cron-secret`** — Vercel cron actually sends `Authorization: Bearer <CRON_SECRET>`. Now accepts either.
+4. **Settings panel used a `settings-section hidden` class** that doesn't match the page's stacked-section layout — would have rendered invisible. Fixed to match neighbor markup.
+5. **Provider registry `globalThis` Symbol pin** to survive `vi.resetModules()` — that's a test workaround leaking into production code. Reverted; tests now use dynamic imports for registry helpers.
+
+---
+
+#### New env vars
+
+`OAUTH_STATE_SECRET`, `CRON_SECRET`. Run `apps/api/integrations-migration.sql` against staging then prod before merging Phase 1.
+
+**Branch:** `feature/integrations-platform` — to be merged after final review + manual smoke on staging.
 
 ---
 
@@ -12844,5 +12952,26 @@ START → Extract → Verify → Validate → Store → END
 | `apps/web/vite.config.ts` | Dynamic JS file copy instead of hardcoded list |
 | `apps/web/dashboard.html` | Removed overflow-hidden on sentiment card |
 | `docs/AI-AGENT-DOCUMENTATION.html` | **New** — full AI agent architecture documentation |
+
+---
+
+### Fix — July 4, 2026 — 12:35 PM IST — HubSpot connect 400 diagnostics
+
+**Problem:** On production (lmmos.ai), saving a HubSpot Private App token in Settings → Integrations returned `400` with the generic message "HubSpot rejected this token. Check the Private App scopes (crm.objects.read)." — no way to tell whether the token was invalid or missing scopes.
+
+**Root cause:** `HubSpotClient.validateToken()` probed `GET /crm/v3/objects/companies?limit=1` and returned only a boolean, discarding HubSpot's HTTP status and error category (`INVALID_AUTHENTICATION` vs `MISSING_SCOPES`). Nothing was logged server-side. The UI help text also referenced `crm.objects.read`, which is not a real HubSpot scope — the Private App needs the granular scopes `crm.objects.companies.read`, `crm.objects.contacts.read`, `crm.objects.deals.read`.
+
+**Fix:**
+- `validateToken()` now returns `{ ok, status, category }` (parses HubSpot's error body).
+- `POST /connect` maps 401 → "HubSpot did not recognize this token…", 403/`MISSING_SCOPES` → message listing the three required scopes, other statuses → message including the HTTP code; failure details are logged with `log.warn`.
+- Pasted token is trimmed (`z.string().trim()`) so stray whitespace/newlines can't corrupt the Bearer header.
+- Settings UI help text now lists the three real granular scopes.
+
+| File | Changes |
+|------|---------|
+| `apps/api/src/services/hubspot/client.ts` | `validateToken` returns `TokenValidation` (status + HubSpot error category) |
+| `apps/api/src/routes/hubspot-import.ts` | Granular 400 messages per failure mode, server-side warn log, token trim |
+| `apps/web-next/src/app/(app)/settings/IntegrationsSection.tsx` | Correct scope names in help text |
+| `apps/api/tests/hubspot-client.test.ts` / `hubspot-routes.test.ts` | 8 new/updated tests (19 total, all green) |
 
 ---

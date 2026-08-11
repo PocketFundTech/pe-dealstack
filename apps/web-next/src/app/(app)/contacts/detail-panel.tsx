@@ -7,43 +7,21 @@ import { cn } from "@/lib/cn";
 import { useToast } from "@/providers/ToastProvider";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
-  Contact, Interaction, LinkedDeal, TYPE_CONFIG, SCORE_CONFIG,
+  Contact, TYPE_CONFIG, LinkedDeal,
   ContactFormData, ContactModal, DeleteConfirmModal,
 } from "./components";
 import { LinkDealModal, ConnectionModal } from "./detail-modals";
-
-// ─── Config ───────────────────────────────────────────────
-
-const INTERACTION_ICONS: Record<string, string> = {
-  NOTE: "edit_note", MEETING: "groups", CALL: "call", EMAIL: "mail", OTHER: "more_horiz",
-};
-
-const STAGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  INITIAL_REVIEW: { bg: "bg-blue-50", text: "text-blue-700", label: "Initial Review" },
-  DUE_DILIGENCE:  { bg: "bg-blue-50", text: "text-primary", label: "Due Diligence" },
-  IOI_SUBMITTED:  { bg: "bg-amber-50", text: "text-amber-700", label: "IOI Submitted" },
-  LOI_SUBMITTED:  { bg: "bg-purple-50", text: "text-purple-700", label: "LOI Submitted" },
-  NEGOTIATION:    { bg: "bg-orange-50", text: "text-orange-700", label: "Negotiation" },
-  CLOSING:        { bg: "bg-teal-50", text: "text-teal-700", label: "Closing" },
-  PASSED:         { bg: "bg-gray-100", text: "text-gray-600", label: "Passed" },
-  CLOSED_WON:     { bg: "bg-green-50", text: "text-green-700", label: "Closed Won" },
-  CLOSED_LOST:    { bg: "bg-red-50", text: "text-red-700", label: "Closed Lost" },
-};
-
-const RELATIONSHIP_TYPE_CONFIG: Record<string, { label: string; icon: string; bg: string; text: string }> = {
-  KNOWS:         { label: "Knows",         icon: "handshake",    bg: "bg-blue-100",    text: "text-blue-700" },
-  REFERRED_BY:   { label: "Referred by",   icon: "share",        bg: "bg-purple-100",  text: "text-purple-700" },
-  REPORTS_TO:    { label: "Reports to",    icon: "account_tree", bg: "bg-amber-100",   text: "text-amber-700" },
-  COLLEAGUE:     { label: "Colleague",     icon: "group",        bg: "bg-emerald-100", text: "text-emerald-700" },
-  INTRODUCED_BY: { label: "Introduced by", icon: "person_add",   bg: "bg-pink-100",    text: "text-pink-700" },
-};
-
-interface Connection {
-  id: string;
-  type: string;
-  notes?: string;
-  contact: { id: string; firstName: string; lastName: string; type: string; company?: string; title?: string };
-}
+import { IntegrationActivityFeed } from "@/components/integrations/IntegrationActivityFeed";
+import { ContactEmailSummary } from "./ContactEmailSummary";
+import { HubSpotFieldsCard } from "@/components/HubSpotFieldsCard";
+import { ContactAskAI } from "./ContactAskAI";
+import {
+  Connection, ContactEnrichment, FollowUpSuggestion,
+  INTERACTION_ICONS, STAGE_STYLES, RELATIONSHIP_TYPE_CONFIG,
+  SUGGEST_FOLLOW_UP_TIMEOUT_MS, FOLLOW_UP_NOTE_MAX_LEN,
+} from "./detail-panel-types";
+import { InteractionStats, AddInteractionForm } from "./detail-panel-sections";
+import { FollowUpSection, EnrichmentBox } from "./detail-panel-followup";
 
 // ─── Detail Panel ──────────────────────────────────────────
 
@@ -66,6 +44,13 @@ export function DetailPanel({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [unlinkDealId, setUnlinkDealId] = useState<string | null>(null);
   const [removeConnectionId, setRemoveConnectionId] = useState<string | null>(null);
+  const [savingFollowUp, setSavingFollowUp] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichment, setEnrichment] = useState<ContactEnrichment | null>(null);
+  const [suggestingFollowUp, setSuggestingFollowUp] = useState(false);
+  const [followUpSuggestion, setFollowUpSuggestion] = useState<FollowUpSuggestion | null>(null);
+  const [followUpSuggestFailed, setFollowUpSuggestFailed] = useState(false);
+  const [pulseSuggestion, setPulseSuggestion] = useState(false);
   const { showToast } = useToast();
 
   const loadContact = useCallback(async () => {
@@ -100,6 +85,7 @@ export function DetailPanel({
       setEditModalOpen(false);
       await loadContact();
       onRefresh();
+      showToast("Contact updated", "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to save contact", "error");
     }
@@ -114,6 +100,85 @@ export function DetailPanel({
       onRefresh();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to delete contact", "error");
+    }
+  }
+
+  // PATCH followUpAt. Pass null to clear. Optimistically reloads the contact.
+  async function updateFollowUp(value: string | null) {
+    setSavingFollowUp(true);
+    try {
+      await api.patch(`/contacts/${contactId}`, { followUpAt: value });
+      await loadContact();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to update follow-up", "error");
+    } finally {
+      setSavingFollowUp(false);
+    }
+  }
+
+  // Cheap, genuinely-AI follow-up suggestion — a SINGLE bounded LLM call.
+  // Does NOT run the full enrichment agent (no web scrape / research).
+  // Races the request against a hard timeout so the spinner can't hang forever;
+  // on timeout we surface a retry affordance instead of a perpetual "Thinking...".
+  async function handleSuggestFollowUp() {
+    setSuggestingFollowUp(true);
+    setFollowUpSuggestFailed(false);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Suggestion timed out — please try again.")),
+          SUGGEST_FOLLOW_UP_TIMEOUT_MS,
+        );
+      });
+      const data = await Promise.race([
+        api.post<FollowUpSuggestion>("/ai/suggest-follow-up", { contactId }),
+        timeout,
+      ]);
+      setFollowUpSuggestion(data);
+      setPulseSuggestion(true);
+      setTimeout(() => setPulseSuggestion(false), 1500);
+    } catch (err) {
+      setFollowUpSuggestFailed(true);
+      showToast(err instanceof Error ? err.message : "Failed to suggest a follow-up", "error");
+    } finally {
+      if (timer) clearTimeout(timer);
+      setSuggestingFollowUp(false);
+    }
+  }
+
+  // Apply a suggested follow-up: set the date AND persist the suggested action
+  // text into the contact's follow-up note. We never clobber an existing note —
+  // if the user already wrote one, theirs wins (the suggestion is advisory).
+  async function applyFollowUpSuggestion(suggestion: FollowUpSuggestion) {
+    setSavingFollowUp(true);
+    try {
+      const existingNote = (contact as { followUpNote?: string | null } | null)?.followUpNote?.trim();
+      const body: Record<string, unknown> = { followUpAt: suggestion.date };
+      if (!existingNote && suggestion.action.trim()) {
+        // followUpNote is capped at 500 chars by the PATCH validator.
+        body.followUpNote = suggestion.action.trim().slice(0, FOLLOW_UP_NOTE_MAX_LEN);
+      }
+      await api.patch(`/contacts/${contactId}`, body);
+      await loadContact();
+      setFollowUpSuggestion(null);
+      showToast("Follow-up applied", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to apply follow-up", "error");
+    } finally {
+      setSavingFollowUp(false);
+    }
+  }
+
+  async function handleAskAi() {
+    setEnriching(true);
+    try {
+      const data = await api.post<ContactEnrichment>("/ai/enrich-contact", { contactId });
+      setEnrichment(data);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to get AI suggestions", "error");
+    } finally {
+      setEnriching(false);
     }
   }
 
@@ -144,7 +209,7 @@ export function DetailPanel({
     return (
       <>
         <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
-        <div className="fixed top-0 right-0 h-full w-[450px] max-w-full bg-surface-card shadow-2xl z-50 flex flex-col border-l border-border-subtle">
+        <div className="right-drawer fixed top-0 right-0 h-full w-[450px] max-w-full bg-surface-card shadow-2xl z-50 flex flex-col border-l border-border-subtle">
           <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
             <h2 className="text-lg font-bold text-text-main">Contact Details</h2>
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-text-muted"><span className="material-symbols-outlined text-[20px]">close</span></button>
@@ -167,7 +232,7 @@ export function DetailPanel({
   return (
     <>
       <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
-      <div className="fixed top-0 right-0 h-full w-[450px] max-w-full bg-surface-card shadow-2xl z-50 flex flex-col border-l border-border-subtle">
+      <div className="right-drawer fixed top-0 right-0 h-full w-[450px] max-w-full bg-surface-card shadow-2xl z-50 flex flex-col border-l border-border-subtle">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle shrink-0">
           <h2 className="text-lg font-bold text-text-main">Contact Details</h2>
@@ -200,6 +265,43 @@ export function DetailPanel({
             </div>
           </div>
 
+          {/* HubSpot-imported fields (custom fields, lifecycle stage, etc.) */}
+          {contact.hubspotProperties && (
+            <div className="mb-6">
+              <HubSpotFieldsCard properties={contact.hubspotProperties} />
+            </div>
+          )}
+
+          {/* Email Summary (Gmail threads) */}
+          <ContactEmailSummary contactId={contactId} />
+
+          {/* Ask AI about this contact (scoped chat) */}
+          <ContactAskAI contactId={contactId} contactName={contact.firstName || "this contact"} />
+
+          {/* Follow-up */}
+          <FollowUpSection
+            followUpAt={contact.followUpAt}
+            savingFollowUp={savingFollowUp}
+            suggestingFollowUp={suggestingFollowUp}
+            followUpSuggestion={followUpSuggestion}
+            followUpSuggestFailed={followUpSuggestFailed}
+            pulseSuggestion={pulseSuggestion}
+            onSuggest={handleSuggestFollowUp}
+            onUpdateFollowUp={updateFollowUp}
+            onApplySuggestion={applyFollowUpSuggestion}
+            onDismissSuggestion={() => setFollowUpSuggestion(null)}
+          />
+
+          {/* AI Suggestions */}
+          {enrichment && (
+            <EnrichmentBox
+              enrichment={enrichment}
+              savingFollowUp={savingFollowUp}
+              onDismiss={() => setEnrichment(null)}
+              onApplyFollowUpDate={(date) => updateFollowUp(date)}
+            />
+          )}
+
           {/* Tags */}
           {tags.length > 0 && (
             <div className="mb-6">
@@ -226,7 +328,7 @@ export function DetailPanel({
                     <div className="size-8 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold" style={{ backgroundColor: ctc.avatarBg, color: ctc.avatarText }}>{getInitials(c.firstName, c.lastName)}</div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-text-main truncate group-hover:text-primary">{c.firstName} {c.lastName}</p>
-                      <p className="text-[10px] text-text-muted truncate">{c.company || ""}{c.title ? " \u00B7 " + c.title : ""}</p>
+                      <p className="text-[10px] text-text-muted truncate">{c.company || ""}{c.title ? " · " + c.title : ""}</p>
                     </div>
                     <span className={cn("px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider shrink-0", rtc.bg, rtc.text)}>{rtc.label}</span>
                     <button onClick={() => setRemoveConnectionId(conn.id)} className="p-1 rounded hover:bg-red-50 text-text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0" title="Remove">
@@ -281,6 +383,12 @@ export function DetailPanel({
           {/* Add Interaction Form */}
           {showInteractionForm && <AddInteractionForm contactId={contactId} onDone={() => { setShowInteractionForm(false); loadContact(); onRefresh(); }} onCancel={() => setShowInteractionForm(false)} />}
 
+          {/* Synced from connected tools (Granola / Gmail / Calendar) */}
+          <div className="mb-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-text-muted mb-3">Synced from your tools</h4>
+            <IntegrationActivityFeed contactId={contactId} />
+          </div>
+
           {/* Interaction Timeline */}
           <div className="mb-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-text-muted mb-3">Interaction Timeline <span className="text-text-muted">({sortedInteractions.length})</span></h4>
@@ -310,20 +418,26 @@ export function DetailPanel({
           </div>
         </div>
 
-        {/* Actions Bar */}
-        <div className="shrink-0 border-t border-border-subtle px-6 py-3">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setShowInteractionForm(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-subtle text-sm font-medium text-text-secondary hover:border-primary/30 hover:text-primary hover:bg-primary-light/50 transition-all">
+        {/* Actions Bar — three labeled primary actions stretch evenly;
+            Edit/Delete are icon-only so the row never wraps or clips in the
+            450px panel. */}
+        <div className="shrink-0 border-t border-border-subtle px-4 py-3 bg-surface-card">
+          <div className="flex items-center gap-1.5">
+            <button onClick={() => setShowInteractionForm(true)} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border border-border-subtle text-sm font-medium text-text-secondary whitespace-nowrap hover:border-primary/30 hover:text-primary hover:bg-primary-light/50 transition-all">
               <span className="material-symbols-outlined text-[16px]">edit_note</span>Add Note
             </button>
-            <button onClick={() => setLinkDealOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-subtle text-sm font-medium text-text-secondary hover:border-primary/30 hover:text-primary hover:bg-primary-light/50 transition-all">
+            <button onClick={() => setLinkDealOpen(true)} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border border-border-subtle text-sm font-medium text-text-secondary whitespace-nowrap hover:border-primary/30 hover:text-primary hover:bg-primary-light/50 transition-all">
               <span className="material-symbols-outlined text-[16px]">link</span>Link Deal
             </button>
-            <button onClick={() => setEditModalOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-subtle text-sm font-medium text-text-secondary hover:border-primary/30 hover:text-primary hover:bg-primary-light/50 transition-all">
-              <span className="material-symbols-outlined text-[16px]">edit</span>Edit
+            <button onClick={handleAskAi} disabled={enriching} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border border-border-subtle text-sm font-medium text-text-secondary whitespace-nowrap hover:border-primary/30 hover:text-primary hover:bg-primary-light/50 transition-all disabled:opacity-50">
+              <span className={cn("material-symbols-outlined text-[16px]", enriching && "animate-spin")}>{enriching ? "sync" : "auto_awesome"}</span>{enriching ? "Asking…" : "Ask AI"}
             </button>
-            <button onClick={() => setDeleteConfirmOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 text-sm font-medium text-red-600 hover:bg-red-50 transition-all">
-              <span className="material-symbols-outlined text-[16px]">delete</span>Delete
+            <div className="w-px h-6 bg-border-subtle mx-0.5 shrink-0" aria-hidden="true" />
+            <button onClick={() => setEditModalOpen(true)} title="Edit contact" aria-label="Edit contact" className="shrink-0 p-2 rounded-lg border border-border-subtle text-text-secondary hover:border-primary/30 hover:text-primary hover:bg-primary-light/50 transition-all">
+              <span className="material-symbols-outlined text-[18px] block">edit</span>
+            </button>
+            <button onClick={() => setDeleteConfirmOpen(true)} title="Delete contact" aria-label="Delete contact" className="shrink-0 p-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-all">
+              <span className="material-symbols-outlined text-[18px] block">delete</span>
             </button>
           </div>
         </div>
@@ -355,127 +469,3 @@ export function DetailPanel({
     </>
   );
 }
-
-// ─── Interaction Stats ─────────────────────────────────────
-
-function InteractionStats({ interactions, scoreData }: { interactions: Interaction[]; scoreData?: { score: number; label: string } }) {
-  const typeCounts: Record<string, number> = { NOTE: 0, MEETING: 0, CALL: 0, EMAIL: 0, OTHER: 0 };
-  for (const inter of interactions) typeCounts[inter.type] = (typeCounts[inter.type] || 0) + 1;
-  const dates = interactions.map((i) => new Date(i.date || i.createdAt).getTime());
-  const oldest = Math.min(...dates);
-  const newest = Math.max(...dates);
-  const monthSpan = Math.max(1, (newest - oldest) / (30 * 86400000));
-  const avgPerMonth = (interactions.length / monthSpan).toFixed(1);
-
-  return (
-    <div className="mb-6">
-      <h4 className="text-xs font-bold uppercase tracking-wider text-text-muted mb-3">Interaction Stats</h4>
-      <div className="grid grid-cols-3 gap-2 mb-2">
-        <div className="p-2.5 rounded-lg bg-gray-50 border border-border-subtle text-center">
-          <p className="text-lg font-bold text-text-main">{interactions.length}</p>
-          <p className="text-[10px] text-text-muted font-medium uppercase">Total</p>
-        </div>
-        <div className="p-2.5 rounded-lg bg-gray-50 border border-border-subtle text-center">
-          <p className="text-lg font-bold text-text-main">~{avgPerMonth}</p>
-          <p className="text-[10px] text-text-muted font-medium uppercase">Per Month</p>
-        </div>
-        {scoreData ? (() => {
-          const sc = SCORE_CONFIG[scoreData.label] || SCORE_CONFIG.Cold;
-          return (
-            <div className={cn("p-2.5 rounded-lg border border-border-subtle text-center", sc.bg)}>
-              <p className={cn("text-lg font-bold", sc.text)}>{scoreData.score}</p>
-              <p className={cn("text-[10px] font-medium uppercase", sc.text)}>{scoreData.label}</p>
-            </div>
-          );
-        })() : (
-          <div className="p-2.5 rounded-lg bg-gray-50 border border-border-subtle text-center">
-            <p className="text-lg font-bold text-text-muted">--</p>
-            <p className="text-[10px] text-text-muted font-medium uppercase">Score</p>
-          </div>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {Object.entries(typeCounts).filter(([, c]) => c > 0).map(([type, count]) => {
-          const icon = INTERACTION_ICONS[type] || INTERACTION_ICONS.OTHER;
-          return (
-            <span key={type} className="flex items-center gap-1 px-2 py-1 rounded-md bg-gray-50 border border-border-subtle text-[11px] text-text-secondary font-medium">
-              <span className="material-symbols-outlined text-[14px]">{icon}</span> {count} {type.charAt(0) + type.slice(1).toLowerCase()}{count !== 1 ? "s" : ""}
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ─── Add Interaction Form ──────────────────────────────────
-
-function AddInteractionForm({ contactId, onDone, onCancel }: { contactId: string; onDone: () => void; onCancel: () => void }) {
-  const [type, setType] = useState("NOTE");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const { showToast } = useToast();
-
-  async function handleSubmit() {
-    if (!title.trim() && !description.trim()) {
-      setFormError("Please enter a title or description.");
-      return;
-    }
-    setFormError(null);
-    setSubmitting(true);
-    try {
-      const body: Record<string, string> = { type };
-      if (title.trim()) body.title = title.trim();
-      if (description.trim()) body.description = description.trim();
-      if (date) body.date = date;
-      await api.post(`/contacts/${contactId}/interactions`, body);
-      onDone();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Failed to add interaction", "error");
-    }
-    finally { setSubmitting(false); }
-  }
-
-  const inputCls = "w-full rounded-md border border-border-subtle bg-white px-2.5 py-1.5 text-sm text-text-main focus:border-primary focus:ring-1 focus:ring-primary/30 transition-colors";
-
-  return (
-    <div className="mb-4 p-4 rounded-lg border border-primary/20 bg-blue-50/20">
-      <div className="flex items-center justify-between mb-3">
-        <h5 className="text-sm font-semibold text-text-main">New Interaction</h5>
-        <button onClick={onCancel} className="p-1 rounded hover:bg-white text-text-muted hover:text-text-main transition-colors"><span className="material-symbols-outlined text-[16px]">close</span></button>
-      </div>
-      <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1">Type</label>
-            <select value={type} onChange={(e) => setType(e.target.value)} className={inputCls}>
-              <option value="NOTE">Note</option><option value="MEETING">Meeting</option>
-              <option value="CALL">Call</option><option value="EMAIL">Email</option>
-              <option value="OTHER">Other</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1">Date</label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} />
-          </div>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">Title</label>
-          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Brief summary..." className={inputCls} />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">Description</label>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} placeholder="Details about this interaction..." className={cn(inputCls, "resize-none")} />
-        </div>
-        {formError && <p className="text-xs text-red-600">{formError}</p>}
-        <button onClick={handleSubmit} disabled={submitting} className="self-end px-4 py-1.5 rounded-md text-white text-sm font-medium hover:opacity-90 transition-colors flex items-center gap-1.5 disabled:opacity-50" style={{ backgroundColor: "#003366" }}>
-          <span className="material-symbols-outlined text-[16px]">save</span>{submitting ? "Saving..." : "Save"}
-        </button>
-      </div>
-    </div>
-  );
-}
-

@@ -100,6 +100,13 @@ export const FirmResearchState = Annotation.Root({
     reducer: (_prev, next) => next,
     default: () => '',
   }),
+  // Firm-provided document / free text (uploaded in Settings → Firm Profile).
+  // Treated as an authoritative source during synthesis; lets a profile be
+  // built even when no website/LinkedIn is available.
+  documentText: Annotation<string>({
+    reducer: (_prev, next) => next,
+    default: () => '',
+  }),
   userId: Annotation<string>({
     reducer: (_prev, next) => next,
     default: () => '',

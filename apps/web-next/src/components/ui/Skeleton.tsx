@@ -119,6 +119,14 @@ function Badge({ width = 64, height = 20, className, ...rest }: BadgeProps) {
 /**
  * Skeleton — base shimmer rectangle with optional w/h/rounded props.
  * Sub-components for common shapes are attached as static members.
+ *
+ * ⚠️ RSC boundary: the `.Line` / `.Circle` / `.Badge` static members only
+ * resolve inside the CLIENT graph. This is a `"use client"` module, so a
+ * Server Component that does `<Skeleton.Line/>` gets a client *reference* for
+ * `Skeleton` (static members stripped) → `Skeleton.Line` is undefined →
+ * React #130 on render. Any `loading.tsx` / server component using the
+ * compound sub-components must declare `"use client"` (plain `<Skeleton/>` is
+ * fine either way).
  */
 export const Skeleton = Object.assign(SkeletonBase, {
   Line,

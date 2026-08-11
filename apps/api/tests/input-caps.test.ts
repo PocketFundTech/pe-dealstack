@@ -73,6 +73,16 @@ vi.mock('../src/services/dealMerger.js', () => ({
   getIconForIndustry: () => 'briefcase',
 }));
 vi.mock('../src/rag.js', () => ({ embedDocument: vi.fn() }));
+vi.mock('../src/services/documentDedup.js', () => ({
+  findExistingDocument: vi.fn(async () => null),
+  logDuplicateSkip: vi.fn(),
+}));
+vi.mock('../src/services/firmTeaserService.js', () => ({
+  generateTeasersForDeal: vi.fn(async () => {}),
+}));
+vi.mock('../src/services/firmContextService.js', () => ({ getFirmContextBlock: vi.fn(async () => '') }));
+
+
 vi.mock('../src/services/financialValidator.js', () => ({
   validateFinancials: () => ({ isValid: true, warnings: [] }),
 }));

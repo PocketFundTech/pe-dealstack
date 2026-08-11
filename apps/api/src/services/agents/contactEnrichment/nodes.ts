@@ -11,6 +11,38 @@ import { analyzeEmailDomain, scrapeCompanyWebsite, constructLinkedInUrl } from '
 import { buildResearchPrompt, enrichmentSchema } from './prompts.js';
 import { wrapDocumentContent } from '../guardrails.js';
 
+// ─── Follow-up suggestion (SUGGESTION ONLY — never auto-writes followUpAt) ──
+// Derives a recommended follow-up date + one-line action from interaction
+// recency. Cadence: never-contacted → 3 days; cold (>90d) → tomorrow;
+// warming (>30d) → 7 days; recent → 30 days.
+
+export interface SuggestedFollowUp {
+  date: string;   // ISO 8601 date of the suggested follow-up
+  action: string; // one-line recommended action
+}
+
+export function computeSuggestedFollowUp(
+  lastContactedAt: string | null | undefined,
+  fullName: string,
+): SuggestedFollowUp {
+  const now = Date.now();
+  const addDays = (d: number) => new Date(now + d * 86400000).toISOString();
+  const name = fullName.trim() || 'this contact';
+
+  if (!lastContactedAt) {
+    return { date: addDays(3), action: `No interactions logged yet — reach out to ${name} to open the relationship.` };
+  }
+
+  const daysSince = Math.floor((now - new Date(lastContactedAt).getTime()) / 86400000);
+  if (daysSince > 90) {
+    return { date: addDays(1), action: `Last contact was ${daysSince} days ago — send a re-engagement note to ${name} before it goes cold.` };
+  }
+  if (daysSince > 30) {
+    return { date: addDays(7), action: `It's been ${daysSince} days — schedule a check-in with ${name} within the week.` };
+  }
+  return { date: addDays(30), action: `Recently engaged (${daysSince} days ago) — plan a routine follow-up with ${name} in ~30 days.` };
+}
+
 // ─── Node 1: Gather CRM Data + External Intelligence ───────────────
 
 export async function gatherNode(state: typeof EnrichmentState.State) {
@@ -186,12 +218,16 @@ export async function gatherNode(state: typeof EnrichmentState.State) {
   if (noteResults?.notes) contextParts.push(`\nEXISTING NOTES: ${noteResults.notes}`);
   if (noteResults?.linkedinUrl) contextParts.push(`LINKEDIN: ${noteResults.linkedinUrl}`);
 
-  // Calculate staleness
+  // Calculate staleness + suggest (do NOT auto-write) a follow-up cadence.
   let staleWarning: string | null = null;
+  const suggestedFollowUp = computeSuggestedFollowUp(noteResults?.lastContactedAt, fullName);
   if (noteResults?.lastContactedAt) {
     const daysSince = Math.floor((Date.now() - new Date(noteResults.lastContactedAt).getTime()) / 86400000);
     if (daysSince > 90) staleWarning = `WARNING: Last contacted ${daysSince} days ago — relationship going cold`;
     if (staleWarning) contextParts.push(`\n${staleWarning}`);
+  }
+  if (suggestedFollowUp?.action) {
+    contextParts.push(`\nSUGGESTED FOLLOW-UP: ${suggestedFollowUp.action}`);
   }
 
   // LinkedIn search URL
@@ -214,7 +250,7 @@ export async function gatherNode(state: typeof EnrichmentState.State) {
 
   return {
     crmContext: contextParts.join('\n') || 'No data found for this contact.',
-    emailAnalysis: { ...emailAnalysis, linkedinSearchUrl, staleWarning },
+    emailAnalysis: { ...emailAnalysis, linkedinSearchUrl, staleWarning, suggestedFollowUp },
     linkedDeals: dealResults,
     documentMentions: docResults.map((d: any) => d.name),
     sources,
@@ -254,6 +290,7 @@ export async function researchNode(state: typeof EnrichmentState.State) {
       linkedDeals: state.linkedDeals,
       documentMentions: state.documentMentions,
       staleWarning: state.emailAnalysis?.staleWarning || null,
+      suggestedFollowUp: state.emailAnalysis?.suggestedFollowUp || null,
     };
 
     // Use company from email domain if LLM didn't find one and user didn't provide one
@@ -305,6 +342,8 @@ export async function researchNode(state: typeof EnrichmentState.State) {
         emailAnalysis: state.emailAnalysis,
         linkedDeals: state.linkedDeals,
         documentMentions: state.documentMentions,
+        staleWarning: state.emailAnalysis?.staleWarning || null,
+        suggestedFollowUp: state.emailAnalysis?.suggestedFollowUp || null,
       },
       confidence: fallbackConfidence,
       steps,

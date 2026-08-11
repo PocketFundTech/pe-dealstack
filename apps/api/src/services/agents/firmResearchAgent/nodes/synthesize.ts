@@ -82,7 +82,7 @@ export async function synthesizeNode(
 ): Promise<Partial<FirmResearchStateType>> {
   const steps: AgentStep[] = [];
 
-  const hasData = state.websiteText || state.firmSearchResults || state.personSearchResults;
+  const hasData = state.websiteText || state.firmSearchResults || state.personSearchResults || state.documentText;
   if (!hasData) {
     steps.push(step('No data gathered, skipping synthesis'));
     return { status: 'failed', error: 'Could not gather data — search may be temporarily unavailable. Please fill in manually and try "Refresh profile" later from Settings.', steps };
@@ -96,6 +96,9 @@ export async function synthesizeNode(
     // Wrap each external-data block in <document> delimiters so the
     // model treats it as untrusted data, not instructions (Task 4.7).
     const firmContext = [
+      state.documentText
+        ? `=== FIRM-PROVIDED DOCUMENT (authoritative — supplied by the firm itself; prefer this over other sources on conflict) ===\n${wrapDocumentContent(state.documentText.slice(0, 12000), 'firm-provided-document')}`
+        : '',
       state.websiteText
         ? `=== WEBSITE CONTENT ===\n${wrapDocumentContent(state.websiteText.slice(0, 12000), 'firm-website')}`
         : '',

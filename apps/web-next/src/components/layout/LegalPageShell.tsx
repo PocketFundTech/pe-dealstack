@@ -2,23 +2,27 @@ import Link from "next/link";
 import { Logo } from "./Logo";
 
 /**
- * Minimal public-page shell used by /privacy-policy and /terms-of-service.
- * Provides a slim header (logo + back-to-home + login/signup) and a footer
- * that cross-links the other legal page. No authenticated sidebar or
- * provider context — these pages render for anonymous visitors arriving
- * from the signup consent links.
+ * Minimal public-page shell used by /privacy-policy, /terms-of-service, and
+ * /security. Provides a slim header (logo + back-to-home + login/signup) and
+ * a footer that cross-links the other public legal/trust pages. No
+ * authenticated sidebar or provider context — these pages render for
+ * anonymous visitors arriving from the signup consent links or the trust
+ * page link sent by sales.
  */
 export function LegalPageShell({
   title,
   lastUpdated,
   activeFooterLink,
+  maxWidth = "3xl",
   children,
 }: {
   title: string;
   lastUpdated: string;
-  activeFooterLink: "privacy" | "terms";
+  activeFooterLink: "privacy" | "terms" | "security";
+  maxWidth?: "3xl" | "4xl";
   children: React.ReactNode;
 }) {
+  const contentMaxWidth = maxWidth === "4xl" ? "max-w-4xl" : "max-w-3xl";
   return (
     <div
       className="bg-[#f8fafc] text-[#1e293b] font-sans overflow-x-hidden overflow-y-auto antialiased"
@@ -60,7 +64,7 @@ export function LegalPageShell({
 
       {/* Main */}
       <main className="min-h-[calc(100vh-200px)]">
-        <div className="max-w-3xl mx-auto px-6 py-16 lg:py-20">
+        <div className={`${contentMaxWidth} mx-auto px-6 py-16 lg:py-20`}>
           <div className="mb-12">
             <h1 className="text-4xl lg:text-5xl font-extrabold text-[#111418] mb-4 tracking-tight">
               {title}
@@ -100,6 +104,16 @@ export function LegalPageShell({
               }
             >
               Terms of Service
+            </Link>
+            <Link
+              href="/security"
+              className={
+                activeFooterLink === "security"
+                  ? "text-primary font-semibold"
+                  : "text-slate-500 hover:text-primary transition-colors"
+              }
+            >
+              Security
             </Link>
             <a
               href="mailto:hello@pocket-fund.com"

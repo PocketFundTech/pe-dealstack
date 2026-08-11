@@ -3,7 +3,6 @@ import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
-import { analyzeMultipleDocuments } from '../services/multiDocAnalyzer.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 
 const router = Router();
@@ -32,6 +31,7 @@ router.post('/:id/analyze', async (req: Request, res) => {
       return res.status(404).json({ error: 'Deal not found' });
     }
 
+    const { analyzeMultipleDocuments } = await import('../services/multiDocAnalyzer.js');
     const result = await analyzeMultipleDocuments(dealId);
 
     if (!result) {

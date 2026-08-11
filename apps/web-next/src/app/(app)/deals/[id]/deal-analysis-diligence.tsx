@@ -1,5 +1,6 @@
 "use client";
 
+import { formatFinancialValue, type UnitScale } from "@/lib/formatters";
 import {
   type AnalysisData,
   type CrossDocData,
@@ -130,26 +131,35 @@ export function DiligencePanel({ analysis, crossDoc }: { analysis: AnalysisData 
                 </tr>
               </thead>
               <tbody>
-                {conflicts.slice(0, 10).map((c, i) => (
-                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="p-2.5 font-semibold text-gray-800">{c.period}</td>
-                    <td className="p-2.5 text-gray-600">{c.field.replace(/_/g, " ")}</td>
-                    <td className="p-2.5">
-                      {c.values.map((v, vi) => (
-                        <span
-                          key={vi}
-                          className="inline-block text-[10px] px-2 py-0.5 rounded-md mx-0.5 my-0.5"
-                          style={{ background: v.isActive ? "#D1FAE5" : "#F1F5F9" }}
-                        >
-                          {v.documentName}: ${v.value}M
-                        </span>
-                      ))}
-                    </td>
-                    <td className="p-2.5 text-right font-bold" style={{ color: c.discrepancyPct > 10 ? "#dc2626" : "#d97706" }}>
-                      {c.discrepancyPct}%
-                    </td>
-                  </tr>
-                ))}
+                {conflicts.slice(0, 10).map((c, i) => {
+                  // Prefer per-value unitScale; fall back to conflict-level
+                  // scale; default ACTUALS so we never silently re-scale.
+                  const conflictScale = (c.unitScale ?? undefined) as UnitScale | undefined;
+                  const conflictCurrency = c.currency ?? "USD";
+                  return (
+                    <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="p-2.5 font-semibold text-gray-800">{c.period}</td>
+                      <td className="p-2.5 text-gray-600">{c.field.replace(/_/g, " ")}</td>
+                      <td className="p-2.5">
+                        {c.values.map((v, vi) => {
+                          const scale = ((v.unitScale ?? conflictScale) ?? "ACTUALS") as UnitScale;
+                          return (
+                            <span
+                              key={vi}
+                              className="inline-block text-[10px] px-2 py-0.5 rounded-md mx-0.5 my-0.5"
+                              style={{ background: v.isActive ? "#D1FAE5" : "#F1F5F9" }}
+                            >
+                              {v.documentName}: {formatFinancialValue(v.value, scale, { currency: conflictCurrency })}
+                            </span>
+                          );
+                        })}
+                      </td>
+                      <td className="p-2.5 text-right font-bold" style={{ color: c.discrepancyPct > 10 ? "#dc2626" : "#d97706" }}>
+                        {c.discrepancyPct.toFixed(1)}%
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

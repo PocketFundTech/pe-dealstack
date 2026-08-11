@@ -1,11 +1,16 @@
 "use client";
 
 import { type DragEvent } from "react";
-import { formatCurrency, getDealDisplayName } from "@/lib/formatters";
+import {
+  formatCurrency,
+  formatHeadlineValue,
+  getDealDisplayName,
+  pickHeadlineMetrics,
+} from "@/lib/formatters";
 import { METRIC_CONFIG, type MetricKey } from "@/lib/constants";
 import { cn } from "@/lib/cn";
 import Link from "next/link";
-import type { Deal } from "@/types";
+import type { Deal, FinancialSummary } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Kanban Card (Compact) with drag-and-drop support
@@ -14,12 +19,35 @@ export function KanbanCard({
   deal,
   activeMetrics,
   onDragStart,
+  summary,
+  summariesLoading,
 }: {
   deal: Deal;
   activeMetrics: MetricKey[];
   onDragStart?: (e: DragEvent<HTMLDivElement>, dealId: string) => void;
+  /**
+   * Latest INCOME_STATEMENT summary — when present we format
+   * revenue/EBITDA at the correct unitScale. Optional so cards still
+   * render before the bulk fetch resolves.
+   */
+  summary?: FinancialSummary;
+  /** True until the bulk summaries fetch resolves; see DealCard. */
+  summariesLoading?: boolean;
 }) {
-  const hasRiskFlag = (deal.ebitda ?? 0) < 0 || deal.stage === "PASSED";
+  // Headline metrics via the canonical precedence (cached → summary →
+  // legacy). The risk-flag sign comparison stays meaningful because the
+  // helper preserves unitScale alongside the picked value.
+  const cacheHit =
+    deal.cachedRevenue != null ||
+    deal.cachedEbitda != null ||
+    deal.cachedEbitdaMargin != null;
+  const headline = pickHeadlineMetrics(
+    deal,
+    summary && (summary.revenue != null || summary.ebitda != null) ? summary : null,
+  );
+  const headlineLoading = !cacheHit && summariesLoading;
+  const ebitdaForRiskFlag = headlineLoading ? null : headline.ebitda;
+  const hasRiskFlag = (ebitdaForRiskFlag ?? 0) < 0 || deal.stage === "PASSED";
   const kanbanMetrics = activeMetrics.slice(0, 3);
 
   return (
@@ -53,26 +81,46 @@ export function KanbanCard({
             </p>
           </div>
         </div>
-        {/* Dynamic compact metrics (first 3) */}
+        {/* Dynamic compact metrics (first 3) \u2014 revenue/EBITDA route
+            through pickHeadlineMetrics (cached \u2192 summary \u2192 legacy) so
+            the cards never render mismatched-scale legacy columns. */}
         <div className="flex gap-3 mb-2">
           {kanbanMetrics.map((key) => {
             const cfg = METRIC_CONFIG[key];
             if (!cfg) return null;
-            const value = deal[key as keyof Deal] as number | undefined | null;
+            const isStmtKey = key === "revenue" || key === "ebitda";
+            const stmtValue = isStmtKey
+              ? key === "revenue"
+                ? headline.revenue
+                : headline.ebitda
+              : null;
+            const dealValue = deal[key as keyof Deal] as number | undefined | null;
+            const colorValue = isStmtKey ? stmtValue : dealValue;
+            const renderedValue = (() => {
+              if (key === "irrProjected") {
+                return dealValue != null ? Number(dealValue).toFixed(1) + "%" : "\u2014";
+              }
+              if (key === "mom") {
+                return dealValue != null ? Number(dealValue).toFixed(1) + "x" : "\u2014";
+              }
+              if (isStmtKey) {
+                if (headlineLoading) return "\u2014";
+                if (stmtValue == null) return "\u2014";
+                return formatHeadlineValue(stmtValue, headline);
+              }
+              return formatCurrency(dealValue as number | null | undefined, deal.currency);
+            })();
             return (
               <div key={key} className="flex-1 bg-background-body rounded px-2 py-1.5">
                 <span className="text-[9px] text-text-muted font-medium uppercase block">{cfg.kanbanLabel}</span>
                 <span className={cn(
                   "text-xs font-bold",
-                  key === "mom" && value != null && value >= 3 ? "text-secondary" : "",
-                  key === "ebitda" && value != null && value < 0 ? "text-red-600" : "",
-                  !(key === "mom" && value != null && value >= 3) && !(key === "ebitda" && value != null && value < 0) ? "text-text-main" : "",
+                  key === "mom" && colorValue != null && colorValue >= 3 ? "text-secondary" : "",
+                  key === "ebitda" && colorValue != null && colorValue < 0 ? "text-red-600" : "",
+                  !(key === "mom" && colorValue != null && colorValue >= 3) && !(key === "ebitda" && colorValue != null && colorValue < 0) ? "text-text-main" : "",
+                  isStmtKey && headlineLoading ? "text-text-muted/60 animate-pulse" : "",
                 )}>
-                  {key === "irrProjected"
-                    ? (value != null ? Number(value).toFixed(1) + "%" : "\u2014")
-                    : key === "mom"
-                      ? (value != null ? Number(value).toFixed(1) + "x" : "\u2014")
-                      : formatCurrency(value as number | null | undefined, deal.currency)}
+                  {renderedValue}
                 </span>
               </div>
             );

@@ -91,9 +91,11 @@ let orgA_dealId: string;
 let orgA_contactId: string;
 let orgA_folderId: string;
 let orgA_documentId: string;
+let orgA_activityId: string;
 
 let orgB_dealId: string;
 let orgB_contactId: string;
+let orgB_documentId: string;
 
 // ─── Setup ────────────────────────────────────────────────────────
 
@@ -138,6 +140,12 @@ beforeAll(async () => {
     orgA_documentId = docsA.data[0].id;
   }
 
+  // Discover an Org A activity (deal detail eager-loads activities)
+  const dealDetailA = await api('GET', `/deals/${orgA_dealId}`, orgA.token);
+  if (dealDetailA.status === 200 && dealDetailA.data?.activities?.length > 0) {
+    orgA_activityId = dealDetailA.data.activities[0].id;
+  }
+
   // Discover Org B resources
   const dealsB = await api('GET', '/deals', orgB.token);
   expect(dealsB.status).toBe(200);
@@ -148,6 +156,11 @@ beforeAll(async () => {
   expect(contactsB.status).toBe(200);
   expect(contactsB.data.length).toBeGreaterThan(0);
   orgB_contactId = contactsB.data[0].id;
+
+  const docsB = await api('GET', `/deals/${orgB_dealId}/documents`, orgB.token);
+  if (docsB.status === 200 && docsB.data?.length > 0) {
+    orgB_documentId = docsB.data[0].id;
+  }
 
   console.log(`  Org A deal: ${orgA_dealId}`);
   console.log(`  Org A contact: ${orgA_contactId}`);
@@ -212,6 +225,52 @@ describeIntegration('Org Isolation — Cross-Org Access Blocked', () => {
       if (!orgA_documentId) return;
       const res = await api('DELETE', `/documents/${orgA_documentId}`, orgB.token);
       expect(res.status).toBe(404);
+    });
+
+    // Regression: POST /documents/:id/link previously had no org checks —
+    // an attacker could copy another tenant's document (and its extracted
+    // financials) into their own deal, or inject one into another tenant's deal.
+    it('Org B cannot link Org A document into their own deal (source not in org)', async () => {
+      if (!orgA_documentId) return;
+      const res = await api('POST', `/documents/${orgA_documentId}/link`, orgB.token, {
+        targetDealId: orgB_dealId,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('Org B cannot link their own document into an Org A deal (target not in org)', async () => {
+      if (!orgB_documentId) return;
+      const res = await api('POST', `/documents/${orgB_documentId}/link`, orgB.token, {
+        targetDealId: orgA_dealId,
+      });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // ── Activities ─────────────────────────────────────────────────
+  // Regression: GET/DELETE /activities/:id had no org scoping, and
+  // /activities/recent had no org filter (and was shadowed by /:id).
+
+  describe('Activities', () => {
+    it('Org B cannot read Org A activity by ID', async () => {
+      if (!orgA_activityId) return;
+      const res = await api('GET', `/activities/${orgA_activityId}`, orgB.token);
+      expect(res.status).toBe(404);
+    });
+
+    it('Org B cannot delete Org A activity by ID', async () => {
+      if (!orgA_activityId) return;
+      const res = await api('DELETE', `/activities/${orgA_activityId}`, orgB.token);
+      expect(res.status).toBe(404);
+    });
+
+    it('recent activity feed is org-scoped and never contains Org A activities', async () => {
+      const res = await api('GET', '/activities/recent', orgB.token);
+      expect(res.status).toBe(200); // reachable — not shadowed by /:id
+      if (orgA_activityId) {
+        const ids = (res.data || []).map((a: any) => a.id);
+        expect(ids).not.toContain(orgA_activityId);
+      }
     });
   });
 
@@ -398,6 +457,12 @@ describeIntegration('Org Isolation — Same-Org Access Works', () => {
   it('Org A can access their own deal team', async () => {
     const res = await api('GET', `/deals/${orgA_dealId}/team`, orgA.token);
     expect(res.status).toBe(200);
+  });
+
+  it('Org A can reach the recent activity feed (route no longer shadowed)', async () => {
+    const res = await api('GET', '/activities/recent', orgA.token);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.data)).toBe(true);
   });
 
   it('Org B can access their own deal', async () => {

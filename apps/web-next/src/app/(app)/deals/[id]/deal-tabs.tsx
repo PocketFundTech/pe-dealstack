@@ -1,18 +1,18 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
-import DOMPurify from "dompurify";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { cn } from "@/lib/cn";
-import { renderMarkdown } from "@/lib/markdown";
-import type { ChatMessage, DealDetail } from "./components";
-import { ClearChatModal } from "./components";
-import { AISettingsModal } from "./deal-panels";
+import type { ChatMessage, DealDetail } from "./deal-detail-shared";
+import { ClearChatModal, AISettingsModal } from "./deal-panels";
 import { api } from "@/lib/api";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { SuggestionChips } from "./deal-tabs-suggestions";
 import { ContextDocIndicators } from "./deal-tabs-context-indicators";
 import { AIMessageActions } from "./deal-tabs-ai-message-actions";
 import { ArtifactActionButton } from "./deal-tabs-artifact-button";
+import { SlashMenu } from "./deal-tabs-slash-menu";
+import { AiMessageBody } from "./deal-tabs-ai-message-body";
+import { filterSkills, findSkillCommand, expandChatInput, type Skill } from "@/lib/dealchat-skills";
 
 // ---------------------------------------------------------------------------
 // Chat Tab
@@ -42,12 +42,128 @@ export function ChatTab({
   const [showClearModal, setShowClearModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // When the user picks a skill from the slash menu we want the caret to
+  // land at the end of the freshly-inserted `/<command> ` so they can keep
+  // typing additional context immediately. Setting `pendingCaretToEnd`
+  // queues a focus + selection adjustment for the next render tick.
+  const [pendingCaretToEnd, setPendingCaretToEnd] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; status: "uploading" | "done" | "error" }>>([]);
 
+  // ---- Slash-command menu state -----------------------------------------
+  // The menu is "open" whenever chatInput starts with `/`. We track the
+  // highlighted index for keyboard nav and reset it whenever the filtered
+  // list changes (so ArrowDown from a fresh `/` lands on row 0).
+  const slashOpen = chatInput.startsWith("/");
+  const slashQuery = slashOpen ? chatInput.slice(1) : "";
+  const filteredSkills = useMemo(
+    () => (slashOpen ? filterSkills(slashQuery) : []),
+    [slashOpen, slashQuery],
+  );
+  const [slashIdx, setSlashIdx] = useState(0);
+  // `dismissed` lets Escape close the menu even though chatInput still
+  // starts with `/`. Cleared when the user edits the input again.
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashMenuVisible = slashOpen && !slashDismissed && filteredSkills.length >= 0;
+
+  useEffect(() => {
+    // Clamp the highlighted row whenever the filtered list shrinks past it.
+    if (slashIdx >= filteredSkills.length) setSlashIdx(0);
+  }, [filteredSkills.length, slashIdx]);
+
+  useEffect(() => {
+    // Re-arm the menu whenever the input no longer starts with `/`.
+    if (!slashOpen && slashDismissed) setSlashDismissed(false);
+  }, [slashOpen, slashDismissed]);
+
+  const pickSkill = useCallback(
+    (skill: Skill) => {
+      // Insert `/<command> ` into the input and close the menu. We DO NOT
+      // submit here — the user may want to append free-form context (e.g.
+      // "/one-pager focus on cash conversion") before hitting Enter. The
+      // expansion to the full skill prompt happens at submit time in
+      // handleSubmit() so the user gets one final review beat.
+      setChatInput(skill.command + " ");
+      setSlashDismissed(true);
+      setSlashIdx(0);
+      setPendingCaretToEnd(true);
+    },
+    [setChatInput],
+  );
+
+  // Move the caret to the end of the textarea after a pickSkill insert.
+  // useEffect fires after React commits the new value, so .value.length
+  // reflects the inserted `/<command> ` and the user can keep typing.
+  useEffect(() => {
+    if (!pendingCaretToEnd) return;
+    const el = textareaRef.current;
+    if (el) {
+      const len = el.value.length;
+      el.focus();
+      el.setSelectionRange(len, len);
+    }
+    setPendingCaretToEnd(false);
+  }, [pendingCaretToEnd, chatInput]);
+
+  // Submit path — expands a `/<command> ...` input into the full skill
+  // prompt (with any trailing text appended as analyst context), then
+  // routes through onSendPrompt so we don't have to round-trip the
+  // expanded prompt back through chatInput state. Plain inputs (no
+  // matching command) fall through to the existing onSend path.
+  const handleSubmit = useCallback(() => {
+    if (chatSending) return;
+    const raw = chatInput;
+    if (!raw.trim()) return;
+    const match = findSkillCommand(raw);
+    if (match && deal) {
+      const expanded = expandChatInput(raw, deal);
+      setChatInput("");
+      onSendPrompt(expanded);
+      return;
+    }
+    onSend();
+  }, [chatInput, chatSending, deal, onSend, onSendPrompt, setChatInput]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // While the slash menu is visible, ArrowUp/Down/Enter/Escape belong to
+    // the menu — never to the textarea. The menu has no focus of its own
+    // (the textarea keeps it for typing), so we own the keyboard here.
+    if (slashMenuVisible) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (filteredSkills.length > 0) {
+          setSlashIdx((i) => Math.min(i + 1, filteredSkills.length - 1));
+        }
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (filteredSkills.length > 0) {
+          setSlashIdx((i) => Math.max(i - 1, 0));
+        }
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const sel = filteredSkills[slashIdx];
+        if (sel) {
+          pickSkill(sel);
+        }
+        // If filteredSkills is empty, Enter is a no-op while the menu is
+        // visible — the user should either keep typing or press Esc.
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+      // Other keys (typing) fall through so the user can refine the query.
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      onSend();
+      handleSubmit();
     }
   };
 
@@ -172,10 +288,7 @@ export function ChatTab({
                 <div className="flex flex-col gap-1">
                   <span className="text-xs font-bold text-text-muted ml-1">PE OS AI</span>
                   <div className="ai-bubble-gradient border border-border-subtle rounded-2xl rounded-tl-none p-4 text-sm text-text-secondary shadow-sm">
-                    <div
-                      className="chat-markdown space-y-1 break-words [&_p]:mb-1.5 [&_ul]:pl-4 [&_ul]:list-disc [&_li]:mb-0.5 [&_strong]:font-semibold"
-                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(msg.content)) }}
-                    />
+                    <AiMessageBody content={msg.content} />
                     {msg.action && msg.action.url && msg.action.label && (
                       <ArtifactActionButton action={msg.action} />
                     )}
@@ -249,13 +362,37 @@ export function ChatTab({
           )}
 
           <div className="relative bg-background-body rounded-xl border border-border-subtle shadow-inner">
+            {slashMenuVisible && (
+              <SlashMenu
+                deal={deal}
+                skills={filteredSkills}
+                selectedIdx={slashIdx}
+                onHoverIndex={setSlashIdx}
+                onPick={pickSkill}
+              />
+            )}
             <textarea
+              ref={textareaRef}
               value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
+              onChange={(e) => {
+                setChatInput(e.target.value);
+                // Any edit re-arms the menu — Escape's "dismissed" flag
+                // only sticks until the user touches the field again.
+                // EXCEPT when the input still starts with a known skill
+                // command (the user picked from the menu and is now
+                // typing extra context); in that case keep it dismissed
+                // so the menu doesn't pop back over their typing.
+                if (slashDismissed && !findSkillCommand(e.target.value)) {
+                  setSlashDismissed(false);
+                }
+              }}
               onKeyDown={handleKeyDown}
               className="w-full bg-transparent border-none text-text-main placeholder:text-text-muted px-4 py-3 pr-24 focus:ring-0 resize-none min-h-[50px] max-h-32 text-sm leading-relaxed"
-              placeholder="Ask about the deal, financials, or risks..."
+              placeholder="Ask about the deal, or type / for commands..."
               rows={1}
+              aria-autocomplete="list"
+              aria-expanded={slashMenuVisible}
+              aria-controls={slashMenuVisible ? "dealchat-slash-menu" : undefined}
             />
             <div className="absolute right-2 bottom-2 flex items-center gap-1">
               <input
@@ -284,7 +421,7 @@ export function ChatTab({
                 <span className="material-symbols-outlined text-[20px]">attach_file</span>
               </button>
               <button
-                onClick={onSend}
+                onClick={handleSubmit}
                 disabled={!chatInput.trim() || chatSending}
                 className="p-1.5 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors shadow-md shadow-primary/30 disabled:opacity-40"
                 title="Send Message"

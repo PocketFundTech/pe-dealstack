@@ -2,9 +2,7 @@ import { Router } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
 import { Resend } from 'resend';
-import { mergeIntoExistingDeal } from '../services/dealMerger.js';
 import { log } from '../utils/logger.js';
-import { captureAgentError } from '../utils/sentryHelpers.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess, verifyDocumentAccess } from '../middleware/orgScope.js';
 
@@ -18,25 +16,25 @@ router.post('/documents/:id/link', async (req, res) => {
   try {
     const { id } = req.params;
     const orgId = getOrgId(req);
-
     const schema = z.object({
       targetDealId: z.string().uuid(),
     });
     const { targetDealId } = schema.parse(req.body);
 
-    // Verify the source document belongs to caller's org.
-    const sourceDoc = await verifyDocumentAccess(id, orgId);
-    if (!sourceDoc) {
+    // SECURITY: both the source document and the target deal must belong to the
+    // caller's organization. Without these checks any authenticated user could
+    // copy another tenant's document (and its extracted financials) into their
+    // own deal, or inject a document into another tenant's deal.
+    const sourceAccess = await verifyDocumentAccess(id, orgId);
+    if (!sourceAccess) {
       return res.status(404).json({ error: 'Document not found' });
     }
-
-    // Verify target deal belongs to caller's org.
     const targetDeal = await verifyDealAccess(targetDealId, orgId);
     if (!targetDeal) {
       return res.status(404).json({ error: 'Target deal not found' });
     }
 
-    // Fetch full original document row (verifyDocumentAccess returns minimal projection)
+    // Fetch the full original document (verifyDocumentAccess returns only id/dealId)
     const { data: original, error: fetchErr } = await supabase
       .from('Document')
       .select('*')
@@ -75,7 +73,8 @@ router.post('/documents/:id/link', async (req, res) => {
     // If original had extracted data, merge into target deal
     if (original.extractedData) {
       try {
-        await mergeIntoExistingDeal(targetDealId, original.extractedData, req.user?.id, original.name);
+        const { mergeIntoExistingDeal } = await import('../services/dealMerger.js');
+        await mergeIntoExistingDeal(targetDealId, original.extractedData, (req as any).user?.id, original.name);
         log.info('Target deal auto-updated from linked document', { targetDealId, documentName: original.name });
       } catch (mergeError) {
         log.error('Failed to auto-update target deal from linked doc', mergeError);
@@ -100,10 +99,7 @@ router.post('/documents/:id/link', async (req, res) => {
           `Linked from another deal's data room`,
           internalId || undefined
         );
-      }).catch(err => {
-        log.error('Notification error (doc link)', err);
-        captureAgentError(err, { context: 'notifyDealTeam:doc_link' }, 'warning');
-      });
+      }).catch(err => log.error('Notification error (doc link)', err));
     }
 
     res.status(201).json(linked);
@@ -221,10 +217,7 @@ router.post('/deals/:dealId/document-requests', async (req, res) => {
       `Document requested: ${documentName}`,
       `${requesterName} requested "${documentName}" for the ${folderName || 'data room'}`,
       internalUserId || undefined
-    ).catch(err => {
-      log.error('Notification error (doc request)', err);
-      captureAgentError(err, { context: 'notifyDealTeam:doc_request' }, 'warning');
-    });
+    ).catch(err => log.error('Notification error (doc request)', err));
 
     // Log activity
     await supabase.from('Activity').insert({

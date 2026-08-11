@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { findOrCreateUser } from '../services/userService.js';
+import { getCachedUserContext, setCachedUserContext } from './authContextCache.js';
 
 /** Build a slug suffix using a UUID fragment so same-millisecond inserts don't collide. */
 function buildSlug(base: string): string {
@@ -26,12 +27,33 @@ export async function orgMiddleware(
       return next();
     }
 
-    // Look up the User record by authId to get organizationId
+    // Fast path: a warm lambda serves the User→{org,role} lookup from a
+    // short-TTL cache instead of a DB round trip on every request. Only
+    // populated (below) for users who already have an organization, so a
+    // cache hit always carries a usable organizationId.
+    const cached = getCachedUserContext(req.user.id);
+    if (cached?.organizationId) {
+      if (cached.role) req.user.role = cached.role;
+      req.user.organizationId = cached.organizationId;
+      return next();
+    }
+
+    // Look up the User record by authId to get organizationId.
+    // Also pull `role` — the JWT's user_metadata.role defaults to 'MEMBER' for
+    // everyone (auth middleware sets it from Supabase user_metadata, which is
+    // rarely populated). The User.role column carries the canonical value
+    // (set by findOrCreateUser, updated by invitation/role-change flows).
+    // Override req.user.role here once so every downstream admin check sees
+    // the table value.
     const { data: userRecord, error } = await supabase
       .from('User')
-      .select('id, organizationId')
+      .select('id, organizationId, role')
       .eq('authId', req.user.id)
       .single();
+
+    if (userRecord?.role && req.user) {
+      req.user.role = String(userRecord.role);
+    }
 
     if (error && error.code === 'PGRST116') {
       // User record doesn't exist yet (first request after signup).
@@ -54,44 +76,27 @@ export async function orgMiddleware(
 
     if (userRecord?.organizationId) {
       req.user.organizationId = userRecord.organizationId;
+      // Cache for subsequent warm requests (short TTL — see authContextCache).
+      setCachedUserContext(req.user.id, {
+        userId: userRecord.id,
+        organizationId: userRecord.organizationId,
+        role: userRecord.role ? String(userRecord.role) : null,
+      });
     } else if (userRecord && !userRecord.organizationId) {
       // User exists but has no Organization — find existing or create one
       try {
         const firmName = req.user.firmName || req.user.email?.split('@')[0] || 'My Firm';
-        const slugBase = firmName.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').substring(0, 100);
+        const slug = firmName.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').substring(0, 100) || 'org';
 
-        // First try to find an existing org with same name (might exist from a previous failed attempt)
-        let newOrg: { id: string } | null = null;
-        const { data: existingOrg } = await supabase
+        // SECURITY: never attach to an existing org by name — firmName is
+        // user-controlled, so a name match would let a user join another
+        // tenant's org. Always create a fresh org for a user who has none.
+        const uniqueSlug = `${slug}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const { data: newOrg } = await supabase
           .from('Organization')
+          .insert({ name: firmName, slug: uniqueSlug })
           .select('id')
-          .eq('name', firmName)
           .single();
-
-        if (existingOrg) {
-          newOrg = existingOrg;
-        } else {
-          // Attempt insert with a UUID-suffixed slug. Retry once on unique-slug
-          // collision (Postgres 23505) — astronomically unlikely but cheap to handle.
-          let createdOrg: { id: string } | null = null;
-          let insertErr: { code?: string } | null = null;
-          for (let attempt = 0; attempt < 2; attempt++) {
-            const res = await supabase
-              .from('Organization')
-              .insert({ name: firmName, slug: buildSlug(slugBase) })
-              .select('id')
-              .single();
-            createdOrg = (res.data as { id: string } | null) ?? null;
-            insertErr = (res.error as { code?: string } | null) ?? null;
-            if (createdOrg) break;
-            if (insertErr?.code !== '23505') break; // non-unique-violation: don't retry
-            log.warn('Org middleware: slug collision, retrying with new slug', { attempt });
-          }
-          if (!createdOrg && insertErr) {
-            log.error('Org middleware: failed to create org', insertErr);
-          }
-          newOrg = createdOrg;
-        }
 
         if (newOrg) {
           // Race guard: re-fetch User by authId — a parallel request may have

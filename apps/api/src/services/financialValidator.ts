@@ -1,6 +1,31 @@
 import { log } from '../utils/logger.js';
-import type { ClassifiedStatement } from './financialClassifier.js';
+import type { ClassifiedStatement, UnitScale } from './financialClassifier.js';
 import { TOLERANCE_LARGE, TOLERANCE_SMALL } from './agents/financialAgent/config.js';
+import {
+  comparePeriodChronologically,
+  inferPeriodScope,
+  type PeriodScope,
+} from '../utils/periodChrono.js';
+
+// Convert a stored numeric value to actual dollars given the statement's
+// unitScale. Used by the revenue-floor gate so we don't false-flag tiny
+// startups for "EBITDA margin > 60%" — small SaaS legitimately runs that high.
+const SCALE_TO_DOLLARS: Record<string, number> = {
+  ACTUALS: 1,
+  THOUSANDS: 1_000,
+  MILLIONS: 1_000_000,
+  BILLIONS: 1_000_000_000,
+};
+function toActualDollars(value: number | null, unitScale?: UnitScale | string | null): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const mult = SCALE_TO_DOLLARS[unitScale ?? 'ACTUALS'] ?? 1;
+  return value * mult;
+}
+// Below this revenue threshold, suppress the "unusually high margin" warning —
+// small SaaS / IP-licence businesses legitimately run >95% margin and the
+// warning is just noise. $5M is the lower-mid-market floor where benchmarks
+// start being meaningful.
+const HIGH_MARGIN_REVENUE_FLOOR_USD = 5_000_000;
 
 export interface ValidationResult {
   isValid: boolean;
@@ -26,19 +51,38 @@ export interface StatementsValidationResult {
   overallPassed: boolean;     // true if no errors (warnings are OK)
 }
 
-// Format value in millions to human-readable form
-function fmtVal(v: number): string {
+// Format a stored numeric line-item value to a human-readable money string.
+//
+// Bug history: this used to assume `v` was always in millions, so a small-SaaS
+// CIM with revenue stored as 16000 at unitScale ACTUALS (= $16,000) would be
+// printed as "$16.0B" in validator warnings — terrifying users and triggering
+// false-flag conflict reviews on healthy data. The function now accepts the
+// statement's unitScale and converts to actual dollars before bucketizing.
+//
+// Always pass the statement's unitScale at the call site. When omitted (legacy
+// callers), we default to ACTUALS — the safest fallback because raw-dollar
+// values like 16000 read sanely as "$16.0K" rather than getting inflated.
+function fmtVal(v: number, unitScale?: UnitScale | string | null): string {
   const abs = Math.abs(v);
   const sign = v < 0 ? '-' : '';
-  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}B`;
-  if (abs >= 1) return `${sign}$${abs.toFixed(1)}M`;
-  if (abs * 1000 >= 1) return `${sign}$${(abs * 1000).toFixed(1)}K`;
-  return `${sign}$${(abs * 1000000).toFixed(0)}`;
+  // Resolve scale → multiplier. Unknown / missing scales fall back to ACTUALS
+  // so we never silently inflate a stored ACTUALS value into "$16.0B".
+  const mult = SCALE_TO_DOLLARS[(unitScale ?? 'ACTUALS') as string] ?? 1;
+  const dollars = abs * mult;
+  if (dollars >= 1_000_000_000) return `${sign}$${(dollars / 1_000_000_000).toFixed(1)}B`;
+  if (dollars >= 1_000_000)     return `${sign}$${(dollars / 1_000_000).toFixed(1)}M`;
+  if (dollars >= 1_000)         return `${sign}$${(dollars / 1_000).toFixed(1)}K`;
+  return `${sign}$${dollars.toFixed(0)}`;
 }
 
 /**
  * Validate and sanity-check extracted financial data.
  * Supports deals ranging from micro-acquisitions ($1K+) to large PE ($5B).
+ *
+ * Optional `sourceLength` lets the validator apply tighter bounds for short
+ * source documents (teasers / one-pagers / executive summaries), where
+ * absurd financial values almost always come from misclassified targets,
+ * valuations, or projections.
  */
 export function validateFinancials(data: {
   revenue?: number | null;
@@ -47,14 +91,25 @@ export function validateFinancials(data: {
   revenueGrowth?: number | null;
   dealSize?: number | null;
   employees?: number | null;
+  sourceLength?: number;
 }): ValidationResult {
   const warnings: string[] = [];
   const corrections: Record<string, { original: any; corrected: any; reason: string }> = {};
 
+  // The aiExtractor path that feeds this function returns values already
+  // normalized to MILLIONS (see aiExtractor.ts: "Revenue must be in millions"),
+  // so format those for display at MILLIONS scale. This is distinct from
+  // validateStatements() below, which receives raw values + an explicit
+  // unitScale per statement.
+  const fmt = (v: number) => fmtVal(v, 'MILLIONS');
+
+  const SHORT_DOC_THRESHOLD = 5000;
+  const isShortDoc = typeof data.sourceLength === 'number' && data.sourceLength < SHORT_DOC_THRESHOLD;
+
   // Revenue sanity check (expect values in millions)
   if (data.revenue !== null && data.revenue !== undefined) {
     if (data.revenue > 50000) {
-      warnings.push(`Revenue ${fmtVal(data.revenue)} seems too high. May be in thousands.`);
+      warnings.push(`Revenue ${fmt(data.revenue)} seems too high. May be in thousands.`);
       corrections.revenue = {
         original: data.revenue,
         corrected: data.revenue / 1000,
@@ -63,10 +118,38 @@ export function validateFinancials(data: {
     }
     if (data.revenue > 0 && data.revenue < 0.0001) {
       // Only flag if less than $100 — micro-acquisitions with $1K+ revenue are valid
-      warnings.push(`Revenue ${fmtVal(data.revenue)} seems extremely low. Verify units.`);
+      warnings.push(`Revenue ${fmt(data.revenue)} seems extremely low. Verify units.`);
     }
     if (data.revenue < 0) {
       warnings.push('Revenue is negative — likely an error.');
+    }
+    // Short-doc cap — values above $500M from a one-pager are almost always
+    // a target or projection misclassified as actuals.
+    if (isShortDoc && data.revenue > 500) {
+      warnings.push(
+        `Revenue ${fmt(data.revenue)} from a short source document (~${Math.round((data.sourceLength ?? 0) / 2500)} pages) is unusual — verify it isn't a target, projection, or valuation.`
+      );
+    }
+  }
+
+  // Deal-size sanity check
+  if (data.dealSize !== null && data.dealSize !== undefined) {
+    if (isShortDoc && data.dealSize > 1000) {
+      warnings.push(
+        `Deal size ${fmt(data.dealSize)} from a short source document is unusual — verify it isn't a valuation or fundraise target.`
+      );
+    }
+    // Cross-field: revenue vastly exceeding dealSize on a short doc — one of the
+    // two is almost certainly a misclassified target/valuation.
+    if (
+      isShortDoc &&
+      data.revenue && data.revenue > 0 &&
+      data.dealSize > 0 &&
+      data.revenue > data.dealSize * 5
+    ) {
+      warnings.push(
+        `Revenue ${fmt(data.revenue)} >> deal size ${fmt(data.dealSize)} on a one-pager — one of these is likely a target or valuation, not the actual.`
+      );
     }
   }
 
@@ -141,6 +224,7 @@ function withinTolerance(a: number, b: number): boolean {
 function checkIncomeStatement(
   lineItems: Record<string, number | null>,
   period: string,
+  unitScale?: UnitScale | string | null,
 ): StatementCheck[] {
   const checks: StatementCheck[] = [];
   const li = (k: string) => lineItems[k] ?? null;
@@ -161,8 +245,8 @@ function checkIncomeStatement(
       passed: withinTolerance(calc, grossProfit),
       severity: 'error',
       message: withinTolerance(calc, grossProfit)
-        ? `Gross profit checks out: ${fmtVal(revenue)} - ${fmtVal(cogs)} ≈ ${fmtVal(grossProfit)}`
-        : `Gross profit mismatch: Revenue ${fmtVal(revenue)} - COGS ${fmtVal(cogs)} = ${fmtVal(calc)}, but extracted ${fmtVal(grossProfit)}`,
+        ? `Gross profit checks out: ${fmtVal(revenue, unitScale)} - ${fmtVal(cogs, unitScale)} ≈ ${fmtVal(grossProfit, unitScale)}`
+        : `Gross profit mismatch: Revenue ${fmtVal(revenue, unitScale)} - COGS ${fmtVal(cogs, unitScale)} = ${fmtVal(calc, unitScale)}, but extracted ${fmtVal(grossProfit, unitScale)}`,
       period,
     });
   }
@@ -175,7 +259,7 @@ function checkIncomeStatement(
       passed: !exceeds,
       severity: 'error',
       message: exceeds
-        ? `EBITDA ${fmtVal(ebitda)} exceeds revenue ${fmtVal(revenue)} — likely an extraction error`
+        ? `EBITDA ${fmtVal(ebitda, unitScale)} exceeds revenue ${fmtVal(revenue, unitScale)} — likely an extraction error`
         : `EBITDA is within revenue bounds`,
       period,
     });
@@ -193,15 +277,26 @@ function checkIncomeStatement(
         period,
       });
     }
+    // Revenue-floor gate: suppress the "unusually high margin" warning for
+    // companies below $5M revenue. Small SaaS / IP-licence / early-stage
+    // businesses legitimately run >95% margin and the warning is noise.
+    // Below the floor we still flag losses, but we don't second-guess high
+    // margins — they're expected at that scale.
+    const revenueUSD = toActualDollars(revenue, unitScale);
+    const isSmallCompany = revenueUSD !== null && revenueUSD < HIGH_MARGIN_REVENUE_FLOOR_USD;
+    const highMargin = calcMargin > 60;
+    const flagAsHighMargin = highMargin && !isSmallCompany;
     checks.push({
       check: 'is_ebitda_margin_sane',
       passed: calcMargin >= -50 && calcMargin <= 80,
-      severity: calcMargin > 60 ? 'warning' : 'info',
-      message: calcMargin > 60
+      severity: flagAsHighMargin ? 'warning' : 'info',
+      message: flagAsHighMargin
         ? `EBITDA margin of ${calcMargin.toFixed(1)}% is unusually high — verify`
-        : calcMargin < 0
-          ? `EBITDA margin of ${calcMargin.toFixed(1)}% indicates losses`
-          : `EBITDA margin of ${calcMargin.toFixed(1)}% is within normal range`,
+        : highMargin && isSmallCompany
+          ? `EBITDA margin of ${calcMargin.toFixed(1)}% — high but expected at this revenue scale`
+          : calcMargin < 0
+            ? `EBITDA margin of ${calcMargin.toFixed(1)}% indicates losses`
+            : `EBITDA margin of ${calcMargin.toFixed(1)}% is within normal range`,
       period,
     });
   }
@@ -214,8 +309,8 @@ function checkIncomeStatement(
       passed: withinTolerance(calc, ebit),
       severity: 'warning',
       message: withinTolerance(calc, ebit)
-        ? `EBIT math checks out: EBITDA ${fmtVal(ebitda)} - D&A ${fmtVal(da)} ≈ EBIT ${fmtVal(ebit)}`
-        : `EBIT mismatch: EBITDA ${fmtVal(ebitda)} - D&A ${fmtVal(da)} = ${fmtVal(calc)}, but extracted EBIT ${fmtVal(ebit)}`,
+        ? `EBIT math checks out: EBITDA ${fmtVal(ebitda, unitScale)} - D&A ${fmtVal(da, unitScale)} ≈ EBIT ${fmtVal(ebit, unitScale)}`
+        : `EBIT mismatch: EBITDA ${fmtVal(ebitda, unitScale)} - D&A ${fmtVal(da, unitScale)} = ${fmtVal(calc, unitScale)}, but extracted EBIT ${fmtVal(ebit, unitScale)}`,
       period,
     });
   }
@@ -227,6 +322,7 @@ function checkIncomeStatement(
 function checkBalanceSheet(
   lineItems: Record<string, number | null>,
   period: string,
+  unitScale?: UnitScale | string | null,
 ): StatementCheck[] {
   const checks: StatementCheck[] = [];
   const li = (k: string) => lineItems[k] ?? null;
@@ -245,8 +341,8 @@ function checkBalanceSheet(
       passed: withinTolerance(calc, totalAssets),
       severity: 'error',
       message: withinTolerance(calc, totalAssets)
-        ? `Balance sheet balances: Assets ≈ Liabilities + Equity (${fmtVal(totalAssets)})`
-        : `Balance sheet doesn't balance: Assets ${fmtVal(totalAssets)} ≠ Liabilities ${fmtVal(totalLiabilities)} + Equity ${fmtVal(totalEquity)} = ${fmtVal(calc)}`,
+        ? `Balance sheet balances: Assets ≈ Liabilities + Equity (${fmtVal(totalAssets, unitScale)})`
+        : `Balance sheet doesn't balance: Assets ${fmtVal(totalAssets, unitScale)} ≠ Liabilities ${fmtVal(totalLiabilities, unitScale)} + Equity ${fmtVal(totalEquity, unitScale)} = ${fmtVal(calc, unitScale)}`,
       period,
     });
   }
@@ -257,7 +353,7 @@ function checkBalanceSheet(
       check: 'bs_current_assets_sane',
       passed: false,
       severity: 'error',
-      message: `Current assets ${fmtVal(totalCurrentAssets)} exceed total assets ${fmtVal(totalAssets)} — extraction error`,
+      message: `Current assets ${fmtVal(totalCurrentAssets, unitScale)} exceed total assets ${fmtVal(totalAssets, unitScale)} — extraction error`,
       period,
     });
   }
@@ -268,7 +364,7 @@ function checkBalanceSheet(
       check: 'bs_current_liabilities_sane',
       passed: false,
       severity: 'error',
-      message: `Current liabilities ${fmtVal(totalCurrentLiabilities)} exceed total liabilities ${fmtVal(totalLiabilities)} — extraction error`,
+      message: `Current liabilities ${fmtVal(totalCurrentLiabilities, unitScale)} exceed total liabilities ${fmtVal(totalLiabilities, unitScale)} — extraction error`,
       period,
     });
   }
@@ -280,6 +376,7 @@ function checkBalanceSheet(
 function checkCashFlow(
   lineItems: Record<string, number | null>,
   period: string,
+  unitScale?: UnitScale | string | null,
 ): StatementCheck[] {
   const checks: StatementCheck[] = [];
   const li = (k: string) => lineItems[k] ?? null;
@@ -298,8 +395,8 @@ function checkCashFlow(
       passed: withinTolerance(calc, fcf),
       severity: 'warning',
       message: withinTolerance(calc, fcf)
-        ? `FCF checks out: Operating CF ${fmtVal(operatingCf)} - CapEx ${fmtVal(capexAbs)} ≈ FCF ${fmtVal(fcf)}`
-        : `FCF mismatch: ${fmtVal(operatingCf)} - ${fmtVal(capexAbs)} = ${fmtVal(calc)}, but extracted FCF ${fmtVal(fcf)}`,
+        ? `FCF checks out: Operating CF ${fmtVal(operatingCf, unitScale)} - CapEx ${fmtVal(capexAbs, unitScale)} ≈ FCF ${fmtVal(fcf, unitScale)}`
+        : `FCF mismatch: ${fmtVal(operatingCf, unitScale)} - ${fmtVal(capexAbs, unitScale)} = ${fmtVal(calc, unitScale)}, but extracted FCF ${fmtVal(fcf, unitScale)}`,
       period,
     });
   }
@@ -307,50 +404,80 @@ function checkCashFlow(
   return checks;
 }
 
-/** Subtask 4e — YoY growth sanity across sorted periods */
+/** Subtask 4e — YoY growth sanity across sorted periods.
+ *
+ * The pairwise growth scan must only compare like-for-like periods. Historical
+ * rows are first bucketed by inferred period scope (annual / quarterly /
+ * monthly / ytd / ltm / mtd / estimate / other) — we only compute deltas
+ * between consecutive rows in the SAME scope. Without this, the scan
+ * happily produced nonsense like
+ *   "Revenue growth from Current Monthly to Current ARR is 1093.8%"
+ * because ARR ≈ MRR × 12 — a unit-of-aggregation difference, not growth.
+ *
+ * Mirrors the frontend grouping at
+ * apps/web-next/src/app/(app)/deals/[id]/deal-financials-period-scope.ts
+ * (`groupRowsByScope`) — same bucket set, same intent.
+ */
 function checkYoYGrowth(
   periods: Array<{ period: string; periodType: string; lineItems: Record<string, number | null> }>,
+  unitScale?: UnitScale | string | null,
 ): StatementCheck[] {
   const checks: StatementCheck[] = [];
 
-  // Only check historical periods in chronological order
-  const historical = periods
-    .filter(p => p.periodType === 'HISTORICAL')
-    .sort((a, b) => a.period.localeCompare(b.period));
+  // Only check historical periods. Group by inferred scope FIRST so we don't
+  // compute deltas across different aggregations (e.g. monthly → ARR,
+  // YTD-cumulative → MTD-single-month, monthly → annual). Then sort within
+  // each bucket chronologically and walk pairwise.
+  const historical = periods.filter(p => p.periodType === 'HISTORICAL');
+  const buckets = new Map<PeriodScope, typeof historical>();
+  for (const p of historical) {
+    const scope = inferPeriodScope(p.period);
+    const arr = buckets.get(scope) ?? [];
+    arr.push(p);
+    buckets.set(scope, arr);
+  }
 
-  for (let i = 1; i < historical.length; i++) {
-    const prev = historical[i - 1];
-    const curr = historical[i];
-    const prevRev = prev.lineItems['revenue'] ?? null;
-    const currRev = curr.lineItems['revenue'] ?? null;
+  for (const rows of buckets.values()) {
+    // A single row in a bucket has nothing to compare against — skip.
+    if (rows.length < 2) continue;
+    const sorted = [...rows].sort((a, b) =>
+      comparePeriodChronologically(a.period, b.period),
+    );
 
-    if (prevRev !== null && currRev !== null && prevRev > 0) {
-      const growth = pct(currRev - prevRev, prevRev);
-      // 4e: Flag >100% or < -50% swings
-      if (Math.abs(growth) > 100) {
-        checks.push({
-          check: 'yoy_revenue_growth_sane',
-          passed: false,
-          severity: 'warning',
-          message: `Revenue growth from ${prev.period} to ${curr.period} is ${growth.toFixed(1)}% — verify (${fmtVal(prevRev)} → ${fmtVal(currRev)})`,
-          period: curr.period,
-        });
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1];
+      const curr = sorted[i];
+      const prevRev = prev.lineItems['revenue'] ?? null;
+      const currRev = curr.lineItems['revenue'] ?? null;
+
+      if (prevRev !== null && currRev !== null && prevRev > 0) {
+        const growth = pct(currRev - prevRev, prevRev);
+        // 4e: Flag >100% or < -50% swings
+        if (Math.abs(growth) > 100) {
+          checks.push({
+            check: 'yoy_revenue_growth_sane',
+            passed: false,
+            severity: 'warning',
+            message: `Revenue growth from ${prev.period} to ${curr.period} is ${growth.toFixed(1)}% — verify (${fmtVal(prevRev, unitScale)} → ${fmtVal(currRev, unitScale)})`,
+            period: curr.period,
+          });
+        }
       }
-    }
 
-    const prevEbitda = prev.lineItems['ebitda'] ?? null;
-    const currEbitda = curr.lineItems['ebitda'] ?? null;
-    if (prevRev !== null && prevRev > 0 && currRev !== null && currRev > 0 && prevEbitda !== null && currEbitda !== null) {
-      const prevMargin = pct(prevEbitda, prevRev);
-      const currMargin = pct(currEbitda, currRev);
-      if (Math.abs(currMargin - prevMargin) > 20) {
-        checks.push({
-          check: 'yoy_margin_swing_sane',
-          passed: false,
-          severity: 'warning',
-          message: `EBITDA margin swung ${(currMargin - prevMargin).toFixed(1)}pp from ${prev.period} (${prevMargin.toFixed(1)}%) to ${curr.period} (${currMargin.toFixed(1)}%) — verify`,
-          period: curr.period,
-        });
+      const prevEbitda = prev.lineItems['ebitda'] ?? null;
+      const currEbitda = curr.lineItems['ebitda'] ?? null;
+      if (prevRev !== null && prevRev > 0 && currRev !== null && currRev > 0 && prevEbitda !== null && currEbitda !== null) {
+        const prevMargin = pct(prevEbitda, prevRev);
+        const currMargin = pct(currEbitda, currRev);
+        if (Math.abs(currMargin - prevMargin) > 20) {
+          checks.push({
+            check: 'yoy_margin_swing_sane',
+            passed: false,
+            severity: 'warning',
+            message: `EBITDA margin swung ${(currMargin - prevMargin).toFixed(1)}pp from ${prev.period} (${prevMargin.toFixed(1)}%) to ${curr.period} (${currMargin.toFixed(1)}%) — verify`,
+            period: curr.period,
+          });
+        }
       }
     }
   }
@@ -371,11 +498,11 @@ export function validateStatements(statements: ClassifiedStatement[]): Statement
       let periodChecks: StatementCheck[] = [];
 
       if (stmt.statementType === 'INCOME_STATEMENT') {
-        periodChecks = checkIncomeStatement(period.lineItems, period.period);
+        periodChecks = checkIncomeStatement(period.lineItems, period.period, stmt.unitScale);
       } else if (stmt.statementType === 'BALANCE_SHEET') {
-        periodChecks = checkBalanceSheet(period.lineItems, period.period);
+        periodChecks = checkBalanceSheet(period.lineItems, period.period, stmt.unitScale);
       } else if (stmt.statementType === 'CASH_FLOW') {
-        periodChecks = checkCashFlow(period.lineItems, period.period);
+        periodChecks = checkCashFlow(period.lineItems, period.period, stmt.unitScale);
       }
 
       allChecks.push(...periodChecks);
@@ -383,7 +510,7 @@ export function validateStatements(statements: ClassifiedStatement[]): Statement
 
     // YoY growth checks across all periods for income statements
     if (stmt.statementType === 'INCOME_STATEMENT') {
-      allChecks.push(...checkYoYGrowth(stmt.periods));
+      allChecks.push(...checkYoYGrowth(stmt.periods, stmt.unitScale));
     }
   }
 

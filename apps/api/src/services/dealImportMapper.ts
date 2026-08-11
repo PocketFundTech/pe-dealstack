@@ -1,6 +1,20 @@
-import { parse } from 'csv-parse/sync';
-import XLSX from 'xlsx';
+import { createRequire } from 'module';
+import type * as XLSX from 'xlsx';
+import type { parse as csvParse } from 'csv-parse/sync';
 import { log } from '../utils/logger.js';
+
+// `xlsx` (~5MB) and `csv-parse` are only needed when a user actually imports a
+// spreadsheet/CSV. Load them lazily via require() so they don't load at module
+// init on every lite serverless cold start. Type-only imports keep type info.
+const require = createRequire(import.meta.url);
+let _xlsx: typeof XLSX | null = null;
+function getXLSX(): typeof XLSX {
+  return (_xlsx ??= require('xlsx'));
+}
+let _csvParse: typeof csvParse | null = null;
+function getCsvParse(): typeof csvParse {
+  return (_csvParse ??= require('csv-parse/sync').parse);
+}
 
 // ============================================
 // Types
@@ -46,7 +60,7 @@ export interface ValidatedDeal {
 
 export function parseCSV(text: string): Record<string, string>[] {
   try {
-    const records = parse(text, {
+    const records = getCsvParse()(text, {
       columns: true,
       skip_empty_lines: true,
       trim: true,
@@ -62,6 +76,7 @@ export function parseCSV(text: string): Record<string, string>[] {
 
 export function parseExcel(buffer: Buffer): { rows: Record<string, string>[]; warnings: string[] } {
   try {
+    const XLSX = getXLSX();
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) throw new Error('Excel file has no sheets');

@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   formatCurrency,
   formatFileSize,
+  formatFinancialValue,
   formatNumber,
+  formatPercent,
   formatRelativeTime,
   getCurrencySymbol,
   getDealDisplayName,
@@ -29,6 +31,82 @@ describe("formatCurrency", () => {
 
   it("defaults to USD when currency omitted", () => {
     expect(formatCurrency(100)).toBe("$100M");
+  });
+});
+
+describe("formatFinancialValue", () => {
+  it("returns em-dash for null/undefined/NaN", () => {
+    expect(formatFinancialValue(null)).toBe("—");
+    expect(formatFinancialValue(undefined)).toBe("—");
+    expect(formatFinancialValue(NaN, "MILLIONS")).toBe("—");
+  });
+
+  it("converts MILLIONS to actual dollars and auto-scales (small)", () => {
+    // 0.0067 M = $6,700 -> "$6.7K"
+    expect(formatFinancialValue(0.0067, "MILLIONS")).toBe("$6.7K");
+  });
+
+  it("formats ACTUALS at K range", () => {
+    expect(formatFinancialValue(6700, "ACTUALS")).toBe("$6.7K");
+  });
+
+  it("treats undefined unitScale as ACTUALS", () => {
+    expect(formatFinancialValue(6700)).toBe("$6.7K");
+  });
+
+  it("formats THOUSANDS at K", () => {
+    expect(formatFinancialValue(53.7, "THOUSANDS")).toBe("$53.7K");
+  });
+
+  it("formats BILLIONS at B", () => {
+    expect(formatFinancialValue(1.5, "BILLIONS")).toBe("$1.5B");
+  });
+
+  it("formats MILLIONS large value at M", () => {
+    expect(formatFinancialValue(320, "MILLIONS")).toBe("$320.0M");
+  });
+
+  it("auto-scales to B when MILLIONS crosses 1000", () => {
+    expect(formatFinancialValue(1500, "MILLIONS")).toBe("$1.5B");
+  });
+
+  it("renders raw < 1000 with no suffix", () => {
+    expect(formatFinancialValue(650, "ACTUALS")).toBe("$650");
+  });
+
+  it("respects currency symbol", () => {
+    expect(formatFinancialValue(1.5, "BILLIONS", { currency: "EUR" })).toBe("€1.5B");
+  });
+
+  it("uses INR Cr/L scale", () => {
+    // 10M actual = 1 Cr
+    expect(formatFinancialValue(10, "MILLIONS", { currency: "INR" })).toBe("₹1.0Cr");
+    // 500K actual = 5 L
+    expect(formatFinancialValue(500, "THOUSANDS", { currency: "INR" })).toBe("₹5.0L");
+  });
+
+  it("respects custom precision", () => {
+    expect(formatFinancialValue(1.234, "BILLIONS", { precision: 2 })).toBe("$1.23B");
+  });
+
+  it("renders negatives with leading minus", () => {
+    expect(formatFinancialValue(-2.5, "MILLIONS")).toBe("-$2.5M");
+  });
+});
+
+describe("formatPercent", () => {
+  it("returns em-dash for nullish/NaN", () => {
+    expect(formatPercent(null)).toBe("—");
+    expect(formatPercent(undefined)).toBe("—");
+    expect(formatPercent(NaN)).toBe("—");
+  });
+
+  it("formats with default 1 decimal", () => {
+    expect(formatPercent(12.345)).toBe("12.3%");
+  });
+
+  it("respects custom decimals", () => {
+    expect(formatPercent(12.345, 0)).toBe("12%");
   });
 });
 

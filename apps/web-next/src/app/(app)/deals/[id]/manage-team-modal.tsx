@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import type { TeamMember } from "./components";
+import type { TeamMember } from "./deal-detail-shared";
 
 type Role = "LEAD" | "MEMBER" | "VIEWER";
 

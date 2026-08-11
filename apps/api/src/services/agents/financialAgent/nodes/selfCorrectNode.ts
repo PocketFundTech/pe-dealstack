@@ -17,7 +17,16 @@ import { MODEL_CLASSIFICATION } from '../../../../utils/aiModels.js';
 import { classifyFinancialsVision } from '../../../visionExtractor.js';
 import { log } from '../../../../utils/logger.js';
 import { captureAgentError } from '../../../../utils/sentryHelpers.js';
-import type { ClassifiedStatement, ClassificationResult } from '../../../financialClassifier.js';
+import {
+  normalizeClassificationResult,
+  applyExplicitUnitOverride,
+  applySmallDollarActualsOverride,
+  applySourceTextDollarOverride,
+  detectExplicitUnitInText,
+  hasExplicitSmallDollarAmounts,
+  type ClassifiedStatement,
+  type ClassificationResult,
+} from '../../../financialClassifier.js';
 import type { FinancialAgentStateType } from '../state.js';
 import type { AgentStep, FailedCheck } from '../state.js';
 
@@ -53,7 +62,7 @@ RULES:
 1. Focus specifically on the issues listed above
 2. Double-check your math: Revenue - COGS must equal Gross Profit, Assets must equal Liabilities + Equity, etc.
 3. If a value truly cannot be determined from the text, use null — do not guess
-4. Normalize all values to MILLIONS USD
+4. Preserve the source's unit scale. Set unitScale to whatever the source uses: MILLIONS, THOUSANDS, ACTUALS, or BILLIONS. Do NOT convert values — store them at the source's scale (e.g., a startup spreadsheet showing "$6,700" in actual dollars stays as 6700 with unitScale "ACTUALS", NOT 0.0067 with "MILLIONS").
 5. confidence: only use 90+ if you are certain the value is correct
 
 INCOME STATEMENT line item keys:
@@ -69,12 +78,12 @@ long_term_debt, total_liabilities, total_equity
 CASH FLOW line item keys:
 operating_cf, capex, fcf, acquisitions, debt_repayment, dividends, net_change_cash
 
-Return ONLY valid JSON:
+Return ONLY valid JSON. Set unitScale to whatever matches the source: "MILLIONS" | "THOUSANDS" | "ACTUALS" | "BILLIONS". Example below uses THOUSANDS — do NOT default to MILLIONS, mirror the source:
 {
   "statements": [
     {
       "statementType": "BALANCE_SHEET",
-      "unitScale": "MILLIONS",
+      "unitScale": "<MILLIONS|THOUSANDS|ACTUALS|BILLIONS — match the source>",
       "currency": "USD",
       "periods": [
         {
@@ -178,7 +187,17 @@ export async function selfCorrectNode(
 
       const content = response.choices[0]?.message?.content;
       if (content) {
-        correctedClassification = JSON.parse(content) as ClassificationResult;
+        // The targeted-correction LLM call bypasses classifyFinancials() and
+        // hence its post-processing. Run the same normalize + override
+        // pipeline here so unit-scale classifications coming back from the
+        // correction model don't sneak past the deterministic guards.
+        const rawCorrection = JSON.parse(content) as unknown;
+        correctedClassification = normalizeClassificationResult(rawCorrection);
+        const explicitUnit = detectExplicitUnitInText(rawText);
+        const hasSmallDollars = hasExplicitSmallDollarAmounts(rawText);
+        applyExplicitUnitOverride(correctedClassification, explicitUnit);
+        applySmallDollarActualsOverride(correctedClassification, hasSmallDollars, explicitUnit);
+        applySourceTextDollarOverride(correctedClassification);
         steps.push(step(
           'self_correct',
           `AI returned ${correctedClassification.statements?.length ?? 0} corrected statement(s)`,
@@ -211,6 +230,29 @@ export async function selfCorrectNode(
 
     // ── Merge corrections into original statements ──
     const mergedStatements = mergeStatements(statements, correctedClassification.statements);
+
+    // Re-apply the deterministic unit guards across the MERGED statements.
+    // mergeStatements may have copied a corrected period into a statement
+    // whose unitScale (set at the original-extraction LLM stage) was wrong.
+    // The source-quote dollar override is cheap, idempotent on already-
+    // ACTUALS rows, and the canonical hook before storeNode — running it
+    // here catches mis-tagged synthesized periods (LTM / Current Month)
+    // that the initial extraction missed.
+    //
+    // RETRO-FIX (manual SQL for already-persisted bad rows on a deal):
+    //   UPDATE "FinancialStatement"
+    //   SET "unitScale" = 'ACTUALS'
+    //   WHERE "dealId" = '<dealId>'
+    //     AND "unitScale" IN ('MILLIONS','THOUSANDS','BILLIONS')
+    //     AND ("lineItems"::jsonb -> 'revenue_source')::text ~ '\$\s*\d{1,3}(,\d{3})*(\.\d+)?'
+    //     AND ABS(("lineItems"::jsonb ->> 'revenue')::numeric) < 100000;
+    // (Cast/regex tweaks may be needed; the JSONB column is at lineItems.)
+    const mergedClassification: ClassificationResult = {
+      statements: mergedStatements,
+      overallConfidence: state.overallConfidence,
+      warnings: state.warnings,
+    };
+    applySourceTextDollarOverride(mergedClassification);
 
     // Recalculate overall confidence from merged data
     const allConfidences: number[] = [];

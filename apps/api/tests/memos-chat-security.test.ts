@@ -24,6 +24,7 @@ vi.mock('../src/services/agents/memoAgent/index.js', () => ({
   runMemoChatAgent: vi.fn(),
 }));
 vi.mock('../src/services/llm.js', () => ({ isLLMAvailable: () => true }));
+vi.mock('../src/services/firmContextService.js', () => ({ getFirmContextBlock: async () => '' }));
 vi.mock('../src/utils/aiModels.js', () => ({ MODEL_REASONING: 'mock-model' }));
 vi.mock('../src/utils/aiErrors.js', () => ({
   classifyAIErrorObject: () => ({ statusCode: 500, userMessage: 'fail' }),

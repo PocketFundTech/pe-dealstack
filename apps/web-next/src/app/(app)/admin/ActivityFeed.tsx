@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { authFetchRaw } from "../deal-intake/components";
 import { formatRelativeTime } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
 import {
@@ -14,6 +15,65 @@ import {
 import type { AdminAuditLog } from "./types";
 
 const PAGE_SIZE = 10;
+
+type DateRange = "all" | "7d" | "30d" | "90d";
+
+interface AuditFilters {
+  range: DateRange;
+  action: string;
+  resourceType: string;
+}
+
+const DEFAULT_FILTERS: AuditFilters = {
+  range: "all",
+  action: "",
+  resourceType: "",
+};
+
+const RESOURCE_TYPES: Array<{ value: string; label: string }> = [
+  { value: "", label: "All resource types" },
+  { value: "DEAL", label: "Deal" },
+  { value: "DOCUMENT", label: "Document" },
+  { value: "MEMO", label: "Memo" },
+  { value: "USER", label: "User" },
+  { value: "ORGANIZATION", label: "Organization" },
+  { value: "FOLDER", label: "Folder" },
+];
+
+const COMMON_ACTIONS: Array<{ value: string; label: string }> = [
+  { value: "", label: "All actions" },
+  { value: "DEAL_VIEWED", label: "Deal viewed" },
+  { value: "DEAL_CREATED", label: "Deal created" },
+  { value: "DEAL_UPDATED", label: "Deal updated" },
+  { value: "DOCUMENT_UPLOADED", label: "Document uploaded" },
+  { value: "DOCUMENT_DOWNLOADED", label: "Document downloaded" },
+  { value: "MEMO_CREATED", label: "Memo created" },
+  { value: "USER_INVITED", label: "User invited" },
+  { value: "SECURITY_TEST_RUN", label: "Isolation test run" },
+];
+
+function rangeToStart(r: DateRange): string | null {
+  if (r === "all") return null;
+  const days = r === "7d" ? 7 : r === "30d" ? 30 : 90;
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString();
+}
+
+function buildAuditQuery(
+  filters: AuditFilters,
+  limit: number,
+  offset: number,
+): string {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  if (filters.action) params.set("action", filters.action);
+  if (filters.resourceType) params.set("resourceType", filters.resourceType);
+  const start = rangeToStart(filters.range);
+  if (start) params.set("startDate", start);
+  return params.toString();
+}
 
 // Mirrors legacy getInitials in activity-formatters.js —
 // splits on whitespace AND `@` so an email-derived display name still produces
@@ -38,9 +98,11 @@ export function ActivityFeed() {
   const [error, setError] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [filters, setFilters] = useState<AuditFilters>(DEFAULT_FILTERS);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(
-    async (append: boolean) => {
+    async (append: boolean, activeFilters: AuditFilters) => {
       const nextOffset = append ? offset : 0;
       if (append) setLoadingMore(true);
       else {
@@ -48,9 +110,8 @@ export function ActivityFeed() {
         setError(false);
       }
       try {
-        const data = await api.get<{ logs: AdminAuditLog[] }>(
-          `/audit?limit=${PAGE_SIZE}&offset=${nextOffset}`,
-        );
+        const qs = buildAuditQuery(activeFilters, PAGE_SIZE, nextOffset);
+        const data = await api.get<{ logs: AdminAuditLog[] }>(`/audit?${qs}`);
         const newLogs = data.logs || [];
         setLogs((prev) => (append ? prev.concat(newLogs) : newLogs));
         setOffset(nextOffset + newLogs.length);
@@ -67,9 +128,42 @@ export function ActivityFeed() {
   );
 
   useEffect(() => {
-    load(false);
+    load(false, filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [filters.range, filters.action, filters.resourceType]);
+
+  const exportCsv = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const qs = new URLSearchParams();
+      if (filters.action) qs.set("action", filters.action);
+      if (filters.resourceType) qs.set("resourceType", filters.resourceType);
+      const start = rangeToStart(filters.range);
+      if (start) qs.set("startDate", start);
+      const res = await authFetchRaw(`/audit/export.csv?${qs.toString()}`);
+      if (!res.ok) {
+        throw new Error(`Export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        res.headers
+          .get("content-disposition")
+          ?.match(/filename="([^"]+)"/)?.[1] ||
+        `pocket-fund-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.warn("[admin] audit CSV export failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const grouped = groupLogsByDay(logs as AuditLog[]);
 
@@ -78,11 +172,74 @@ export function ActivityFeed() {
       className="bg-surface-card rounded-xl border border-border-subtle shadow-card flex flex-col"
       style={{ height: 420 }}
     >
-      <div className="p-5 border-b border-border-subtle">
-        <h2 className="text-base font-semibold text-text-main flex items-center gap-2">
-          <span className="material-symbols-outlined text-text-muted text-[20px]">rss_feed</span>
-          Team Activity
-        </h2>
+      <div className="p-5 border-b border-border-subtle space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-text-main flex items-center gap-2">
+            <span className="material-symbols-outlined text-text-muted text-[20px]">rss_feed</span>
+            Team Activity
+          </h2>
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={exporting}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border border-border-subtle bg-white text-text-main hover:bg-gray-50 transition-colors disabled:opacity-50"
+            title="Export filtered audit log as CSV"
+          >
+            <span className="material-symbols-outlined text-[16px]">download</span>
+            {exporting ? "Exporting..." : "Export CSV"}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={filters.range}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, range: e.target.value as DateRange }))
+            }
+            className="text-xs rounded-md border border-border-subtle bg-white px-2 py-1.5 font-medium text-text-main focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+          >
+            <option value="all">All time</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="90d">Last 90 days</option>
+          </select>
+          <select
+            value={filters.action}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, action: e.target.value }))
+            }
+            className="text-xs rounded-md border border-border-subtle bg-white px-2 py-1.5 font-medium text-text-main focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+          >
+            {COMMON_ACTIONS.map((a) => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filters.resourceType}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, resourceType: e.target.value }))
+            }
+            className="text-xs rounded-md border border-border-subtle bg-white px-2 py-1.5 font-medium text-text-main focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+          >
+            {RESOURCE_TYPES.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+          {(filters.range !== "all" ||
+            filters.action ||
+            filters.resourceType) && (
+            <button
+              type="button"
+              onClick={() => setFilters(DEFAULT_FILTERS)}
+              className="text-xs text-text-muted hover:text-primary font-medium transition-colors"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-5 relative custom-scrollbar">
         {/* Vertical timeline rail — matches admin-dashboard.html .activity-timeline::before:
@@ -108,7 +265,7 @@ export function ActivityFeed() {
             <p className="text-sm font-medium">Could not load activity</p>
             <button
               type="button"
-              onClick={() => load(false)}
+              onClick={() => load(false, filters)}
               className="mt-3 text-sm text-primary font-medium hover:text-primary-hover transition-colors"
             >
               Retry
@@ -139,7 +296,7 @@ export function ActivityFeed() {
         <div className="p-3 border-t border-border-subtle text-center">
           <button
             type="button"
-            onClick={() => load(true)}
+            onClick={() => load(true, filters)}
             disabled={loadingMore}
             className="text-xs text-text-muted hover:text-primary font-medium uppercase tracking-wide transition-colors disabled:opacity-50"
           >

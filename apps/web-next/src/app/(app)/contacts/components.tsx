@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
+import { api, NotFoundError } from "@/lib/api";
+import { STORAGE_KEYS } from "@/lib/storageKeys";
 
 // ─── Shared Types & Constants ──────────────────────────────
 
@@ -18,10 +20,13 @@ export interface Contact {
   tags?: string[];
   linkedinUrl?: string;
   lastInteractionAt?: string;
+  followUpAt?: string | null;
   interactions?: Interaction[];
   linkedDeals?: LinkedDeal[];
   createdAt: string;
   updatedAt: string;
+  /** Raw HubSpot properties kept verbatim by the importer; absent for non-imported contacts. */
+  hubspotProperties?: Record<string, string | null> | null;
 }
 
 export interface Interaction {
@@ -204,10 +209,158 @@ export function DeleteConfirmModal({ onConfirm, onCancel }: { onConfirm: () => v
   );
 }
 
-// ─── Insight Cards ─────────────────────────────────────────
+// ─── Needs Attention (stale contacts) ──────────────────────
+//
+// Surfaces `GET /contacts/insights/stale` on the contacts list page. The
+// endpoint returns contacts that have never been contacted or haven't been
+// contacted within the threshold window. Previously this endpoint had no UI
+// caller. The card hides entirely when there are no stale contacts, when Gmail
+// isn't connected (endpoint may report `connected: false`), when the endpoint
+// 404s (NotFoundError → treated as empty), or when the banker dismisses it for
+// the session.
 
-// Sections hidden for now: Needs Attention, Recent Activity, Possible Duplicates, Network Stats
-export function InsightCards(_props: { totalContacts: number }) {
-  return null;
+const STALE_TOP_N = 5;
+
+interface StaleContact {
+  id: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  type?: string | null;
+  company?: string | null;
+  email?: string | null;
+  lastContactedAt?: string | null;
+  reason?: string | null;
+}
+
+interface StaleResponse {
+  contacts?: StaleContact[];
+  threshold?: number;
+  connected?: boolean;
+}
+
+function staleContactName(c: StaleContact): string {
+  const name = `${c.firstName || ""} ${c.lastName || ""}`.trim();
+  return name || c.email || "Unnamed contact";
+}
+
+function staleTiming(c: StaleContact): string {
+  if (!c.lastContactedAt) return "Never contacted";
+  const days = Math.floor((Date.now() - new Date(c.lastContactedAt).getTime()) / 86400000);
+  if (days <= 0) return "Contacted today";
+  return `${days}d since last contact`;
+}
+
+function StaleItem({ c, onOpen }: { c: StaleContact; onOpen: (id: string) => void }) {
+  const neverContacted = !c.lastContactedAt;
+  return (
+    <button
+      onClick={() => onOpen(c.id)}
+      className="flex items-center justify-between gap-3 w-full text-left px-3 py-2 rounded-lg bg-surface-card border border-border-subtle hover:border-primary/30 hover:shadow-sm transition-all"
+    >
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-text-main truncate">{staleContactName(c)}</p>
+        {c.company && <p className="text-xs text-text-muted truncate">{c.company}</p>}
+      </div>
+      <span
+        className={cn(
+          "shrink-0 px-2 py-0.5 rounded-full text-[11px] font-bold",
+          neverContacted ? "bg-slate-100 text-slate-600" : "bg-orange-50 text-orange-600"
+        )}
+      >
+        {staleTiming(c)}
+      </span>
+    </button>
+  );
+}
+
+export function InsightCards({ onOpenContact }: { totalContacts: number; onOpenContact: (id: string) => void }) {
+  const [contacts, setContacts] = useState<StaleContact[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  // Lazy-init from sessionStorage so we don't sync state in an effect
+  // (matches the quick-notes widget idiom).
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem(STORAGE_KEYS.contactsStaleDismissed) === "1";
+    } catch (err) {
+      console.warn("[contacts] stale dismiss read failed:", err);
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    let active = true;
+    api
+      .get<StaleResponse>("/contacts/insights/stale")
+      .then((res) => {
+        if (!active) return;
+        // `connected: false` (Gmail not connected) → hide entirely.
+        setContacts(res.connected === false ? [] : res.contacts || []);
+      })
+      .catch((err) => {
+        if (!active) return;
+        // 404 → endpoint not available; treat as empty/hidden, not an error.
+        if (!(err instanceof NotFoundError)) {
+          console.warn("[contacts] stale load failed:", err);
+        }
+        setContacts([]);
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  function dismiss() {
+    setDismissed(true);
+    try {
+      sessionStorage.setItem(STORAGE_KEYS.contactsStaleDismissed, "1");
+    } catch (err) {
+      console.warn("[contacts] stale dismiss write failed:", err);
+    }
+  }
+
+  if (dismissed) return null;
+
+  // Loading: lightweight skeleton, never a blocking spinner.
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-border-subtle bg-surface-card p-4 flex flex-col gap-3">
+        <div className="h-4 w-40 rounded bg-slate-100 animate-pulse" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="h-12 rounded-lg bg-slate-100 animate-pulse" />
+          <div className="h-12 rounded-lg bg-slate-100 animate-pulse" />
+        </div>
+      </div>
+    );
+  }
+
+  // Empty / not connected / 404 → hide the card.
+  if (!contacts || contacts.length === 0) return null;
+
+  const top = contacts.slice(0, STALE_TOP_N);
+
+  return (
+    <div className="rounded-xl border border-orange-200 bg-orange-50/30 p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-orange-600 text-[20px]">schedule</span>
+          <h2 className="text-sm font-bold text-text-main">Needs attention</h2>
+          <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[11px] font-bold">
+            {contacts.length} stale
+          </span>
+        </div>
+        <button
+          onClick={dismiss}
+          className="text-text-muted hover:text-text-secondary transition-colors"
+          title="Dismiss"
+          aria-label="Dismiss needs attention"
+        >
+          <span className="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {top.map((c) => <StaleItem key={c.id} c={c} onOpen={onOpenContact} />)}
+      </div>
+    </div>
+  );
 }
 

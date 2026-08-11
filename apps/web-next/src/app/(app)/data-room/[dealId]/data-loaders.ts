@@ -14,6 +14,7 @@ import {
   transformInsights,
 } from "@/lib/vdr/api";
 import type { APIFolder, Folder, FolderInsights, VDRFile } from "@/lib/vdr/types";
+import { onDealsChanged } from "@/lib/appEvents";
 
 type TeamMembers = Array<{ id: string; role: string; user?: { name?: string; avatar?: string; email?: string } }>;
 
@@ -83,6 +84,36 @@ export function useInitialLoad({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dealId]);
+
+  // Refresh just the document list when an ingest reports this deal changed
+  // (e.g. a Google Drive import into this deal via the ingest modal) or when the
+  // tab regains focus (covers the background Gmail sync). Deliberately does NOT
+  // touch loading/folders/deal-name — only the file list goes stale on ingest —
+  // so a background refresh doesn't flash the whole page.
+  useEffect(() => {
+    let cancelled = false;
+    const reloadDocuments = async () => {
+      try {
+        const docs = await fetchDocuments(dealId);
+        if (!cancelled) setAllFiles(docs.map(transformDocument));
+      } catch (err) {
+        console.warn("[data-room] document refresh failed:", err);
+      }
+    };
+    const off = onDealsChanged((detail) => {
+      if (!detail.dealId || detail.dealId === dealId) reloadDocuments();
+    });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reloadDocuments();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      off();
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dealId, setAllFiles]);
 }
 
 interface UseFolderInsightsArgs {

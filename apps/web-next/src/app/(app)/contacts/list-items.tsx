@@ -6,9 +6,51 @@ import {
   Contact, TYPE_CONFIG, SCORE_CONFIG,
   getInitials, getRelationshipLabel,
 } from "./components";
+import {
+  STRENGTH_TIER_STYLE, strengthTierForContact, strengthTooltip,
+} from "@/lib/contacts/strength";
+
+// Small green/amber/gray relationship-strength pill — the core list-triage
+// affordance. Tier semantics live in lib/contacts/strength.ts so the list and
+// the detail panel agree. Renders even for unscored contacts (cold) so every
+// row carries a consistent signal.
+function StrengthPill({
+  contact, contactScores, className,
+}: {
+  contact: Contact;
+  contactScores: Record<string, { score: number; label: string }>;
+  className?: string;
+}) {
+  const score = contactScores[contact.id];
+  const tier = strengthTierForContact(score);
+  const style = STRENGTH_TIER_STYLE[tier];
+  return (
+    <span
+      title={strengthTooltip(score)}
+      className={cn(
+        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wide shrink-0",
+        style.bg, style.text, className,
+      )}
+    >
+      <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", style.dot)} />
+      {style.label}
+    </span>
+  );
+}
 
 // ─── Contact card (grid view) and row (list view) renderers ─────────────────
 // Extracted from page.tsx so the page module stays under the 500-line budget.
+
+// True when the contact's follow-up date is in the past (date-only compare).
+function isFollowUpOverdue(followUpAt?: string | null): boolean {
+  if (!followUpAt) return false;
+  const due = new Date(followUpAt);
+  if (Number.isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+  return due.getTime() < today.getTime();
+}
 
 export function ContactCard({
   contact,
@@ -29,6 +71,7 @@ export function ContactCard({
   const overflow = visibleTags.length - 4;
   const lastContacted = contact.lastInteractionAt ? `Contacted ${formatRelativeTime(contact.lastInteractionAt)}` : "Never contacted";
   const linkedDealsCount = contact.linkedDeals ? contact.linkedDeals.length : 0;
+  const followUpOverdue = isFollowUpOverdue(contact.followUpAt);
 
   return (
     <div onClick={onClick} className="cursor-pointer">
@@ -70,6 +113,11 @@ export function ContactCard({
         <div className="flex items-center justify-between mt-auto pt-3 border-t border-border-subtle">
           <span className="text-[11px] text-primary font-medium">{lastContacted}</span>
           <div className="flex items-center gap-2">
+            {followUpOverdue && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-red-100 text-red-700" title="Follow-up overdue">
+                <span className="material-symbols-outlined text-[12px]">event_busy</span>Due
+              </span>
+            )}
             {sd && <span className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold", sc.bg, sc.text)}><span className={cn("w-1.5 h-1.5 rounded-full shrink-0", sc.dot)} />{sd.score}</span>}
             {linkedDealsCount > 0 && (
               <span className="flex items-center gap-1 text-[11px] text-text-muted font-medium">
@@ -104,7 +152,13 @@ export function ContactRow({
         <div className="flex items-center gap-3">
           <div className="size-8 rounded-full flex items-center justify-center shrink-0 text-xs font-bold" style={{ backgroundColor: ts.avatarBg, color: ts.avatarText }}>{getInitials(contact.firstName, contact.lastName)}</div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-text-main truncate">{contact.firstName} {contact.lastName}</p>
+            <p className="text-sm font-semibold text-text-main truncate flex items-center gap-1.5">
+              {contact.firstName} {contact.lastName}
+              <StrengthPill contact={contact} contactScores={contactScores} />
+              {isFollowUpOverdue(contact.followUpAt) && (
+                <span className="material-symbols-outlined text-[14px] text-red-500 shrink-0" title="Follow-up overdue">event_busy</span>
+              )}
+            </p>
             {contact.title && <p className="text-xs text-text-muted truncate">{contact.title}</p>}
           </div>
         </div>
