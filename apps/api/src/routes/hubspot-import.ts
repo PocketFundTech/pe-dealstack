@@ -43,8 +43,15 @@ const BATCH_SIZE = 100; // mirrors importEngine.ts's BATCH constant
  * vercel.json caps this function at maxDuration 300s; stop well short of that
  * so the response (and the job-state write inside the final batch) always
  * lands rather than being cut off mid-flight.
+ *
+ * 90s of headroom (not 60): the budget is only checked BETWEEN batches, so
+ * the last batch started just under budget must fully complete inside the
+ * headroom — including up to three HubSpot calls that can each burn capped
+ * 429-backoff time (client.ts MAX_BACKOFF_MS) plus per-record DB round-trips.
+ * Yielding one round earlier costs a ~1s continue round-trip; overrunning
+ * costs a killed function and an error toast.
  */
-const TIME_BUDGET_MS = 240_000;
+const TIME_BUDGET_MS = 210_000;
 
 /**
  * Drive runImportBatch for one job, bounded by BOTH a batch cap and a wall-clock

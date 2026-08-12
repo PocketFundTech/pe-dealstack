@@ -62,6 +62,34 @@ describe('HubSpotClient', () => {
     expect(page.nextCursor).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  /**
+   * The 429 backoff sleeps for Retry-After seconds — a value controlled
+   * entirely by an external server — inside a Vercel function that is
+   * hard-killed at 300s. An uncapped wait (huge Retry-After, or a value
+   * denominated in ms instead of seconds) would sleep past the function
+   * deadline: lambda killed mid-request, client sees a network error, and
+   * the user is back to a stuck "Importing…". The wait must be capped.
+   */
+  it('caps the 429 backoff wait even when Retry-After is huge', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(mkRes(429, {}, { 'retry-after': '3600' })) // 1 hour
+        .mockResolvedValueOnce(mkRes(200, { results: [], paging: undefined }));
+      vi.stubGlobal('fetch', fetchMock);
+      const c = new HubSpotClient('tok');
+      const pending = c.listPage('contacts', { limit: 20 });
+      // Advance only 10s — if the wait were the full 3600s, the retry fetch
+      // would not have fired yet and this await would hang the test.
+      await vi.advanceTimersByTimeAsync(10_000);
+      const page = await pending;
+      expect(page.results).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('HubSpotClient.listPropertyNames', () => {
