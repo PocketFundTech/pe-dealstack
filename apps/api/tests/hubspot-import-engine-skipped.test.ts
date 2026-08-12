@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mocks BEFORE importing the module under test.
-const { mockSupabase, mockListPage, mockUpsertInteraction, capturedUpdates } = vi.hoisted(() => ({
+const { mockSupabase, mockListPage, mockUpsertInteraction, mockUpsertDealActivity, capturedUpdates } = vi.hoisted(() => ({
   mockSupabase: { from: vi.fn() },
   mockListPage: vi.fn(),
   mockUpsertInteraction: vi.fn(),
+  mockUpsertDealActivity: vi.fn(),
   capturedUpdates: [] as Array<Record<string, unknown>>,
 }));
 
@@ -24,6 +25,7 @@ vi.mock('../src/services/hubspot/client.js', () => ({
 vi.mock('../src/services/hubspot/dedup.js', () => ({
   upsertByHubspotId: vi.fn(),
   upsertContactInteractionByHubspotId: mockUpsertInteraction,
+  upsertDealActivityByHubspotId: mockUpsertDealActivity,
 }));
 
 const JOB_ROW = {
@@ -41,6 +43,7 @@ describe('runImportBatch — engagement contact-resolution accounting', () => {
     mockSupabase.from.mockReset();
     mockListPage.mockReset();
     mockUpsertInteraction.mockReset();
+    mockUpsertDealActivity.mockReset();
 
     mockSupabase.from.mockImplementation((table: string) => {
       if (table === 'ImportJob') {
@@ -65,6 +68,20 @@ describe('runImportBatch — engagement contact-resolution accounting', () => {
               eq: (_col: string, hubspotContactId: string) => ({
                 maybeSingle: async () => ({
                   data: hubspotContactId === 'hs-contact-1' ? { id: 'local-contact-1' } : null,
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === 'Deal') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: (_col: string, hubspotDealId: string) => ({
+                maybeSingle: async () => ({
+                  data: hubspotDealId === 'hs-deal-1' ? { id: 'local-deal-1' } : null,
                   error: null,
                 }),
               }),
@@ -111,5 +128,38 @@ describe('runImportBatch — engagement contact-resolution accounting', () => {
 
     const savedCounts = capturedUpdates.at(-1)?.objectCounts as any;
     expect(savedCounts.notes).toEqual({ processed: 2, created: 1, updated: 0, failed: 0, skipped: 1 });
+  });
+
+  it('falls back to the deal activity feed when no contact resolves but a deal does', async () => {
+    mockListPage.mockResolvedValueOnce({
+      results: [
+        {
+          id: 'note-3',
+          properties: { hs_note_body: 'deal-level note, no contact tagged', hs_timestamp: '1700000000000' },
+          associations: {
+            contacts: { results: [{ id: 'hs-contact-unknown' }] },
+            deals: { results: [{ id: 'hs-deal-1' }] },
+          },
+        },
+      ],
+      nextCursor: null,
+    });
+    mockUpsertDealActivity.mockResolvedValue('created');
+
+    const { runImportBatch } = await import('../src/services/hubspot/importEngine.js');
+    const more = await runImportBatch('job-1', 'fake-token');
+
+    expect(more).toBe(true);
+    expect(mockUpsertInteraction).not.toHaveBeenCalled();
+    expect(mockUpsertDealActivity).toHaveBeenCalledTimes(1);
+    expect(mockUpsertDealActivity).toHaveBeenCalledWith(
+      'local-deal-1',
+      'note-3',
+      expect.objectContaining({ type: 'NOTE_ADDED', title: 'Note' }),
+      'fill',
+    );
+
+    const savedCounts = capturedUpdates.at(-1)?.objectCounts as any;
+    expect(savedCounts.notes).toEqual({ processed: 1, created: 1, updated: 0, failed: 0, skipped: 0 });
   });
 });

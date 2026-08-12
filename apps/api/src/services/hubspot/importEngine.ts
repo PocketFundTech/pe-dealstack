@@ -3,12 +3,27 @@ import { log } from '../../utils/logger.js';
 import { HubSpotClient } from './client.js';
 import { mapCompany, mapContact, mapDeal } from './mappers.js';
 import { mapEngagement } from './engagementMappers.js';
-import { upsertByHubspotId, upsertContactInteractionByHubspotId, type ImportMode } from './dedup.js';
+import { upsertByHubspotId, upsertContactInteractionByHubspotId, upsertDealActivityByHubspotId, type ImportMode } from './dedup.js';
 import type { EngagementType, HubSpotObjectType } from './types.js';
 
 const ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals', 'notes', 'calls', 'meetings', 'emails', 'tasks'];
 const ENGAGEMENT_TYPES: EngagementType[] = ['notes', 'calls', 'meetings', 'emails', 'tasks'];
 const BATCH = 100;
+
+/**
+ * Activity.type + a fallback title per engagement type, used when an
+ * engagement has no resolvable contact and falls back to the deal's
+ * activity feed. Mirrors the type strings the deal-chat add_note tool
+ * already writes (apps/api/src/services/agents/dealChatAgent/tools/addNote.ts)
+ * so the deal activity feed renders a matching icon.
+ */
+const DEAL_ACTIVITY_META: Record<EngagementType, { type: string; fallbackTitle: string }> = {
+  notes: { type: 'NOTE_ADDED', fallbackTitle: 'Note' },
+  calls: { type: 'CALL_LOGGED', fallbackTitle: 'Call Logged' },
+  meetings: { type: 'MEETING_SCHEDULED', fallbackTitle: 'Meeting' },
+  emails: { type: 'EMAIL_SENT', fallbackTitle: 'Email' },
+  tasks: { type: 'TASK_ADDED', fallbackTitle: 'Task' },
+};
 
 /**
  * Deal pipeline stage labels are invariant for the whole import job, but
@@ -62,6 +77,17 @@ async function contactIdForHubspotId(orgId: string, hubspotContactId: string): P
 }
 
 /**
+ * Resolve a HubSpot deal id → the local Deal's id. Used as the fallback
+ * association for engagements with no resolvable contact.
+ */
+async function dealIdForHubspotId(orgId: string, hubspotDealId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('Deal').select('id')
+    .eq('organizationId', orgId).eq('hubspotId', hubspotDealId).maybeSingle();
+  return (data as { id?: string } | null)?.id ?? null;
+}
+
+/**
  * Process ONE batch for the job's current object. Returns true if more work remains.
  * @param mode 'fill' never overwrites existing local values; 'refresh' lets
  *   HubSpot win for the fields it maps, so corrections propagate on re-import.
@@ -108,6 +134,14 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     if (contactIdCache.has(hubspotContactId)) return contactIdCache.get(hubspotContactId) ?? null;
     const id = await contactIdForHubspotId(orgId, hubspotContactId);
     contactIdCache.set(hubspotContactId, id);
+    return id;
+  }
+
+  const dealIdCache = new Map<string, string | null>();
+  async function dealIdForHubspotIdCached(orgId: string, hubspotDealId: string) {
+    if (dealIdCache.has(hubspotDealId)) return dealIdCache.get(hubspotDealId) ?? null;
+    const id = await dealIdForHubspotId(orgId, hubspotDealId);
+    dealIdCache.set(hubspotDealId, id);
     return id;
   }
 
@@ -214,11 +248,33 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
           }
           counts[current][anyCreated ? 'created' : 'updated'] += 1;
         } else {
-          // No resolvable local contact: this phase is contact-scoped only
-          // (per spec), so the record is dropped rather than saved orphaned.
-          // Tracked separately so the job response can distinguish "nothing
-          // to import" from "imported everything" instead of looking identical.
-          counts[current].skipped += 1;
+          // No resolvable contact: PE workflows routinely log activity at
+          // the deal level with no single contact attached (diligence
+          // notes, internal call recaps) — that isn't missing data, so fall
+          // back to the deal(s) this engagement is associated with instead
+          // of dropping it.
+          const resolvedDealIds = (await Promise.all(
+            m.associatedDealHubspotIds.map((hsId) => dealIdForHubspotIdCached(job.organizationId, hsId)),
+          )).filter((id): id is string => id !== null);
+
+          if (resolvedDealIds.length > 0) {
+            const meta = DEAL_ACTIVITY_META[current as EngagementType];
+            let anyCreated = false;
+            for (const dealId of resolvedDealIds) {
+              const res = await upsertDealActivityByHubspotId(dealId, m.hubspotId, {
+                type: meta.type, title: m.title || meta.fallbackTitle, description: m.description,
+                createdAt: m.date ?? new Date().toISOString(),
+              }, mode);
+              if (res === 'created') anyCreated = true;
+            }
+            counts[current][anyCreated ? 'created' : 'updated'] += 1;
+          } else {
+            // Neither a contact nor a deal resolves — genuinely nothing to
+            // attach this engagement to locally. Tracked separately so the
+            // job response can distinguish "nothing to import" from
+            // "imported everything" instead of looking identical.
+            counts[current].skipped += 1;
+          }
         }
       }
     } catch (err) {
