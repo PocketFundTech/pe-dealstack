@@ -397,6 +397,7 @@ const ACTIVITY_ICONS: Record<string, { icon: string; color: string; bg: string }
   MEETING_SCHEDULED: { icon: "event", color: "text-green-600", bg: "bg-green-100" },
   CALL_LOGGED: { icon: "call", color: "text-cyan-600", bg: "bg-cyan-100" },
   EMAIL_SENT: { icon: "mail", color: "text-red-600", bg: "bg-red-100" },
+  TASK_ADDED: { icon: "checklist", color: "text-orange-600", bg: "bg-orange-100" },
   STATUS_UPDATED: { icon: "update", color: "text-indigo-600", bg: "bg-indigo-100" },
   TEAM_MEMBER_ADDED: { icon: "person_add", color: "text-emerald-600", bg: "bg-emerald-100" },
 };

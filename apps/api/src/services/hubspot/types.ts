@@ -5,6 +5,7 @@ export interface HubSpotRecord {
   associations?: {
     companies?: { results: Array<{ id: string }> };
     contacts?: { results: Array<{ id: string }> };
+    deals?: { results: Array<{ id: string }> };
   };
 }
 
@@ -60,6 +61,14 @@ export interface MappedEngagement {
   date: string | null;
   /** HubSpot contact ids this engagement is associated with — may be empty. */
   associatedContactHubspotIds: string[];
+  /**
+   * HubSpot deal ids this engagement is associated with — may be empty.
+   * Used as a fallback when no contact resolves: PE workflows routinely log
+   * activity at the deal level (diligence notes, internal call recaps) with
+   * no single contact attached, so the import falls back to the deal's
+   * activity feed instead of dropping the record.
+   */
+  associatedDealHubspotIds: string[];
 }
 
 export type HubSpotObjectType = 'companies' | 'contacts' | 'deals' | EngagementType;

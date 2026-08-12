@@ -119,3 +119,32 @@ export async function upsertContactInteractionByHubspotId(
   if (error) throw new Error(`HubSpot ContactInteraction insert failed: ${error.message}`);
   return 'created';
 }
+
+/**
+ * Upsert a HubSpot-imported Activity row for an engagement that has no
+ * resolvable contact but does have a resolvable deal. Scoped by dealId, not
+ * organizationId — same reasoning as upsertContactInteractionByHubspotId:
+ * (dealId, hubspotId) is the identity, no natural-key fallback applies.
+ */
+export async function upsertDealActivityByHubspotId(
+  dealId: string,
+  hubspotId: string,
+  row: Record<string, unknown>,
+  mode: ImportMode,
+): Promise<UpsertResult> {
+  const { data: existing } = await supabase
+    .from('Activity').select('*')
+    .eq('dealId', dealId).eq('hubspotId', hubspotId).maybeSingle();
+
+  if (existing) {
+    const merged = mergeForImport(existing as Record<string, unknown>, row, mode);
+    merged.hubspotId = hubspotId;
+    const { error } = await supabase.from('Activity').update(merged).eq('id', (existing as { id: string }).id);
+    if (error) throw new Error(`HubSpot Activity update failed: ${error.message}`);
+    return 'updated';
+  }
+
+  const { error } = await supabase.from('Activity').insert({ ...row, dealId, hubspotId });
+  if (error) throw new Error(`HubSpot Activity insert failed: ${error.message}`);
+  return 'created';
+}

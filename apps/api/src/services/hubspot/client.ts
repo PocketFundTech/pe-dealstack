@@ -147,7 +147,9 @@ export class HubSpotClient {
     const props = opts.properties && opts.properties.length ? opts.properties : STANDARD_PROPERTIES[object];
     params.set('properties', props.join(','));
     if (COMPANY_ASSOCIATED.includes(object)) params.set('associations', 'companies');
-    if (CONTACT_ASSOCIATED.includes(object)) params.set('associations', 'contacts');
+    // Also fetch deal associations: engagements with no resolvable contact
+    // fall back to the deal's activity feed rather than being dropped.
+    if (CONTACT_ASSOCIATED.includes(object)) params.set('associations', 'contacts,deals');
     if (opts.after) params.set('after', opts.after);
     const res = await this.requestWithBackoff(`${BASE}/crm/v3/objects/${object}?${params.toString()}`);
     if (!res.ok) {

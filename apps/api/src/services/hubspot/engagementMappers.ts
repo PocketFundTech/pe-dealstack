@@ -36,7 +36,8 @@ function joinParts(parts: Array<string | null | undefined>): string | null {
 export function mapEngagement(type: EngagementType, r: HubSpotRecord): MappedEngagement {
   const p = r.properties;
   const associatedContactHubspotIds = r.associations?.contacts?.results?.map((c) => c.id) ?? [];
-  const base = { hubspotId: r.id, interactionType: INTERACTION_TYPE[type], associatedContactHubspotIds };
+  const associatedDealHubspotIds = r.associations?.deals?.results?.map((d) => d.id) ?? [];
+  const base = { hubspotId: r.id, interactionType: INTERACTION_TYPE[type], associatedContactHubspotIds, associatedDealHubspotIds };
 
   if (type === 'notes') {
     return { ...base, title: null, description: p.hs_note_body || null, date: fromEpochMs(p.hs_timestamp) };
