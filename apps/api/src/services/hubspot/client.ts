@@ -4,6 +4,17 @@ import { log } from '../../utils/logger.js';
 const BASE = 'https://api.hubapi.com';
 const MAX_RETRIES = 5;
 
+/**
+ * Upper bound on a single 429 backoff sleep. Retry-After is controlled by an
+ * external server, and this code runs inside a Vercel function that is
+ * hard-killed at 300s (vercel.json maxDuration) — an uncapped wait (a huge
+ * Retry-After, or a value denominated in ms rather than seconds) would sleep
+ * straight past the function deadline and kill the request mid-import.
+ * HubSpot's burst limit is per 10-second rolling window, so a real 429
+ * clears within ~10s anyway.
+ */
+const MAX_BACKOFF_MS = 10_000;
+
 export const MAX_PROPERTIES = 250;
 
 /**
@@ -61,7 +72,7 @@ export class HubSpotClient {
       });
       if (res.status !== 429) return res as unknown as Response;
       const retryAfter = Number(res.headers.get('Retry-After') ?? '1');
-      const waitMs = Math.max(0, retryAfter) * 1000 || 2 ** attempt * 250;
+      const waitMs = Math.min(MAX_BACKOFF_MS, Math.max(0, retryAfter) * 1000 || 2 ** attempt * 250);
       log.warn(`[hubspot] 429 rate-limited, retry ${attempt + 1}/${MAX_RETRIES} in ${waitMs}ms`);
       await new Promise((r) => setTimeout(r, waitMs));
     }
