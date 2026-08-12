@@ -39,14 +39,46 @@ const MAX_BATCHES = 1000; // safety bound on the drive loop
 const BATCH_SIZE = 100; // mirrors importEngine.ts's BATCH constant
 
 /**
- * Drive runImportBatch to completion for one job. Exported (rather than
- * inlined in the route) so the cap-hit path is unit-testable with a small
- * maxBatches instead of looping the real MAX_BATCHES in a test.
+ * How long one request may spend importing before yielding back to the client.
+ * vercel.json caps this function at maxDuration 300s; stop well short of that
+ * so the response (and the job-state write inside the final batch) always
+ * lands rather than being cut off mid-flight.
  */
-export async function driveImport(jobId: string, token: string, mode: ImportMode, maxBatches: number): Promise<void> {
+const TIME_BUDGET_MS = 240_000;
+
+/**
+ * Drive runImportBatch for one job, bounded by BOTH a batch cap and a wall-clock
+ * budget. Returns `{ more: true }` when the budget ran out with work remaining —
+ * the caller is expected to issue another request to resume.
+ *
+ * Why this runs inside the request instead of as a background task: Vercel
+ * freezes the serverless instance as soon as the HTTP response is sent, so a
+ * fire-and-forget loop is killed mid-import and the job sits at 'running'
+ * forever with no process working it. Cursor/currentObject are already
+ * persisted per batch by runImportBatch, so resuming is just another call.
+ *
+ * Exported (rather than inlined in the route) so the cap-hit and budget paths
+ * are unit-testable with small maxBatches/budgetMs values.
+ */
+export async function driveImport(
+  jobId: string,
+  token: string,
+  mode: ImportMode,
+  maxBatches: number,
+  budgetMs: number = TIME_BUDGET_MS,
+): Promise<{ more: boolean }> {
+  const startedAt = Date.now();
   try {
     let more = true; let i = 0;
-    while (more && i < maxBatches) { more = await runImportBatch(jobId, token, mode); i += 1; }
+    while (more && i < maxBatches) {
+      more = await runImportBatch(jobId, token, mode);
+      i += 1;
+      if (more && Date.now() - startedAt >= budgetMs) {
+        // Out of time for this invocation, but the job is healthy and resumable
+        // — leave its status alone and let the client continue it.
+        return { more: true };
+      }
+    }
     if (more) {
       // Hit the safety cap rather than finishing naturally. Imports are
       // idempotent (matched by hubspotId), so re-running is safe — it just
@@ -62,6 +94,9 @@ export async function driveImport(jobId: string, token: string, mode: ImportMode
     log.error(`[hubspot] import loop crashed: ${(err as Error).message}`);
     await supabase.from('ImportJob').update({ status: 'failed', error: (err as Error).message }).eq('id', jobId);
   }
+  // Cap-hit and crash paths both end the job (status already set above), so
+  // there is nothing for the client to continue.
+  return { more: false };
 }
 
 /** Map the Supabase auth UUID (req.user.id) to the internal User.id (PK). */
@@ -125,12 +160,13 @@ router.post('/import', async (req: Request, res: Response) => {
   const token = decryptField((conn as { accessToken: string }).accessToken);
   if (!token) return res.status(500).json({ error: 'HubSpot connection could not be decrypted' });
 
-  // I1: return existing in-flight job rather than spawning a second drive loop
+  // I1: an in-flight job is resumable rather than restartable — hand its id
+  // back so the client continues it instead of starting a second one.
   const { data: existing } = await supabase
     .from('ImportJob').select('id')
     .eq('organizationId', orgId).in('status', ['queued', 'running'])
     .maybeSingle();
-  if (existing) return res.status(202).json({ jobId: (existing as { id: string }).id });
+  if (existing) return res.status(202).json({ jobId: (existing as { id: string }).id, more: true });
 
   const internalUserId = await resolveInternalUserId(req.user?.id);
 
@@ -140,10 +176,34 @@ router.post('/import', async (req: Request, res: Response) => {
   }).select('id').maybeSingle();
   const jobId = (job as { id: string }).id;
 
-  // Respond immediately; drive the batches without blocking the response.
-  res.status(202).json({ jobId });
+  // Run the batches INSIDE this request — Vercel freezes the instance once the
+  // response is sent, so a background loop would be killed mid-import and leave
+  // the job stuck at 'running' forever. `more: true` means the time budget ran
+  // out with work left; the client resumes via POST /import/:id/continue.
+  const { more } = await driveImport(jobId, token, mode, MAX_BATCHES);
+  res.status(202).json({ jobId, more });
+});
 
-  void driveImport(jobId, token, mode, MAX_BATCHES);
+// POST /import/:id/continue → resume a job whose previous request ran out of time
+router.post('/import/:id/continue', async (req: Request, res: Response) => {
+  const orgId = getOrgId(req);
+  const { data: job } = await supabase
+    .from('ImportJob').select('id, status')
+    .eq('id', req.params.id).eq('organizationId', orgId).maybeSingle();
+  if (!job) return res.status(404).json({ error: 'Import job not found' });
+
+  // Terminal (or cancelled) jobs have nothing left to do — tell the client to stop.
+  if ((job as { status: string }).status !== 'running') return res.json({ more: false });
+
+  const { data: conn } = await supabase
+    .from('HubSpotConnection').select('accessToken').eq('organizationId', orgId).maybeSingle();
+  if (!conn) return res.status(400).json({ error: 'Connect HubSpot before importing' });
+  const token = decryptField((conn as { accessToken: string }).accessToken);
+  if (!token) return res.status(500).json({ error: 'HubSpot connection could not be decrypted' });
+
+  const mode = importSchema.safeParse(req.body).data?.mode ?? 'fill';
+  const { more } = await driveImport(req.params.id, token, mode, MAX_BATCHES);
+  res.json({ more });
 });
 
 // GET /import/:id → status

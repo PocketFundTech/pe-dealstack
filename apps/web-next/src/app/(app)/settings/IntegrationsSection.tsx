@@ -70,6 +70,14 @@ const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "me
 
 const POLL_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
+/**
+ * Safety bound on the client-driven continuation loop. Each round is up to ~4
+ * minutes of server-side import work, so this covers far more than any
+ * realistic portal — it exists only to stop a runaway loop if the server were
+ * ever to keep reporting `more: true` without making progress.
+ */
+const MAX_CONTINUE_ROUNDS = 200;
+
 // ────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -305,10 +313,13 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
     setBusy(true);
     setError(null);
     try {
-      const { jobId } = await api.post<{ jobId: string }>("/integrations/hubspot/import", {
-        mode: overwrite ? "refresh" : "fill",
-      });
-      // Immediately fetch initial state, then poll every 2 s
+      const mode = overwrite ? "refresh" : "fill";
+      const { jobId, more } = await api.post<{ jobId: string; more: boolean }>(
+        "/integrations/hubspot/import",
+        { mode },
+      );
+
+      // Poll status for the live progress card.
       const fetchJob = async () => {
         const j = await api.get<HubSpotImportJob>(`/integrations/hubspot/import/${jobId}`);
         setJob(j);
@@ -323,6 +334,29 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
       pollRef.current = setInterval(() => {
         fetchJob().catch(console.warn);
       }, 2000);
+
+      // The API runs the import inside the request and yields when it hits its
+      // time budget (serverless can't keep working after responding). Keep
+      // calling continue until the server says there's nothing left, otherwise
+      // the job would sit at 'running' with no one advancing it.
+      let hasMore = more;
+      let rounds = 0;
+      while (hasMore && rounds < MAX_CONTINUE_ROUNDS) {
+        const next = await api.post<{ more: boolean }>(
+          `/integrations/hubspot/import/${jobId}/continue`,
+          { mode },
+        );
+        hasMore = next.more;
+        rounds += 1;
+      }
+      if (hasMore) {
+        // Far beyond any realistic import size — stop rather than hammer the
+        // server. The job is still resumable: clicking Import again picks it up.
+        setError("Import is taking unusually long. Click \"Import from HubSpot\" again to resume where it left off.");
+      }
+      // Final refresh so the card reflects the terminal state immediately
+      // rather than waiting for the next poll tick.
+      await fetchJob().catch(console.warn);
     } catch (err) {
       const msg =
         err instanceof ApiError ? err.message :

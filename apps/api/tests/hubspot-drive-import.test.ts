@@ -65,3 +65,56 @@ describe('driveImport', () => {
     }));
   });
 });
+
+/**
+ * Vercel freezes the serverless instance the moment the HTTP response is sent,
+ * so a fire-and-forget background loop is killed mid-import and the job sits at
+ * status 'running' forever. driveImport must instead run INSIDE the request,
+ * bounded by a time budget, and report whether work remains so the client can
+ * resume it with another request.
+ */
+describe('driveImport — serverless time budget', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns more:true and leaves the job running when the time budget is exhausted mid-import', async () => {
+    runImportBatch.mockResolvedValue(true); // work always remains
+    mockFrom.mockReturnValue(makeChain());
+
+    // budgetMs: 0 → the budget is already spent after the first batch.
+    const result = await driveImport('job-budget', 'tok', 'fill', 1000, 0);
+
+    expect(result).toEqual({ more: true });
+    // Exactly one batch ran, then it yielded rather than burning the whole cap.
+    expect(runImportBatch).toHaveBeenCalledTimes(1);
+    // Critically: the job must NOT be marked failed — it's resumable.
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it('returns more:false when the import finishes within the budget', async () => {
+    runImportBatch.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    const result = await driveImport('job-done', 'tok', 'fill', 1000, 60_000);
+
+    expect(result).toEqual({ more: false });
+    expect(runImportBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns more:false after hitting the batch cap (not resumable via continue — needs a fresh import)', async () => {
+    runImportBatch.mockResolvedValue(true);
+    mockFrom.mockReturnValue(makeChain());
+
+    const result = await driveImport('job-cap', 'tok', 'fill', 3, 60_000);
+
+    expect(result).toEqual({ more: false });
+    expect(runImportBatch).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns more:false when runImportBatch throws, so the client stops retrying', async () => {
+    runImportBatch.mockRejectedValue(new Error('boom'));
+    mockFrom.mockReturnValue(makeChain());
+
+    const result = await driveImport('job-throw', 'tok', 'fill', 10, 60_000);
+
+    expect(result).toEqual({ more: false });
+  });
+});
