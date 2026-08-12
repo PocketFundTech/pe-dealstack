@@ -112,3 +112,35 @@ describe('mapEngagement — associations and missing timestamps', () => {
     expect(mapEngagement('notes', rec({ hs_note_body: 'x', hs_timestamp: '1e21' })).date).toBeNull();
   });
 });
+
+describe('mapEngagement — HTML body stripping', () => {
+  it('strips HubSpot rich-text markup from a note body down to plain text', () => {
+    const out = mapEngagement('notes', rec({
+      hs_note_body: '<div style="" dir="auto" data-top-level="true"><p style="margin:0;">hii testing</p></div>',
+      hs_timestamp: '1700000000000',
+    }));
+    expect(out.description).toBe('hii testing');
+  });
+
+  it('strips markup + nested spans from a meeting body', () => {
+    const out = mapEngagement('meetings', rec({
+      hs_meeting_body:
+        '<div style="" dir="auto" data-top-level="true"><p style="margin:0;"><span style="color: rgb(140, 140, 140);"><span style="font-size: 11.7px;">Some notes</span></span></p></div>',
+      hs_meeting_title: 'Kickoff',
+      hs_timestamp: '1700000000000',
+    }));
+    expect(out.description).toBe('Some notes');
+  });
+
+  it('leaves plain text bodies (no markup) unchanged', () => {
+    const out = mapEngagement('tasks', rec({
+      hs_task_subject: 'Send NDA', hs_task_body: 'Standard mutual NDA', hs_timestamp: '1700000000000',
+    }));
+    expect(out.description).toBe('Standard mutual NDA');
+  });
+
+  it('returns null description for an empty/missing body rather than an empty string', () => {
+    const out = mapEngagement('notes', rec({ hs_note_body: null, hs_timestamp: '1700000000000' }));
+    expect(out.description).toBeNull();
+  });
+});

@@ -1,3 +1,4 @@
+import sanitizeHtml from 'sanitize-html';
 import type { EngagementType, HubSpotRecord, InteractionType, MappedEngagement } from './types.js';
 
 const INTERACTION_TYPE: Record<EngagementType, InteractionType> = {
@@ -28,6 +29,18 @@ function formatDuration(msValue: string | null | undefined): string | null {
   return `${minutes}m ${seconds}s`;
 }
 
+/**
+ * HubSpot's rich-text engagement bodies (hs_note_body, hs_call_body,
+ * hs_meeting_body, hs_email_text, hs_task_body) come back as HTML, not
+ * plain text — the deal/contact activity feeds render this as plain text,
+ * so leaving the markup in produces literal "<div>...</div>" on screen.
+ */
+function stripHtml(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const text = sanitizeHtml(value, { allowedTags: [], allowedAttributes: {} }).trim();
+  return text || null;
+}
+
 function joinParts(parts: Array<string | null | undefined>): string | null {
   const kept = parts.filter((p): p is string => !!p);
   return kept.length ? kept.join(' · ') : null;
@@ -40,7 +53,7 @@ export function mapEngagement(type: EngagementType, r: HubSpotRecord): MappedEng
   const base = { hubspotId: r.id, interactionType: INTERACTION_TYPE[type], associatedContactHubspotIds, associatedDealHubspotIds };
 
   if (type === 'notes') {
-    return { ...base, title: null, description: p.hs_note_body || null, date: fromEpochMs(p.hs_timestamp) };
+    return { ...base, title: null, description: stripHtml(p.hs_note_body), date: fromEpochMs(p.hs_timestamp) };
   }
 
   if (type === 'calls') {
@@ -48,7 +61,7 @@ export function mapEngagement(type: EngagementType, r: HubSpotRecord): MappedEng
     return {
       ...base,
       title: p.hs_call_title || null,
-      description: joinParts([p.hs_call_body, duration ? `Duration: ${duration}` : null, p.hs_call_direction ? `Direction: ${p.hs_call_direction}` : null]),
+      description: joinParts([stripHtml(p.hs_call_body), duration ? `Duration: ${duration}` : null, p.hs_call_direction ? `Direction: ${p.hs_call_direction}` : null]),
       date: fromEpochMs(p.hs_timestamp),
     };
   }
@@ -57,20 +70,20 @@ export function mapEngagement(type: EngagementType, r: HubSpotRecord): MappedEng
     return {
       ...base,
       title: p.hs_meeting_title || null,
-      description: joinParts([p.hs_meeting_body, p.hs_meeting_outcome ? `Outcome: ${p.hs_meeting_outcome}` : null]),
+      description: joinParts([stripHtml(p.hs_meeting_body), p.hs_meeting_outcome ? `Outcome: ${p.hs_meeting_outcome}` : null]),
       date: fromEpochMs(p.hs_meeting_start_time || p.hs_timestamp),
     };
   }
 
   if (type === 'emails') {
-    return { ...base, title: p.hs_email_subject || null, description: p.hs_email_text || null, date: fromEpochMs(p.hs_timestamp) };
+    return { ...base, title: p.hs_email_subject || null, description: stripHtml(p.hs_email_text), date: fromEpochMs(p.hs_timestamp) };
   }
 
   // tasks
   return {
     ...base,
     title: `[Task] ${p.hs_task_subject?.trim() || 'Untitled Task'}`,
-    description: joinParts([p.hs_task_body, p.hs_task_status ? `Status: ${p.hs_task_status}` : null, p.hs_task_priority ? `Priority: ${p.hs_task_priority}` : null]),
+    description: joinParts([stripHtml(p.hs_task_body), p.hs_task_status ? `Status: ${p.hs_task_status}` : null, p.hs_task_priority ? `Priority: ${p.hs_task_priority}` : null]),
     date: fromEpochMs(p.hs_timestamp),
   };
 }
