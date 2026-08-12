@@ -56,6 +56,7 @@ interface HubSpotJobCounts {
   created: number;
   updated: number;
   failed: number;
+  skipped?: number;
 }
 
 interface HubSpotImportJob {
@@ -482,7 +483,9 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
                   <div key={obj} className="flex items-center justify-between text-sm">
                     <span className="capitalize text-text-secondary">{obj}</span>
                     <span className="text-text-main font-medium">
-                      {c ? `${c.created + c.updated} imported · ${c.failed} failed` : "—"}
+                      {c
+                        ? `${c.created + c.updated} imported · ${c.skipped ?? 0} skipped (no contact) · ${c.failed} failed`
+                        : "—"}
                     </span>
                   </div>
                 );
