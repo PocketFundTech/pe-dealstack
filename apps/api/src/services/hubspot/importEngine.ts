@@ -23,8 +23,8 @@ export function resetStageLabelCache(): void {
   stageLabelCache.clear();
 }
 
-interface Counters { processed: number; created: number; updated: number; failed: number; }
-const emptyCounters = (): Counters => ({ processed: 0, created: 0, updated: 0, failed: 0 });
+interface Counters { processed: number; created: number; updated: number; failed: number; skipped: number; }
+const emptyCounters = (): Counters => ({ processed: 0, created: 0, updated: 0, failed: 0, skipped: 0 });
 
 async function loadJob(jobId: string) {
   const { data } = await supabase.from('ImportJob').select('*').eq('id', jobId).maybeSingle();
@@ -213,10 +213,13 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
             if (res === 'created') anyCreated = true;
           }
           counts[current][anyCreated ? 'created' : 'updated'] += 1;
+        } else {
+          // No resolvable local contact: this phase is contact-scoped only
+          // (per spec), so the record is dropped rather than saved orphaned.
+          // Tracked separately so the job response can distinguish "nothing
+          // to import" from "imported everything" instead of looking identical.
+          counts[current].skipped += 1;
         }
-        // No resolvable local contact: this phase is contact-scoped only
-        // (per spec) — skip silently. `processed` still increments below;
-        // this record contributes to neither created/updated/failed.
       }
     } catch (err) {
       counts[current].failed += 1;
