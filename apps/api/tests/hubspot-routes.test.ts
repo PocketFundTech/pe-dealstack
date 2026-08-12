@@ -163,3 +163,71 @@ describe('hubspot-import routes', () => {
     expect(res.body.status).toBe('running');
   });
 });
+
+/**
+ * Vercel freezes the serverless instance once the response is sent, so the
+ * import loop must run INSIDE the request and report whether work remains,
+ * rather than being fired off in the background where it silently dies.
+ */
+describe('hubspot-import routes — serverless continuation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateToken.mockResolvedValue({ ok: true, status: 200, category: null });
+    runImportBatch.mockResolvedValue(false);
+  });
+
+  it('POST /import runs the import inline and reports more:false when it finishes', async () => {
+    const singleMock = vi.fn().mockResolvedValueOnce({ data: { id: 'internal-user-1' } });
+    const maybeSingleMock = vi.fn()
+      .mockResolvedValueOnce({ data: { accessToken: 'enc:tok' } })
+      .mockResolvedValueOnce({ data: null })
+      .mockResolvedValueOnce({ data: { id: 'job-1' } });
+    mockSupabase.from.mockReturnValue(chain({ single: singleMock, maybeSingle: maybeSingleMock }));
+
+    const res = await request(await buildApp()).post('/api/integrations/hubspot/import').send({});
+
+    expect(res.status).toBe(202);
+    expect(res.body.jobId).toBe('job-1');
+    expect(res.body.more).toBe(false);
+    // The batch must have already run by the time the response landed — not
+    // scheduled for after it, which is what the serverless freeze kills.
+    expect(runImportBatch).toHaveBeenCalledWith('job-1', 'tok', 'fill');
+  });
+
+  it('POST /import/:id/continue resumes a running job and reports more:false when done', async () => {
+    const maybeSingleMock = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'job-9', status: 'running' } })   // job lookup
+      .mockResolvedValueOnce({ data: { accessToken: 'enc:tok' } });          // connection lookup
+    mockSupabase.from.mockReturnValue(chain({ maybeSingle: maybeSingleMock }));
+
+    const res = await request(await buildApp())
+      .post('/api/integrations/hubspot/import/job-9/continue').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.more).toBe(false);
+    expect(runImportBatch).toHaveBeenCalledWith('job-9', 'tok', 'fill');
+  });
+
+  it('POST /import/:id/continue 404s for a job outside the caller\'s org', async () => {
+    mockSupabase.from.mockReturnValue(chain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) }));
+
+    const res = await request(await buildApp())
+      .post('/api/integrations/hubspot/import/someone-elses-job/continue').send({});
+
+    expect(res.status).toBe(404);
+    expect(runImportBatch).not.toHaveBeenCalled();
+  });
+
+  it('POST /import/:id/continue does no work for an already-finished job', async () => {
+    mockSupabase.from.mockReturnValue(chain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job-done', status: 'completed' } }),
+    }));
+
+    const res = await request(await buildApp())
+      .post('/api/integrations/hubspot/import/job-done/continue').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.more).toBe(false);
+    expect(runImportBatch).not.toHaveBeenCalled();
+  });
+});
