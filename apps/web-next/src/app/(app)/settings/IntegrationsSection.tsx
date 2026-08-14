@@ -406,14 +406,11 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
             <p className="mt-1 text-xs text-text-muted">
               HubSpot → Settings → Integrations → Private Apps. Under Scopes, grant{" "}
               <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.companies.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.deals.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.notes.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.calls.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.meetings.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.emails.read</code> and{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.tasks.read</code>, plus the matching{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code> and{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.deals.read</code>, plus the matching{" "}
               <code className="text-xs bg-gray-100 px-1 rounded">crm.schemas.*</code> scopes for companies, contacts and deals (needed to import your custom fields).
+              Notes, calls, meetings, emails and tasks import automatically under the{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code> scope above — HubSpot has no separate scope for them.
             </p>
           </div>
           <button
@@ -479,11 +476,15 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
             <div className="rounded-lg border border-border-subtle bg-gray-50 p-4 space-y-2">
               {HUBSPOT_OBJECTS.map((obj) => {
                 const c = job.objectCounts?.[obj];
+                const skipped = c?.skipped ?? 0;
                 return (
                   <div key={obj} className="flex items-center justify-between text-sm">
                     <span className="capitalize text-text-secondary">{obj}</span>
                     <span className="text-text-main font-medium">
-                      {c ? `${c.created + c.updated} imported · ${c.failed} failed` : "—"}
+                      {c
+                        ? `${c.created + c.updated} imported · ${c.failed} failed`
+                          + (skipped > 0 ? ` · ${skipped} skipped (no contact or deal)` : "")
+                        : "—"}
                     </span>
                   </div>
                 );

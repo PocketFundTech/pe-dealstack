@@ -16,16 +16,17 @@ const importSchema = z.object({ mode: z.enum(['fill', 'refresh']).optional() });
 // client's custom properties (GET /crm/v3/properties/{object}) so custom fields aren't
 // silently dropped. Both sets are required for a lossless import.
 //
-// crm.objects.notes.read and crm.objects.emails.read are confirmed real
-// HubSpot scope names (verified against HubSpot's community forum).
-// crm.objects.calls.read / meetings.read / tasks.read follow the same
-// naming convention but were NOT independently confirmed against HubSpot's
-// authoritative scopes reference — if a client reports one of these three
-// doesn't appear in their Private App scope picker, double-check against
-// HubSpot's current docs before assuming the client's portal is at fault.
+// There is NO dedicated crm.objects.{notes,calls,meetings,emails,tasks}.read
+// scope required (and several of those names don't exist as grantable Private
+// App scopes at all, which is why clients couldn't find "notes.read" in
+// HubSpot's scope picker). Confirmed directly against HubSpot's current,
+// non-legacy v3 API reference pages for the engagement GET-list endpoints
+// this client calls: all five engagement types are gated by
+// crm.objects.contacts.read OR crm.objects.contacts.write (an OR
+// relationship, not an AND) — already required below for the Contacts
+// object import itself, so no separate engagement scope is needed.
 const REQUIRED_SCOPES =
   'crm.objects.companies.read, crm.objects.contacts.read, crm.objects.deals.read, '
-  + 'crm.objects.notes.read, crm.objects.calls.read, crm.objects.meetings.read, crm.objects.emails.read, crm.objects.tasks.read, '
   + 'crm.schemas.companies.read, crm.schemas.contacts.read, crm.schemas.deals.read';
 
 function tokenRejectionMessage(v: { status: number; category: string | null }): string {

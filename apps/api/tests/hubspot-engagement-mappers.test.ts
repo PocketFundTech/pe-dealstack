@@ -143,4 +143,39 @@ describe('mapEngagement — HTML body stripping', () => {
     const out = mapEngagement('notes', rec({ hs_note_body: null, hs_timestamp: '1700000000000' }));
     expect(out.description).toBeNull();
   });
+
+  it('decodes HTML entities left behind after tag-stripping a rich-text body', () => {
+    const out = mapEngagement('notes', rec({
+      hs_note_body: '<p>revenue &lt; 5% &amp; growing</p>',
+      hs_timestamp: '1700000000000',
+    }));
+    expect(out.description).toBe('revenue < 5% & growing');
+  });
+});
+
+describe('mapEngagement — email bodies are plain text, not HTML', () => {
+  it('does not tag-strip hs_email_text, since HubSpot already sends it as a plain-text extract', () => {
+    const out = mapEngagement('emails', rec({
+      hs_email_subject: 'Intro',
+      hs_email_text: 'Contact: Jane Smith <jane.smith@acmecorp.com>',
+      hs_timestamp: '1700000000000',
+    }));
+    // Regression check: sanitize-html's tag stripper parses "<jane.smith@...>"
+    // as an unrecognized tag and silently discards it (and the address inside
+    // it) — hs_email_text must be passed through untouched, not stripHtml'd.
+    expect(out.description).toBe('Contact: Jane Smith <jane.smith@acmecorp.com>');
+  });
+
+  it('leaves quoted-reply email headers with bare angle brackets intact', () => {
+    const out = mapEngagement('emails', rec({
+      hs_email_text: 'From: John Doe <john@example.com>\nSent: Monday\nHi team...',
+      hs_timestamp: '1700000000000',
+    }));
+    expect(out.description).toBe('From: John Doe <john@example.com>\nSent: Monday\nHi team...');
+  });
+
+  it('returns null for an empty/missing email body rather than an empty string', () => {
+    const out = mapEngagement('emails', rec({ hs_email_text: null, hs_timestamp: '1700000000000' }));
+    expect(out.description).toBeNull();
+  });
 });
