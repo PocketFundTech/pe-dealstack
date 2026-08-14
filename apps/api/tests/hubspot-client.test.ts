@@ -237,16 +237,22 @@ describe('STANDARD_PROPERTIES — engagement types', () => {
   });
 });
 
-describe('HubSpotClient.listPage — engagement contact associations', () => {
+describe('HubSpotClient.listPage — engagement contact + deal associations', () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it.each(['notes', 'calls', 'meetings', 'emails', 'tasks'] as const)(
-    'requests contact associations for %s',
+    'requests both contact and deal associations for %s',
     async (type) => {
       const fetchMock = vi.fn().mockResolvedValue(mkRes(200, { results: [], paging: undefined }));
       vi.stubGlobal('fetch', fetchMock);
       await new HubSpotClient('tok').listPage(type, { limit: 20 });
-      expect(fetchMock.mock.calls[0][0] as string).toContain('associations=contacts');
+      const url = fetchMock.mock.calls[0][0] as string;
+      // Regression check: 'associations=contacts,deals' URL-encodes the comma
+      // as %2C, so a bare toContain('associations=contacts') is a substring
+      // match that passes regardless of whether ',deals' is present at all —
+      // it wouldn't catch a regression that dropped deal associations
+      // entirely. Assert the full encoded param instead.
+      expect(url).toContain('associations=contacts%2Cdeals');
     },
   );
 });

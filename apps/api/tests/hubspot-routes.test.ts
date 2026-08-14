@@ -54,14 +54,18 @@ describe('hubspot-import routes', () => {
     expect(res.body.error).toContain('crm.objects.companies.read');
     expect(res.body.error).toContain('crm.objects.contacts.read');
     expect(res.body.error).toContain('crm.objects.deals.read');
-    expect(res.body.error).toContain('crm.objects.notes.read');
-    expect(res.body.error).toContain('crm.objects.calls.read');
-    expect(res.body.error).toContain('crm.objects.meetings.read');
-    expect(res.body.error).toContain('crm.objects.emails.read');
-    expect(res.body.error).toContain('crm.objects.tasks.read');
     expect(res.body.error).toContain('crm.schemas.companies.read');
     expect(res.body.error).toContain('crm.schemas.contacts.read');
     expect(res.body.error).toContain('crm.schemas.deals.read');
+    // Regression check: there is no dedicated crm.objects.{notes,calls,
+    // meetings,emails,tasks}.read scope — engagement reads are gated by
+    // crm.objects.contacts.read (already listed above), and several of
+    // these names aren't even real grantable Private App scopes.
+    expect(res.body.error).not.toContain('crm.objects.notes.read');
+    expect(res.body.error).not.toContain('crm.objects.calls.read');
+    expect(res.body.error).not.toContain('crm.objects.meetings.read');
+    expect(res.body.error).not.toContain('crm.objects.emails.read');
+    expect(res.body.error).not.toContain('crm.objects.tasks.read');
   });
 
   it('POST /connect reports the HTTP status for other HubSpot failures', async () => {

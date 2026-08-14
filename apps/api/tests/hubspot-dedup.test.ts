@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockFrom } = vi.hoisted(() => ({ mockFrom: vi.fn() }));
 vi.mock('../src/supabase.js', () => ({ supabase: { from: mockFrom } }));
 
-import { mergeBlankOnly, mergeForImport, upsertByHubspotId, upsertContactInteractionByHubspotId } from '../src/services/hubspot/dedup.js';
+import {
+  mergeBlankOnly, mergeForImport, upsertByHubspotId,
+  upsertContactInteractionByHubspotId, upsertDealActivityByHubspotId,
+} from '../src/services/hubspot/dedup.js';
 
 function makeChain(overrides: Record<string, unknown> = {}) {
   const base: Record<string, unknown> = {
@@ -218,5 +221,82 @@ describe('upsertContactInteractionByHubspotId', () => {
     await expect(
       upsertContactInteractionByHubspotId('contact-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'refresh'),
     ).rejects.toThrow(/connection reset/);
+  });
+});
+
+describe('upsertDealActivityByHubspotId', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('creates a new Activity when no existing row matches (dealId, hubspotId)', async () => {
+    const noMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const insertChain = makeChain();
+    mockFrom.mockReturnValueOnce(noMatch).mockReturnValueOnce(insertChain);
+
+    const result = await upsertDealActivityByHubspotId('deal-1', 'hs-note-1', {
+      type: 'NOTE', title: null, description: 'Logged directly on the deal', date: '2026-08-01T00:00:00.000Z',
+    }, 'fill');
+
+    expect(result).toBe('created');
+    expect(insertChain.insert).toHaveBeenCalledWith(expect.objectContaining({
+      dealId: 'deal-1', hubspotId: 'hs-note-1', type: 'NOTE', description: 'Logged directly on the deal',
+    }));
+  });
+
+  it('updates the existing row when (dealId, hubspotId) already matches', async () => {
+    const match = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'act-1', description: 'Old text' } }),
+    });
+    const updateChain = makeChain();
+    mockFrom.mockReturnValueOnce(match).mockReturnValueOnce(updateChain);
+
+    const result = await upsertDealActivityByHubspotId('deal-1', 'hs-note-1', {
+      type: 'NOTE', title: null, description: 'Corrected text', date: '2026-08-01T00:00:00.000Z',
+    }, 'refresh');
+
+    expect(result).toBe('updated');
+    expect(updateChain.update).toHaveBeenCalledWith(expect.objectContaining({ description: 'Corrected text' }));
+  });
+
+  it('throws instead of silently swallowing a Supabase error on insert', async () => {
+    const noMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const insertChain = makeChain({ error: { message: 'null value in column "dealId"' } });
+    mockFrom.mockReturnValueOnce(noMatch).mockReturnValueOnce(insertChain);
+
+    await expect(
+      upsertDealActivityByHubspotId('deal-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'fill'),
+    ).rejects.toThrow(/dealId/);
+  });
+
+  it('throws instead of silently swallowing a Supabase error on update', async () => {
+    const match = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'act-1', description: 'Old text' } }),
+    });
+    const updateChain = makeChain({ error: { message: 'connection reset' } });
+    mockFrom.mockReturnValueOnce(match).mockReturnValueOnce(updateChain);
+
+    await expect(
+      upsertDealActivityByHubspotId('deal-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'refresh'),
+    ).rejects.toThrow(/connection reset/);
+  });
+
+  /**
+   * Regression coverage for the "migration not run yet" production scenario
+   * (hubspot-engagement-deal-fallback-migration.sql adds Activity.hubspotId;
+   * Vercel doesn't auto-run apps/api/*.sql — see project docs). A missing
+   * column surfaces as a Postgrest error on the SELECT, not a thrown
+   * exception — assert it doesn't get silently treated as "no existing row"
+   * that then also silently no-ops; it must still surface via the INSERT's
+   * own error check so the caller sees a real failure, not a false success.
+   */
+  it('still throws (does not silently succeed) when the SELECT itself errors, e.g. a missing hubspotId column', async () => {
+    const selectErrors = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'column Activity.hubspotId does not exist' } }),
+    });
+    const insertChain = makeChain({ error: { message: 'column "hubspotId" of relation "Activity" does not exist' } });
+    mockFrom.mockReturnValueOnce(selectErrors).mockReturnValueOnce(insertChain);
+
+    await expect(
+      upsertDealActivityByHubspotId('deal-1', 'hs-note-1', { type: 'NOTE', title: null, description: 'x', date: null }, 'fill'),
+    ).rejects.toThrow(/does not exist/);
   });
 });
