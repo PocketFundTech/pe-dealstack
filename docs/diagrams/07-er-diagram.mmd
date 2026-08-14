@@ -1,3 +1,7 @@
+%% PE OS — Entity-Relationship Diagram (core domain)
+%% Last verified 2026-08-14 against apps/api/*.sql migrations (V2: scorecard, deal sharing, usage ledger, claude extraction).
+%% Supporting tables not shown: agent-memory caches, HubSpot import staging (HubSpotConnection, ImportJob),
+%% Integration/IntegrationEvent, LegalDocument/LegalDocTemplate, DealTeaser, CustomGraph, caches (AICache, FinancialExtractionCache, NarrativeInsightCache).
 erDiagram
     ORGANIZATION {
         uuid id PK
@@ -6,10 +10,11 @@ erDiagram
         string logo
         string industry
         string website
-        jsonb settings "incl. firmProfile"
+        jsonb settings "incl. firmProfile + investment criteria"
         string plan
         int maxUsers
         boolean isActive
+        timestamp researchLockedAt "managed-agents lock"
         uuid createdBy
         timestamp createdAt
     }
@@ -55,15 +60,23 @@ erDiagram
         uuid assignedTo FK
         date targetCloseDate
         date actualCloseDate
-        string source
+        string source "manual ingest gmail hubspot"
         string_arr tags
         int extractionConfidence
         boolean needsReview
         jsonb reviewReasons
         jsonb aiRisks
         timestamp aiCacheUpdatedAt
+        jsonb scorecard "GO NO_GO BORDERLINE + quality/thesis scores"
+        float cachedRevenue "canonical from statements"
+        float cachedEbitda
+        float cachedEbitdaMargin
+        string cachedPeriod
+        string cachedCurrency
+        string hubspotId
         jsonb customFields
         string currency "default USD"
+        timestamp deletedAt "soft delete"
         timestamp createdAt
     }
 
@@ -80,6 +93,7 @@ erDiagram
         int employeeCount
         float annualRevenue
         string linkedinUrl
+        string hubspotId
         timestamp createdAt
     }
 
@@ -136,7 +150,7 @@ erDiagram
         uuid folderId FK
         string name
         string type "CIM TEASER FINANCIAL LEGAL TAX OTHER"
-        string fileUrl
+        string fileUrl "Supabase Storage path"
         int fileSize
         string mimeType
         jsonb extractedData
@@ -151,6 +165,7 @@ erDiagram
         string embeddingStatus "pending processing completed failed"
         int chunkCount
         timestamp embeddedAt
+        string fingerprint "dedup"
         timestamp createdAt
     }
 
@@ -184,11 +199,11 @@ erDiagram
         string statementType "INCOME_STATEMENT BALANCE_SHEET CASH_FLOW"
         string period
         string periodType "HISTORICAL PROJECTED LTM"
-        jsonb lineItems
+        jsonb lineItems "with sourcePage + sourceQuote provenance"
         string currency
         string unitScale "MILLIONS THOUSANDS ACTUALS"
         int extractionConfidence "0-100"
-        string extractionSource "gpt4o azure vision manual"
+        string extractionSource "claude gpt4o azure vision manual"
         timestamp extractedAt
         timestamp reviewedAt
         uuid reviewedBy FK
@@ -223,7 +238,7 @@ erDiagram
         string userId
         string role "user assistant system"
         text content
-        jsonb metadata
+        jsonb metadata "tools used + sideEffects"
         timestamp createdAt
     }
 
@@ -243,7 +258,7 @@ erDiagram
         uuid_arr collaborators
         boolean complianceChecked
         text complianceNotes
-        jsonb metadata
+        jsonb metadata "incl. rubric critique results"
         timestamp createdAt
     }
 
@@ -307,6 +322,54 @@ erDiagram
         boolean requiresApproval
         int sortOrder
         timestamp createdAt
+    }
+
+    DEAL_SHARE {
+        uuid id PK
+        uuid dealId FK
+        uuid organizationId FK
+        string token UK "32-byte random - public portal URL"
+        string label
+        string invitedEmail
+        boolean includeFinancials
+        boolean includeDocuments
+        boolean includeMemos
+        string createdBy
+        timestamp expiresAt "null = no expiry"
+        timestamp revokedAt
+        timestamp createdAt
+    }
+
+    DEAL_SHARE_VIEW {
+        uuid id PK
+        uuid shareId FK
+        timestamp viewedAt
+        string userAgent
+    }
+
+    USAGE_EVENT {
+        uuid id PK
+        uuid userId FK
+        uuid organizationId FK
+        string operation "memo_section deal_scorecard extraction etc"
+        string model
+        string provider "anthropic openai openrouter azure apify"
+        int promptTokens
+        int completionTokens
+        int totalTokens
+        numeric costUsd
+        int credits
+        string status "success error rate_limited blocked"
+        int durationMs
+        timestamp createdAt
+    }
+
+    MODEL_PRICE {
+        string model PK
+        string provider
+        numeric inputPricePer1M
+        numeric outputPricePer1M
+        timestamp updatedAt
     }
 
     ACTIVITY {
@@ -378,7 +441,7 @@ erDiagram
         uuid id PK
         uuid userId FK
         uuid organizationId FK
-        string action
+        string action "incl. AI_INFERENCE + aiIngest"
         string entityType
         uuid entityId
         string entityName
@@ -415,6 +478,7 @@ erDiagram
     ORGANIZATION ||--o{ NOTIFICATION : "notifies"
     ORGANIZATION ||--o{ TASK : "assigns"
     ORGANIZATION ||--o{ WATCHLIST : "watches"
+    ORGANIZATION ||--o{ USAGE_EVENT : "billed for"
 
     COMPANY ||--o{ DEAL : "is target of"
     DEAL ||--o{ DOCUMENT : "contains"
@@ -428,6 +492,8 @@ erDiagram
     DEAL ||--o{ MEMO : "reports"
     DEAL ||--o{ NOTIFICATION : "alerts on"
     DEAL ||--o{ TASK : "tracks"
+    DEAL ||--o{ DEAL_SHARE : "shared externally via"
+    DEAL_SHARE ||--o{ DEAL_SHARE_VIEW : "logs views"
 
     USER ||--o{ ACTIVITY : "performs"
     USER ||--o{ NOTIFICATION : "receives"
@@ -437,6 +503,8 @@ erDiagram
     USER ||--o{ MEMO_CONVERSATION : "owns"
     USER ||--o{ INVITATION : "sends"
     USER ||--o{ TASK : "assigned to"
+    USER ||--o{ USAGE_EVENT : "attributed AI usage"
+    MODEL_PRICE ||..o{ USAGE_EVENT : "prices"
 
     DOCUMENT ||--o{ DOCUMENT_CHUNK : "chunked into"
     DOCUMENT ||--o{ FINANCIAL_STATEMENT : "extracted from"
