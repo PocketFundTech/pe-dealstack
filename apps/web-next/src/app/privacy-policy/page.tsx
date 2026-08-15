@@ -76,8 +76,7 @@ export default function PrivacyPolicyPage() {
         <LegalList>
           <li>AES-256 encryption for data at rest</li>
           <li>TLS 1.3 encryption for data in transit</li>
-          <li>SOC 2 Type II compliance</li>
-          <li>Regular security audits and penetration testing</li>
+                    <li>Immutable, insert-only audit logging</li>
           <li>Role-based access controls</li>
           <li>Multi-factor authentication support</li>
         </LegalList>
