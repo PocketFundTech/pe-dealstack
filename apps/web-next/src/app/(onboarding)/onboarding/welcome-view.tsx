@@ -60,7 +60,7 @@ export function WelcomeView({
             {[
               { value: "< 3min", label: "To first insight" },
               { value: "No prompts", label: "Pre-loaded context" },
-              { value: "SOC 2", label: "Enterprise ready" },
+              { value: "Per-deal", label: "Access control" },
             ].map((s) => (
               <div key={s.label}>
                 <div className="font-display text-[22px] font-bold text-primary">{s.value}</div>

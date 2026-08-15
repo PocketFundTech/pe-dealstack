@@ -143,8 +143,10 @@ export default function SecurityPage() {
       <section id="data-location">
         <LegalH2>Where your data lives</LegalH2>
         <LegalP>
-          All Pocket Fund data is processed and stored on enterprise-grade,
-          SOC 2 Type II certified infrastructure:
+          All Pocket Fund data is processed and stored on infrastructure
+          operated by the providers below. The certifications listed are{" "}
+          <strong>held by those providers, not by Pocket Fund</strong> — our own
+          certification status is set out further down this page:
         </LegalP>
         <LegalList>
           <li>
