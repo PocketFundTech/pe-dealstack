@@ -295,7 +295,18 @@ export async function sendPrompt(
       `/deals/${dealId}/chat`,
       { message: trimmed, history: historySnapshot },
       (event) => {
-        const e = event as Record<string, any>;
+        // Cast to the SSE event union deal chat emits. `label`/`text`/`effect`
+        // are typed as always-present because every branch that reads them has
+        // already narrowed on the event type that carries them.
+        const e = event as {
+          type?: string;
+          label: string;
+          text: string;
+          action?: ChatMessage["action"];
+          update?: unknown;
+          effect: { type?: string; message?: string; section?: string };
+          message?: string;
+        };
 
         if (e.type === "tool_start") {
           // Shows the tool's label as transient status text (e.g. "Searching

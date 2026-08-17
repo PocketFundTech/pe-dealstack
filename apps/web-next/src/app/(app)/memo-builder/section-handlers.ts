@@ -164,7 +164,7 @@ export function createGenerateAll(deps: SectionDeps) {
 
     const upsertSection = (generated: {
       type: string; title: string; content: string; aiGenerated: boolean;
-      tableData?: any; chartConfig?: any;
+      tableData?: MemoSection["tableData"]; chartConfig?: MemoSection["chartConfig"];
     }) => {
       setSections((prev) => {
         const idx = prev.findIndex((s) => s.type === generated.type);
@@ -192,7 +192,21 @@ export function createGenerateAll(deps: SectionDeps) {
 
     try {
       await api.stream(`/memos/${selectedMemo.id}/generate-all`, {}, (event) => {
-        const e = event as Record<string, any>;
+        // Cast to the SSE event union this endpoint emits. `section` is typed
+        // as always-present because every branch that reads it has already
+        // narrowed on an event type that carries it.
+        const e = event as {
+          type?: string;
+          sectionType?: string;
+          index?: number;
+          total?: number;
+          section: {
+            type: string; title: string; content: string; aiGenerated: boolean;
+            tableData?: MemoSection["tableData"]; chartConfig?: MemoSection["chartConfig"];
+          };
+          sections?: MemoSection[];
+          message?: string;
+        };
         if (e.type === "section_start") {
           const label = String(e.sectionType).replaceAll("_", " ").toLowerCase();
           setGenerationStatus(`Generating ${label}... (${e.index}/${e.total})`);

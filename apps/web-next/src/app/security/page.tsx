@@ -35,18 +35,18 @@ const SUB_PROCESSORS: Array<{
     dpaUrl: "https://vercel.com/legal/dpa",
   },
   {
-    provider: "OpenAI",
-    service: "GPT-4o (extraction, classification, chat)",
-    region: "US",
-    certifications: "SOC 2 Type II",
-    dpaUrl: "https://openai.com/policies/data-processing-addendum",
-  },
-  {
     provider: "Anthropic",
-    service: "Claude (financial cross-verification)",
+    service: "Claude (document extraction, memos, deal chat)",
     region: "US",
     certifications: "SOC 2 Type II",
     dpaUrl: "https://www.anthropic.com/legal/dpa",
+  },
+  {
+    provider: "OpenAI",
+    service: "GPT-4o (fast classification + legacy fallback)",
+    region: "US",
+    certifications: "SOC 2 Type II",
+    dpaUrl: "https://openai.com/policies/data-processing-addendum",
   },
   {
     provider: "Google",

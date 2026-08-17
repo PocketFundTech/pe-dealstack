@@ -26,7 +26,7 @@ export default function LandingPage() {
               <div className="flex-1 flex flex-col gap-6 text-center lg:text-left z-10">
                 <div className="inline-flex items-center gap-2 self-center lg:self-start rounded-full border border-primary/20 bg-primary/5 px-3 py-1">
                   <span className="flex size-2 rounded-full bg-primary animate-pulse" />
-                  <span className="text-xs font-semibold text-primary uppercase tracking-wide">New: GPT-4o Integration</span>
+                  <span className="text-xs font-semibold text-primary uppercase tracking-wide">New: Claude-Native AI Engine</span>
                 </div>
                 <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.1] tracking-tight text-[#111418]">
                   The Intelligence Layer for <span className="text-primary">Private Equity</span>

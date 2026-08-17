@@ -291,7 +291,7 @@ export function AISettingsModal({ onClose }: { onClose: () => void }) {
             <label className="block text-sm font-semibold text-text-main mb-2">AI Model</label>
             <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-border-subtle rounded-lg">
               <span className="material-symbols-outlined text-primary text-base">smart_toy</span>
-              <span className="text-sm font-medium text-text-main">GPT-4o (ReAct Agent)</span>
+              <span className="text-sm font-medium text-text-main">Claude (streaming agent)</span>
               <span className="ml-auto text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-green-50 text-green-600 border border-green-200">Active</span>
             </div>
             <p className="text-xs text-text-muted mt-1.5">Model is configured by your admin.</p>
