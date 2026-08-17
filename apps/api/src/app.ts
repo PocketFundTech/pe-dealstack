@@ -63,6 +63,9 @@ import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import dealsShareRouter from './routes/deals-share.js';
 import portalRouter from './routes/portal.js';
+import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
+import docRequestPortalRouter from './routes/doc-request-portal.js';
+import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -321,6 +324,9 @@ app.use('/api/public/invitations', invitationsAcceptRouter);
 // Deal-share portal must be public — external viewers have no accounts;
 // the DealShare token is the credential (see routes/portal.ts).
 app.use('/api/public/portal', portalRouter);
+// Document-request upload page must be public — brokers/sellers have no
+// accounts; the DocRequest token is the credential (see routes/doc-request-portal.ts).
+app.use('/api/public/doc-requests', docRequestPortalRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens
@@ -346,6 +352,9 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
+// Doc-request CRUD (/:dealId/doc-requests) — literal segment, so mount
+// BEFORE the generic dealsRouter. Public fulfilment side is above.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
@@ -409,6 +418,7 @@ app.use('/api/internal', authMiddleware, internalRouter);
 // so authMiddleware/orgMiddleware don't apply)
 // ========================================
 app.use('/api/cron/signal-scan', cronSignalScanRouter);
+app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
 
 // ========================================
 // AI Routes (mixed - some protected, some public)

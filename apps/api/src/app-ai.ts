@@ -14,6 +14,7 @@ import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import dealsScorecardRouter from './routes/deals-scorecard.js';
 import cronSignalScanRouter from './routes/cron-signal-scan.js';
+import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
 import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
@@ -207,6 +208,9 @@ app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageCon
 // Vercel nightly cron — no user auth; CRON_SECRET is verified inside the
 // router (see routes/cron-signal-scan.ts and vercel.json crons).
 app.use('/api/cron/signal-scan', cronSignalScanRouter);
+// Reminder sweep for outstanding document requests. Lands in the AI bundle
+// only because pickBundle routes ALL /api/cron/* here — it makes no LLM call.
+app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
 
 // AI status endpoint (public - no auth required)
 app.get('/api/ai/status', (_req, res) => {

@@ -24,6 +24,7 @@ import {
 } from "./components";
 import { DealScorecardSection } from "./deal-scorecard-section";
 import { DealTeasers } from "./DealTeasers";
+import { DocRequestsPanel } from "./doc-requests-panel";
 
 // ---------------------------------------------------------------------------
 // Left panel — deal content (icon, title, stage pipeline, metadata, financial
@@ -186,14 +187,18 @@ export function DealPageLeftPanel({
             />
           )}
           {activeTab === "Documents" && (
-            <DocumentsTab
-              documents={documents}
-              uploading={uploading}
-              fileInputRef={fileInputRef}
-              onUpload={onUpload}
-              driveImporting={driveImporting}
-              onImportFromDrive={onImportFromDrive}
-            />
+            <div className="flex flex-col gap-8">
+              <DocumentsTab
+                documents={documents}
+                uploading={uploading}
+                fileInputRef={fileInputRef}
+                onUpload={onUpload}
+                driveImporting={driveImporting}
+                onImportFromDrive={onImportFromDrive}
+              />
+              {/* Asking for documents belongs next to receiving them. */}
+              <DocRequestsPanel dealId={deal.id} />
+            </div>
           )}
           {activeTab === "Activity" && (
             <ActivityTab

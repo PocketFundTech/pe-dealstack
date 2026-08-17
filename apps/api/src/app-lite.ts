@@ -55,6 +55,8 @@ import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeserie
 import organizationCriteriaRouter from './routes/organization-criteria.js';
 import dealsShareRouter from './routes/deals-share.js';
 import portalRouter from './routes/portal.js';
+import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
+import docRequestPortalRouter from './routes/doc-request-portal.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
@@ -249,6 +251,9 @@ app.use('/api/public/invitations', invitationsAcceptRouter);
 // Deal-share portal must be public — external viewers have no accounts;
 // the DealShare token is the credential (see routes/portal.ts).
 app.use('/api/public/portal', portalRouter);
+// Document-request upload page must be public — brokers/sellers have no
+// accounts; the DocRequest token is the credential (see routes/doc-request-portal.ts).
+app.use('/api/public/doc-requests', docRequestPortalRouter);
 
 // Integration webhooks + OAuth callbacks + cron must be public — providers
 // POST/GET here without an auth header. Auth is enforced via signed state
@@ -285,6 +290,9 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Share-link CRUD (/:dealId/shares) — the public read side lives at
 // /api/public/portal above.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
+// Doc-request CRUD (/:dealId/doc-requests) — literal segment, so mount
+// BEFORE the generic dealsRouter. Public fulfilment side is above.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);

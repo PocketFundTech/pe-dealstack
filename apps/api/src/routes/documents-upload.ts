@@ -53,7 +53,13 @@ const documentTypes = ['CIM', 'TEASER', 'FINANCIALS', 'LEGAL', 'NDA', 'LOI', 'EM
 // activity/audit/notifications) by synthesizing a multer-style `req.file` from
 // the downloaded Drive bytes. Keep this handler the single source of truth for
 // "a document was added to a deal" — do not fork it.
-async function handleDocumentUpload(req: Request, res: Response) {
+//
+// Exported for the same reason: routes/doc-request-portal.ts feeds
+// broker/seller uploads (unauthenticated, token-gated) through this exact
+// pipeline by synthesizing a request whose `user.organizationId` comes from
+// the DocRequest row — the token is the credential, so the org is derived
+// from the token, never from anything the uploader supplies.
+export async function handleDocumentUpload(req: Request, res: Response) {
   try {
     // Lazy-load heavy extraction deps so the shared lite bundle stays light on cold start
     const { extractDealDataFromText } = await import('../services/aiExtractor.js');
