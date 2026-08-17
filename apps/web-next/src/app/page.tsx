@@ -26,7 +26,7 @@ export default function LandingPage() {
               <div className="flex-1 flex flex-col gap-6 text-center lg:text-left z-10">
                 <div className="inline-flex items-center gap-2 self-center lg:self-start rounded-full border border-primary/20 bg-primary/5 px-3 py-1">
                   <span className="flex size-2 rounded-full bg-primary animate-pulse" />
-                  <span className="text-xs font-semibold text-primary uppercase tracking-wide">New: GPT-4o Integration</span>
+                  <span className="text-xs font-semibold text-primary uppercase tracking-wide">New: Claude-Native AI Engine</span>
                 </div>
                 <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.1] tracking-tight text-[#111418]">
                   The Intelligence Layer for <span className="text-primary">Private Equity</span>
@@ -43,9 +43,17 @@ export default function LandingPage() {
                     View Documentation
                   </Link>
                 </div>
+                {/*
+                  Removed: an unqualified "SOC 2 Type II Compliant" badge.
+                  PE OS is not certified — SOC 2 Type I is in progress, per
+                  /security. Only our sub-processors hold Type II. Do not
+                  reinstate any compliance badge until an auditor issues the
+                  report; state sub-processor certifications on /security only,
+                  attributed to the provider.
+                */}
                 <div className="flex items-center justify-center lg:justify-start gap-2 text-sm text-slate-500 pt-2">
-                  <span className="material-symbols-outlined text-[18px] text-green-500">check_circle</span>
-                  <span>SOC 2 Type II Compliant</span>
+                  <span className="material-symbols-outlined text-[18px] text-green-500">lock</span>
+                  <span>Multi-tenant isolation, encryption in transit and at rest</span>
                 </div>
               </div>
               {/* Hero Image / Dashboard Preview */}
@@ -132,7 +140,9 @@ export default function LandingPage() {
             Ready to modernize your investment process?
           </h2>
           <p className="text-lg text-slate-600 mb-10 max-w-2xl mx-auto">
-            Join over 200+ investment firms using PE OS to make data-driven decisions faster.
+            {/* Removed an unsupported "200+ investment firms" customer count. Do
+                not state a customer number until it is true and verifiable. */}
+            Built by an operating M&amp;A practice, on live deal flow.
           </p>
           <div className="flex flex-col sm:flex-row justify-center gap-4">
             <Link href="/signup" className="h-14 px-8 rounded-lg text-white text-lg font-bold shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-all flex items-center justify-center" style={{ backgroundColor: "#003366" }}>

@@ -15,10 +15,13 @@ const AI_AGENTS = [
   { name: "Meeting Prep", desc: "Briefs auto-generated before every call", icon: "event_note", color: "#14B8A6" },
 ];
 
+// Previous values ("10x Faster diligence", "15hrs Saved per deal", "SOC 2
+// Enterprise ready") were unsourced and, in the SOC 2 case, untrue — PE OS is
+// not certified. Replaced with capabilities that are verifiable in the product.
 const STATS = [
-  { value: "10x", label: "Faster diligence" },
-  { value: "15hrs", label: "Saved per deal" },
-  { value: "SOC 2", label: "Enterprise ready" },
+  { value: "3-layer", label: "Financial extraction" },
+  { value: "13", label: "Analysis modules" },
+  { value: "Per-deal", label: "Access control" },
 ];
 
 const MFA_DIGIT_COUNT = 6;

@@ -5,18 +5,23 @@ import type { MemoSection } from "./components";
 const streamMock = vi.fn();
 vi.mock("@/lib/api", () => ({ api: { stream: (...args: unknown[]) => streamMock(...args) } }));
 
+type OnEvent = (event: Record<string, unknown>) => void;
+type GenerateAllDeps = Parameters<typeof createGenerateAll>[0];
+
 function makeDeps() {
   let sections: MemoSection[] = [];
-  const setSections = vi.fn((updater: any) => {
-    sections = typeof updater === "function" ? updater(sections) : updater;
-  }) as any;
-  const setEditingContent = vi.fn() as any;
-  const setActiveSection = vi.fn() as any;
-  const setGeneratingAll = vi.fn() as any;
-  const setGenerationStatus = vi.fn() as any;
-  const setError = vi.fn() as any;
+  const setSections = vi.fn((updater: unknown) => {
+    sections = typeof updater === "function"
+      ? (updater as (prev: MemoSection[]) => MemoSection[])(sections)
+      : (updater as MemoSection[]);
+  });
+  const setEditingContent = vi.fn();
+  const setActiveSection = vi.fn();
+  const setGeneratingAll = vi.fn();
+  const setGenerationStatus = vi.fn();
+  const setError = vi.fn();
 
-  const deps: any = {
+  const deps = {
     selectedMemo: { id: "memo-1" },
     setSections,
     setEditingContent,
@@ -24,7 +29,7 @@ function makeDeps() {
     setGeneratingAll,
     setGenerationStatus,
     setError,
-  };
+  } as unknown as GenerateAllDeps;
   return { deps, getSections: () => sections, setGeneratingAll, setGenerationStatus, setError };
 }
 
@@ -34,7 +39,7 @@ beforeEach(() => {
 
 describe("createGenerateAll (streaming)", () => {
   it("upserts a section into state as soon as its section_complete event arrives", async () => {
-    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: any) => {
+    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: OnEvent) => {
       onEvent({ type: "section_start", sectionType: "EXECUTIVE_SUMMARY", index: 1, total: 2 });
       onEvent({
         type: "section_complete",
@@ -53,7 +58,7 @@ describe("createGenerateAll (streaming)", () => {
   });
 
   it("updates the same section in place (not duplicated) on a later section_revised event", async () => {
-    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: any) => {
+    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: OnEvent) => {
       onEvent({
         type: "section_complete",
         sectionType: "EXECUTIVE_SUMMARY",
@@ -76,7 +81,7 @@ describe("createGenerateAll (streaming)", () => {
   });
 
   it("replaces state wholesale with the persisted rows on the final done event", async () => {
-    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: any) => {
+    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: OnEvent) => {
       onEvent({
         type: "section_complete",
         sectionType: "EXECUTIVE_SUMMARY",
@@ -102,7 +107,7 @@ describe("createGenerateAll (streaming)", () => {
   });
 
   it("updates the status line through section_start, critique_start, and clears it when done", async () => {
-    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: any) => {
+    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: OnEvent) => {
       onEvent({ type: "section_start", sectionType: "EXECUTIVE_SUMMARY", index: 1, total: 1 });
       onEvent({ type: "critique_start" });
       onEvent({ type: "done", success: true, completed: 1, total: 1, sections: [] });
@@ -111,14 +116,14 @@ describe("createGenerateAll (streaming)", () => {
     const { deps, setGenerationStatus } = makeDeps();
     await createGenerateAll(deps)();
 
-    const calls = setGenerationStatus.mock.calls.map((c: any[]) => c[0]);
-    expect(calls.some((s: string | null) => s?.includes("executive summary"))).toBe(true);
+    const calls = setGenerationStatus.mock.calls.map((c: unknown[]) => c[0] as string | null);
+    expect(calls.some((s) => s?.includes("executive summary"))).toBe(true);
     expect(calls).toContain("Reviewing memo quality...");
     expect(calls[calls.length - 1]).toBeNull(); // cleared in finally
   });
 
   it("sets an error on an error event", async () => {
-    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: any) => {
+    streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: OnEvent) => {
       onEvent({ type: "error", message: "LLM is not available. Check API key configuration." });
     });
     const { deps, setError } = makeDeps();
