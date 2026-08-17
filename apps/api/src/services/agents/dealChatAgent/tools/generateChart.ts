@@ -11,8 +11,22 @@
 // duplicate the shape rather than cross-importing across apps — sharing
 // types over the workspace boundary breaks the tsc build path in both
 // directions. If you change one schema, update the other.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here. Ported from a LangChain-only `tool()` wrapper
+// (2026-08-14) so it's available on both the legacy and streaming
+// (DEAL_CHAT_ENGINE=streaming) barrels — see tools.ts.
+//
+// Deliberate deviation from the addNote.ts `parse` idiom: `parse` here
+// is a lenient passthrough (never throws) and `run` does its own
+// `safeParse` + friendly-error-string return, exactly as the original
+// LangChain implementation did. Chart args are the one schema in this
+// barrel with a cross-field `.refine()` (pie/waterfall ⇒ single series),
+// and letting the model see a plain-text "Chart generation failed: ..."
+// result (so it can self-correct next turn) is safer than surfacing a
+// thrown validation error through the tool-runner's error path — keeps
+// identical behavior on both the legacy and streaming barrels.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
 
@@ -47,7 +61,7 @@ const chartUnitSchema = z
     ].join(' '),
   );
 
-const chartSpecSchema = z
+export const inputSchema = z
   .object({
     type: z.enum(['line', 'bar', 'waterfall', 'pie']),
     title: z.string().min(1),
@@ -67,7 +81,7 @@ const chartSpecSchema = z
     { message: 'pie and waterfall charts must have exactly one series' },
   );
 
-type ChartSpecInput = z.infer<typeof chartSpecSchema>;
+type ChartSpecInput = z.infer<typeof inputSchema>;
 
 function buildChartArtifact(spec: ChartSpecInput): string {
   // Strip undefined optionals before serializing so the marker stays compact.
@@ -85,9 +99,66 @@ function buildChartArtifact(spec: ChartSpecInput): string {
 }
 
 export function makeGenerateChartTool() {
-  return tool(
-    async (input) => {
-      const parsed = chartSpecSchema.safeParse(input);
+  return {
+    type: 'custom' as const,
+    name: 'generate_chart',
+    description:
+      "Render a chart inline in the chat. Returns a fenced ```chart...``` text block that you MUST copy VERBATIM into your final reply — opening fence, JSON line, and closing fence. The frontend chat renderer scans for that exact fence pair and draws Chart.js from the JSON inside; summarizing or paraphrasing the JSON means NO chart appears. Use for trends, comparisons, distributions. DO NOT also describe the same data in a long paragraph after the chart. Chart data must come from get_deal_financials (or compare_deals for comp sets) — never fabricate. CRITICAL: set the `unit` field — currency: ACTUALS -> 'units', THOUSANDS -> 'K', MILLIONS -> 'M', BILLIONS -> 'B'; percentages (margins, growth): '%'; multiples (EV/EBITDA, P/E): 'x'. Omitting `unit` defaults to millions and renders raw-dollar values as $0.0M.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['line', 'bar', 'waterfall', 'pie'] },
+        title: { type: 'string' },
+        xLabel: { type: 'string' },
+        yLabel: { type: 'string' },
+        series: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              data: {
+                type: 'array',
+                minItems: 1,
+                items: {
+                  type: 'object',
+                  properties: {
+                    x: { type: ['string', 'number'] },
+                    y: { type: 'number' },
+                  },
+                  required: ['x', 'y'],
+                },
+              },
+            },
+            required: ['name', 'data'],
+          },
+        },
+        annotations: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              x: { type: ['string', 'number'] },
+              label: { type: 'string' },
+            },
+            required: ['x', 'label'],
+          },
+        },
+        unit: {
+          type: 'string',
+          enum: ['K', 'M', 'B', 'units', '%', 'x'],
+          description: "Display unit for y-axis ticks. Currency: ACTUALS -> 'units', THOUSANDS -> 'K', MILLIONS -> 'M', BILLIONS -> 'B'. Percentages: '%'. Multiples: 'x'.",
+        },
+      },
+      required: ['type', 'title', 'series'],
+    },
+    // Lenient passthrough — see the file-header note on why this deviates
+    // from the standard `inputSchema.parse(input)` idiom used elsewhere in
+    // this barrel. `run` below performs the real validation via safeParse.
+    parse: (input: unknown) => input as ChartSpecInput,
+    run: async (input: unknown) => {
+      const parsed = inputSchema.safeParse(input);
       if (!parsed.success) {
         const message = parsed.error.issues
           .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
@@ -104,11 +175,5 @@ export function makeGenerateChartTool() {
 
       return buildChartArtifact(parsed.data);
     },
-    {
-      name: 'generate_chart',
-      description:
-        "Render a chart inline in the chat. Returns a fenced ```chart...``` text block that you MUST copy VERBATIM into your final reply — opening fence, JSON line, and closing fence. The frontend chat renderer scans for that exact fence pair and draws Chart.js from the JSON inside; summarizing or paraphrasing the JSON means NO chart appears. Use for trends, comparisons, distributions. DO NOT also describe the same data in a long paragraph after the chart. Chart data must come from get_deal_financials (or compare_deals for comp sets) — never fabricate. CRITICAL: set the `unit` field — currency: ACTUALS -> 'units', THOUSANDS -> 'K', MILLIONS -> 'M', BILLIONS -> 'B'; percentages (margins, growth): '%'; multiples (EV/EBITDA, P/E): 'x'. Omitting `unit` defaults to millions and renders raw-dollar values as $0.0M.",
-      schema: chartSpecSchema,
-    },
-  );
+  };
 }
