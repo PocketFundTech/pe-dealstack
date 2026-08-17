@@ -2,7 +2,7 @@
  * Deal Chat Agent bounds tests — recursion limit + timeout guards.
  *
  * Verifies Task 4.2 fixes:
- *   1. agent.invoke() is called with recursionLimit: 10
+ *   1. agent.invoke() is called with recursionLimit: 25
  *   2. agent.invoke() is called with a signal (AbortSignal)
  *   3. When the agent never resolves, runDealChatAgent rejects/returns
  *      a timeout error within the configured window.
@@ -61,7 +61,7 @@ describe('runDealChatAgent — bounds', () => {
     invokeSpy.mockReset();
   });
 
-  it('passes recursionLimit: 10 as config to agent.invoke()', async () => {
+  it('passes recursionLimit: 25 as config to agent.invoke()', async () => {
     invokeSpy.mockResolvedValueOnce({
       messages: [
         // Minimal AI message so the result extractor finds something.
@@ -74,7 +74,7 @@ describe('runDealChatAgent — bounds', () => {
     expect(invokeSpy).toHaveBeenCalledTimes(1);
     const [, config] = invokeSpy.mock.calls[0];
     expect(config).toBeDefined();
-    expect(config.recursionLimit).toBe(10);
+    expect(config.recursionLimit).toBe(25);
   });
 
   it('passes an AbortSignal as config to agent.invoke()', async () => {
