@@ -24,12 +24,19 @@ import type { ToolEmit, ToolEmitEvent } from './types.js';
 //
 // Refs: .planning/REMEDIATION_ROADMAP.md Phase 4 Task 4.2
 // Refs: .planning/codebase/CONCERNS.md §3.5, §7.2
-const AGENT_RECURSION_LIMIT = 10;
+const DEFAULT_AGENT_RECURSION_LIMIT = 10;
 const DEFAULT_AGENT_TIMEOUT_MS = 30_000;
-// Allow tests to shorten the timeout; production reads the default.
+// Both bounds are env-overridable: tests shorten the timeout, and production
+// can widen either without a deploy (2026-08-14 verification found the
+// legacy path hitting both limits on real workloads after the chat provider
+// cascade flipped to Anthropic — see llm.ts chatProvider).
 function getAgentTimeoutMs(): number {
   const override = Number(process.env.DEAL_CHAT_AGENT_TIMEOUT_MS);
   return Number.isFinite(override) && override > 0 ? override : DEFAULT_AGENT_TIMEOUT_MS;
+}
+function getAgentRecursionLimit(): number {
+  const override = Number(process.env.DEAL_CHAT_AGENT_RECURSION_LIMIT);
+  return Number.isFinite(override) && override > 0 ? override : DEFAULT_AGENT_RECURSION_LIMIT;
 }
 import { getTodayIso } from '../../../utils/dates.js';
 import { getFirmContextBlock } from '../../firmContextService.js';
@@ -326,7 +333,7 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
         agent.invoke(
           { messages },
           {
-            recursionLimit: AGENT_RECURSION_LIMIT,
+            recursionLimit: getAgentRecursionLimit(),
             signal: abortController.signal,
           }
         ),
@@ -490,7 +497,7 @@ export async function* runDealChatAgentStreaming(
   try {
     for await (const messageStream of runner) {
       iterationCount++;
-      if (iterationCount > AGENT_RECURSION_LIMIT) {
+      if (iterationCount > getAgentRecursionLimit()) {
         internalController.abort();
         cleanup();
         await recordUsage(usage, 'error');
