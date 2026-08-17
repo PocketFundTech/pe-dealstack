@@ -15,8 +15,19 @@ import { extractTextFromPDF, upload } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
+import { runInBackground } from '../utils/background.js';
+import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
 
 const router = Router();
+
+// INGEST_ENGINE=claude: deal-level overview extraction reads the document
+// natively (claudeDealReader — whole PDF via the Files API, or full text up
+// to 200k chars) instead of the legacy truncated-text chain. Read per call
+// (never cached at module load) so a Vercel env flip applies on the next
+// invocation — same idiom as extractNode's EXTRACTION_ENGINE.
+function isClaudeIngestEnabled(): boolean {
+  return (process.env.INGEST_ENGINE || 'legacy') === 'claude';
+}
 
 // Transform deep extraction result into ExtractedDealData format
 function transformDeepResultToExtractedDealData(result: DeepExtractionResult): ExtractedDealData {
@@ -117,18 +128,28 @@ export async function runIngestFromBuffer(
       // Image-only one-pagers (scanned PDFs) yield ~0 chars from pdf-parse.
       // Surface a useful 422 instead of letting the AI extractor return null.
       if (extraction.sparse && extractedText.trim().length < 100) {
-        log.warn('PDF text too sparse for AI extraction', {
+        if (!isClaudeIngestEnabled()) {
+          log.warn('PDF text too sparse for AI extraction', {
+            documentName,
+            chars: extractedText.trim().length,
+            layer: extraction.source,
+          });
+          return {
+            status: 422,
+            body: {
+              error:
+                "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
+            },
+          };
+        }
+        // INGEST_ENGINE=claude: scanned/image-only PDFs proceed — the native
+        // reader sees the complete file regardless of text layer. Only the
+        // downstream "AI couldn't identify deal information" 422 fires if the
+        // native read ALSO fails.
+        log.info('Sparse/scanned PDF — deferring to native Claude read', {
           documentName,
           chars: extractedText.trim().length,
-          layer: extraction.source,
         });
-        return {
-          status: 422,
-          body: {
-            error:
-              "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
-          },
-        };
       }
     } else if (
       mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -164,13 +185,34 @@ export async function runIngestFromBuffer(
     }
 
     // Step 2: Run AI extraction with confidence scores
-    // Smart routing: use deep extraction for long documents (>50k chars) if available
-    const shouldUseDeepExtraction =
-      extractedText.length > 50000 && isDeepExtractionAvailable();
-
     let aiData: ExtractedDealData | null = null;
 
-    if (shouldUseDeepExtraction) {
+    // INGEST_ENGINE=claude — native full-document read (whole PDF via the
+    // Files API; full text for other formats). Returns the exact
+    // ExtractedDealData shape, so everything downstream is unchanged. Any
+    // failure falls through to the legacy chain below — deal creation is
+    // never blocked by the new engine.
+    if (isClaudeIngestEnabled()) {
+      const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
+      aiData = await readDealDocument({
+        fileBuffer: mimeType === 'application/pdf' ? buffer : undefined,
+        fileName: documentName,
+        fullText: mimeType === 'application/pdf' ? undefined : extractedText,
+        sourceLength: extractedText.length,
+      });
+      if (!aiData) {
+        log.warn('INGEST_ENGINE=claude deal read failed — falling back to legacy extractor', { documentName });
+      }
+    }
+
+    // Legacy chain (also the fallback when the claude read returns null).
+    // Smart routing: use deep extraction for long documents (>50k chars) if available
+    const shouldUseDeepExtraction =
+      !aiData && extractedText.length > 50000 && isDeepExtractionAvailable();
+
+    if (aiData) {
+      // native read succeeded — skip the legacy chain entirely
+    } else if (shouldUseDeepExtraction) {
       log.info('Using deep extraction for long document', { textLength: extractedText.length });
       const deepResult = await deepExtract(extractedText);
 
@@ -583,13 +625,35 @@ export async function runIngestFromBuffer(
       }
     }
 
-    log.info('Ingest complete', { dealId: deal.id, isUpdate });
+    // Background deep pass: financial-statement extraction + auto-score, so
+    // the deal page fills in (financials, red flags, scorecard) without a
+    // manual Re-extract. Survives the serverless response freeze via
+    // waitUntil (utils/background.ts). Skipped for duplicate re-uploads
+    // (already extracted) and file types that carry no statements.
+    let backgroundExtraction: 'started' | 'skipped' = 'skipped';
+    if (!existingDuplicate && shouldRunIngestDeepPass(mimeType, documentName)) {
+      runInBackground(
+        `ingest-deep-pass:${deal.id}`,
+        runIngestDeepPass({
+          dealId: deal.id,
+          orgId,
+          documentId: document.id,
+          fileBuffer: buffer,
+          fileName: documentName,
+          mimeType,
+        }),
+      );
+      backgroundExtraction = 'started';
+    }
+
+    log.info('Ingest complete', { dealId: deal.id, isUpdate, backgroundExtraction });
 
     return {
       status: isUpdate ? 200 : 201,
       body: {
         success: true,
         isUpdate,
+        backgroundExtraction,
         deal: {
           ...deal,
           company: company || deal.company,
