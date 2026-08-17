@@ -29,6 +29,7 @@
     "@sentry/node": "^10.39.0",
     "@supabase/supabase-js": "^2.91.1",
     "@types/multer": "^2.0.0",
+    "@vercel/functions": "^3.9.3",
     "apify-client": "^2.23.0",
     "compression": "^1.8.1",
     "cors": "^2.8.5",

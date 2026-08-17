@@ -20,7 +20,7 @@ function computeStrength(password: string): number {
 const STATS = [
   { value: "< 3min", label: "To first insight" },
   { value: "No prompts", label: "Pre-loaded context" },
-  { value: "SOC 2", label: "Enterprise ready" },
+  { value: "Per-deal", label: "Access control" },
 ];
 
 export default function SignupPage() {

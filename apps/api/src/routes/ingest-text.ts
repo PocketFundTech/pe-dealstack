@@ -39,8 +39,23 @@ subRouter.post('/text', async (req, res) => {
     const { text, sourceName, sourceType, dealId: targetDealId } = validation.data;
     log.info('Text ingest starting', { textLength: text.length, sourceType, targetDealId });
 
-    // Step 1: Extract data using existing AI extractor
-    const aiData = await extractDealDataFromText(text);
+    // Step 1: Extract deal data. INGEST_ENGINE=claude uses the native reader
+    // with the FULL text (200k-char window vs the legacy 20k truncation);
+    // any failure falls back to the legacy extractor — same ladder as
+    // ingest-upload.ts.
+    let aiData = null as Awaited<ReturnType<typeof extractDealDataFromText>>;
+    if ((process.env.INGEST_ENGINE || 'legacy') === 'claude') {
+      const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
+      aiData = await readDealDocument({
+        fileName: sourceName || 'pasted-text',
+        fullText: text,
+        sourceLength: text.length,
+      });
+      if (!aiData) {
+        log.warn('INGEST_ENGINE=claude text read failed — falling back to legacy extractor');
+      }
+    }
+    if (!aiData) aiData = await extractDealDataFromText(text);
     if (!aiData) {
       return res.status(400).json({ error: 'Could not extract deal data from text. Try providing more detail.' });
     }

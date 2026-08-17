@@ -35,18 +35,18 @@ const SUB_PROCESSORS: Array<{
     dpaUrl: "https://vercel.com/legal/dpa",
   },
   {
-    provider: "OpenAI",
-    service: "GPT-4o (extraction, classification, chat)",
-    region: "US",
-    certifications: "SOC 2 Type II",
-    dpaUrl: "https://openai.com/policies/data-processing-addendum",
-  },
-  {
     provider: "Anthropic",
-    service: "Claude (financial cross-verification)",
+    service: "Claude (document extraction, memos, deal chat)",
     region: "US",
     certifications: "SOC 2 Type II",
     dpaUrl: "https://www.anthropic.com/legal/dpa",
+  },
+  {
+    provider: "OpenAI",
+    service: "GPT-4o (fast classification + legacy fallback)",
+    region: "US",
+    certifications: "SOC 2 Type II",
+    dpaUrl: "https://openai.com/policies/data-processing-addendum",
   },
   {
     provider: "Google",
@@ -143,8 +143,10 @@ export default function SecurityPage() {
       <section id="data-location">
         <LegalH2>Where your data lives</LegalH2>
         <LegalP>
-          All Pocket Fund data is processed and stored on enterprise-grade,
-          SOC 2 Type II certified infrastructure:
+          All Pocket Fund data is processed and stored on infrastructure
+          operated by the providers below. The certifications listed are{" "}
+          <strong>held by those providers, not by Pocket Fund</strong> — our own
+          certification status is set out further down this page:
         </LegalP>
         <LegalList>
           <li>

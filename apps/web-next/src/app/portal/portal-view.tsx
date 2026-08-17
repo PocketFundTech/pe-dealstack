@@ -4,6 +4,7 @@
 // data fetching lives in [token]/page.tsx so this stays unit-testable.
 
 import DOMPurify from "dompurify";
+import Link from "next/link";
 import { formatCurrency } from "@/lib/formatters";
 
 // Same allowlist approach as memo-builder/editor.tsx's sanitizeHtml — memo
@@ -191,7 +192,7 @@ export function PortalView({ state, token }: { state: PortalState; token: string
       </main>
 
       <footer className="max-w-4xl mx-auto px-6 pb-8 text-center text-[11px] text-gray-400">
-        Powered by <a href="/" className="font-semibold" style={{ color: "#003366" }}>PE OS</a> — deal management for private equity teams
+        Powered by <Link href="/" className="font-semibold" style={{ color: "#003366" }}>PE OS</Link> — deal management for private equity teams
       </footer>
     </div>
   );
