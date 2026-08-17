@@ -6,15 +6,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const streamCalls: any[] = [];
+const streamOptions: any[] = [];
+const toolRunnerCalls: any[] = [];
+const toolRunnerOptions: any[] = [];
 let nextFinalMessage: any;
 
 vi.mock('@anthropic-ai/sdk', () => {
   class MockAnthropic {
     beta = {
       messages: {
-        stream: (req: any) => {
+        stream: (req: any, opts?: any) => {
           streamCalls.push(req);
+          streamOptions.push(opts);
           return { finalMessage: async () => nextFinalMessage };
+        },
+        toolRunner: (req: any, opts?: any) => {
+          toolRunnerCalls.push(req);
+          toolRunnerOptions.push(opts);
+          return {};
         },
       },
       files: { upload: vi.fn() },
@@ -40,6 +49,9 @@ function okMessage(text: string) {
 
 beforeEach(() => {
   streamCalls.length = 0;
+  streamOptions.length = 0;
+  toolRunnerCalls.length = 0;
+  toolRunnerOptions.length = 0;
   recorded.length = 0;
   process.env.ANTHROPIC_API_KEY = 'test-key';
   delete process.env.AI_EXTRACTION_MODEL;
@@ -110,7 +122,12 @@ describe('trackedClaudeMessage', () => {
     expect(recorded[0]).toMatchObject({ status: 'blocked' });
   });
 
-  it('forwards an AbortSignal to the stream request when provided', async () => {
+  // PROD REGRESSION (2026-08-14, D1): `signal` placed on the request BODY is
+  // serialized into the JSON payload and the API rejects every call with
+  // 400 invalid_request_error "signal: Extra inputs are not permitted"
+  // (killed all memo section generation in prod). The AbortSignal must be
+  // passed as SDK RequestOptions (second argument), never in the body.
+  it('passes an AbortSignal as request options, never in the request body', async () => {
     nextFinalMessage = okMessage('ok');
     const { trackedClaudeMessage } = await getClient();
     const controller = new AbortController();
@@ -120,7 +137,8 @@ describe('trackedClaudeMessage', () => {
       messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
       signal: controller.signal,
     });
-    expect(streamCalls[0].signal).toBe(controller.signal);
+    expect('signal' in streamCalls[0]).toBe(false);
+    expect(streamOptions[0]?.signal).toBe(controller.signal);
   });
 
   it('omits betas entirely for roles with no beta flags (empty anthropic-beta header 400s)', async () => {
@@ -143,6 +161,35 @@ describe('trackedClaudeMessage', () => {
       messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
     });
     expect('signal' in streamCalls[0]).toBe(false);
+  });
+});
+
+describe('trackedClaudeStream', () => {
+  it('passes an AbortSignal as request options, never in the toolRunner params', async () => {
+    const { trackedClaudeStream } = await getClient();
+    const controller = new AbortController();
+    trackedClaudeStream({
+      operation: 'deal_chat',
+      role: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      signal: controller.signal,
+    });
+    expect('signal' in toolRunnerCalls[0]).toBe(false);
+    expect(toolRunnerOptions[0]?.signal).toBe(controller.signal);
+  });
+
+  it('keeps stream: true and omits signal options when no signal given', async () => {
+    const { trackedClaudeStream } = await getClient();
+    trackedClaudeStream({
+      operation: 'deal_chat',
+      role: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+    });
+    expect(toolRunnerCalls[0].stream).toBe(true);
+    expect('signal' in toolRunnerCalls[0]).toBe(false);
+    expect(toolRunnerOptions[0]?.signal).toBeUndefined();
   });
 });
 
