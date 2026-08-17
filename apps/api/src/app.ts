@@ -40,6 +40,7 @@ import { googleCalendarProvider } from './integrations/googleCalendar/index.js';
 import { outlookProvider } from './integrations/outlook/index.js';
 import { microsoft365Provider } from './integrations/microsoft365/index.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
+import ndaReviewRouter from './routes/nda-review.js';
 import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
@@ -62,6 +63,7 @@ import hubspotImportRouter from './routes/hubspot-import.js';
 import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import dealsShareRouter from './routes/deals-share.js';
+import organizationNdaPlaybookRouter from './routes/organization-nda-playbook.js';
 import portalRouter from './routes/portal.js';
 import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
 import docRequestPortalRouter from './routes/doc-request-portal.js';
@@ -373,6 +375,9 @@ app.use('/api/documents', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
 app.use('/api/users', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
+// NDA playbook (GET/PATCH /nda-playbook) — literal path, so mount before
+// the generic organizationsRouter for the same reason as criteria.
+app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationNdaPlaybookRouter);
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
 app.use('/api/notifications', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
@@ -408,6 +413,9 @@ app.use('/api/contacts', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware,
 app.use('/api/watchlist', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, watchlistRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+// NDA review of INCOMING counterparty paper — runs trackedClaudeMessage,
+// so pickBundle routes /api/deals/:id/nda-reviews to the AI bundle.
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { DOC_TYPE_LABELS, STATUS_COLOR_CLASSES, STATUS_LABELS } from "./constants";
-import { CreateTile, ImportGdocTile, UploadExistingTile } from "./GalleryTiles";
+import { CreateTile, ImportGdocTile, ReviewIncomingTile, UploadExistingTile } from "./GalleryTiles";
 import { isImportedGdoc, type DocStatus, type LegalDocumentWithDeal } from "./types";
 
 interface DocCardProps {
@@ -222,6 +222,7 @@ interface GalleryProps {
   onCreate: () => void;
   onUploadExisting: () => void;
   onImportGdoc: () => void;
+  onReviewIncoming: () => void;
   onEdit: (doc: LegalDocumentWithDeal) => void;
   onDelete: (doc: LegalDocumentWithDeal) => void;
   onDismissError: () => void;
@@ -234,6 +235,7 @@ export function Gallery({
   onCreate,
   onUploadExisting,
   onImportGdoc,
+  onReviewIncoming,
   onEdit,
   onDelete,
   onDismissError,
@@ -330,6 +332,7 @@ export function Gallery({
             importing then sending is a draft-creation path, not an archive of
             something already done. */}
         {showCreateTile && <ImportGdocTile onClick={onImportGdoc} />}
+        {showCreateTile && <ReviewIncomingTile onClick={onReviewIncoming} />}
         {uploadCtaStatus && (
           <UploadExistingTile status={uploadCtaStatus} onClick={onUploadExisting} />
         )}

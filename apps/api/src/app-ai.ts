@@ -19,6 +19,7 @@ import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
 import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
+import ndaReviewRouter from './routes/nda-review.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import authWorkspaceEmailRouter from './routes/auth-workspace-email.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
@@ -199,6 +200,9 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+// NDA review of INCOMING counterparty paper — runs trackedClaudeMessage,
+// so pickBundle routes /api/deals/:id/nda-reviews to the AI bundle.
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 
 // Auth-scoped self-service routes (MFA bypass active for /api/auth/* in
