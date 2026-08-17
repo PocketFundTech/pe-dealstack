@@ -86,7 +86,10 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
   if (opts.outputSchema) {
     request.output_config = { format: { type: 'json_schema', schema: opts.outputSchema } };
   }
-  if (opts.signal) request.signal = opts.signal;
+  // `signal` is SDK RequestOptions (2nd argument to .stream()), NEVER a body
+  // field — a body-level `signal` serializes into the JSON payload and the
+  // API 400s every call with "signal: Extra inputs are not permitted"
+  // (prod incident 2026-08-14: all memo section generation down).
   // Never send `thinking`: Fable 5 rejects explicit configs; other models
   // use their defaults.
 
@@ -102,7 +105,10 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     }).catch(() => { /* ledger is fire-and-forget */ });
 
   try {
-    const stream = client.beta.messages.stream(request as never);
+    const stream = client.beta.messages.stream(
+      request as never,
+      opts.signal ? { signal: opts.signal } : undefined,
+    );
     const message = await stream.finalMessage();
 
     const inTok = message.usage?.input_tokens ?? 0;
@@ -158,17 +164,23 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
   // tools/betas/etc., whose real SDK types this codebase doesn't import) are
   // cast individually so the `stream: true` key stays visible for overload
   // resolution.
-  const runner = client.beta.messages.toolRunner({
-    model: cfg.model,
-    max_tokens: cfg.maxTokens,
-    messages: opts.messages as never,
-    tools: opts.tools as never,
-    ...(cfg.betas.length > 0 ? { betas: cfg.betas as never } : {}),
-    stream: true,
-    ...(opts.system ? { system: opts.system } : {}),
-    ...(cfg.fallbacks ? { fallbacks: cfg.fallbacks as never } : {}),
-    ...(opts.signal ? { signal: opts.signal as never } : {}),
-  });
+  // `signal` goes in the RequestOptions second argument, never in the params
+  // object — a params-level `signal` is serialized into the request body and
+  // the API 400s with "signal: Extra inputs are not permitted" (same failure
+  // class as the 2026-08-14 memo-generation incident in trackedClaudeMessage).
+  const runner = client.beta.messages.toolRunner(
+    {
+      model: cfg.model,
+      max_tokens: cfg.maxTokens,
+      messages: opts.messages as never,
+      tools: opts.tools as never,
+      ...(cfg.betas.length > 0 ? { betas: cfg.betas as never } : {}),
+      stream: true,
+      ...(opts.system ? { system: opts.system } : {}),
+      ...(cfg.fallbacks ? { fallbacks: cfg.fallbacks as never } : {}),
+    },
+    opts.signal ? { signal: opts.signal } : undefined,
+  );
 
   const recordUsage = async (
     usage: { inputTokens: number; outputTokens: number },
