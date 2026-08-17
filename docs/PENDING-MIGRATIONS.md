@@ -1,4 +1,4 @@
-# ⛔ PENDING SUPABASE MIGRATIONS — RUN BEFORE ANY "DONE" CLAIM
+# ✅ SUPABASE MIGRATIONS — ALL RUN AND VERIFIED (2026-08-18)
 
 > **HARD GATE.** Vercel does **not** run `apps/api/*.sql`. Code can ship green,
 > pass every test, and still 500 in production because the tables don't exist.
@@ -8,7 +8,11 @@
 > that back in writing.** Tests passing is not confirmation. A green PR is not
 > confirmation. Only an explicit "I ran it" from the founder counts.
 
-**Status: 🟡 PARTIAL — migrations 1-3 RUN + VERIFIED 2026-08-18. Migration 4 BUILT AND WAITING — not yet run.**
+**Status: 🟢 COMPLETE — all four migrations run by the founder and verified live against Supabase on 2026-08-18.**
+
+Keep this file. The gate above still governs any FUTURE migration: a new
+`.sql` gets a new row, the status drops back to 🔴, and no feature
+depending on it may be called complete until the founder runs it.
 
 ---
 
@@ -19,7 +23,7 @@
 | 1 | `apps/api/doc-request-migration.sql` | Document Requests | `feat/doc-requests` | ☑ 2026-08-18 |
 | 2 | `apps/api/deal-reactivation-migration.sql` | Deal Reactivation | `feat/deal-reactivation` | ☑ 2026-08-18 |
 | 3 | `apps/api/nda-review-migration.sql` | NDA Redlining | `feat/nda-review` | ☑ 2026-08-18 |
-| 4 | `apps/api/deal-model-migration.sql` | Model Export | `feat/model-export` | ☐ |
+| 4 | `apps/api/deal-model-migration.sql` | Model Export | `feat/model-export` | ☑ 2026-08-18 |
 
 _Rows 2–4 are added as each feature lands. A row with an unchecked box blocks
 that feature's completion claim._
@@ -27,9 +31,14 @@ that feature's completion claim._
 ---
 
 Applied via the combined script `apps/api/migrations-2026-08-18-all.sql`.
-Verified live against Supabase 2026-08-18: 5 tables present, 6 Deal columns
-present, CHECK constraints enforcing (pg 23514), RLS blocking the anon key on
-all 5 tables (pg 42501 on write, 0 rows on read).
+Verified live against Supabase 2026-08-18:
+  - 6 tables present (DocRequest, DocRequestItem, DocRequestEvent,
+    DealReactivation, NdaReview, DealModel)
+  - 6 Deal columns present (passReason, passedAt, revisitAt, lastRescoredAt,
+    scorecardHistory, scorecard)
+  - CHECK + FK constraints enforcing (pg 23514, 23503)
+  - RLS blocking the anon key on every new table (pg 42501 on write,
+    0 rows on read)
 
 ## How to run them
 
