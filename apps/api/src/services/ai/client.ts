@@ -53,6 +53,13 @@ export interface ClaudeCallOptions {
   outputSchema?: Record<string, unknown>;
   /** Extra anthropic-beta flags (e.g. files-api-2025-04-14). */
   extraBetas?: string[];
+  /**
+   * Optional tools for this request — used for SERVER tools (e.g.
+   * code_execution) that run on Anthropic's side within the single call.
+   * Client tools needing an execution loop belong in trackedClaudeStream's
+   * tool runner, not here.
+   */
+  tools?: unknown[];
   maxTokens?: number;
   signal?: AbortSignal;
 }
@@ -82,6 +89,7 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
   const betas = [...cfg.betas, ...(opts.extraBetas ?? [])];
   if (betas.length > 0) request.betas = betas;
   if (opts.system) request.system = opts.system;
+  if (opts.tools && opts.tools.length > 0) request.tools = opts.tools;
   if (cfg.fallbacks) request.fallbacks = cfg.fallbacks;
   if (opts.outputSchema) {
     request.output_config = { format: { type: 'json_schema', schema: opts.outputSchema } };

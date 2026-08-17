@@ -459,22 +459,51 @@ async function handleDocumentUpload(req: Request, res: Response) {
         });
       } else {
         try {
-          log.info('Running deep financial extraction', { documentId: document.id, dealId });
-          const deepResult = await runDeepPass({
-            text: extractedText,
-            dealId,
-            documentId: document.id,
-          });
-          if (deepResult) {
-            log.info('Deep financial extraction complete', {
+          // EXTRACTION_ENGINE=claude routes upload-time spreadsheet
+          // extraction through the same flag-aware agent the Re-extract
+          // button uses (extractNode → claudeEngine, container mode), with
+          // the raw workbook buffer. Previously this block always called
+          // runDeepPass → classifyFinancials directly, silently bypassing
+          // the engine flag — uploaded spreadsheets kept getting legacy
+          // extraction even after the 2026-08-18 flag flip. runDeepPass
+          // remains the legacy-only path.
+          const useClaudeEngine = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude';
+          if (useClaudeEngine) {
+            log.info('Running deep financial extraction (claude engine)', { documentId: document.id, dealId });
+            const { runFinancialAgent } = await import('../services/agents/financialAgent/index.js');
+            const agentResult = await runFinancialAgent({
+              dealId,
               documentId: document.id,
-              statementsStored: deepResult.statementsStored,
-              periodsStored: deepResult.periodsStored,
-              overallConfidence: deepResult.overallConfidence,
-              warnings: deepResult.warnings,
+              fileBuffer: file.buffer,
+              fileName: documentName,
+              fileType: 'excel',
+              organizationId: orgId,
+            });
+            log.info('Deep financial extraction complete (claude engine)', {
+              documentId: document.id,
+              status: agentResult.status,
+              statementsStored: agentResult.statementIds.length,
+              periodsStored: agentResult.periodsStored,
+              overallConfidence: agentResult.overallConfidence,
             });
           } else {
-            log.info('Deep financial extraction: no statements detected', { documentId: document.id });
+            log.info('Running deep financial extraction', { documentId: document.id, dealId });
+            const deepResult = await runDeepPass({
+              text: extractedText,
+              dealId,
+              documentId: document.id,
+            });
+            if (deepResult) {
+              log.info('Deep financial extraction complete', {
+                documentId: document.id,
+                statementsStored: deepResult.statementsStored,
+                periodsStored: deepResult.periodsStored,
+                overallConfidence: deepResult.overallConfidence,
+                warnings: deepResult.warnings,
+              });
+            } else {
+              log.info('Deep financial extraction: no statements detected', { documentId: document.id });
+            }
           }
         } catch (deepErr) {
           log.error('Deep financial extraction failed', deepErr, { documentId: document.id });

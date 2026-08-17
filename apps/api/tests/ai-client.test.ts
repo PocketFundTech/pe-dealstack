@@ -152,6 +152,26 @@ describe('trackedClaudeMessage', () => {
     expect('betas' in streamCalls[0]).toBe(false);
   });
 
+  it('passes tools into the request body when provided, omits the field otherwise', async () => {
+    nextFinalMessage = okMessage('ok');
+    const { trackedClaudeMessage } = await getClient();
+    const codeExec = [{ type: 'code_execution_20250825', name: 'code_execution' }];
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      tools: codeExec,
+    });
+    expect(streamCalls[0].tools).toEqual(codeExec);
+
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    });
+    expect('tools' in streamCalls[1]).toBe(false);
+  });
+
   it('omits signal from the request when not provided', async () => {
     nextFinalMessage = okMessage('ok');
     const { trackedClaudeMessage } = await getClient();
