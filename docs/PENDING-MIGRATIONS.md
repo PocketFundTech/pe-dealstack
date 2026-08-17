@@ -8,7 +8,7 @@
 > that back in writing.** Tests passing is not confirmation. A green PR is not
 > confirmation. Only an explicit "I ran it" from the founder counts.
 
-**Status: 🔴 NOT RUN — awaiting founder confirmation**
+**Status: 🟡 PARTIAL — migrations 1-3 RUN + VERIFIED by founder 2026-08-18. Migration 4 pending (feature not yet built).**
 
 ---
 
@@ -16,15 +16,20 @@
 
 | # | Migration file | Feature | Branch | Run? |
 |---|---|---|---|---|
-| 1 | `apps/api/doc-request-migration.sql` | Document Requests | `feat/doc-requests` | ☐ |
-| 2 | `apps/api/deal-reactivation-migration.sql` | Deal Reactivation | `feat/deal-reactivation` | ☐ |
-| 3 | `apps/api/nda-review-migration.sql` | NDA Redlining | `feat/nda-review` | ☐ |
+| 1 | `apps/api/doc-request-migration.sql` | Document Requests | `feat/doc-requests` | ☑ 2026-08-18 |
+| 2 | `apps/api/deal-reactivation-migration.sql` | Deal Reactivation | `feat/deal-reactivation` | ☑ 2026-08-18 |
+| 3 | `apps/api/nda-review-migration.sql` | NDA Redlining | `feat/nda-review` | ☑ 2026-08-18 |
 | 4 | `apps/api/deal-model-migration.sql` | Model Export | `feat/model-export` | ☐ |
 
 _Rows 2–4 are added as each feature lands. A row with an unchecked box blocks
 that feature's completion claim._
 
 ---
+
+Applied via the combined script `apps/api/migrations-2026-08-18-all.sql`.
+Verified live against Supabase 2026-08-18: 5 tables present, 6 Deal columns
+present, CHECK constraints enforcing (pg 23514), RLS blocking the anon key on
+all 5 tables (pg 42501 on write, 0 rows on read).
 
 ## How to run them
 
