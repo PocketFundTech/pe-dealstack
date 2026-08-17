@@ -24,10 +24,10 @@ import {
   suggestActionInputSchema,
   scrollToSectionInputSchema,
 } from './tools/navigation.js';
-import { makeWebSearchTool } from './tools/webSearch.js';
-import { makeGenerateChartTool } from './tools/generateChart.js';
-import { makeGetRecentEmailsForDealTool } from './tools/getRecentEmailsForDeal.js';
-import { makeGetUpcomingMeetingsForDealTool } from './tools/getUpcomingMeetingsForDeal.js';
+import { makeWebSearchTool, inputSchema as webSearchSchema } from './tools/webSearch.js';
+import { makeGenerateChartTool, inputSchema as generateChartSchema } from './tools/generateChart.js';
+import { makeGetRecentEmailsForDealTool, inputSchema as getRecentEmailsForDealSchema } from './tools/getRecentEmailsForDeal.js';
+import { makeGetUpcomingMeetingsForDealTool, inputSchema as getUpcomingMeetingsForDealSchema } from './tools/getUpcomingMeetingsForDeal.js';
 import { toLangChainTool } from './langchainAdapter.js';
 import type { ToolEmit } from './types.js';
 
@@ -37,19 +37,22 @@ const noopEmit: ToolEmit = () => {};
  * Streaming-path barrel: BetaRunnableTool-shaped tools for the Anthropic
  * Tool Runner (DEAL_CHAT_ENGINE=streaming).
  *
- * MERGE NOTE (2026-08-11): main added four LangChain-style tools
- * (web_search, generate_chart, and the two /follow-ups Gmail/Calendar
- * live readers) that have NOT yet been ported to BetaRunnableTool shape —
- * they are available on the legacy path below only. Port them here before
- * flipping DEAL_CHAT_ENGINE=streaming, or the streaming agent silently
- * loses those four capabilities.
+ * RESOLVED (2026-08-14): the four tools called out in the 2026-08-11 merge
+ * note (web_search, generate_chart, and the two /follow-ups Gmail/Calendar
+ * live readers) are now ported to BetaRunnableTool shape and included below
+ * — parity with getDealChatToolsLegacy is restored. `userId` is threaded
+ * through (optional, same graceful-degradation contract as the legacy
+ * path) so the two live readers work here too; see the call site in
+ * dealChatAgent/index.ts's runDealChatAgentStreaming.
  */
-export function getDealChatTools(dealId: string, orgId: string, emit: ToolEmit) {
+export function getDealChatTools(dealId: string, orgId: string, emit: ToolEmit, userId?: string) {
   return [
     makeSearchDocumentsTool(dealId, orgId),
     makeGetDealFinancialsTool(dealId, orgId),
     makeCompareDealsTool(dealId, orgId),
     makeGetDealActivityTool(dealId, orgId),
+    makeWebSearchTool(),
+    makeGenerateChartTool(),
     makeUpdateDealFieldTool(dealId, orgId, emit),
     makeChangeDealStageTool(dealId, orgId, emit),
     makeAddNoteTool(dealId, orgId, emit),
@@ -60,6 +63,10 @@ export function getDealChatTools(dealId: string, orgId: string, emit: ToolEmit) 
     makeListDocumentsTool(dealId, orgId),
     makeScrollToSectionTool(dealId, orgId, emit),
     makeSuggestActionTool(dealId, orgId, emit),
+    // /follow-ups live readers — appended last to mirror the legacy
+    // barrel's ordering exactly (order is load-bearing, see file header).
+    makeGetRecentEmailsForDealTool(dealId, orgId, userId),
+    makeGetUpcomingMeetingsForDealTool(dealId, orgId, userId),
   ];
 }
 
@@ -83,8 +90,8 @@ export function getDealChatToolsLegacy(dealId: string, orgId: string, userId?: s
     toLangChainTool(makeGetDealFinancialsTool(dealId, orgId), getDealFinancialsSchema),
     toLangChainTool(makeCompareDealsTool(dealId, orgId), compareDealsSchema),
     toLangChainTool(makeGetDealActivityTool(dealId, orgId), getDealActivitySchema),
-    makeWebSearchTool(),
-    makeGenerateChartTool(),
+    toLangChainTool(makeWebSearchTool(), webSearchSchema),
+    toLangChainTool(makeGenerateChartTool(), generateChartSchema),
     toLangChainTool(makeUpdateDealFieldTool(dealId, orgId, noopEmit), updateDealFieldSchema),
     toLangChainTool(makeChangeDealStageTool(dealId, orgId, noopEmit), changeDealStageSchema),
     toLangChainTool(makeAddNoteTool(dealId, orgId, noopEmit), addNoteSchema),
@@ -97,7 +104,7 @@ export function getDealChatToolsLegacy(dealId: string, orgId: string, userId?: s
     toLangChainTool(makeSuggestActionTool(dealId, orgId, noopEmit), suggestActionInputSchema),
     // /follow-ups live readers — order matters per the comment in this file;
     // these go at the end so existing prompt references stay stable.
-    makeGetRecentEmailsForDealTool(dealId, orgId, userId),
-    makeGetUpcomingMeetingsForDealTool(dealId, orgId, userId),
+    toLangChainTool(makeGetRecentEmailsForDealTool(dealId, orgId, userId), getRecentEmailsForDealSchema),
+    toLangChainTool(makeGetUpcomingMeetingsForDealTool(dealId, orgId, userId), getUpcomingMeetingsForDealSchema),
   ];
 }

@@ -3,8 +3,12 @@
 // Query: Gmail messages in the last N days that EITHER involve a known
 // contact email OR mention the deal's company name (subject or body).
 // Returns markdown so the LLM can extract action items / follow-ups.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here. Ported from a LangChain-only `tool()` wrapper
+// (2026-08-14) so it's available on both the legacy and streaming
+// (DEAL_CHAT_ENGINE=streaming) barrels — see tools.ts.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
@@ -157,13 +161,31 @@ async function ensureFreshGmailToken(integration: Integration): Promise<string |
   }
 }
 
+export const inputSchema = z.object({
+  lookback_days: z.number().int().min(1).max(90).optional().describe('How many days back to search Gmail (default 30, max 90).'),
+  limit: z.number().int().min(1).max(50).optional().describe('Max emails to return (default 25, max 50).'),
+});
+
 export function makeGetRecentEmailsForDealTool(
   dealId: string,
   orgId: string,
   userId?: string
 ) {
-  return tool(
-    async (rawArgs: { lookback_days?: number; limit?: number }) => {
+  return {
+    type: 'custom' as const,
+    name: 'get_recent_emails_for_deal',
+    description:
+      'Read the CURRENT USER\'s Gmail for recent emails involving this deal — matched by known contact emails OR by deal company name in subject/body. Returns up to `limit` messages from the last `lookback_days` days with subject, sender, date, and a body excerpt. Use this for /follow-ups, action-item extraction, or "what did we last say about X" questions. Requires the user to have connected Gmail in Settings → Integrations.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        lookback_days: { type: 'integer', minimum: 1, maximum: 90, description: 'How many days back to search Gmail (default 30, max 90).' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max emails to return (default 25, max 50).' },
+      },
+      required: [],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async (rawArgs: { lookback_days?: number; limit?: number }) => {
       const lookbackDays = Math.min(Math.max(rawArgs.lookback_days ?? 30, 1), 90);
       const limit = Math.min(Math.max(rawArgs.limit ?? 25, 1), 50);
       const args = { lookback_days: lookbackDays, limit };
@@ -305,14 +327,5 @@ export function makeGetRecentEmailsForDealTool(
         return 'Failed to read Gmail. Please try again.';
       }
     },
-    {
-      name: 'get_recent_emails_for_deal',
-      description:
-        'Read the CURRENT USER\'s Gmail for recent emails involving this deal — matched by known contact emails OR by deal company name in subject/body. Returns up to `limit` messages from the last `lookback_days` days with subject, sender, date, and a body excerpt. Use this for /follow-ups, action-item extraction, or "what did we last say about X" questions. Requires the user to have connected Gmail in Settings → Integrations.',
-      schema: z.object({
-        lookback_days: z.number().int().min(1).max(90).optional().describe('How many days back to search Gmail (default 30, max 90).'),
-        limit: z.number().int().min(1).max(50).optional().describe('Max emails to return (default 25, max 50).'),
-      }),
-    }
-  );
+  };
 }

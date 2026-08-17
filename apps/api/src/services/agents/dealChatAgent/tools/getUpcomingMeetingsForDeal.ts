@@ -2,8 +2,12 @@
 // LIVE Google Calendar read for the current user, filtered to events
 // relevant to this deal (attendee email match OR company-name mention
 // in summary/description). Window: past N days .. future M days.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here. Ported from a LangChain-only `tool()` wrapper
+// (2026-08-14) so it's available on both the legacy and streaming
+// (DEAL_CHAT_ENGINE=streaming) barrels — see tools.ts.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
@@ -147,13 +151,33 @@ function truncate(s: string, max: number): string {
   return collapsed.slice(0, max).trimEnd() + '…';
 }
 
+export const inputSchema = z.object({
+  past_days: z.number().int().min(0).max(30).optional().describe('How many days into the past to include (default 7, max 30).'),
+  future_days: z.number().int().min(0).max(60).optional().describe('How many days into the future to include (default 14, max 60).'),
+  limit: z.number().int().min(1).max(50).optional().describe('Max events to return (default 25, max 50).'),
+});
+
 export function makeGetUpcomingMeetingsForDealTool(
   dealId: string,
   orgId: string,
   userId?: string
 ) {
-  return tool(
-    async (rawArgs: { past_days?: number; future_days?: number; limit?: number }) => {
+  return {
+    type: 'custom' as const,
+    name: 'get_upcoming_meetings_for_deal',
+    description:
+      'Read the CURRENT USER\'s Google Calendar for meetings related to this deal — matched by attendee email (deal contacts) OR company-name mention in title/description. Window: past `past_days` days to next `future_days` days. Use this for /follow-ups, meeting prep, or "what\'s on my calendar with X" questions. Requires the user to have connected Google Calendar in Settings → Integrations.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        past_days: { type: 'integer', minimum: 0, maximum: 30, description: 'How many days into the past to include (default 7, max 30).' },
+        future_days: { type: 'integer', minimum: 0, maximum: 60, description: 'How many days into the future to include (default 14, max 60).' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max events to return (default 25, max 50).' },
+      },
+      required: [],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async (rawArgs: { past_days?: number; future_days?: number; limit?: number }) => {
       const pastDays = Math.min(Math.max(rawArgs.past_days ?? 7, 0), 30);
       const futureDays = Math.min(Math.max(rawArgs.future_days ?? 14, 0), 60);
       const limit = Math.min(Math.max(rawArgs.limit ?? 25, 1), 50);
@@ -275,15 +299,5 @@ export function makeGetUpcomingMeetingsForDealTool(
         return 'Failed to read Google Calendar. Please try again.';
       }
     },
-    {
-      name: 'get_upcoming_meetings_for_deal',
-      description:
-        'Read the CURRENT USER\'s Google Calendar for meetings related to this deal — matched by attendee email (deal contacts) OR company-name mention in title/description. Window: past `past_days` days to next `future_days` days. Use this for /follow-ups, meeting prep, or "what\'s on my calendar with X" questions. Requires the user to have connected Google Calendar in Settings → Integrations.',
-      schema: z.object({
-        past_days: z.number().int().min(0).max(30).optional().describe('How many days into the past to include (default 7, max 30).'),
-        future_days: z.number().int().min(0).max(60).optional().describe('How many days into the future to include (default 14, max 60).'),
-        limit: z.number().int().min(1).max(50).optional().describe('Max events to return (default 25, max 50).'),
-      }),
-    }
-  );
+  };
 }

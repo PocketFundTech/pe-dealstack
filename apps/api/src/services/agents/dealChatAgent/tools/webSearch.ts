@@ -3,12 +3,17 @@
 // current news, competitive intel, and market signals — anything that
 // isn't already in the deal's documents/financials.
 //
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here. Ported from a LangChain-only `tool()` wrapper
+// (2026-08-14) so it's available on both the legacy and streaming
+// (DEAL_CHAT_ENGINE=streaming) barrels — see tools.ts.
+//
 // Factory is NOT closure-bound to a deal/org (search is generic). A
 // per-instance call counter enforces a soft cap of 3 searches per
-// tool-instance lifetime. Since getDealChatTools() is invoked once per
-// chat turn, this naturally yields per-turn limiting.
+// tool-instance lifetime. Since both getDealChatTools() and
+// getDealChatToolsLegacy() are invoked once per chat turn, this
+// naturally yields per-turn limiting on either path.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
 
@@ -79,6 +84,38 @@ async function tavilyOnce(apiKey: string, body: Omit<TavilyRequestBody, 'api_key
   }
 }
 
+export const inputSchema = z.object({
+  query: z
+    .string()
+    .describe('Search query. Include the company name or industry for grounding.'),
+  max_results: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe('Number of results, default 5'),
+  recency_days: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe('Limit to results from the last N days'),
+  topic: z
+    .enum(['general', 'news'])
+    .optional()
+    .describe(
+      "Search index to use. 'news' is filtered to news articles (better for recent company news, funding, acquisitions, personnel moves). 'general' (default) covers the open web. If recency_days is set without topic, topic defaults to 'news'.",
+    ),
+  search_depth: z
+    .enum(['basic', 'advanced'])
+    .optional()
+    .describe(
+      "Search depth. 'basic' (default, 1 credit/call) is sufficient for ~95% of queries. 'advanced' (2 credits/call) yields slightly more thorough snippets — use ONLY for a deep dive on a known-active target where basic returned thin results.",
+    ),
+});
+
 export function makeWebSearchTool() {
   let callCount = 0;
   // Remember which key is exhausted for the lifetime of this tool instance
@@ -88,8 +125,34 @@ export function makeWebSearchTool() {
   // user wall-clock time and adds noise to the logs.
   let primaryExhausted = false;
 
-  return tool(
-    async ({ query, max_results, recency_days, topic, search_depth }) => {
+  return {
+    type: 'custom' as const,
+    name: 'web_search',
+    description:
+      "Search the public web via Tavily. Use for current news, competitive intel, market signals, and information not in the deal's documents. ALWAYS cite source URLs in your final answer. Treat web results as supplementary — never use them as a primary source for financial numbers.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query. Include the company name or industry for grounding.' },
+        max_results: { type: 'integer', minimum: 1, maximum: 10, description: 'Number of results, default 5' },
+        recency_days: { type: 'integer', minimum: 1, maximum: 365, description: 'Limit to results from the last N days' },
+        topic: {
+          type: 'string',
+          enum: ['general', 'news'],
+          description:
+            "Search index to use. 'news' is filtered to news articles (better for recent company news, funding, acquisitions, personnel moves). 'general' (default) covers the open web. If recency_days is set without topic, topic defaults to 'news'.",
+        },
+        search_depth: {
+          type: 'string',
+          enum: ['basic', 'advanced'],
+          description:
+            "Search depth. 'basic' (default, 1 credit/call) is sufficient for ~95% of queries. 'advanced' (2 credits/call) yields slightly more thorough snippets — use ONLY for a deep dive on a known-active target where basic returned thin results.",
+        },
+      },
+      required: ['query'],
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ query, max_results, recency_days, topic, search_depth }: z.infer<typeof inputSchema>) => {
       const effectiveMaxResults = max_results ?? 5;
       // News-index when caller asks (or specifies recency); general otherwise.
       const effectiveTopic: 'general' | 'news' =
@@ -168,42 +231,5 @@ export function makeWebSearchTool() {
 
       return lines.join('\n').trimEnd();
     },
-    {
-      name: 'web_search',
-      description:
-        "Search the public web via Tavily. Use for current news, competitive intel, market signals, and information not in the deal's documents. ALWAYS cite source URLs in your final answer. Treat web results as supplementary — never use them as a primary source for financial numbers.",
-      schema: z.object({
-        query: z
-          .string()
-          .describe('Search query. Include the company name or industry for grounding.'),
-        max_results: z
-          .number()
-          .int()
-          .min(1)
-          .max(10)
-          .default(5)
-          .optional()
-          .describe('Number of results, default 5'),
-        recency_days: z
-          .number()
-          .int()
-          .min(1)
-          .max(365)
-          .optional()
-          .describe('Limit to results from the last N days'),
-        topic: z
-          .enum(['general', 'news'])
-          .optional()
-          .describe(
-            "Search index to use. 'news' is filtered to news articles (better for recent company news, funding, acquisitions, personnel moves). 'general' (default) covers the open web. If recency_days is set without topic, topic defaults to 'news'.",
-          ),
-        search_depth: z
-          .enum(['basic', 'advanced'])
-          .optional()
-          .describe(
-            "Search depth. 'basic' (default, 1 credit/call) is sufficient for ~95% of queries. 'advanced' (2 credits/call) yields slightly more thorough snippets — use ONLY for a deep dive on a known-active target where basic returned thin results.",
-          ),
-      }),
-    },
-  );
+  };
 }

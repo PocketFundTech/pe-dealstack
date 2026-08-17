@@ -427,6 +427,10 @@ const TOOL_LABELS: Record<string, string> = {
   list_documents: 'Listing documents...',
   scroll_to_section: 'Navigating...',
   suggest_action: 'Preparing suggestion...',
+  web_search: 'Searching the web...',
+  generate_chart: 'Building chart...',
+  get_recent_emails_for_deal: 'Checking Gmail...',
+  get_upcoming_meetings_for_deal: 'Checking calendar...',
 };
 
 export type DealChatStreamEvent =
@@ -460,7 +464,7 @@ export async function* runDealChatAgentStreaming(
     if (event.type === 'action') action = event.action;
   };
 
-  const tools = getDealChatTools(input.dealId, input.orgId, emit);
+  const tools = getDealChatTools(input.dealId, input.orgId, emit, input.userId);
   // Mirror the legacy path's prompt assembly: firm-wide standing context
   // (when present) above the date-anchored base prompt + guardrails.
   const today = input.today ?? getTodayIso();
