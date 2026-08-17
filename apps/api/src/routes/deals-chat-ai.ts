@@ -13,6 +13,7 @@ import { runDealChatAgent, runDealChatAgentStreaming } from '../services/agents/
 import { generateFallbackResponse } from '../services/chatHelpers.js';
 import { getTodayIso } from '../utils/dates.js';
 import { formatDealHeadline } from '../utils/financialFormat.js';
+import { classifyAIErrorObject } from '../utils/aiErrors.js';
 
 const router = Router();
 
@@ -374,6 +375,21 @@ router.post('/:dealId/chat', async (req, res) => {
         await AuditLog.aiChat(req, `Deal: ${deal.name} (streaming)`);
       } catch (streamErr) {
         log.error('Deal chat streaming failed after headers sent', streamErr);
+        // PROD REGRESSION (2026-08-17): an exception thrown before the
+        // generator's first yield (e.g. a rejected request the Anthropic API
+        // never accepts — see the generate_chart schema fix in the same
+        // commit) used to fall straight to `res.end()` here with NO event
+        // ever written. HTTP/SSE headers were already sent (200, text/
+        // event-stream), so the client's EventSource/fetch-stream reader saw
+        // a connection that opened and then closed with zero data frames —
+        // no error, no text, nothing. The chat UI rendered a blank reply.
+        // Only fix once headers are already committed: emit an `error` SSE
+        // event before ending the stream, same shape the client already
+        // handles from mid-stream errors (see DealChatStreamEvent 'error').
+        if (!fullText) {
+          const { userMessage } = classifyAIErrorObject(streamErr);
+          send({ type: 'error', message: userMessage });
+        }
       } finally {
         res.end();
       }

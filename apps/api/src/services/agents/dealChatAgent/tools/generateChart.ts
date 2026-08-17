@@ -124,7 +124,13 @@ export function makeGenerateChartTool() {
                 items: {
                   type: 'object',
                   properties: {
-                    x: { type: ['string', 'number'] },
+                    // anyOf (not a type array) — Anthropic's tool input_schema
+                    // validator rejects `type: ['string','number']`; same
+                    // lesson already recorded in extraction/extractionSchema.ts.
+                    // This is the exact bug that broke every streaming chat
+                    // request the day DEAL_CHAT_ENGINE was flipped on 2026-08-17
+                    // (generate_chart is unconditionally in the tool list).
+                    x: { anyOf: [{ type: 'string' }, { type: 'number' }] },
                     y: { type: 'number' },
                   },
                   required: ['x', 'y'],
@@ -139,7 +145,7 @@ export function makeGenerateChartTool() {
           items: {
             type: 'object',
             properties: {
-              x: { type: ['string', 'number'] },
+              x: { anyOf: [{ type: 'string' }, { type: 'number' }] }, // see the note above
               label: { type: 'string' },
             },
             required: ['x', 'label'],
