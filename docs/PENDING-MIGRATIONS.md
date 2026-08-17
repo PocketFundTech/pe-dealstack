@@ -8,7 +8,7 @@
 > that back in writing.** Tests passing is not confirmation. A green PR is not
 > confirmation. Only an explicit "I ran it" from the founder counts.
 
-**Status: 🟡 PARTIAL — migrations 1-3 RUN + VERIFIED by founder 2026-08-18. Migration 4 pending (feature not yet built).**
+**Status: 🟡 PARTIAL — migrations 1-3 RUN + VERIFIED 2026-08-18. Migration 4 BUILT AND WAITING — not yet run.**
 
 ---
 

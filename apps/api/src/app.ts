@@ -66,6 +66,7 @@ import dealsShareRouter from './routes/deals-share.js';
 import organizationNdaPlaybookRouter from './routes/organization-nda-playbook.js';
 import portalRouter from './routes/portal.js';
 import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
+import dealsModelRouter from './routes/deals-model.js';
 import docRequestPortalRouter from './routes/doc-request-portal.js';
 import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
@@ -359,6 +360,9 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Doc-request CRUD (/:dealId/doc-requests) — literal segment, so mount
 // BEFORE the generic dealsRouter. Public fulfilment side is above.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
+// Deal model (/:dealId/model, /:dealId/model/export) — literal segment,
+// mount BEFORE the generic dealsRouter. No LLM call, so it stays in lite.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsModelRouter);
 // Reactivations: literal /reactivations + /:dealId/rescore — mount BEFORE
 // the generic dealsRouter or /:id swallows 'reactivations'.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);

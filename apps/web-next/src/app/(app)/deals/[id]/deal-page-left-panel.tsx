@@ -25,6 +25,7 @@ import {
 import { DealScorecardSection } from "./deal-scorecard-section";
 import { DealTeasers } from "./DealTeasers";
 import { DocRequestsPanel } from "./doc-requests-panel";
+import { DealModelPanel } from "./deal-model-panel";
 
 // ---------------------------------------------------------------------------
 // Left panel — deal content (icon, title, stage pipeline, metadata, financial
@@ -151,6 +152,10 @@ export function DealPageLeftPanel({
 
         {/* Financial Statements section */}
         <FinancialStatementsSection dealId={dealId} onFullscreen={onOpenFinancialsFullscreen} />
+
+        {/* Model builder — turns the extracted financials into the .xlsx a
+            deal team actually sends its IC and its lender. */}
+        <DealModelPanel dealId={dealId} />
 
         {/* AI Financial Analysis section */}
         <DealAnalysisSection dealId={dealId} onFullscreen={onOpenAnalysisFullscreen} />
