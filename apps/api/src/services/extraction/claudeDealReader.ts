@@ -50,7 +50,11 @@ export interface ClaudeDealReaderInput {
 function fieldSchema(valueType: 'string' | 'number', description: string, withSource = true) {
   const props: Record<string, unknown> = {
     value: { anyOf: [{ type: valueType }, { type: 'null' }], description },
-    confidence: { type: 'number', minimum: 0, maximum: 100 },
+    // No minimum/maximum keywords — the structured-output schema validator
+    // rejects them on number types ("For 'number' type, properties maximum,
+    // minimum are not supported" — 2026-08-18 prod incident: this 400'd every
+    // INGEST_ENGINE=claude read). The 0-100 range lives in the description.
+    confidence: { type: 'number', description: 'Confidence score from 0 to 100' },
   };
   if (withSource) props.source = { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Short verbatim snippet (or page reference) supporting the value' };
   return {
@@ -73,7 +77,11 @@ export const DEAL_READ_JSON_SCHEMA = {
       type: 'object',
       properties: {
         value: { type: 'string', description: '2-3 sentence business description' },
-        confidence: { type: 'number', minimum: 0, maximum: 100 },
+        // No minimum/maximum keywords — the structured-output schema validator
+    // rejects them on number types ("For 'number' type, properties maximum,
+    // minimum are not supported" — 2026-08-18 prod incident: this 400'd every
+    // INGEST_ENGINE=claude read). The 0-100 range lives in the description.
+    confidence: { type: 'number', description: 'Confidence score from 0 to 100' },
       },
       required: ['value', 'confidence'],
       additionalProperties: false,
