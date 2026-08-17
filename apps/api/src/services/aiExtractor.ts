@@ -147,7 +147,7 @@ export interface LegacyExtractedDealData {
 // the date at process-boot time. Always build the prompt fresh per call via
 // buildExtractionSystemPrompt(getTodayIso()).
 
-function buildExtractionSystemPrompt(today: string): string {
+export function buildExtractionSystemPrompt(today: string): string {
   return `You are a senior private equity analyst with expertise in analyzing CIMs, teasers, and financial documents. Your task is to extract key business and financial data with HIGH ACCURACY.
 
 Today's date is ${today}. Use this for any relative period inference (FY, LTM, "current quarter", "last N days"). Do NOT rely on your training cutoff to decide what "current" means — anchor every relative period against ${today}.
@@ -317,123 +317,144 @@ export async function extractDealDataFromText(text: string): Promise<ExtractedDe
       });
     }
 
-    // Build result with proper defaults
-    const result: ExtractedDealData = {
-      companyName: normalizeField(extracted.companyName, null),
-      industry: normalizeField(extracted.industry, null),
-      description: normalizeField(extracted.description, 'No description available'),
-      currency: extracted.currency || 'USD',
-      revenue: normalizeNumericField(extracted.revenue),
-      ebitda: normalizeNumericField(extracted.ebitda),
-      ebitdaMargin: normalizeNumericField(extracted.ebitdaMargin),
-      dealSize: normalizeNumericField(extracted.dealSize),
-      revenueGrowth: normalizeNumericField(extracted.revenueGrowth),
-      employees: normalizeNumericField(extracted.employees),
-      foundedYear: normalizeNumericField(extracted.foundedYear),
-      headquarters: normalizeField(extracted.headquarters, null),
-      keyRisks: Array.isArray(extracted.keyRisks) ? extracted.keyRisks : [],
-      investmentHighlights: Array.isArray(extracted.investmentHighlights) ? extracted.investmentHighlights : [],
-      summary: extracted.summary || 'Unable to generate summary from document',
-      overallConfidence: 0,
-      needsReview: false,
-      reviewReasons: [],
-    };
-
-    // Short-doc confidence guard — defensive backstop in case the LLM ignores
-    // the prompt-level instruction. Teasers / one-pagers (< 5,000 chars) cap
-    // financial-field confidence at 60 so downstream merge logic treats them
-    // as needing review even when the model claims 90% confidence.
-    const SHORT_DOC_THRESHOLD = 5000;
-    const SHORT_DOC_CONF_CAP = 60;
-    if (sourceLen < SHORT_DOC_THRESHOLD) {
-      const fields: Array<keyof Pick<ExtractedDealData, 'revenue' | 'ebitda' | 'ebitdaMargin' | 'dealSize' | 'revenueGrowth'>> = [
-        'revenue', 'ebitda', 'ebitdaMargin', 'dealSize', 'revenueGrowth',
-      ];
-      for (const k of fields) {
-        const f = result[k];
-        if (f && f.value !== null && f.confidence > SHORT_DOC_CONF_CAP) {
-          (result[k] as ExtractedField<number | null>).confidence = SHORT_DOC_CONF_CAP;
-        }
-      }
-    }
-
-    // Calculate overall confidence and determine if review is needed
-    const confidenceScores: number[] = [];
-    const reviewReasons: string[] = [];
-
-    // Per-field review reasons. Avoid embedding the raw "(N% confidence)"
-    // parenthetical — when the per-field score is 0, the legacy phrasing
-    // read like the OVERALL extraction was at 0% in the UI popup, alarming
-    // users whose overall extractionConfidence was actually high.
-    if (result.companyName.confidence < 70) {
-      reviewReasons.push("Company name could not be confidently identified — please verify.");
-    }
-    if (result.companyName.value) confidenceScores.push(result.companyName.confidence);
-
-    if (result.industry.confidence < 70) {
-      reviewReasons.push("Industry could not be confidently identified — please verify.");
-    }
-    if (result.industry.value) confidenceScores.push(result.industry.confidence);
-
-    if (result.revenue.value !== null) {
-      if (result.revenue.confidence < 70) {
-        reviewReasons.push(`Revenue value ${formatExtractedValue(result.revenue.value)} is uncertain — please verify against the source.`);
-      }
-      confidenceScores.push(result.revenue.confidence);
-    }
-
-    if (result.ebitda.value !== null) {
-      if (result.ebitda.confidence < 70) {
-        reviewReasons.push(`EBITDA value ${formatExtractedValue(result.ebitda.value)} is uncertain — please verify against the source.`);
-      }
-      confidenceScores.push(result.ebitda.confidence);
-    }
-
-    // Short-doc with large absolute values — flag unconditionally for review.
-    // A 1-page teaser claiming $500M+ revenue or $1B+ deal size is almost
-    // always a target / valuation / projection misclassified as actuals.
-    if (sourceLen < SHORT_DOC_THRESHOLD) {
-      reviewReasons.push(`Short source document (${sourceLen} chars / ~${approxPages} page${approxPages === 1 ? '' : 's'}) — verify financial values against the source.`);
-      if (result.revenue.value !== null && result.revenue.value > 500) {
-        reviewReasons.push(`Revenue ${formatExtractedValue(result.revenue.value)} from a one-pager is unusual — verify it isn't a target or projection.`);
-      }
-      if (result.dealSize.value !== null && result.dealSize.value > 1000) {
-        reviewReasons.push(`Deal size ${formatExtractedValue(result.dealSize.value)} from a one-pager is unusual — verify it isn't a valuation or fundraise target.`);
-      }
-    }
-
-    // Cross-field sanity: revenue should generally not exceed dealSize by an
-    // implausible multiple. If revenue is more than 5x dealSize on a short
-    // document, that's a sign one of the two is likely a target/valuation.
-    if (
-      sourceLen < SHORT_DOC_THRESHOLD &&
-      result.revenue.value !== null && result.revenue.value > 0 &&
-      result.dealSize.value !== null && result.dealSize.value > 0 &&
-      result.revenue.value > result.dealSize.value * 5
-    ) {
-      reviewReasons.push(
-        `Revenue ${formatExtractedValue(result.revenue.value)} >> deal size ${formatExtractedValue(result.dealSize.value)} — one of these is likely a target or valuation, not the actual.`
-      );
-    }
-
-    result.overallConfidence = confidenceScores.length > 0
-      ? Math.round(confidenceScores.reduce((a, b) => a + b, 0) / confidenceScores.length)
-      : 0;
-
-    result.needsReview = reviewReasons.length > 0 || result.overallConfidence < 70;
-    result.reviewReasons = reviewReasons;
-
-    log.debug('AI extraction completed (structured output)', {
-      companyName: result.companyName.value,
-      overallConfidence: result.overallConfidence,
-      needsReview: result.needsReview,
-    });
-
-    return result;
+    return finalizeExtractedDealData(extracted, sourceLen);
   } catch (error) {
     log.error('AI extraction error', undefined, describeAIError(error));
     return null;
   }
+}
+
+/**
+ * Shared post-processing for a raw structured-output extraction: normalize
+ * per-field shapes, apply the short-doc confidence cap, compute overall
+ * confidence and review reasons. Used by BOTH the legacy text extractor
+ * above and the Claude native deal reader (claudeDealReader.ts) so the
+ * scoring/review semantics can never drift between engines.
+ *
+ * `opts.nativeFullDocument`: the model read the complete file natively
+ * (e.g. a scanned PDF via the Files API) — near-zero TEXT length says
+ * nothing about document substance there, so the short-doc cap and its
+ * review flags are skipped.
+ */
+export function finalizeExtractedDealData(
+  extracted: any,
+  sourceLen: number,
+  opts: { nativeFullDocument?: boolean } = {},
+): ExtractedDealData {
+  const approxPages = Math.max(1, Math.round(sourceLen / 2500));
+  // Build result with proper defaults
+  const result: ExtractedDealData = {
+    companyName: normalizeField(extracted.companyName, null),
+    industry: normalizeField(extracted.industry, null),
+    description: normalizeField(extracted.description, 'No description available'),
+    currency: extracted.currency || 'USD',
+    revenue: normalizeNumericField(extracted.revenue),
+    ebitda: normalizeNumericField(extracted.ebitda),
+    ebitdaMargin: normalizeNumericField(extracted.ebitdaMargin),
+    dealSize: normalizeNumericField(extracted.dealSize),
+    revenueGrowth: normalizeNumericField(extracted.revenueGrowth),
+    employees: normalizeNumericField(extracted.employees),
+    foundedYear: normalizeNumericField(extracted.foundedYear),
+    headquarters: normalizeField(extracted.headquarters, null),
+    keyRisks: Array.isArray(extracted.keyRisks) ? extracted.keyRisks : [],
+    investmentHighlights: Array.isArray(extracted.investmentHighlights) ? extracted.investmentHighlights : [],
+    summary: extracted.summary || 'Unable to generate summary from document',
+    overallConfidence: 0,
+    needsReview: false,
+    reviewReasons: [],
+  };
+
+  // Short-doc confidence guard — defensive backstop in case the LLM ignores
+  // the prompt-level instruction. Teasers / one-pagers (< 5,000 chars) cap
+  // financial-field confidence at 60 so downstream merge logic treats them
+  // as needing review even when the model claims 90% confidence.
+  const SHORT_DOC_THRESHOLD = 5000;
+  const SHORT_DOC_CONF_CAP = 60;
+  if (!opts.nativeFullDocument && sourceLen < SHORT_DOC_THRESHOLD) {
+    const fields: Array<keyof Pick<ExtractedDealData, 'revenue' | 'ebitda' | 'ebitdaMargin' | 'dealSize' | 'revenueGrowth'>> = [
+      'revenue', 'ebitda', 'ebitdaMargin', 'dealSize', 'revenueGrowth',
+    ];
+    for (const k of fields) {
+      const f = result[k];
+      if (f && f.value !== null && f.confidence > SHORT_DOC_CONF_CAP) {
+        (result[k] as ExtractedField<number | null>).confidence = SHORT_DOC_CONF_CAP;
+      }
+    }
+  }
+
+  // Calculate overall confidence and determine if review is needed
+  const confidenceScores: number[] = [];
+  const reviewReasons: string[] = [];
+
+  // Per-field review reasons. Avoid embedding the raw "(N% confidence)"
+  // parenthetical — when the per-field score is 0, the legacy phrasing
+  // read like the OVERALL extraction was at 0% in the UI popup, alarming
+  // users whose overall extractionConfidence was actually high.
+  if (result.companyName.confidence < 70) {
+    reviewReasons.push("Company name could not be confidently identified — please verify.");
+  }
+  if (result.companyName.value) confidenceScores.push(result.companyName.confidence);
+
+  if (result.industry.confidence < 70) {
+    reviewReasons.push("Industry could not be confidently identified — please verify.");
+  }
+  if (result.industry.value) confidenceScores.push(result.industry.confidence);
+
+  if (result.revenue.value !== null) {
+    if (result.revenue.confidence < 70) {
+      reviewReasons.push(`Revenue value ${formatExtractedValue(result.revenue.value)} is uncertain — please verify against the source.`);
+    }
+    confidenceScores.push(result.revenue.confidence);
+  }
+
+  if (result.ebitda.value !== null) {
+    if (result.ebitda.confidence < 70) {
+      reviewReasons.push(`EBITDA value ${formatExtractedValue(result.ebitda.value)} is uncertain — please verify against the source.`);
+    }
+    confidenceScores.push(result.ebitda.confidence);
+  }
+
+  // Short-doc with large absolute values — flag unconditionally for review.
+  // A 1-page teaser claiming $500M+ revenue or $1B+ deal size is almost
+  // always a target / valuation / projection misclassified as actuals.
+  if (!opts.nativeFullDocument && sourceLen < SHORT_DOC_THRESHOLD) {
+    reviewReasons.push(`Short source document (${sourceLen} chars / ~${approxPages} page${approxPages === 1 ? '' : 's'}) — verify financial values against the source.`);
+    if (result.revenue.value !== null && result.revenue.value > 500) {
+      reviewReasons.push(`Revenue ${formatExtractedValue(result.revenue.value)} from a one-pager is unusual — verify it isn't a target or projection.`);
+    }
+    if (result.dealSize.value !== null && result.dealSize.value > 1000) {
+      reviewReasons.push(`Deal size ${formatExtractedValue(result.dealSize.value)} from a one-pager is unusual — verify it isn't a valuation or fundraise target.`);
+    }
+  }
+
+  // Cross-field sanity: revenue should generally not exceed dealSize by an
+  // implausible multiple. If revenue is more than 5x dealSize on a short
+  // document, that's a sign one of the two is likely a target/valuation.
+  if (
+    !opts.nativeFullDocument && sourceLen < SHORT_DOC_THRESHOLD &&
+    result.revenue.value !== null && result.revenue.value > 0 &&
+    result.dealSize.value !== null && result.dealSize.value > 0 &&
+    result.revenue.value > result.dealSize.value * 5
+  ) {
+    reviewReasons.push(
+      `Revenue ${formatExtractedValue(result.revenue.value)} >> deal size ${formatExtractedValue(result.dealSize.value)} — one of these is likely a target or valuation, not the actual.`
+    );
+  }
+
+  result.overallConfidence = confidenceScores.length > 0
+    ? Math.round(confidenceScores.reduce((a, b) => a + b, 0) / confidenceScores.length)
+    : 0;
+
+  result.needsReview = reviewReasons.length > 0 || result.overallConfidence < 70;
+  result.reviewReasons = reviewReasons;
+
+  log.debug('AI extraction completed (structured output)', {
+    companyName: result.companyName.value,
+    overallConfidence: result.overallConfidence,
+    needsReview: result.needsReview,
+  });
+
+  return result;
 }
 
 /**
