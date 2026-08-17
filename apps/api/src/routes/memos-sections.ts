@@ -140,11 +140,23 @@ router.patch('/:id/sections/:sectionId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-7: bind sectionId to memo. Without this, a caller could supply their
+    // own valid memoId (passes the org gate above) plus a sectionId from any
+    // other org's memo and overwrite that section. Pre-check yields a real
+    // 404 instead of a silent zero-row update.
+    const { data: existing } = await supabase
+      .from('MemoSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('memoId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { data: section, error } = await supabase
       .from('MemoSection')
       .update(validation.data)
       .eq('id', sectionId)
-      .eq('memoId', id) // SECURITY: bind the section to the verified memo
+      .eq('memoId', id)
       .select()
       .single();
 
@@ -167,11 +179,22 @@ router.delete('/:id/sections/:sectionId', async (req, res) => {
     const { data: memo } = await supabase.from('Memo').select('id').eq('id', id).eq('organizationId', orgId).single();
     if (!memo) return res.status(404).json({ error: 'Memo not found' });
 
+    // F-8: bind sectionId to memo. Without this, a caller could delete a
+    // section from any other org's memo. Pre-check yields a real 404 instead
+    // of a silent zero-row delete.
+    const { data: existing } = await supabase
+      .from('MemoSection')
+      .select('id')
+      .eq('id', sectionId)
+      .eq('memoId', id)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Section not found' });
+
     const { error } = await supabase
       .from('MemoSection')
       .delete()
       .eq('id', sectionId)
-      .eq('memoId', id); // SECURITY: bind the section to the verified memo
+      .eq('memoId', id);
 
     if (error) throw error;
 
@@ -198,14 +221,28 @@ router.post('/:id/sections/reorder', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // F-9: bind each sectionId to this memo. Without this, a caller could
+    // scramble the sort order of any memo's sections by passing arbitrary
+    // section IDs. Both the explicit memoId filter on each update AND the
+    // pre-fetched ID intersection give defense in depth — the intersect
+    // turns cross-memo IDs into a no-op rather than a row miss inside a
+    // Promise.all swarm.
+    const { data: validSections } = await supabase
+      .from('MemoSection')
+      .select('id')
+      .eq('memoId', id);
+    const validIds = new Set((validSections || []).map((s: any) => s.id));
+
     // Update each section's sortOrder
-    const updates = validation.data.sections.map(({ id: sectionId, sortOrder }) =>
-      supabase
-        .from('MemoSection')
-        .update({ sortOrder })
-        .eq('id', sectionId)
-        .eq('memoId', id) // SECURITY: only reorder sections of the verified memo
-    );
+    const updates = validation.data.sections
+      .filter(({ id: sectionId }) => validIds.has(sectionId))
+      .map(({ id: sectionId, sortOrder }) =>
+        supabase
+          .from('MemoSection')
+          .update({ sortOrder })
+          .eq('id', sectionId)
+          .eq('memoId', id)
+      );
 
     await Promise.all(updates);
 

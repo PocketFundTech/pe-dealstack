@@ -46,7 +46,25 @@ async function getAuthHeaders(): Promise<HeadersInit> {
   };
 }
 
+// Once the org-level 2FA enforcement has fired, every protected endpoint will
+// keep returning 403 MFA_REQUIRED. Tracking a module-level flag lets us
+// short-circuit subsequent requests so we don't spam the network tab and
+// console with identical failures while the lockout screen is up.
+let mfaLockoutActive = false;
+
+function triggerMfaLockout(message: string): never {
+  mfaLockoutActive = true;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pf:mfa-required"));
+  }
+  throw new ApiError(message, 403, "MFA_REQUIRED");
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (mfaLockoutActive) {
+    triggerMfaLockout("Two-factor authentication is required by your organization");
+  }
+
   const headers = await getAuthHeaders();
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -80,13 +98,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
           : res.statusText || `API error ${res.status}`;
     const code = (body as { code?: string }).code;
 
-    // Org has enforced 2FA but the user hasn't enrolled — bounce them to
-    // the security panel where the existing enrollment UI lives. The API
-    // bypasses /api/auth/, /api/users/me, and /api/organizations/me so the
-    // enrollment flow itself can still run after the redirect.
-    if (res.status === 403 && code === "MFA_REQUIRED" && typeof window !== "undefined") {
-      window.location.href = "/settings#section-security";
-      throw new ApiError(message, res.status, code);
+    // Org has enforced 2FA but the user hasn't enrolled. Surface a full-page
+    // lockout via MfaLockoutGate instead of letting individual sections fail
+    // — see apps/web-next/src/components/layout/MfaLockoutGate.tsx.
+    if (res.status === 403 && code === "MFA_REQUIRED") {
+      triggerMfaLockout(message);
     }
 
     throw new ApiError(message, res.status, code);
@@ -162,6 +178,103 @@ async function postStream(
   flush(decoder.decode()); // final buffered line, if any
 }
 
+export type StreamEventHandler = (event: Record<string, unknown>) => void;
+
+/**
+ * POST that consumes a Server-Sent-Events response ("data: {...}\n\n" frames),
+ * invoking `onEvent` per parsed frame. Powers the streaming deal chat and
+ * live memo generation UIs.
+ */
+async function requestStream(path: string, body: unknown, onEvent: StreamEventHandler): Promise<void> {
+  if (mfaLockoutActive) {
+    triggerMfaLockout("Two-factor authentication is required by your organization");
+  }
+
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: { ...headers, Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+
+  if (res.status === 404) {
+    throw new NotFoundError(`Not found: ${path}`);
+  }
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({} as Record<string, unknown>));
+    const message =
+      (errBody as { error?: string; message?: string }).error ||
+      (errBody as { message?: string }).message ||
+      res.statusText ||
+      `API error ${res.status}`;
+    const code = (errBody as { code?: string }).code;
+
+    if (res.status === 403 && code === "MFA_REQUIRED") {
+      triggerMfaLockout(message);
+    }
+
+    throw new ApiError(message, res.status, code);
+  }
+
+  // Legacy-JSON fallback: when the endpoint's streaming engine flag is off
+  // (e.g. DEAL_CHAT_ENGINE unset), the backend answers with one buffered
+  // JSON body instead of SSE frames. Synthesize the equivalent event
+  // sequence so streaming-aware callers render it identically — without
+  // this, the reply is generated and persisted server-side but the UI
+  // shows nothing.
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (body) {
+      if (typeof body.response === "string" && body.response) {
+        onEvent({ type: "text_delta", text: body.response });
+      }
+      for (const update of Array.isArray(body.updates) ? body.updates : []) {
+        onEvent({ type: "update", update });
+      }
+      if (body.action) onEvent({ type: "action", action: body.action });
+      for (const effect of Array.isArray(body.sideEffects) ? body.sideEffects : []) {
+        onEvent({ type: "side_effect", effect });
+      }
+      onEvent({ type: "done", ...body });
+    }
+    return;
+  }
+
+  if (!res.body) return;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (dataLine) {
+        try {
+          onEvent(JSON.parse(dataLine.slice(6)));
+        } catch (err) {
+          console.warn("[api.stream] failed to parse SSE frame:", err);
+        }
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   getRaw: (path: string) => requestRaw(path),
@@ -173,4 +286,5 @@ export const api = {
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  stream: (path: string, body: unknown, onEvent: StreamEventHandler) => requestStream(path, body, onEvent),
 };

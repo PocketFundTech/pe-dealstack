@@ -1,4 +1,8 @@
-export type UserRole = "ADMIN" | "MEMBER" | "VIEWER";
+// Canonical enums live in @ai-crm/shared so apps/api and apps/web-next
+// can't drift. Re-export here so existing import sites (`from '@/types'`)
+// keep working — the SOURCE moved, the import path didn't.
+export type { UserRole } from "@ai-crm/shared";
+import type { UserRole } from "@ai-crm/shared";
 
 export interface AppUser {
   id: string;
@@ -9,6 +13,16 @@ export interface AppUser {
   avatar: string;
   preferences: Record<string, unknown>;
   isInternal: boolean;
+}
+
+export interface DealScorecard {
+  overallScore: number;
+  verdict: "GO" | "NO_GO" | "BORDERLINE";
+  qualityScore: number;
+  thesisFitScore: number;
+  reasons: Array<{ kind: "hit" | "miss" | "flag"; text: string }>;
+  scoredAt: string;
+  model: string;
 }
 
 export interface Deal {
@@ -37,6 +51,7 @@ export interface Deal {
   lastDocument?: string;
   lastDocumentUpdated?: string;
   tags?: string[];
+  scorecard?: DealScorecard | null;
   // Phase 2 canonical cache: latest-period revenue/EBITDA in ACTUAL
   // DOLLARS (unitScale already applied by the API). Refreshed on every
   // FinancialStatement upsert by the extraction pipeline. Use these

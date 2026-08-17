@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
@@ -15,11 +16,27 @@ const router = Router();
  * Joins through Deal to filter by organizationId. Returns at most 20 items
  * with the deal name + a 'state' tag the frontend uses for badge color.
  */
-router.get('/alerts', async (req: any, res) => {
+router.get('/alerts', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
 
-    // Pull docs joined to their deals so we can filter by org
+    // Pre-fetch deal IDs for this org, then filter Document at the DB layer.
+    // The previous implementation fetched the 50 most-recent rows globally
+    // and filtered in JS by deal.organizationId — small orgs could see zero
+    // alerts when 50 newer rows from other tenants crowded theirs out.
+    // Mirrors the pattern used by /api/activities/recent (F-2 fix).
+    const { data: deals, error: dealsErr } = await supabase
+      .from('Deal')
+      .select('id')
+      .eq('organizationId', orgId);
+
+    if (dealsErr) throw dealsErr;
+
+    const dealIds = (deals || []).map((d: { id: string }) => d.id);
+    if (dealIds.length === 0) {
+      return res.json({ items: [] });
+    }
+
     const { data, error } = await supabase
       .from('Document')
       .select(`
@@ -29,15 +46,15 @@ router.get('/alerts', async (req: any, res) => {
         createdAt,
         extractedText,
         aiAnalyzedAt,
-        deal:Deal!dealId(id, name, organizationId)
+        deal:Deal!dealId(id, name)
       `)
+      .in('dealId', dealIds)
       .order('createdAt', { ascending: false })
       .limit(50);
 
     if (error) throw error;
 
     const items = (data || [])
-      .filter((d: any) => d.deal?.organizationId === orgId)
       .filter((d: any) => !d.extractedText || !d.aiAnalyzedAt)
       .slice(0, 20)
       .map((d: any) => ({

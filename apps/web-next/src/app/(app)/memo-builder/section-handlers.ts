@@ -27,6 +27,7 @@ interface SectionDeps {
   setAddingSectionLoading: Dispatch<SetStateAction<boolean>>;
   setPendingDeleteSection: Dispatch<SetStateAction<{ id: string; title: string } | null>>;
   setGeneratingAll: Dispatch<SetStateAction<boolean>>;
+  setGenerationStatus: Dispatch<SetStateAction<string | null>>;
   setError: Dispatch<SetStateAction<string | null>>;
 }
 
@@ -151,24 +152,74 @@ export function createDeleteSection(deps: SectionDeps) {
 }
 
 export function createGenerateAll(deps: SectionDeps) {
-  const { selectedMemo, setSections, setEditingContent, setActiveSection, setGeneratingAll, setError } = deps;
+  const {
+    selectedMemo, setSections, setEditingContent, setActiveSection,
+    setGeneratingAll, setGenerationStatus, setError,
+  } = deps;
+
   return async () => {
     if (!selectedMemo) return;
     setGeneratingAll(true);
+    setGenerationStatus(null);
+
+    const upsertSection = (generated: {
+      type: string; title: string; content: string; aiGenerated: boolean;
+      tableData?: any; chartConfig?: any;
+    }) => {
+      setSections((prev) => {
+        const idx = prev.findIndex((s) => s.type === generated.type);
+        const patch: Partial<MemoSection> = {
+          content: generated.content,
+          aiGenerated: generated.aiGenerated,
+          ...(generated.tableData !== undefined ? { tableData: generated.tableData } : {}),
+          ...(generated.chartConfig !== undefined ? { chartConfig: generated.chartConfig } : {}),
+        };
+        if (idx === -1) {
+          return [...prev, {
+            id: `pending-${generated.type}`,
+            type: generated.type,
+            title: generated.title,
+            sortOrder: prev.length + 1,
+            aiGenerated: generated.aiGenerated,
+            content: generated.content,
+          } as MemoSection];
+        }
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...patch };
+        return next;
+      });
+    };
+
     try {
-      const result = await api.post<{ sections: MemoSection[] }>(`/memos/${selectedMemo.id}/generate-all`, {});
-      if (result.sections) {
-        const sorted = result.sections.sort((a, b) => a.sortOrder - b.sortOrder);
-        setSections(sorted);
-        const contentMap: Record<string, string> = {};
-        sorted.forEach((s) => { contentMap[s.id] = s.content || ""; });
-        setEditingContent(contentMap);
-        setActiveSection(sorted[0]?.id || null);
-      }
+      await api.stream(`/memos/${selectedMemo.id}/generate-all`, {}, (event) => {
+        const e = event as Record<string, any>;
+        if (e.type === "section_start") {
+          const label = String(e.sectionType).replaceAll("_", " ").toLowerCase();
+          setGenerationStatus(`Generating ${label}... (${e.index}/${e.total})`);
+        } else if (e.type === "section_complete") {
+          setGenerationStatus(`${e.section.title} ready (${e.index}/${e.total})`);
+          upsertSection(e.section);
+        } else if (e.type === "critique_start") {
+          setGenerationStatus("Reviewing memo quality...");
+        } else if (e.type === "section_revised") {
+          setGenerationStatus(`Revising ${e.section.title}...`);
+          upsertSection(e.section);
+        } else if (e.type === "done" && e.sections) {
+          const sorted = [...e.sections].sort((a: MemoSection, b: MemoSection) => a.sortOrder - b.sortOrder);
+          setSections(sorted);
+          const contentMap: Record<string, string> = {};
+          sorted.forEach((s: MemoSection) => { contentMap[s.id] = s.content || ""; });
+          setEditingContent(contentMap);
+          setActiveSection(sorted[0]?.id || null);
+        } else if (e.type === "error") {
+          setError(e.message || "Failed to generate all sections");
+        }
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate all sections");
     } finally {
       setGeneratingAll(false);
+      setGenerationStatus(null);
     }
   };
 }

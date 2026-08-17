@@ -18,7 +18,7 @@ import type { ReconcileResult } from './nodes/crossVerifyNode.js';
 // ─── Supporting Types ────────────────────────────────────────────────
 
 export type FileType = 'pdf' | 'excel' | 'image';
-export type ExtractionSource = 'gpt4o' | 'azure' | 'vision' | 'manual';
+export type ExtractionSource = 'gpt4o' | 'azure' | 'vision' | 'manual' | 'claude';
 export type AgentStatus = 'pending' | 'extracting' | 'validating' | 'self_correcting' | 'storing' | 'completed' | 'failed';
 
 /** Matches the existing StatementCheck from financialValidator.ts */
@@ -122,6 +122,16 @@ export const FinancialAgentState = Annotation.Root({
   }),
   /** Skip the verify node to reduce execution time (for serverless timeouts) */
   skipVerify: Annotation<boolean>({
+    reducer: (_prev, next) => next,
+    default: () => false,
+  }),
+  /** Bypass the extraction cache and re-run extraction even on cache hit */
+  forceExtraction: Annotation<boolean>({
+    reducer: (_prev, next) => next,
+    default: () => false,
+  }),
+  /** True when the extracted state was served from the FinancialExtractionCache */
+  fromCache: Annotation<boolean>({
     reducer: (_prev, next) => next,
     default: () => false,
   }),

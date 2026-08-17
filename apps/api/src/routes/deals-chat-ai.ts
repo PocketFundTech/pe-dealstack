@@ -3,15 +3,36 @@
 // fetching instead of stuffing everything into the system prompt.
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
+import { isLLMAvailable } from '../services/llm.js';
+import { runDealChatAgent, runDealChatAgentStreaming } from '../services/agents/dealChatAgent/index.js';
 import { generateFallbackResponse } from '../services/chatHelpers.js';
 import { getTodayIso } from '../utils/dates.js';
 import { formatDealHeadline } from '../utils/financialFormat.js';
 
 const router = Router();
+
+// ─── Input caps (Task 4.4) ────────────────────────────────────────
+// User-supplied text flows into LangGraph context. Cap message length,
+// number of history items, and per-item content length so a 1MB
+// submission can't burn OpenAI tokens or exceed the model context window.
+const chatRequestSchema = z.object({
+  message: z.string().min(1).max(10_000),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().max(10_000),
+      })
+    )
+    .max(50)
+    .optional()
+    .default([]),
+});
 
 // ─── Financial Markdown Table Builder ────────────────────────────────
 // Transforms raw FinancialStatement rows into LLM-optimized Markdown
@@ -126,11 +147,15 @@ router.post('/:dealId/chat', async (req, res) => {
 
   try {
     const { dealId } = req.params;
-    const { message, history = [] } = req.body;
 
-    if (!message || typeof message !== 'string') {
-      return res.status(400).json({ error: 'Message is required' });
+    const parsed = chatRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Invalid input',
+        details: parsed.error.errors,
+      });
     }
+    const { message, history } = parsed.data;
 
     // Verify deal belongs to user's org before any data access
     const orgId = getOrgId(req);
@@ -295,20 +320,72 @@ router.post('/:dealId/chat', async (req, res) => {
     const financialContext = buildFinancialMarkdown(financialStatements || []);
     contextParts.push(financialContext);
 
-    // Read userId once up-front — needed by the agent (Gmail/Calendar tools
-    // for /follow-ups) AND by ChatMessage inserts below.
+    const dealContext = contextParts.join('\n');
     const userId = req.user?.id || null;
 
-    // Run the ReAct agent. Pass today explicitly so the model anchors
-    // relative-period reasoning ("recent news", "last 90 days", "current
-    // quarter") against the request's wall-clock day — never a hardcoded or
-    // module-scope-cached date.
-    const { runDealChatAgent } = await import('../services/agents/dealChatAgent/index.js');
+    if (process.env.DEAL_CHAT_ENGINE === 'streaming') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      const abortController = new AbortController();
+      req.on('close', () => abortController.abort());
+
+      const send = (event: Record<string, unknown>) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      let fullText = '';
+      let finalModel = '';
+      let truncated = false;
+      let finalUpdates: any[] | undefined;
+      let finalAction: any;
+
+      try {
+        for await (const event of runDealChatAgentStreaming(
+          { dealId, orgId: deal.organizationId, message, dealContext, history: history.slice(-10), today: getTodayIso(), userId: userId ?? undefined },
+          { signal: abortController.signal },
+        )) {
+          if (event.type === 'text_delta') fullText += event.text;
+          if (event.type === 'update') finalUpdates = [...(finalUpdates ?? []), event.update];
+          if (event.type === 'action') finalAction = event.action;
+          if (event.type === 'done') { finalModel = event.model; truncated = event.truncated; }
+          if (event.type === 'error') truncated = true;
+          send(event);
+        }
+
+        await supabase.from('ChatMessage').insert({ dealId, userId, role: 'user', content: message });
+        await supabase.from('ChatMessage').insert({
+          dealId,
+          userId,
+          role: 'assistant',
+          content: fullText,
+          metadata: {
+            model: finalModel || 'claude-sonnet-5',
+            ...(truncated && { truncated: true }),
+            ...(finalUpdates && { updates: finalUpdates }),
+            ...(finalAction && { action: finalAction }),
+          },
+        });
+
+        await AuditLog.aiChat(req, `Deal: ${deal.name} (streaming)`);
+      } catch (streamErr) {
+        log.error('Deal chat streaming failed after headers sent', streamErr);
+      } finally {
+        res.end();
+      }
+      return;
+    }
+
+    // Run the ReAct agent (legacy path)
     const result = await runDealChatAgent({
       dealId,
       orgId: deal.organizationId,
       message,
-      dealContext: contextParts.join('\n'),
+      dealContext,
       history: history.slice(-10),
       today: getTodayIso(),
       userId: userId ?? undefined,

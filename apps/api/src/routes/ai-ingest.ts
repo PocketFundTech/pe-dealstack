@@ -6,6 +6,7 @@ import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtrac
 import { validateFile, sanitizeFilename, isPotentiallyDangerous, ALLOWED_MIME_TYPES } from '../services/fileValidator.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, resolveUserId } from './notifications.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { extractTextFromPDF } from './ingest-shared.js';
@@ -311,7 +312,10 @@ subRouter.post('/ai/ingest', upload.single('file'), async (req, res) => {
             dealId: deal.id,
           });
         }
-      }).catch(err => log.error('Notification error (ingest)', err));
+      }).catch(err => {
+        log.error('Notification error (ingest)', err);
+        captureAgentError(err, { context: 'notification:ai_ingest' }, 'warning');
+      });
     }
 
     // Auto-generate firm-teaser blurbs for the new deal (blocking, best-effort

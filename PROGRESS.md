@@ -5,6 +5,88 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 64 — July 31, 2026
+
+#### Timestamp: July 31, 2026 — 19:00-19:45 IST
+
+#### Goal: Phase 1 AI core swap — single Anthropic provider, structured-output financial extraction, behind a rollout flag (final task: full regression run + operator documentation)
+
+---
+
+#### Summary
+
+Closed out the 9-task Phase 1 plan (design doc: `docs/superpowers/plans/2026-07-12-phase1-ai-core-swap.md`) that replaces the dual-LLM (LangChain + raw SDK), 4-layer legacy financial extraction pipeline with a single tracked Anthropic client and a structured-output extraction call — gated end-to-end behind `EXTRACTION_ENGINE=claude` (default: `legacy`, unchanged). Every one of the 9 tasks went through an implement → spec-review → code-quality-review cycle, several with 2-3 rounds after real bugs were caught (a data-loss bug in the repair-merge logic, a whitespace-quote confidence-scoring bug, a cache-poisoning gap). This is reviewed, production-grade work, not a rough draft.
+
+#### New Features / Architecture
+
+1. **`apps/api/src/services/ai/`** — the new single-provider AI layer.
+   - `models.ts` — role → model map. `extraction` defaults to `claude-fable-5` with a server-side refusal fallback to `claude-opus-4-8`; `chat` → `claude-sonnet-5`; `fast` → `claude-haiku-4-5`. All three are env-overridable (`AI_EXTRACTION_MODEL` / `AI_CHAT_MODEL` / `AI_FAST_MODEL`).
+   - `client.ts` — `trackedClaudeMessage()`, a single tracked Anthropic client wrapper that replaces the old dual LangChain/raw-SDK call pattern for new call sites (usage ledger + tracked billing built in).
+
+2. **`apps/api/src/services/extraction/`** — the new structured-output extraction stack.
+   - `extractionSchema.ts` — JSON schema + prompts requiring per-line-item `sourcePage`/`sourceQuote` provenance and as-printed values with an explicit `unitScale`, instead of asking the model to normalize units itself.
+   - `normalize.ts` — deterministic scale/currency conversion to canonical millions plus alias dedup, replacing the old prompt-based normalization (the model reports what's on the page; code does the math).
+   - `claudeEngine.ts` — `extractWithClaude()`: one extraction call via the Files API for PDFs, with at most one deterministic-validator-triggered repair pass. The repair pass carries a statement-type AND period-level merge guard so it can never silently drop or corrupt data it wasn't asked to fix, and Files API cleanup is guaranteed via try/finally.
+
+3. **Wiring into the live financial extraction agent** (`apps/api/src/services/agents/financialAgent/`):
+   - `state.ts` — added `'claude'` as an `ExtractionSource`.
+   - `nodes/extractNode.ts` — routes to the new engine when the flag is set; the legacy 4-layer fallback (LlamaParse → pdf-parse → Vision → Excel) is untouched when the flag is unset.
+   - `nodes/verifyNode.ts` / `nodes/crossVerifyNode.ts` — skip for claude-sourced state, since in-schema provenance replaces the old GPT-4.1-mini/Haiku verification passes.
+   - `graph.ts` — `routeAfterValidate` never routes claude output into the GPT self-correct loop.
+   - `nodes/validateNode.ts` — no longer logs a misleading "self-correction attempt" for claude sources.
+   - `nodes/storeNode.ts` — scores claude-native-PDF source citations against a schema-driven signal instead of a meaningless substring match (there's no real text layer to substring-match against for native PDF input).
+   - `extractionCache.ts` — the cache key now includes the active engine, so legacy and claude results can never be cross-served from cache.
+
+4. **`apps/api/scripts/extraction-bakeoff.ts`** — an operator harness comparing legacy vs. one or more Claude models on real documents, reporting statement/period counts, validator pass rate, duration, and token cost. This is how the flag-flip decision gets made (see rollout checklist below).
+
+5. **DB migration** (manual, **not yet run**): `apps/api/phase1-claude-extraction-migration.sql` — adds `'claude'` to the `FinancialStatement.extractionSource` CHECK constraint and seeds `ModelPrice` rows for the 4 new Anthropic models (`claude-fable-5`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-haiku-4-5`).
+
+#### Bug Fix — affects the LEGACY path too
+
+While building the claude engine's storeNode scoring, a latent bug was found in `apps/api/src/services/compositeConfidence.ts`'s `scoreSourceMatch()`: a whitespace-only citation (empty/blank `sourceQuote`) scored a perfect 100 "match" instead of failing the check. This was fixed as part of this work. **This fix is not claude-specific** — `scoreSourceMatch()` is shared code, so the existing legacy extraction path's confidence scoring is also more accurate now (it will no longer silently award full marks to a blank citation).
+
+#### Rollout status — nothing changes in production yet
+
+`EXTRACTION_ENGINE` defaults to `legacy`. None of this is live until, in order: (1) the DB migration is run manually in Supabase (Vercel ships code but never runs `apps/api/*.sql`), (2) the org's Anthropic data-retention is confirmed ≥30 days (required for `claude-fable-5`), (3) the bake-off script is run against real documents and clears the validator-pass-rate gate, and (4) `EXTRACTION_ENGINE=claude` is flipped in Vercel env. Full step-by-step checklist: `docs/PHASE1-ROLLOUT-CHECKLIST.md`.
+
+#### Verification — full test suite + typecheck
+
+- `npm test` (apps/api): **780 passed, 8 failed, 44 skipped** (832 total; 74 test files passed, 1 failed, 1 skipped of 76). The 8 failures are 100% contained to `tests/mfa-bypass.test.ts` (`enforceOrgMfaMiddleware is not a function`) — a **known, pre-existing, unrelated failure** confirmed present before any Phase 1 work started; it belongs to a different, not-yet-landed security branch (`fix/security-phase1-p0`) and no Phase 1 commit touches it.
+- `npx tsc --noEmit` (apps/api): exactly **2 pre-existing errors**, both in `src/routes/memos-generate.ts` and `src/routes/memos-mutate.ts` (a Postgrest `PostgrestFilterBuilder` → `Promise<any>` typing mismatch, unrelated to this plan).
+- No other failures or regressions of any kind.
+
+---
+
+#### Files Changed — Session 64
+
+| File | Change |
+|------|--------|
+| `apps/api/.env.example` | Documented `EXTRACTION_ENGINE` flag + `AI_EXTRACTION_MODEL`/`AI_CHAT_MODEL`/`AI_FAST_MODEL` overrides |
+| `PROGRESS.md` | This entry |
+| `docs/PHASE1-ROLLOUT-CHECKLIST.md` | **New** — consolidated operator rollout checklist (migration, retention check, bake-off gate, flag flip, soak period, post-soak cleanup) |
+
+**Production modules landed across the 9-task plan (for reference — not modified in this session):**
+
+| File | Role |
+|------|------|
+| `apps/api/src/services/ai/models.ts` | Role → model map, env-overridable |
+| `apps/api/src/services/ai/client.ts` | `trackedClaudeMessage()` — single tracked Anthropic client wrapper |
+| `apps/api/src/services/extraction/extractionSchema.ts` | Structured-output JSON schema + provenance-requiring prompts |
+| `apps/api/src/services/extraction/normalize.ts` | Deterministic scale/currency normalization + alias dedup |
+| `apps/api/src/services/extraction/claudeEngine.ts` | `extractWithClaude()` — one call + guarded repair pass |
+| `apps/api/src/services/agents/financialAgent/state.ts` | Added `'claude'` `ExtractionSource` |
+| `apps/api/src/services/agents/financialAgent/nodes/extractNode.ts` | Routes to claude engine behind the flag |
+| `apps/api/src/services/agents/financialAgent/nodes/verifyNode.ts` | Skips for claude-sourced state |
+| `apps/api/src/services/agents/financialAgent/nodes/crossVerifyNode.ts` | Skips for claude-sourced state |
+| `apps/api/src/services/agents/financialAgent/nodes/validateNode.ts` | No misleading self-correction log for claude sources |
+| `apps/api/src/services/agents/financialAgent/nodes/storeNode.ts` | Schema-driven citation scoring for native-PDF claude output |
+| `apps/api/src/services/agents/financialAgent/graph.ts` | `routeAfterValidate` excludes claude output from GPT self-correct loop |
+| `apps/api/src/services/agents/financialAgent/extractionCache.ts` | Cache key includes active engine |
+| `apps/api/src/services/compositeConfidence.ts` | Fixed whitespace-only-citation scoring bug (legacy + claude) |
+| `apps/api/scripts/extraction-bakeoff.ts` | **New** — legacy-vs-claude operator bake-off harness |
+| `apps/api/phase1-claude-extraction-migration.sql` | **New, not yet run** — `extractionSource` CHECK constraint + `ModelPrice` seeds |
+---
+
 ### Session 67 — April 30, 2026
 
 #### Goal

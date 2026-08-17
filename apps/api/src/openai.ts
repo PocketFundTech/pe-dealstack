@@ -6,6 +6,7 @@ import { log } from './utils/logger.js';
 import { OPENROUTER_BASE_URL, OPENROUTER_HEADERS, isOpenRouterEnabled } from './utils/aiModels.js';
 import { recordUsageEvent } from './services/usage/trackedLLM.js';
 import { enforceUserGate, UserBlockedError } from './services/usage/enforcement.js';
+import { withCircuitBreaker } from './services/aiCircuitBreaker.js';
 
 export { UserBlockedError } from './services/usage/enforcement.js';
 
@@ -254,7 +255,9 @@ export async function trackedChatCompletion(
   const start = Date.now();
   try {
     const response: any = await withTrace(operation, extras, () =>
-      openai!.chat.completions.create(safeParams as any, options),
+      withCircuitBreaker(provider, () =>
+        openai!.chat.completions.create(safeParams as any, options),
+      ),
     );
     const promptTokens = response?.usage?.prompt_tokens ?? 0;
     const completionTokens = response?.usage?.completion_tokens ?? 0;
@@ -302,7 +305,9 @@ export async function trackedDirectChatCompletion(
   const start = Date.now();
   try {
     const response: any = await withTrace(operation, extras, () =>
-      openaiDirect!.chat.completions.create(safeParams as any, options),
+      withCircuitBreaker('openai', () =>
+        openaiDirect!.chat.completions.create(safeParams as any, options),
+      ),
     );
     const promptTokens = response?.usage?.prompt_tokens ?? 0;
     const completionTokens = response?.usage?.completion_tokens ?? 0;
@@ -350,7 +355,9 @@ export async function trackedDirectResponsesCreate(
   const start = Date.now();
   try {
     const response: any = await withTrace(operation, extras, () =>
-      (openaiDirect as any).responses.create(params, options),
+      withCircuitBreaker('openai', () =>
+        (openaiDirect as any).responses.create(params, options),
+      ),
     );
     const promptTokens = response?.usage?.input_tokens ?? 0;
     const completionTokens = response?.usage?.output_tokens ?? 0;

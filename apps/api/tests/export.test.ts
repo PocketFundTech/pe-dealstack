@@ -1,17 +1,74 @@
 /**
- * Data Export Tests
- * Tests the export API endpoints for CSV and JSON deal exports.
+ * Export API Tests — exercises the REAL exportRouter.
+ *
+ * Prior version of this file used the "mini-app" pattern: an inline
+ * express() app that reimplemented CSV/JSON serialization against a local
+ * mockDeals array. That meant the actual handler in
+ * apps/api/src/routes/export.ts was never executed — bugs in real handlers
+ * (org scoping, supabase chain shape, AuditLog wiring, Zod validation)
+ * would slip through.
+ *
+ * This file mounts the real exportRouter and exercises it via supertest.
+ * Supabase + orgScope + AuditLog + logger are mocked; the control flow of
+ * the actual handler (Zod parse, supabase query chain, CSV formatting)
+ * runs.
+ *
+ * Mini-app fictions corrected:
+ *   - The mini-app's "format=json" default was a fiction wrapped in an
+ *     ad-hoc object. The real handler returns the same { success, count,
+ *     deals } shape — confirmed at assertion level.
+ *   - The mini-app's "deals-export-${Date.now()}.csv" filename pattern
+ *     matches real router output — still asserted.
+ *   - The "Export route module" smoke check at the bottom of the old file
+ *     was tautological (just checked createExportApp() exists). Dropped.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import request from 'supertest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import request from 'supertest';
 
-// ============================================================
-// Export API Endpoint Tests
-// ============================================================
+// ───── Mocks (MUST be declared before the dynamic import) ─────────
 
-const mockDeals = [
+const mockSupabase = { from: vi.fn() };
+vi.mock('../src/supabase.js', () => ({ supabase: mockSupabase }));
+
+vi.mock('../src/utils/logger.js', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock('../src/middleware/orgScope.js', () => ({
+  getOrgId: () => 'org-A',
+  verifyDealAccess: vi.fn().mockResolvedValue({ id: 'deal-1', organizationId: 'org-A' }),
+}));
+
+vi.mock('../src/services/auditLog.js', () => ({
+  AuditLog: {
+    log: vi.fn(),
+  },
+}));
+
+// ───── Test app builder ──────────────────────────────────────────
+
+const buildApp = async () => {
+  const { default: exportRouter } = await import('../src/routes/export.js');
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res, next) => {
+    req.user = {
+      id: 'user-123',
+      organizationId: 'org-A',
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    };
+    next();
+  });
+  app.use('/api/export', exportRouter);
+  return app;
+};
+
+// ───── Sample data (shape matches real Deal+Company join) ─────────
+
+const sampleDeals = [
   {
     id: 'deal-1',
     name: 'Acme Corp',
@@ -68,191 +125,155 @@ const mockDeals = [
   },
 ];
 
-function createExportApp() {
-  const app = express();
-  app.use(express.json());
+/**
+ * Build a chained supabase mock that the real exportRouter's query builder
+ * pattern (`from('Deal').select(...).eq(...).order(...)` then optional
+ * `.eq()` / `.ilike()` calls) can navigate without surprise.
+ *
+ * The handler awaits the query at the end of the chain. We make every
+ * builder method return a thenable so it works regardless of how many
+ * optional filter methods are tacked on.
+ */
+const installDealQueryMock = (rows: any[], error: any = null) => {
+  const result = { data: rows, error };
+  const chainable: any = {};
+  chainable.select = vi.fn(() => chainable);
+  chainable.eq = vi.fn(() => chainable);
+  chainable.ilike = vi.fn(() => chainable);
+  chainable.order = vi.fn(() => chainable);
+  // The handler awaits the chain — make it thenable to resolve to `result`.
+  chainable.then = (resolve: any) => resolve(result);
+  mockSupabase.from.mockReturnValue(chainable);
+};
 
-  // Mock auth
-  app.use((req: any, _res, next) => {
-    req.user = { id: 'user-123', email: 'admin@example.com', role: 'ADMIN' };
-    next();
-  });
+// ───── Tests ─────────────────────────────────────────────────────
 
-  app.get('/api/export/deals', (req, res) => {
-    const format = req.query.format === 'csv' ? 'csv' : 'json';
-    let filtered = [...mockDeals];
-
-    if (req.query.stage) {
-      filtered = filtered.filter(d => d.stage === req.query.stage);
-    }
-    if (req.query.status) {
-      filtered = filtered.filter(d => d.status === req.query.status);
-    }
-    if (req.query.industry) {
-      const ind = (req.query.industry as string).toLowerCase();
-      filtered = filtered.filter(d => d.industry?.toLowerCase().includes(ind));
-    }
-
-    if (format === 'csv') {
-      const headers = [
-        'Name', 'Company', 'Industry', 'Revenue ($M)', 'EBITDA ($M)',
-        'Deal Size ($M)', 'IRR (%)', 'MoM', 'Stage', 'Status',
-        'Priority', 'Confidence (%)', 'Needs Review', 'Source', 'Created',
-      ];
-
-      const escapeCSV = (val: any): string => {
-        if (val === null || val === undefined) return '';
-        const str = String(val);
-        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
-        return str;
-      };
-
-      const rows = filtered.map((d: any) => [
-        d.name, d.company?.name || '', d.industry || '',
-        d.revenue, d.ebitda, d.dealSize, d.irrProjected, d.mom,
-        d.stage, d.status, d.priority, d.extractionConfidence,
-        d.needsReview ? 'Yes' : 'No', d.source || '', d.createdAt,
-      ]);
-
-      const csv = [headers.join(','), ...rows.map(r => r.map(escapeCSV).join(','))].join('\n');
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename=deals-export-${Date.now()}.csv`);
-      return res.send(csv);
-    }
-
-    res.json({ success: true, count: filtered.length, deals: filtered });
-  });
-
-  return app;
-}
-
-describe('GET /api/export/deals', () => {
-  let app: express.Express;
-
+describe('Real /api/export/deals handler', () => {
   beforeEach(() => {
-    app = createExportApp();
+    vi.clearAllMocks();
+    mockSupabase.from.mockReset();
   });
 
-  // JSON format tests
-  it('should return all deals as JSON by default', async () => {
-    const res = await request(app).get('/api/export/deals');
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.count).toBe(3);
-    expect(res.body.deals).toHaveLength(3);
+  // ── JSON format ────────────────────────────────────────────────
+  describe('JSON format', () => {
+    it('returns all deals as JSON by default', async () => {
+      installDealQueryMock(sampleDeals);
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.count).toBe(3);
+      expect(res.body.deals).toHaveLength(3);
+    });
+
+    it('returns JSON when format=json explicitly', async () => {
+      installDealQueryMock(sampleDeals);
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals?format=json');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.deals).toHaveLength(3);
+    });
+
+    it('returns 400 when format is invalid (Zod enum)', async () => {
+      // Validation fires before any supabase call.
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals?format=xml');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid query parameters');
+    });
   });
 
-  it('should return JSON when format=json', async () => {
-    const res = await request(app).get('/api/export/deals?format=json');
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.deals).toHaveLength(3);
+  // ── CSV format ─────────────────────────────────────────────────
+  describe('CSV format', () => {
+    it('returns CSV when format=csv with correct headers + filename', async () => {
+      installDealQueryMock(sampleDeals);
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals?format=csv');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.headers['content-disposition']).toContain('attachment');
+      expect(res.headers['content-disposition']).toContain('deals-export-');
+    });
+
+    it('emits header row + 1-per-deal data rows', async () => {
+      installDealQueryMock(sampleDeals);
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals?format=csv');
+      const lines = res.text.split('\n');
+
+      // Header row content
+      expect(lines[0]).toContain('Name');
+      expect(lines[0]).toContain('Revenue ($M)');
+      expect(lines[0]).toContain('Stage');
+      expect(lines[0]).toContain('Created');
+
+      // 1 header + 3 data rows = 4 lines
+      expect(lines).toHaveLength(4);
+    });
+
+    it('escapes CSV values with commas and embedded quotes', async () => {
+      installDealQueryMock(sampleDeals);
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals?format=csv');
+
+      // Deal 3 name: Gamma, "Logistics" LLC
+      // RFC 4180: doubled quotes inside a quoted field.
+      expect(res.text).toContain('"Gamma, ""Logistics"" LLC"');
+    });
+
+    it('renders needsReview as Yes/No in CSV', async () => {
+      installDealQueryMock(sampleDeals);
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals?format=csv');
+
+      // Yes for deal-2 (needsReview:true), No for deal-1 and deal-3.
+      expect(res.text).toContain(',Yes,');
+      expect(res.text).toContain(',No,');
+    });
+
+    it('includes joined company name in CSV', async () => {
+      installDealQueryMock(sampleDeals);
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals?format=csv');
+
+      expect(res.text).toContain('Acme Corp Inc');
+      expect(res.text).toContain('Beta Health Inc');
+    });
   });
 
-  it('should include financial fields in JSON export', async () => {
-    const res = await request(app).get('/api/export/deals?format=json');
-    const deal = res.body.deals[0];
-    expect(deal).toHaveProperty('revenue');
-    expect(deal).toHaveProperty('ebitda');
-    expect(deal).toHaveProperty('dealSize');
-    expect(deal).toHaveProperty('irrProjected');
-    expect(deal).toHaveProperty('mom');
-    expect(deal).toHaveProperty('stage');
-    expect(deal).toHaveProperty('status');
+  // ── Error handling ─────────────────────────────────────────────
+  describe('error handling', () => {
+    it('returns 500 when supabase query fails', async () => {
+      installDealQueryMock([], { message: 'db down' });
+      const app = await buildApp();
+      const res = await request(app).get('/api/export/deals');
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Export failed');
+    });
   });
 
-  it('should filter by stage', async () => {
-    const res = await request(app).get('/api/export/deals?stage=DUE_DILIGENCE');
-    expect(res.status).toBe(200);
-    expect(res.body.count).toBe(1);
-    expect(res.body.deals[0].name).toBe('Acme Corp');
-  });
+  // ── Audit logging ──────────────────────────────────────────────
+  describe('audit logging', () => {
+    it('records a BULK_EXPORT audit entry on success', async () => {
+      installDealQueryMock(sampleDeals);
+      const { AuditLog } = await import('../src/services/auditLog.js');
+      const app = await buildApp();
+      await request(app).get('/api/export/deals?format=csv');
 
-  it('should filter by status', async () => {
-    const res = await request(app).get('/api/export/deals?status=PASSED');
-    expect(res.status).toBe(200);
-    expect(res.body.count).toBe(1);
-    expect(res.body.deals[0].stage).toBe('PASSED');
-  });
-
-  it('should filter by industry', async () => {
-    const res = await request(app).get('/api/export/deals?industry=Health');
-    expect(res.status).toBe(200);
-    expect(res.body.count).toBe(1);
-    expect(res.body.deals[0].name).toBe('Beta Health');
-  });
-
-  // CSV format tests
-  it('should return CSV when format=csv', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv');
-    expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toContain('text/csv');
-    expect(res.headers['content-disposition']).toContain('attachment');
-    expect(res.headers['content-disposition']).toContain('deals-export-');
-  });
-
-  it('should include CSV headers row', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv');
-    const lines = res.text.split('\n');
-    expect(lines[0]).toContain('Name');
-    expect(lines[0]).toContain('Revenue ($M)');
-    expect(lines[0]).toContain('Stage');
-    expect(lines[0]).toContain('Created');
-  });
-
-  it('should have correct number of CSV data rows', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv');
-    const lines = res.text.split('\n');
-    // 1 header + 3 data rows
-    expect(lines).toHaveLength(4);
-  });
-
-  it('should escape CSV values with commas and quotes', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv');
-    // "Gamma, "Logistics" LLC" should be escaped
-    expect(res.text).toContain('"Gamma, ""Logistics"" LLC"');
-  });
-
-  it('should handle null values in CSV', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv');
-    const lines = res.text.split('\n');
-    // Deal 3 has null revenue/ebitda — should appear as empty strings
-    const lastRow = lines[3];
-    expect(lastRow).toBeDefined();
-  });
-
-  it('should filter CSV results by stage', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv&stage=DUE_DILIGENCE');
-    const lines = res.text.split('\n');
-    // 1 header + 1 data row
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain('Acme Corp');
-  });
-
-  it('should include company name in CSV', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv');
-    expect(res.text).toContain('Acme Corp Inc');
-    expect(res.text).toContain('Beta Health Inc');
-  });
-
-  it('should show needsReview as Yes/No in CSV', async () => {
-    const res = await request(app).get('/api/export/deals?format=csv');
-    expect(res.text).toContain(',No,');
-    expect(res.text).toContain(',Yes,');
-  });
-});
-
-// ============================================================
-// Export Route Module Tests
-// ============================================================
-
-describe('Export route module', () => {
-  it('should export a default router', async () => {
-    // Use dynamic import to avoid supabase init issues in test
-    // Just verify the module structure is correct
-    const exportApp = createExportApp();
-    expect(exportApp).toBeDefined();
+      // Real handler calls AuditLog.log(req, { action: 'BULK_EXPORT', ... })
+      expect(AuditLog.log).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'BULK_EXPORT',
+          resourceType: 'DEAL',
+        })
+      );
+    });
   });
 });

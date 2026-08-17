@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
@@ -29,7 +30,7 @@ router.get('/insights/gmail-suggestions', async (req: any, res) => {
 
 // ─── GET /api/contacts/insights/timeline — Recent interactions across all contacts ─
 
-router.get('/insights/timeline', async (req: any, res) => {
+router.get('/insights/timeline', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
     const limit = Math.min(Number(req.query.limit) || 20, 50);
@@ -63,7 +64,7 @@ router.get('/insights/timeline', async (req: any, res) => {
 
 // ─── GET /api/contacts/insights/duplicates — Find duplicate contacts ─
 
-router.get('/insights/duplicates', async (req: any, res) => {
+router.get('/insights/duplicates', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
 
@@ -118,7 +119,7 @@ router.get('/insights/duplicates', async (req: any, res) => {
 
 // ─── GET /api/contacts/insights/stale — Contacts needing attention ─
 
-router.get('/insights/stale', async (req: any, res) => {
+router.get('/insights/stale', async (req: Request, res) => {
   try {
     const daysThreshold = Number(req.query.days) || 30;
     const cutoff = new Date(Date.now() - daysThreshold * 24 * 60 * 60 * 1000).toISOString();
@@ -215,7 +216,7 @@ router.get('/insights/follow-ups', async (req: any, res) => {
 
 // ─── GET /api/contacts/insights/scores — Relationship strength scores ─
 
-router.get('/insights/scores', async (req: any, res) => {
+router.get('/insights/scores', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
 
@@ -308,7 +309,7 @@ router.get('/insights/scores', async (req: any, res) => {
 
 // ─── GET /api/contacts/insights/network — Network overview stats ─
 
-router.get('/insights/network', async (req: any, res) => {
+router.get('/insights/network', async (req: Request, res) => {
   try {
     const orgId = getOrgId(req);
 

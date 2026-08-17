@@ -15,6 +15,7 @@ import { searchWeb } from '../../webSearch.js';
 import { scrapePageText } from '../../companyResearcher.js';
 import { supabase } from '../../../supabase.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { isHighValueUrl } from '../../../utils/urlHelpers.js';
 import { generateQueries, extractNewNames } from './deepResearchQueries.js';
 import { synthesizePhase2, countInsights } from './deepResearchSynthesis.js';
@@ -245,6 +246,7 @@ export async function runDeepResearch(input: DeepResearchInput): Promise<void> {
         await supabase.from('Organization').update({ settings }).eq('id', input.organizationId);
       } catch (error) {
         log.error('Deep research: failed to save firm profile', { error: (error as Error).message });
+        captureAgentError(error, { agent: 'firmResearchAgent', node: 'deepResearch.saveFirm' });
       }
     }
 
@@ -270,6 +272,7 @@ export async function runDeepResearch(input: DeepResearchInput): Promise<void> {
         await supabase.from('User').update({ onboardingStatus: status }).eq('authId', input.userId);
       } catch (error) {
         log.error('Deep research: failed to save person profile', { error: (error as Error).message });
+        captureAgentError(error, { agent: 'firmResearchAgent', node: 'deepResearch.savePerson' });
       }
     }
 
@@ -282,6 +285,7 @@ export async function runDeepResearch(input: DeepResearchInput): Promise<void> {
 
   } catch (error) {
     log.error('Deep research Phase 2 failed', { error: (error as Error).message });
+    captureAgentError(error, { agent: 'firmResearchAgent', node: 'deepResearch.invoke' });
     await updateProgress(input.organizationId, {
       status: 'failed', startedAt, queriesRun,
       insightsFound: 0, error: (error as Error).message,

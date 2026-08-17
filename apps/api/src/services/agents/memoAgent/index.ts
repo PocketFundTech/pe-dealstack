@@ -10,18 +10,26 @@ import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
 import { classifyAIError } from '../../../utils/aiErrors.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
+import { runWithAgentBounds } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// Chat ReAct agent — tool calls + a final reply. 60s gives the user a
+// reasonable interactive ceiling; recursionLimit 10 caps tool-call loops.
+const MEMO_CHAT_TIMEOUT_MS = 60_000;
+const MEMO_CHAT_RECURSION_LIMIT = 10;
 
 // ─── Re-exports ───────────────────────────────────────────────────────────────
 
 export { buildMemoContext, formatContextForLLM } from './context.js';
-export { generateAllSections, generateSection } from './pipeline.js';
+export { generateAllSections, generateSection, generateAllSectionsStreaming } from './pipeline.js';
 export {
   COMPREHENSIVE_IC_SECTIONS,
   STANDARD_IC_SECTIONS,
   SEARCH_FUND_SECTIONS,
   SCREENING_NOTE_SECTIONS,
 } from './prompts.js';
-export type { GeneratedSection } from './pipeline.js';
+export type { GeneratedSection, MemoGenerationStreamEvent } from './pipeline.js';
 export type { MemoContext } from './context.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -104,9 +112,17 @@ export async function runMemoChatAgent(input: MemoChatInput): Promise<MemoChatRe
       messageCount: messages.length,
     });
 
-    // ── Invoke ───────────────────────────────────────────────────────────────
+    // ── Invoke (bounded) ─────────────────────────────────────────────────────
 
-    const result = await agent.invoke({ messages });
+    const result: any = await runWithAgentBounds(
+      (config) => agent.invoke({ messages }, config),
+      {
+        timeoutMs: MEMO_CHAT_TIMEOUT_MS,
+        recursionLimit: MEMO_CHAT_RECURSION_LIMIT,
+        envVar: 'MEMO_CHAT_AGENT_TIMEOUT_MS',
+        label: 'Memo chat agent',
+      },
+    );
 
     // ── Extract final AI response ─────────────────────────────────────────────
 
@@ -187,6 +203,7 @@ export async function runMemoChatAgent(input: MemoChatInput): Promise<MemoChatRe
       message: error.message,
       stack: error.stack?.slice(0, 500),
     });
+    captureAgentError(error, { agent: 'memoAgent', node: 'chat' });
 
     return {
       message: classifyAIError(error.message),

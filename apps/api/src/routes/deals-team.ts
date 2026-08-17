@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 
@@ -54,6 +55,20 @@ router.post('/:id/team', async (req, res) => {
     }
 
     const data = addTeamMemberSchema.parse(req.body);
+
+    // F-23: verify the target user belongs to the caller's org. Without this
+    // a deal owner could add a user from another org to their team — that
+    // user would then receive a DEAL_UPDATE notification carrying the deal
+    // name + role and a link they can't actually open.
+    const { data: targetUser } = await supabase
+      .from('User')
+      .select('id')
+      .eq('id', data.userId)
+      .eq('organizationId', orgId)
+      .single();
+    if (!targetUser) {
+      return res.status(400).json({ error: 'Cannot add a user from another organization' });
+    }
 
     // Idempotent upsert: if the user is already on the team, treat this as a
     // role change (or no-op). The Assign Deal modal doesn't filter out
@@ -153,7 +168,10 @@ router.post('/:id/team', async (req, res) => {
         type: 'DEAL_UPDATE',
         title: `You were added to "${dealInfo?.name || 'a deal'}" as ${data.role}`,
         dealId: id,
-      }).catch(err => log.error('Notification error (team member added)', err));
+      }).catch(err => {
+        log.error('Notification error (team member added)', err);
+        captureAgentError(err, { context: 'notification:deal_team_added' }, 'warning');
+      });
     } else if (action === 'updated') {
       await supabase.from('Activity').insert({
         dealId: id,

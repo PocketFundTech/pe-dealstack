@@ -2,6 +2,7 @@
 import { FirmResearchStateType, AgentStep } from '../state.js';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 
 function step(message: string, detail?: string): AgentStep {
   return { timestamp: new Date().toISOString(), node: 'save', message, detail };
@@ -67,6 +68,7 @@ export async function saveNode(
     } catch (error) {
       steps.push(step('Failed to save firm profile', (error as Error).message));
       log.error('Save firm profile failed', { error: (error as Error).message });
+      captureAgentError(error, { agent: 'firmResearchAgent', node: 'save.firm' });
     }
   }
 
@@ -91,6 +93,7 @@ export async function saveNode(
     } catch (error) {
       steps.push(step('Failed to save person profile', (error as Error).message));
       log.error('Save person profile failed', { error: (error as Error).message });
+      captureAgentError(error, { agent: 'firmResearchAgent', node: 'save.person' });
     }
   }
 

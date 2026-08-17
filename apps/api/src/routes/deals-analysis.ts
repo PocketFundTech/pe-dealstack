@@ -1,16 +1,26 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
+import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 
 const router = Router();
 
 // POST /api/deals/:id/analyze — Run multi-document analysis
-router.post('/:id/analyze', async (req: any, res) => {
+router.post('/:id/analyze', async (req: Request, res) => {
   try {
     const dealId = req.params.id;
+    const orgId = getOrgId(req);
 
-    // Verify deal exists
+    // Verify deal belongs to caller's org. Return 404 (not 403) to prevent
+    // enumeration of deal ids across tenants.
+    const dealAccess = await verifyDealAccess(dealId, orgId);
+    if (!dealAccess) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    // Fetch deal name for activity + audit log entries.
     const { data: deal, error: dealError } = await supabase
       .from('Deal')
       .select('id, name')

@@ -4,13 +4,15 @@ import { extractDealDataFromText } from '../services/aiExtractor.js';
 import { z } from 'zod';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { researchCompany, buildResearchText } from '../services/companyResearcher.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
-import { getOrgId } from '../middleware/orgScope.js';
+import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { formatValueWithUnit } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
+import { isPrivateUrl } from '../utils/urlHelpers.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 
@@ -19,8 +21,8 @@ const subRouter = Router();
 // ─── Website URL Research (Multi-Page Scraping) ──────────────
 
 const urlResearchSchema = z.object({
-  url: z.string().url('Must be a valid URL'),
-  companyName: z.string().optional(),
+  url: z.string().url('Must be a valid URL').max(2048),
+  companyName: z.string().max(500).optional(),
   autoCreateDeal: z.boolean().optional().default(true),
   dealId: z.string().uuid().optional(),
 });
@@ -35,6 +37,12 @@ subRouter.post('/url', async (req, res) => {
     }
 
     const { url, companyName: userCompanyName, autoCreateDeal, dealId: targetDealId } = validation.data;
+
+    // SECURITY: block SSRF — refuse URLs pointing to loopback / RFC1918 / .local before fetch.
+    if (isPrivateUrl(url)) {
+      return res.status(400).json({ error: 'URL points to a private/internal network' });
+    }
+
     log.info('URL research starting', { url, targetDealId });
 
     // Step 1: Research company (scrapes multiple pages in parallel)
@@ -107,6 +115,14 @@ subRouter.post('/url', async (req, res) => {
 
     if (targetDealId) {
       // ─── Update Existing Deal path ───
+      // Verify the caller's org owns this deal before merging extracted data
+      // and dropping a Document row pointing at it. Without this, a client
+      // could ingest scraped web data into any tenant's deal.
+      const dealAccess = await verifyDealAccess(targetDealId, orgId);
+      if (!dealAccess) {
+        return res.status(404).json({ error: 'Deal not found' });
+      }
+
       log.info('URL ingest into existing deal', { dealId: targetDealId });
       const result = await mergeIntoExistingDeal(targetDealId, aiData, req.user?.id, `Web Research — ${url}`);
       deal = result.deal;
@@ -315,7 +331,10 @@ subRouter.post('/url', async (req, res) => {
           if (result.success) log.debug('Research RAG embedding complete', { chunkCount: result.chunkCount });
           else log.error('Research RAG embedding failed', result.error);
         })
-        .catch(err => log.error('Research RAG embedding error', err));
+        .catch(err => {
+          log.error('Research RAG embedding error', err);
+          captureAgentError(err, { context: 'rag:embed_url_research' }, 'warning');
+        });
     }
 
     await AuditLog.aiIngest(req, `Web Research — ${url}`, deal.id);

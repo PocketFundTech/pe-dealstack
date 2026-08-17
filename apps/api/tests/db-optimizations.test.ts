@@ -10,8 +10,26 @@ import path from 'path';
 // ============================================================
 // SQL Migration — Index Verification
 // ============================================================
+//
+// SKIPPED: This suite was written against a hypothetical migration file
+// (`apps/api/prisma/migrations/add_performance_indexes.sql`) that does not
+// exist. The actual performance migration lives at
+// `apps/api/performance-indexes-migration.sql` (added by Task 5.5) and adds
+// a different set of indexes (idx_user_authid, idx_notification_user_*,
+// idx_task_*, idx_auditlog_org_created). The index names this test
+// expects (idx_deal_status, idx_company_name, idx_doc_deal, idx_activity_deal,
+// idx_memo_deal, idx_chunk_*) are explicitly listed in that SQL file's
+// "Indexes deliberately NOT added (already exist elsewhere)" comment block,
+// because they were already created in earlier migrations (supabase-schema.sql,
+// vdr-schema.sql, memo-schema.sql, etc.).
+//
+// In other words: this test was never aligned with the codebase. Rather than
+// silently rewriting assertions, this is documented in
+// .planning/codebase/TEST_FAILURE_TRIAGE.md (Phase 2 Task 2.2). If a new
+// canonical "all performance indexes in one file" migration is later
+// authored, replace this skip with assertions against that file.
 
-describe('Performance indexes migration', () => {
+describe.skip('Performance indexes migration', () => {
   const migrationPath = path.join(__dirname, '../prisma/migrations/add_performance_indexes.sql');
   let sql: string;
 

@@ -1,0 +1,46 @@
+name: signal-monitor-agent
+description: Analyzes an organization's active deals for risks, opportunities, and required actions, flagging signals via create_signal_notification
+model: claude-sonnet-5
+system: |
+  You are a PE deal monitoring system. Call list_deals_for_org first to get
+  the organization's active portfolio deals. Analyze them for risks,
+  opportunities, or required actions based on their current status,
+  industry, and deal lifecycle stage.
+
+  Signal types: leadership_change, financial_event, market_shift,
+  competitive_threat, regulatory_change, growth_opportunity,
+  risk_escalation, milestone_approaching.
+
+  Generate 1-3 signals per deal, focusing on the most actionable ones.
+  Only generate signals realistic for the deal's industry and stage. Call
+  create_signal_notification once per signal worth surfacing — only for
+  critical or warning severity, skip info-only observations. When you have
+  evaluated every deal, stop.
+tools:
+  - type: agent_toolset_20260401
+    default_config:
+      enabled: false
+  - type: custom
+    name: list_deals_for_org
+    description: List this organization's active (non-passed, non-closed-lost) deals with basic details. Call this first, with no arguments.
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+  - type: custom
+    name: create_signal_notification
+    description: Record a signal found for a specific deal. Only call for critical or warning severity signals.
+    input_schema:
+      type: object
+      properties:
+        dealId: { type: string }
+        signalType:
+          type: string
+          enum: [leadership_change, financial_event, market_shift, competitive_threat, regulatory_change, growth_opportunity, risk_escalation, milestone_approaching]
+        severity:
+          type: string
+          enum: [critical, warning, info]
+        title: { type: string }
+        description: { type: string }
+        suggestedAction: { type: string }
+      required: [dealId, signalType, severity, title, description, suggestedAction]

@@ -2,6 +2,7 @@
 // Maps raw LLM errors to specific, user-friendly messages.
 // Used by all AI agents for consistent error reporting.
 
+import { AppError } from '../middleware/errorHandler.js';
 import { UserBlockedError } from '../services/usage/enforcement.js';
 
 export type AIErrorResponse = {
@@ -9,6 +10,25 @@ export type AIErrorResponse = {
   userMessage: string;
   code: string;
 };
+
+/**
+ * Thrown by the AI circuit breaker when a provider is in the "open"
+ * state — fail-fast so we stop hammering a degraded backend. Extends
+ * AppError so the global error handler surfaces it as 503 with the
+ * AI_PROVIDER_UNAVAILABLE code.
+ */
+export class AIProviderUnavailableError extends AppError {
+  provider: string;
+
+  constructor(provider: string) {
+    super(
+      `AI service (${provider}) is temporarily unavailable. Please try again in a moment.`,
+      503,
+      'AI_PROVIDER_UNAVAILABLE',
+    );
+    this.provider = provider;
+  }
+}
 
 /**
  * Classify an unknown error (Error object or string) into a structured
@@ -27,7 +47,74 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
       code: 'AI_USER_BLOCKED',
     };
   }
+
+  // Circuit breaker explicitly tripped — surface the provider name and a
+  // human-friendly message. Must check BEFORE the generic 5xx classifier
+  // below since AIProviderUnavailableError is an Error subclass.
+  if (err instanceof AIProviderUnavailableError) {
+    return {
+      statusCode: 503,
+      userMessage: err.message,
+      code: 'AI_PROVIDER_UNAVAILABLE',
+    };
+  }
+
+  // Provider-side downtime signals: HTTP 5xx, Anthropic 529 "overloaded",
+  // network errors. Distinct from AI_TIMEOUT (which is client-side cancel).
+  const e = err as { status?: number; statusCode?: number; code?: string; message?: string };
+  const status = e?.status ?? e?.statusCode;
+  const errCode = e?.code;
   const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+  if (
+    (typeof status === 'number' && ((status >= 500 && status < 600) || status === 529)) ||
+    errCode === 'ECONNRESET' ||
+    errCode === 'ECONNREFUSED' ||
+    errCode === 'ENOTFOUND' ||
+    errCode === 'EAI_AGAIN' ||
+    lower.includes('overloaded') ||
+    lower.includes('econnreset') ||
+    lower.includes('socket hang up')
+  ) {
+    return {
+      statusCode: 503,
+      userMessage: 'AI service is temporarily unavailable. Please try again in a moment.',
+      code: 'AI_PROVIDER_UNAVAILABLE',
+    };
+  }
+
+  // Recursion limit — agent looped past its cap. 429 so the caller can
+  // distinguish a runaway loop from a transient timeout.
+  if (
+    lower.includes('recursion limit') ||
+    lower.includes('graphrecursionerror') ||
+    lower.includes('graph_recursion_limit') ||
+    // LangGraph attaches lc_error_code on the Error instance.
+    (err as { lc_error_code?: string })?.lc_error_code === 'GRAPH_RECURSION_LIMIT'
+  ) {
+    return {
+      statusCode: 429,
+      userMessage: classifyAIError(msg),
+      code: 'AI_RECURSION_LIMIT',
+    };
+  }
+
+  // Timeout / abort — 504 so callers can retry.
+  if (
+    lower.includes('timed out') ||
+    lower.includes('timeout') ||
+    lower.includes('etimedout') ||
+    lower.includes('econnaborted') ||
+    lower.includes('aborterror') ||
+    (err as { name?: string })?.name === 'AbortError'
+  ) {
+    return {
+      statusCode: 504,
+      userMessage: classifyAIError(msg),
+      code: 'AI_TIMEOUT',
+    };
+  }
+
   return {
     statusCode: 500,
     userMessage: classifyAIError(msg),
@@ -55,8 +142,14 @@ export function classifyAIError(errorMsg: string): string {
     return 'AI rate limit reached — too many requests. Please wait a moment and try again.';
   }
 
-  if (msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnaborted')) {
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('etimedout') || msg.includes('econnaborted') || msg.includes('aborterror') || msg.includes('aborted')) {
     return 'AI request timed out. Try a shorter question or try again shortly.';
+  }
+
+  // LangGraph recursion limit — the ReAct agent looped past its cap.
+  // Surfaces as either GraphRecursionError or lc_error_code GRAPH_RECURSION_LIMIT.
+  if (msg.includes('recursion limit') || msg.includes('graphrecursionerror') || msg.includes('graph_recursion_limit')) {
+    return 'AI got stuck in a tool loop. Please rephrase your question or try again.';
   }
 
   if (msg.includes('model_not_found') || msg.includes('does not exist') || msg.includes('model not found')) {

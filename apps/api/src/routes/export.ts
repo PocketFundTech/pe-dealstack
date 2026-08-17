@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
 import { AuditLog } from '../services/auditLog.js';
@@ -18,7 +19,7 @@ const exportQuerySchema = z.object({
 
 // ─── GET /api/export/deals — Export deals as JSON or CSV ─────
 
-router.get('/deals', async (req: any, res) => {
+router.get('/deals', async (req: Request, res) => {
   try {
     const validation = exportQuerySchema.safeParse(req.query);
     if (!validation.success) {

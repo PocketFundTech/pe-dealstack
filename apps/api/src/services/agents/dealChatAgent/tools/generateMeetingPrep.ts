@@ -1,14 +1,32 @@
 // ─── generate_meeting_prep tool ──────────────────────────────────
 // Calls the meetingPrep agent and renders the brief as Markdown.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
 import { generateMeetingPrep } from '../../meetingPrep/index.js';
 
+export const inputSchema = z.object({
+  attendees: z.string().optional().describe('Who the meeting is with (e.g., "CEO of target company")'),
+  topics: z.string().optional().describe('Key topics to cover'),
+});
+
 export function makeGenerateMeetingPrepTool(dealId: string, orgId: string) {
-  return tool(
-    async ({ attendees, topics }) => {
+  return {
+    type: 'custom' as const,
+    name: 'generate_meeting_prep',
+    description: 'Generate a meeting preparation brief for this deal. Includes talking points, questions, risks, and suggested agenda.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        attendees: { type: 'string', description: 'Who the meeting is with (e.g., "CEO of target company")' },
+        topics: { type: 'string', description: 'Key topics to cover' },
+      },
+    },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async ({ attendees, topics }: z.infer<typeof inputSchema>) => {
       try {
         const brief = await generateMeetingPrep({
           dealId,
@@ -32,13 +50,5 @@ export function makeGenerateMeetingPrepTool(dealId: string, orgId: string) {
         return 'Failed to generate meeting prep. Please try again.';
       }
     },
-    {
-      name: 'generate_meeting_prep',
-      description: 'Generate a meeting preparation brief for this deal. Includes talking points, questions, risks, and suggested agenda.',
-      schema: z.object({
-        attendees: z.string().optional().describe('Who the meeting is with (e.g., "CEO of target company")'),
-        topics: z.string().optional().describe('Key topics to cover'),
-      }),
-    }
-  );
+  };
 }

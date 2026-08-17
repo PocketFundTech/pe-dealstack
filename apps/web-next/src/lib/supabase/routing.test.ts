@@ -30,6 +30,7 @@ describe("isAppRouteRequiringAuth", () => {
     expect(isAppRouteRequiringAuth("/terms-of-service")).toBe(false);
     expect(isAppRouteRequiringAuth("/security")).toBe(false);
     expect(isAppRouteRequiringAuth("/pricing")).toBe(false);
+    expect(isAppRouteRequiringAuth("/portal/some-share-token")).toBe(false);
     expect(isAppRouteRequiringAuth("/documentation")).toBe(false);
     expect(isAppRouteRequiringAuth("/help-center")).toBe(false);
   });

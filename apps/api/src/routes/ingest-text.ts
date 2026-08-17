@@ -4,10 +4,11 @@ import { extractDealDataFromText } from '../services/aiExtractor.js';
 import { z } from 'zod';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
+import { captureAgentError } from '../utils/sentryHelpers.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
-import { getOrgId } from '../middleware/orgScope.js';
+import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
@@ -17,8 +18,11 @@ const subRouter = Router();
 // ─── Validation Schema ───────────────────────────────────────
 
 const textIngestSchema = z.object({
-  text: z.string().min(50, 'Text must be at least 50 characters'),
-  sourceName: z.string().optional(),
+  text: z
+    .string()
+    .min(50, 'Text must be at least 50 characters')
+    .max(500_000, 'Text must be at most 500,000 characters'),
+  sourceName: z.string().max(500).optional(),
   sourceType: z.enum(['email', 'note', 'slack', 'whatsapp', 'other']).optional(),
   dealId: z.string().uuid().optional(),
 });
@@ -63,6 +67,14 @@ subRouter.post('/text', async (req, res) => {
 
     if (targetDealId) {
       // ─── Update Existing Deal path ───
+      // Verify the caller's org owns this deal before merging extracted data
+      // and dropping a Document row pointing at it. Without this, a client
+      // could ingest text into any tenant's deal.
+      const dealAccess = await verifyDealAccess(targetDealId, orgId);
+      if (!dealAccess) {
+        return res.status(404).json({ error: 'Deal not found' });
+      }
+
       log.info('Text ingest into existing deal', { dealId: targetDealId });
       const result = await mergeIntoExistingDeal(targetDealId, aiData, req.user?.id, docName);
       deal = result.deal;
@@ -222,7 +234,10 @@ subRouter.post('/text', async (req, res) => {
           if (result.success) log.debug('RAG embedding complete', { chunkCount: result.chunkCount });
           else log.error('RAG embedding failed', result.error);
         })
-        .catch(err => log.error('RAG embedding error', err));
+        .catch(err => {
+          log.error('RAG embedding error', err);
+          captureAgentError(err, { context: 'rag:embed_text' }, 'warning');
+        });
     }
 
     await AuditLog.aiIngest(req, docName, deal.id);

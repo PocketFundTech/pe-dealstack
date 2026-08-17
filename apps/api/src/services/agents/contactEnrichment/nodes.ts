@@ -5,9 +5,11 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { invokeStructured } from '../../llm.js';
 import { supabase } from '../../../supabase.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { EnrichmentState } from './state.js';
 import { analyzeEmailDomain, scrapeCompanyWebsite, constructLinkedInUrl } from './helpers.js';
 import { buildResearchPrompt, enrichmentSchema } from './prompts.js';
+import { wrapDocumentContent } from '../guardrails.js';
 
 // ─── Follow-up suggestion (SUGGESTION ONLY — never auto-writes followUpAt) ──
 // Derives a recommended follow-up date + one-line action from interaction
@@ -163,19 +165,27 @@ export async function gatherNode(state: typeof EnrichmentState.State) {
     contextParts.push(`EMAIL ANALYSIS: Personal email (${emailAnalysis.domain}). No company from email.`);
   }
 
-  // Company website data (REAL external data)
+  // Company website data (REAL external data) — wrap raw page content
+  // in <document> delimiters so the LLM treats it as untrusted data (Task 4.7).
   if (websiteData) {
     contextParts.push(`\nCOMPANY WEBSITE (${emailAnalysis.domain}):`);
     if (websiteData.title) contextParts.push(`  Site Title: ${websiteData.title}`);
     if (websiteData.description) contextParts.push(`  Description: ${websiteData.description}`);
-    if (websiteData.raw) contextParts.push(`  Page Content: ${websiteData.raw.slice(0, 1000)}`);
+    if (websiteData.raw) {
+      contextParts.push(
+        `  Page Content:\n${wrapDocumentContent(websiteData.raw.slice(0, 1000), `${emailAnalysis.domain}-website`)}`,
+      );
+    }
   }
 
-  // CRM documents
+  // CRM documents — each excerpt comes from user-uploaded extractedText;
+  // wrap as untrusted external data (Task 4.7).
   if (docResults.length > 0) {
     contextParts.push(`\nFOUND IN ${docResults.length} CRM DOCUMENT(S):`);
     for (const doc of docResults.slice(0, 5)) {
-      contextParts.push(`  Document: "${doc.name}"\n  Excerpt: ...${doc.excerpt.slice(0, 300)}...`);
+      contextParts.push(
+        `  Document: "${doc.name}"\n  Excerpt:\n${wrapDocumentContent(doc.excerpt.slice(0, 300), doc.name)}`,
+      );
     }
   }
 
@@ -301,6 +311,7 @@ export async function researchNode(state: typeof EnrichmentState.State) {
     };
   } catch (error: any) {
     log.error('Contact enrichment research failed', { error: error.message, contact: `${state.firstName} ${state.lastName}` });
+    captureAgentError(error, { agent: 'contactEnrichment', node: 'research' }, 'warning');
     steps.push({ timestamp: new Date().toISOString(), node: 'research', message: `LLM synthesis failed: ${error.message}` });
 
     // Fallback: return what we gathered from CRM without LLM
@@ -424,6 +435,7 @@ export async function saveNode(state: typeof EnrichmentState.State) {
     return { status: 'completed', steps };
   } catch (error: any) {
     steps.push({ timestamp: new Date().toISOString(), node: 'save', message: `Save failed: ${error.message}` });
+    captureAgentError(error, { agent: 'contactEnrichment', node: 'save' });
     return { status: 'failed', error: error.message, steps };
   }
 }

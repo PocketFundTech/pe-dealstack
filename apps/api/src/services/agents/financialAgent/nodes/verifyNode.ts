@@ -18,6 +18,7 @@
 import { openai, isAIEnabled, trackedChatCompletion } from '../../../../openai.js';
 import { MODEL_FAST } from '../../../../utils/aiModels.js';
 import { log } from '../../../../utils/logger.js';
+import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import { getTodayIso } from '../../../../utils/dates.js';
 import type { FinancialAgentStateType } from '../state.js';
 import { VERIFY_SAMPLE_SIZE } from '../config.js';
@@ -245,6 +246,10 @@ export async function verifyNode(
   const steps: AgentStep[] = [];
   const { statements, rawText } = state;
 
+  if (state.extractionSource === 'claude') {
+    return { steps: [step('verify', 'Skipped — structured-output engine carries in-schema provenance')] };
+  }
+
   // Skip if flag is set (serverless timeout optimization)
   if (state.skipVerify) {
     steps.push(step('verify', 'Skipping verification (fast mode)'));
@@ -434,6 +439,7 @@ export async function verifyNode(
   } catch (error) {
     // Verification is best-effort — don't block the pipeline on failure
     log.warn('Verify node: verification failed, continuing without corrections', error as object);
+    captureAgentError(error, { agent: 'financialAgent', node: 'verify' }, 'warning');
     steps.push(step('verify', 'Verification encountered an error — continuing without corrections'));
     return { steps };
   }

@@ -22,7 +22,9 @@ const generateSectionSchema = z.object({
 });
 
 const chatMessageSchema = z.object({
-  content: z.string().min(1),
+  // Cap chat input — an unbounded body goes straight into the LLM prompt
+  // (cost + prompt-stuffing vector). 10k chars ≈ a very long user message.
+  content: z.string().min(1).max(10_000),
   sectionId: z.string().uuid().optional(),
   activeSectionId: z.string().uuid().optional(),
 });

@@ -52,12 +52,11 @@ const STATUS_BADGE: Record<IntegrationStatus, { bg: string; fg: string; label: s
 // ─── HubSpot types ──────────────────────────────────────────────────
 
 interface HubSpotJobCounts {
-  total: number;
   processed: number;
   created: number;
   updated: number;
-  skipped: number;
   failed: number;
+  skipped?: number;
 }
 
 interface HubSpotImportJob {
@@ -68,9 +67,17 @@ interface HubSpotImportJob {
   error?: string | null;
 }
 
-const HUBSPOT_OBJECTS = ["companies", "contacts", "deals"] as const;
+const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "meetings", "emails", "tasks"] as const;
 
 const POLL_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+
+/**
+ * Safety bound on the client-driven continuation loop. Each round is up to ~4
+ * minutes of server-side import work, so this covers far more than any
+ * realistic portal — it exists only to stop a runaway loop if the server were
+ * ever to keep reporting `more: true` without making progress.
+ */
+const MAX_CONTINUE_ROUNDS = 200;
 
 // ────────────────────────────────────────────────────────────────────
 
@@ -256,6 +263,7 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<HubSpotImportJob | null>(null);
+  const [overwrite, setOverwrite] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -306,8 +314,13 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
     setBusy(true);
     setError(null);
     try {
-      const { jobId } = await api.post<{ jobId: string }>("/integrations/hubspot/import", {});
-      // Immediately fetch initial state, then poll every 2 s
+      const mode = overwrite ? "refresh" : "fill";
+      const { jobId, more } = await api.post<{ jobId: string; more: boolean }>(
+        "/integrations/hubspot/import",
+        { mode },
+      );
+
+      // Poll status for the live progress card.
       const fetchJob = async () => {
         const j = await api.get<HubSpotImportJob>(`/integrations/hubspot/import/${jobId}`);
         setJob(j);
@@ -322,6 +335,29 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
       pollRef.current = setInterval(() => {
         fetchJob().catch(console.warn);
       }, 2000);
+
+      // The API runs the import inside the request and yields when it hits its
+      // time budget (serverless can't keep working after responding). Keep
+      // calling continue until the server says there's nothing left, otherwise
+      // the job would sit at 'running' with no one advancing it.
+      let hasMore = more;
+      let rounds = 0;
+      while (hasMore && rounds < MAX_CONTINUE_ROUNDS) {
+        const next = await api.post<{ more: boolean }>(
+          `/integrations/hubspot/import/${jobId}/continue`,
+          { mode },
+        );
+        hasMore = next.more;
+        rounds += 1;
+      }
+      if (hasMore) {
+        // Far beyond any realistic import size — stop rather than hammer the
+        // server. The job is still resumable: clicking Import again picks it up.
+        setError("Import is taking unusually long. Click \"Import from HubSpot\" again to resume where it left off.");
+      }
+      // Final refresh so the card reflects the terminal state immediately
+      // rather than waiting for the next poll tick.
+      await fetchJob().catch(console.warn);
     } catch (err) {
       const msg =
         err instanceof ApiError ? err.message :
@@ -347,7 +383,7 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
         <div>
           <div className="text-sm font-bold text-text-main">HubSpot CRM Import</div>
           <div className="text-xs text-text-muted">
-            One-time import of contacts, companies, and deals from HubSpot.
+            One-time import of contacts, companies, deals, and activity history (notes, calls, meetings, emails, tasks) from HubSpot.
           </div>
         </div>
       </div>
@@ -370,8 +406,14 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
             <p className="mt-1 text-xs text-text-muted">
               HubSpot → Settings → Integrations → Private Apps. Under Scopes, grant{" "}
               <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.companies.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code> and{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.deals.read</code>.
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.deals.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.notes.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.calls.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.meetings.read</code>,{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.emails.read</code> and{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.tasks.read</code>, plus the matching{" "}
+              <code className="text-xs bg-gray-100 px-1 rounded">crm.schemas.*</code> scopes for companies, contacts and deals (needed to import your custom fields).
             </p>
           </div>
           <button
@@ -403,6 +445,25 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
               Disconnect
             </button>
           </div>
+
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={overwrite}
+              onChange={(e) => setOverwrite(e.target.checked)}
+              disabled={busy || isImporting}
+              className="mt-0.5 h-4 w-4 rounded border-border-subtle accent-[#003366] disabled:opacity-50"
+            />
+            <span className="text-xs">
+              <span className="font-semibold text-text-main">
+                Overwrite existing values with HubSpot data
+              </span>
+              <span className="block text-text-muted">
+                Off by default: fields already filled in PE OS are left untouched. Turn this on to
+                re-import after correcting records in HubSpot.
+              </span>
+            </span>
+          </label>
 
           <button
             type="button"

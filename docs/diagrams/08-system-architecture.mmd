@@ -1,66 +1,55 @@
+%% PE OS — System Architecture
+%% Last verified 2026-08-14 (V2: Anthropic-first AI layer, memo grading + streaming, scorecard, client portal, usage ledger).
 flowchart TB
-    subgraph WebNext["Next.js App — apps/web-next :3002 (PRIMARY)"]
+    subgraph WebNext["Next.js App — apps/web-next :3002 (PRIMARY, Vercel root)"]
         direction TB
-        subgraph NextRoutes["10 App Router Routes"]
+        subgraph NextRoutes["App Router Routes"]
             direction LR
             WN_Dashboard["dashboard"]
-            WN_Deals["deals — pipeline + detail"]
-            WN_DataRoom["data-room — VDR React"]
-            WN_Memo["memo-builder"]
+            WN_Deals["deals — pipeline + detail
+            scorecard · chat · share"]
+            WN_DataRoom["data-room — VDR"]
+            WN_Memo["memo-builder
+            live section streaming"]
             WN_Contacts["contacts"]
-            WN_Templates["templates"]
-            WN_Admin["admin"]
-            WN_Settings["settings"]
-            WN_DealIntake["deal-intake"]
+            WN_Graphs["graphs"]
+            WN_NDA["nda — legal docs"]
+            WN_Usage["internal/usage
+            AI usage ledger"]
+            WN_Portal["portal/[token]
+            PUBLIC share view, no auth"]
+            WN_Settings["settings
+            incl. investment criteria"]
             WN_Onboarding["onboarding"]
+            WN_Admin["admin · templates · deal-intake"]
         end
         subgraph NextStack["React 19 + Next 16 + Tailwind v4"]
             direction LR
             ApiProxy["/api/[...slug]
             proxies → Express API"]
+            ApiClient["lib/api.ts
+            SSE streaming client
+            + legacy JSON fallback"]
             SupaSSR["@supabase/ssr
             Server-side auth"]
-            Providers["providers/
-            theme, auth, toast"]
         end
     end
 
-    subgraph WebLegacy["Legacy Vanilla JS — apps/web :3003"]
-        direction TB
-        subgraph LegacyPages["30 HTML Pages"]
-            direction LR
-            L_Dashboard["dashboard.html"]
-            L_CRM["crm.html"]
-            L_Deal["deal.html — chat tab"]
-            L_VDR["vdr.html — React"]
-            L_Memo["memo-builder.html"]
-            L_Contacts["contacts.html"]
-            L_Admin["admin-dashboard.html"]
-            L_Settings["settings.html"]
-            L_Onboard["onboarding.html"]
-            L_Templates["templates.html"]
-        end
-        subgraph LegacyJS["39 JS Modules"]
-            direction LR
-            JS_Auth["auth.js — PEAuth"]
-            JS_Config["config.js"]
-            JS_Layout["layout.js — sidebar"]
-            JS_Format["formatters.js"]
-            JS_Notif["notifications.js"]
-            JS_AI["ai-tools.js"]
-            JS_Fin["financials.js + helpers"]
-            JS_Analysis["analysis.js + 4 modules"]
-            JS_DealImport["deal-import.js"]
-            JS_Onboard["onboarding/ — 6 modules"]
-        end
+    subgraph WebLegacy["Legacy Vanilla JS — apps/web :3003 (being retired)"]
+        direction LR
+        L_Pages["30 HTML pages
+        dashboard, crm, deal, vdr,
+        memo-builder, admin ..."]
+        L_JS["39 JS modules
+        PEAuth, financials,
+        analysis, onboarding"]
     end
 
-    subgraph API["Express + TypeScript API — apps/api :3001"]
+    subgraph API["Express + TypeScript API — apps/api :3001 (serverless on Vercel)"]
         direction TB
         subgraph Middleware["Middleware Stack (in order)"]
             direction LR
-            MW_Compress["compression
-            gzip"]
+            MW_Compress["compression"]
             MW_Helmet["helmet
             CSP, HSTS"]
             MW_CORS["cors
@@ -68,152 +57,144 @@ flowchart TB
             MW_RateLimit["rate-limit
             600/15min general
             10/min AI, 30/min write"]
-            MW_ReqId["requestId
-            correlation header"]
             MW_Auth["authMiddleware
-            Supabase JWT verify"]
+            Supabase JWT verify
+            + MFA enforcement"]
             MW_Org["orgMiddleware
             org resolution + isolation"]
             MW_RBAC["rbacMiddleware
             ADMIN | MEMBER | VIEWER"]
-            MW_Err["errorHandler
-            ValidationError, NotFoundError"]
         end
 
-        subgraph Routes["48 Route Files — /api/*"]
+        subgraph Routes["92 Route Files — /api/* (app-lite core + app-ai)"]
             direction LR
-            R_Deals["Deals — 6 files
+            R_Deals["Deals
             deals, analysis, chat,
-            chat-ai, team, import"]
-            R_Docs["Documents — 4 files
-            docs, upload,
-            sharing, alerts"]
-            R_Folders["Folders — 2 files
-            folders, insights"]
-            R_Fin["Financials — 5 files
-            list, extraction,
-            merge, analysis, memo"]
-            R_Memos["Memos — 3 files
-            memos, sections, chat"]
-            R_Tmpl["Templates — 2 files
-            templates, sections"]
-            R_AI["AI — 3 files
-            agents, portfolio,
-            ingest"]
-            R_Ingest["Ingest — 5 files
-            upload, url, email,
-            text, shared"]
-            R_Users["Users — 3 files
-            users, profile,
-            invitations(+accept)"]
-            R_Contacts["Contacts — 3 files
-            contacts, insights,
-            connections"]
-            R_Sys["System — 7 files
-            audit, tasks, export,
-            notifications, watchlist,
-            onboarding, activities"]
+            team, import, scorecard"]
+            R_Share["Sharing
+            deal-shares (create/revoke)
+            portal (public, token)"]
+            R_Docs["Documents + VDR
+            upload, folders, insights"]
+            R_Fin["Financials
+            extraction, merge,
+            analysis, memo"]
+            R_Memos["Memos
+            memos, sections, chat,
+            generate-all (SSE)"]
+            R_Ingest["Ingest
+            upload, drive, url,
+            email, text, bulk"]
+            R_Integrations["Integrations
+            gmail, outlook, hubspot,
+            legal-documents"]
+            R_Sys["System
+            users, invitations, audit,
+            usage, notifications, tasks"]
         end
 
-        subgraph Services["37 Service Files + sub-dirs"]
+        subgraph Services["Service Layer"]
             direction LR
-            S_LLM["llm.ts — Unified LLM
-            getChatModel, getFastModel,
-            getExtractionModel"]
+            S_AI["services/ai — Anthropic client
+            trackedClaudeMessage / Stream
+            role→model map · Files API
+            writes UsageEvent + AuditLog"]
+            S_LLM["llm.ts — legacy unified LLM
+            (flag-off paths)"]
             S_Fin["Financial extraction
-            classifier, orchestrator,
-            validator, vision, azure,
-            excel, pdf, llamaParse"]
+            claudeEngine (native PDF) +
+            legacy: classifier, azure,
+            vision, excel, llamaParse"]
             S_Analysis["analysis/ — PE engine
-            QoE, ratios, operational,
-            debt-LBO, red flags"]
-            S_Parsers["parsers/ — accounting
-            bank, paypal, square,
-            stripe, router"]
-            S_Doc["Doc services
-            parser, validator,
-            chunker, scraper, email"]
+            QoE, ratios, red flags,
+            debt-LBO"]
             S_Other["Misc services
-            audit, encryption, cache,
-            agent memory, sample deal"]
+            dealMerger, aiExtractor,
+            embeddings, audit, teasers"]
         end
 
-        subgraph Agents["8 AI Agents — services/agents/"]
+        subgraph Agents["13 AI Agents — services/agents/"]
             direction LR
             A_Fin["Financial Agent
-            LangGraph 6-node"]
-            A_DealChat["Deal Chat Agent
-            ReAct + 14 tools"]
+            LangGraph: extract → validate
+            → cross-verify → self-correct
+            → store (EXTRACTION_ENGINE flag)"]
             A_Memo["Memo Agent
-            pipeline + tools"]
-            A_Firm["Firm Research Agent
-            LangGraph 6-node"]
-            A_Enrich["Contact Enrichment
-            4-node graph"]
-            A_Meet["Meeting Prep
-            5-source parallel"]
-            A_Signal["Signal Monitor
-            3-node graph"]
-            A_Email["Email Drafter
-            4-node graph"]
+            generate 12 sections (streamed)
+            → rubric critique → revise"]
+            A_DealChat["Deal Chat Agent
+            14 tools · dual barrels
+            (DEAL_CHAT_ENGINE flag)"]
+            A_Score["Deal Scorecard
+            quality + thesis fit
+            → GO / NO-GO (auto re-score)"]
+            A_Firm["Firm Research +
+            Signal Monitor
+            (RESEARCH/SIGNAL_ENGINE flags)"]
+            A_More["contact enrichment,
+            meeting prep, email drafter,
+            global chat, transcript ..."]
         end
     end
+
+    Flags["Feature flags (env)
+    EXTRACTION_ENGINE legacy→claude (bake-off pending)
+    DEAL_CHAT_ENGINE legacy→streaming (4-tool port pending)
+    RESEARCH_ENGINE / SIGNAL_ENGINE off (2-B provisioning)"]
 
     subgraph External["External Services"]
         direction LR
         Supabase["Supabase
-        PostgreSQL + Auth + Storage"]
-        OpenAI["OpenAI
-        GPT-4o + GPT-4o-mini"]
-        Gemini["Google Gemini
-        Alt LLM (configurable)"]
-        Anthropic["Anthropic
-        Claude (optional)"]
+        PostgreSQL (RLS backstop)
+        + Auth (JWT/MFA) + Storage"]
+        Anthropic["Anthropic API — PRIMARY
+        Fable 5 — extraction (native PDF)
+        Sonnet 5 — chat + memo
+        Haiku 4.5 — fast"]
+        OpenAI["OpenAI / OpenRouter
+        legacy engines (flag-off)"]
         AzureDI["Azure Doc Intelligence
-        complex PDF layouts"]
+        legacy PDF fallback"]
         LlamaParse["LlamaParse
-        deep PDF parsing"]
+        legacy deep PDF parsing"]
         Apify["Apify
-        Google Search scrape"]
+        research scraping"]
         Resend["Resend
-        Transactional email"]
-        Sentry["Sentry
-        Error tracking"]
+        invites + share emails"]
+        Sentry["Sentry"]
         Vercel["Vercel
-        Production hosting"]
+        single deployment
+        (root dir: apps/web-next)"]
     end
 
     WebNext -->|"fetch → /api/* proxy
-    JWT Bearer token"| API
-    WebLegacy -->|"PEAuth.authFetch()
-    JWT Bearer token"| API
+    JWT Bearer token · SSE streams"| API
+    WebLegacy -->|"PEAuth.authFetch()"| API
     API -->|"Supabase JS client
-    org-scoped queries"| Supabase
-    API -->|"OpenAI SDK"| OpenAI
-    API -->|"Gemini SDK
-    if LLM_CHAT_PROVIDER=gemini"| Gemini
-    API -->|"Anthropic SDK
-    optional"| Anthropic
-    API -->|"Azure DI SDK
-    if AZURE_DI_KEY set"| AzureDI
-    API -->|"LlamaParse
-    if LLAMA_CLOUD_API_KEY set"| LlamaParse
-    API -->|"apify-client
-    firm research agent"| Apify
-    API -->|"Resend SDK
-    invites + doc requests"| Resend
-    API -->|"Sentry SDK
-    NODE_ENV=production"| Sentry
+    org-scoped queries + storage"| Supabase
+    S_AI -->|"Anthropic SDK
+    structured output · streaming
+    Files API uploads"| Anthropic
+    S_LLM -.->|"legacy flags off"| OpenAI
+    S_Fin -.->|"legacy chain"| AzureDI
+    S_Fin -.->|"legacy chain"| LlamaParse
+    API -->|"apify-client"| Apify
+    API -->|"Resend SDK"| Resend
+    API -.->|"NODE_ENV=production"| Sentry
     WebNext -.->|"deploy"| Vercel
     API -.->|"deploy serverless"| Vercel
+    Flags -.- Agents
+    A_Fin -->|"FinancialStatement rows
+    + deal cache writeback"| Supabase
+    A_Fin -->|"auto re-score"| A_Score
 
     style WebNext fill:#003366,color:#fff,stroke:#002855
     style WebLegacy fill:#1e3a8a,color:#fff,stroke:#1e40af
     style API fill:#6366f1,color:#fff,stroke:#4f46e5
+    style Flags fill:#fef2f2,color:#7a2020,stroke:#b3261e
     style Supabase fill:#10b981,color:#fff,stroke:#059669
-    style OpenAI fill:#f59e0b,color:#fff,stroke:#d97706
-    style Gemini fill:#3b82f6,color:#fff,stroke:#2563eb
     style Anthropic fill:#d97706,color:#fff,stroke:#b45309
+    style OpenAI fill:#f59e0b,color:#fff,stroke:#d97706
     style AzureDI fill:#0ea5e9,color:#fff,stroke:#0284c7
     style LlamaParse fill:#ec4899,color:#fff,stroke:#db2777
     style Apify fill:#84cc16,color:#fff,stroke:#65a30d

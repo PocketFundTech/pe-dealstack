@@ -14,6 +14,8 @@ import watchlistRouter from './routes/watchlist.js';
 import aiRouter from './routes/ai.js';
 import foldersRouter from './routes/folders.js';
 import usersRouter from './routes/users.js';
+import organizationCriteriaRouter from './routes/organization-criteria.js';
+import dealsScorecardRouter from './routes/deals-scorecard.js';
 import chatRouter from './routes/chat.js';
 import notificationsRouter from './routes/notifications.js';
 import ingestRouter from './routes/ingest.js';
@@ -54,9 +56,13 @@ import adminSecurityRouter from './routes/admin-security.js';
 import adminSecurityDashboardRouter from './routes/admin-security-dashboard.js';
 import internalRouter from './routes/internal-usage.js';
 import usageRouter from './routes/usage.js';
+import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
+import cronSignalScanRouter from './routes/cron-signal-scan.js';
 import hubspotImportRouter from './routes/hubspot-import.js';
 import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
+import dealsShareRouter from './routes/deals-share.js';
+import portalRouter from './routes/portal.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -202,7 +208,27 @@ app.use('/api/', generalLimiter);
 app.use('/api/ai', aiLimiter);
 app.use('/api/memos/*/chat', aiLimiter);
 app.use('/api/memos/*/sections/*/generate', aiLimiter);
+// Deal chat invokes a LangGraph ReAct agent (up to 14 tools, 5-10 GPT-4o
+// tool calls per message). Without this limiter, the general 600/15min
+// budget allows ~$300 of OpenAI spend in 15 minutes from one user.
+// See: REMEDIATION_ROADMAP.md Phase 4 Task 4.1, CONCERNS.md §1.7
+app.use('/api/deals/*/chat', aiLimiter);
+// Task 4.1b: remaining LangGraph / multi-call LLM endpoints surfaced by
+// the Task 4.1 audit. Each fans out into expensive agent or trackedChat
+// completions; the 10/min cap matches deal-chat.
+app.use('/api/deals/*/generate-thesis', aiLimiter);       // trackedChatCompletion
+app.use('/api/deals/*/analyze-risks', aiLimiter);          // trackedChatCompletion
+app.use('/api/deals/*/financials/extract', aiLimiter);     // runFinancialAgent
+app.use('/api/deals/*/scorecard', aiLimiter);              // trackedClaudeMessage
+app.use('/api/documents/*/extract-financials', aiLimiter); // runFinancialAgent
+app.use('/api/portfolio/chat', aiLimiter);                 // createReactAgent
+app.use('/api/conversations/*/messages', aiLimiter);       // trackedChatCompletion
+app.use('/api/onboarding/enrich-firm', aiLimiter);         // runFirmResearch (defence-in-depth; has its own 3/hr/org cap)
 app.use('/api/ingest', writeLimiter);
+
+// Mounted ahead of express.json() — webhook signature verification needs
+// the exact request bytes, so this route parses its own raw body.
+app.use('/api/webhooks/managed-agents', express.raw({ type: 'application/json' }), managedAgentsWebhooksRouter);
 
 app.use(
   express.json({
@@ -292,6 +318,9 @@ app.get('/api', (_req, res) => {
 // ========================================
 // Invitation verify/accept must be public — invitees don't have accounts yet
 app.use('/api/public/invitations', invitationsAcceptRouter);
+// Deal-share portal must be public — external viewers have no accounts;
+// the DealShare token is the credential (see routes/portal.ts).
+app.use('/api/public/portal', portalRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens
@@ -316,9 +345,11 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // mount BEFORE the generic dealsRouter so the literal segments match
 // before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsScorecardRouter);
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsRouter);
 app.use('/api/firm-teaser', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmTeaserRouter);
 app.use('/api/firm-context', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmContextRouter);
@@ -328,6 +359,7 @@ app.use('/api/documents', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
 app.use('/api/users', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
+app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
 app.use('/api/notifications', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
 app.use('/api/ingest', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ingestRouter);
@@ -371,6 +403,12 @@ app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // No orgMiddleware — these routes intentionally query across orgs
 // ========================================
 app.use('/api/internal', authMiddleware, internalRouter);
+
+// ========================================
+// Cron Routes (CRON_SECRET bearer check inside the router — no user JWT,
+// so authMiddleware/orgMiddleware don't apply)
+// ========================================
+app.use('/api/cron/signal-scan', cronSignalScanRouter);
 
 // ========================================
 // AI Routes (mixed - some protected, some public)

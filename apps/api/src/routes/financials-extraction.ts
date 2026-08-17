@@ -14,6 +14,7 @@ import { runFinancialAgent } from '../services/agents/financialAgent/index.js';
 import type { FileType } from '../services/agents/financialAgent/index.js';
 import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
 import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
+import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { isFinancialDoc } from './financials-extraction-utils.js';
 
 const require = createRequire(import.meta.url);
@@ -396,6 +397,12 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         ? { documentUsed: { id: first.id, name: first.name }, extractionMethod: first.extractionMethod, agent: first.agent ?? null }
         : {};
 
+    // Fire-and-forget: re-score the deal against firm criteria now that
+    // fresh financials exist. Never awaited, never affects this response.
+    if (aggregateSuccess) {
+      void maybeScoreAfterExtraction(dealId, orgId);
+    }
+
     return res.json({
       success: aggregateSuccess,
       mode: effectiveMode,
@@ -511,6 +518,11 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
       });
     }
 
+    const forceExtraction =
+      req.query.force === 'true' ||
+      req.query.force === '1' ||
+      req.body?.force === true;
+
     let agentResult;
     try {
       agentResult = await runFinancialAgent({
@@ -520,9 +532,16 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
         fileName: doc.name ?? 'document',
         fileType: detectFileType(doc.mimeType, doc.name),
         organizationId: orgId,
+        forceExtraction,
       });
     } finally {
       releaseExtractionSlot(orgId);
+    }
+
+    // Fire-and-forget: re-score the deal against firm criteria now that
+    // fresh financials exist. Never awaited, never affects this response.
+    if (agentResult.status === 'completed') {
+      void maybeScoreAfterExtraction(doc.dealId, orgId);
     }
 
     res.json({
@@ -530,6 +549,7 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
       documentUsed: { id: doc.id, name: doc.name },
       dealId: doc.dealId,
       extractionMethod: agentResult.extractionSource,
+      fromCache: agentResult.fromCache,
       result: {
         statementsStored: agentResult.statementIds.length,
         periodsStored: agentResult.periodsStored,
@@ -544,6 +564,7 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
         validationResult: agentResult.validationResult,
         steps: agentResult.steps,
         error: agentResult.error,
+        fromCache: agentResult.fromCache,
         crossVerifyResult: agentResult.crossVerifyResult || null,
       },
     });

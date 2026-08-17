@@ -276,82 +276,116 @@ export async function sendPrompt(
     content: trimmed,
     createdAt: new Date().toISOString(),
   };
-  setMessages((prev) => [...prev, userMsg]);
+
+  // Snapshot history BEFORE appending the new message, so we don't send the
+  // question we're about to ask as if it were a prior turn.
+  let historySnapshot: Array<{ role: "user" | "assistant"; content: string }> = [];
+  setMessages((prev) => {
+    historySnapshot = prev.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+    return [...prev, userMsg];
+  });
   setChatSending(true);
 
+  const assistantId = `ai-${Date.now()}`;
+  let assistantStarted = false;
+  let hasStreamedText = false;
+
   try {
-    const data = await api.post<ChatResponseShape>(`/deals/${dealId}/chat`, {
-      message: trimmed,
-    });
-    const responseText =
-      data.response || (data as unknown as { content?: string }).content || "";
+    await api.stream(
+      `/deals/${dealId}/chat`,
+      { message: trimmed, history: historySnapshot },
+      (event) => {
+        const e = event as Record<string, any>;
 
-    // Show error-styled message if agent returned an error model
-    if ((data as unknown as { model?: string }).model === "error") {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `err-${Date.now()}`,
-          role: "assistant",
-          content: `⚠️ ${responseText}`,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-    } else if (responseText) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `ai-${Date.now()}`,
-          role: "assistant",
-          content: responseText,
-          createdAt: new Date().toISOString(),
-          ...(data.action && { action: data.action }),
-        },
-      ]);
-    }
-
-    // If there were deal-field updates, refresh the deal data
-    if (data.updates && data.updates.length > 0) {
-      showToast("Changes have been applied", "success", { title: "Deal Updated" });
-      try {
-        await loadDeal();
-      } catch (err) {
-        console.warn("[deal] loadDeal after side-effect failed:", err);
-      }
-    }
-
-    // Handle side effects (notes, extraction, scroll)
-    if (data.sideEffects && data.sideEffects.length > 0) {
-      for (const effect of data.sideEffects) {
-        if (effect.type === "note_added") {
-          showToast("Activity feed updated", "success", { title: "Note Added" });
-          try {
-            await loadDeal();
-          } catch (err) {
-            console.warn("[deal] loadDeal after side-effect failed:", err);
+        if (e.type === "tool_start") {
+          // Shows the tool's label as transient status text (e.g. "Searching
+          // documents...") until real answer text starts arriving. If a
+          // second tool runs before any text streamed, replace the label
+          // rather than stacking placeholders.
+          if (!assistantStarted) {
+            assistantStarted = true;
+            setMessages((prev) => [
+              ...prev,
+              { id: assistantId, role: "assistant", content: e.label, createdAt: new Date().toISOString(), streaming: true },
+            ]);
+          } else if (!hasStreamedText) {
+            setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: e.label } : m)));
           }
         }
-        if (effect.type === "extraction_triggered") {
-          showToast(effect.message || "Financial extraction queued", "info", {
-            title: "Extraction",
-          });
-        }
-        if (effect.type === "scroll_to") {
-          const sectionMap: Record<string, string> = {
-            financials: "financials-section",
-            analysis: "analysis-section",
-            activity: "activity-feed",
-            documents: "documents-list",
-            risks: "key-risks-list",
-          };
-          const elId = effect.section ? sectionMap[effect.section] : undefined;
-          const el = elId ? document.getElementById(elId) : null;
-          if (el) {
-            el.scrollIntoView({ behavior: "smooth", block: "start" });
+
+        if (e.type === "text_delta") {
+          if (!assistantStarted) {
+            assistantStarted = true;
+            hasStreamedText = true;
+            setMessages((prev) => [
+              ...prev,
+              { id: assistantId, role: "assistant", content: e.text, createdAt: new Date().toISOString(), streaming: true },
+            ]);
+          } else if (!hasStreamedText) {
+            // First real text after a tool_start placeholder — replace the
+            // label instead of appending to it.
+            hasStreamedText = true;
+            setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: e.text } : m)));
+          } else {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + e.text } : m)),
+            );
           }
         }
-      }
-    }
+
+        if (e.type === "action") {
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, action: e.action } : m)));
+        }
+
+        if (e.type === "update") {
+          showToast("Changes have been applied", "success", { title: "Deal Updated" });
+          loadDeal().catch((err) => console.warn("[deal] loadDeal after update failed:", err));
+        }
+
+        if (e.type === "side_effect") {
+          if (e.effect.type === "note_added") {
+            showToast("Activity feed updated", "success", { title: "Note Added" });
+            loadDeal().catch((err) => console.warn("[deal] loadDeal after side-effect failed:", err));
+          }
+          if (e.effect.type === "extraction_triggered") {
+            showToast(e.effect.message || "Financial extraction queued", "info", { title: "Extraction" });
+          }
+          if (e.effect.type === "scroll_to") {
+            const sectionMap: Record<string, string> = {
+              financials: "financials-section",
+              analysis: "analysis-section",
+              activity: "activity-feed",
+              documents: "documents-list",
+              risks: "key-risks-list",
+            };
+            const elId = e.effect.section ? sectionMap[e.effect.section] : undefined;
+            const el = elId ? document.getElementById(elId) : null;
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }
+
+        if (e.type === "done") {
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, streaming: false } : m)));
+        }
+
+        if (e.type === "error") {
+          if (assistantStarted) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, streaming: false, content: m.content ? `${m.content}\n\n⚠️ ${e.message}` : `⚠️ ${e.message}` }
+                  : m,
+              ),
+            );
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              { id: assistantId, role: "assistant", content: `⚠️ ${e.message}`, createdAt: new Date().toISOString() },
+            ]);
+          }
+        }
+      },
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Something went wrong";
     const isServerError =

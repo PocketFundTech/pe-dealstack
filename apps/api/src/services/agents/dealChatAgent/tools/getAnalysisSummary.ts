@@ -1,16 +1,25 @@
 // ─── get_analysis_summary tool ───────────────────────────────────
 // Runs the PE analysis pipeline (QoE, red flags, ratios) and returns
 // a Markdown summary.
+//
+// Plain BetaRunnableTool object — see addNote.ts for why betaZodTool()
+// isn't used here.
 
-import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import { analyzeFinancials } from '../../../analysis/index.js';
 
+export const inputSchema = z.object({});
+
 export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
-  return tool(
-    async () => {
+  return {
+    type: 'custom' as const,
+    name: 'get_analysis_summary',
+    description: 'Run and fetch the PE analysis summary: Quality of Earnings score, red flags, key financial ratios. Use when the user asks about QoE, red flags, analysis results, or financial health.',
+    input_schema: { type: 'object', properties: {} },
+    parse: (input: unknown) => inputSchema.parse(input),
+    run: async () => {
       try {
         const { data: statements } = await supabase
           .from('FinancialStatement')
@@ -61,10 +70,5 @@ export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
         return 'Error running analysis.';
       }
     },
-    {
-      name: 'get_analysis_summary',
-      description: 'Run and fetch the PE analysis summary: Quality of Earnings score, red flags, key financial ratios. Use when the user asks about QoE, red flags, analysis results, or financial health.',
-      schema: z.object({}),
-    }
-  );
+  };
 }

@@ -3,6 +3,7 @@
 //
 // This is a LEAF module: pure types and static data, no React components and
 // no "use client". Every sub-component of the deal-detail page imports its
+import type { DealScorecard } from "@/types";
 // types/constants from here instead of from the `components.tsx` barrel.
 //
 // Why this file exists: `components.tsx` re-exports the page's sub-components
@@ -51,6 +52,7 @@ export interface DealDetail {
   updatedAt: string;
   documents?: DocItem[];
   team?: TeamMember[];
+  scorecard?: DealScorecard | null;
   activities?: Activity[];
   // Phase 2 canonical cache: latest-period revenue/EBITDA in ACTUAL
   // DOLLARS (unitScale already applied by the API). Refreshed on every
@@ -65,6 +67,8 @@ export interface DealDetail {
   cachedPeriod?: string | null;
   cachedCurrency?: string | null;
   cachedAt?: string | null;
+  /** Raw HubSpot properties kept verbatim by the importer; null for non-imported deals. */
+  hubspotProperties?: Record<string, string | null> | null;
 }
 
 export interface DocItem {
@@ -99,6 +103,8 @@ export interface ChatMessage {
   content: string;
   createdAt?: string;
   action?: ChatAction;
+  /** True while this assistant message is still streaming in (deal chat SSE). */
+  streaming?: boolean;
 }
 
 export interface Activity {

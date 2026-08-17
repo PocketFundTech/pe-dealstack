@@ -16,7 +16,7 @@ import {
   SEARCH_FUND_SECTIONS,
   SCREENING_NOTE_SECTIONS,
 } from '../services/agents/memoAgent/index.js';
-import { isLLMAvailable } from '../services/llm.js';
+import { isAnthropicAvailable } from '../services/ai/client.js';
 import { createMemoSchema, updateMemoSchema, SECTION_TYPE_MAP } from './memos-schemas.js';
 
 const router = Router();
@@ -38,14 +38,22 @@ router.post('/', async (req, res) => {
     // Strip templateId, autoGenerate, templatePreset from memoData (not Memo table columns)
     const { templateId, autoGenerate, templatePreset, ...memoFields } = validation.data;
 
-    // Fetch deal name if dealId provided and no explicit project name
-    if (memoFields.dealId && (!memoFields.projectName || memoFields.projectName === 'New Project')) {
+    // F-18: scope deal lookup to caller's org. The prior `.eq('id', dealId)`
+    // select alone would echo any deal's name back as the memo's projectName,
+    // leaking the deal name string across orgs. Now: if dealId is provided but
+    // not in caller's org, refuse to create the memo at all (400, since dealId
+    // is a required and validated field — wrong-org is a validation error).
+    if (memoFields.dealId) {
       const { data: deal } = await supabase
         .from('Deal')
         .select('name')
         .eq('id', memoFields.dealId)
+        .eq('organizationId', orgId)
         .single();
-      if (deal?.name) {
+      if (!deal) {
+        return res.status(400).json({ error: 'Invalid dealId' });
+      }
+      if (!memoFields.projectName || memoFields.projectName === 'New Project') {
         memoFields.projectName = deal.name;
       }
     }
@@ -71,40 +79,53 @@ router.post('/', async (req, res) => {
     // Create sections from template or use defaults
     let usedTemplate = false;
     if (templateId) {
-      const { data: templateSections, error: tplError } = await supabase
-        .from('MemoTemplateSection')
-        .select('*')
-        .eq('templateId', templateId)
-        .order('sortOrder', { ascending: true });
+      // F-19: verify the template belongs to the caller's org BEFORE cloning
+      // sections or incrementing usage. The previous code fetched sections by
+      // templateId alone and would clone any org's template structure into
+      // the new memo, and the usage increment also ran with no org check.
+      const { data: tpl } = await supabase
+        .from('MemoTemplate')
+        .select('id, usageCount')
+        .eq('id', templateId)
+        .eq('organizationId', orgId)
+        .single();
 
-      if (!tplError && templateSections && templateSections.length > 0) {
-        const sections = templateSections.map((ts: any, idx: number) => ({
-          memoId: memo.id,
-          type: SECTION_TYPE_MAP[ts.title.toLowerCase()] || 'CUSTOM',
-          title: ts.title,
-          sortOrder: ts.sortOrder ?? idx,
-          aiPrompt: ts.aiPrompt || null,
-        }));
+      if (tpl) {
+        // Cap template-section clone at 500 rows (Task 5.3.4). The original
+        // unbounded select would clone a pathological 10k-section template
+        // into MemoSection in one insert — defensive bound covers any
+        // legitimate template (a "comprehensive IC memo" rarely exceeds
+        // 30 sections) while preventing abuse.
+        const { data: templateSections, error: tplError } = await supabase
+          .from('MemoTemplateSection')
+          .select('*')
+          .eq('templateId', templateId)
+          .order('sortOrder', { ascending: true })
+          .range(0, 499);
 
-        const { error: sectionsError } = await supabase.from('MemoSection').insert(sections);
-        if (sectionsError) throw sectionsError;
+        if (!tplError && templateSections && templateSections.length > 0) {
+          const sections = templateSections.map((ts: any, idx: number) => ({
+            memoId: memo.id,
+            type: SECTION_TYPE_MAP[ts.title.toLowerCase()] || 'CUSTOM',
+            title: ts.title,
+            sortOrder: ts.sortOrder ?? idx,
+            aiPrompt: ts.aiPrompt || null,
+          }));
 
-        usedTemplate = true;
+          const { error: sectionsError } = await supabase.from('MemoSection').insert(sections);
+          if (sectionsError) throw sectionsError;
 
-        // Increment template usage count
-        const { data: tpl } = await supabase
-          .from('MemoTemplate')
-          .select('usageCount')
-          .eq('id', templateId)
-          .single();
-        if (tpl) {
+          usedTemplate = true;
+
+          // Increment template usage count (org-scoped — see F-19 fetch above)
           await supabase
             .from('MemoTemplate')
             .update({ usageCount: (tpl.usageCount || 0) + 1 })
-            .eq('id', templateId);
-        }
+            .eq('id', templateId)
+            .eq('organizationId', orgId);
 
-        log.debug('Memo created from template', { memoId: memo.id, templateId, sectionCount: sections.length });
+          log.debug('Memo created from template', { memoId: memo.id, templateId, sectionCount: sections.length });
+        }
       }
     }
 
@@ -125,7 +146,7 @@ router.post('/', async (req, res) => {
     // Auto-generate section content if requested and AI is available
     let generationStatus = null;
 
-    if (autoGenerate && memoFields.dealId && isLLMAvailable()) {
+    if (autoGenerate && memoFields.dealId && isAnthropicAvailable()) {
       try {
         const presetMap: Record<string, any> = {
           comprehensive: COMPREHENSIVE_IC_SECTIONS,
@@ -136,16 +157,29 @@ router.post('/', async (req, res) => {
         const sectionTypes = templatePreset ? presetMap[templatePreset] : undefined;
         const { sections: generated } = await generateAllSections(memoFields.dealId, orgId, sectionTypes);
 
+        // Pre-fetch ALL existing sections for this memo in ONE query. The prior
+        // code did a per-section `.single()` existence check inside a for-loop,
+        // turning a 10-section generation into 10-20 sequential round-trips.
+        // No compound unique on (memoId, type) exists in the schema (multiple
+        // CUSTOM sections coexist), so we classify in-memory then issue parallel
+        // updates by primary key — the N+1 existence-check selects are gone.
+        const { data: existingRows } = await supabase
+          .from('MemoSection')
+          .select('id, type')
+          .eq('memoId', memo.id);
+        const existingByType = new Map<string, { id: string }>();
+        for (const row of existingRows || []) {
+          // First match wins; multiple CUSTOM rows are intentionally not matched
+          // (the original code's .single() would have errored on duplicates too).
+          if (!existingByType.has(row.type)) existingByType.set(row.type, { id: row.id });
+        }
+
         let completed = 0;
         const errors: string[] = [];
+        // PostgrestFilterBuilder is PromiseLike (thenable), not a real Promise.
+  const updatePromises: PromiseLike<any>[] = [];
         for (const gen of generated) {
-          const { data: existingSection } = await supabase
-            .from('MemoSection')
-            .select('id')
-            .eq('memoId', memo.id)
-            .eq('type', gen.type)
-            .single();
-
+          const existingSection = existingByType.get(gen.type);
           if (existingSection) {
             const updateData: any = {
               content: gen.content,
@@ -155,10 +189,13 @@ router.post('/', async (req, res) => {
             };
             if (gen.tableData) updateData.tableData = gen.tableData;
             if (gen.chartConfig) updateData.chartConfig = gen.chartConfig;
-            await supabase.from('MemoSection').update(updateData).eq('id', existingSection.id);
+            updatePromises.push(
+              supabase.from('MemoSection').update(updateData).eq('id', existingSection.id)
+            );
             completed++;
           }
         }
+        await Promise.all(updatePromises);
         generationStatus = { completed, total: generated.length, errors };
       } catch (error: any) {
         log.error('Auto-generation failed', { memoId: memo.id, error: error.message });

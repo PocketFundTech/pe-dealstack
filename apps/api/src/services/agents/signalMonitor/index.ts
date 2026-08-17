@@ -9,6 +9,14 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import { supabase } from '../../../supabase.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
+import { runWithAgentBounds } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// 3-node sequential DAG (fetch → analyze → route). 30s covers a batch
+// analysis call over up to 30 deals; recursionLimit 10 is conservative.
+const SIGNAL_MONITOR_TIMEOUT_MS = 30_000;
+const SIGNAL_MONITOR_RECURSION_LIMIT = 10;
 
 // ─── State Schema ──────────────────────────────────────────────────
 
@@ -122,6 +130,7 @@ Generate 1-3 signals per deal, focusing on the most actionable ones. Only genera
     };
   } catch (error: any) {
     log.error('Signal analysis failed', error);
+    captureAgentError(error, { agent: 'signalMonitor', node: 'analyze' });
     return {
       signals: [],
       processedCount: 0,
@@ -211,14 +220,26 @@ export async function runSignalMonitor(organizationId: string): Promise<SignalMo
 
   log.info('Running deal signal monitor', { organizationId });
 
-  const result = await compiledGraph.invoke({
-    organizationId,
-    deals: [],
-    signals: [],
-    processedCount: 0,
-    status: 'pending',
-    error: null,
-  });
+  const result: any = await runWithAgentBounds(
+    (config) =>
+      compiledGraph.invoke(
+        {
+          organizationId,
+          deals: [],
+          signals: [],
+          processedCount: 0,
+          status: 'pending',
+          error: null,
+        },
+        config,
+      ),
+    {
+      timeoutMs: SIGNAL_MONITOR_TIMEOUT_MS,
+      recursionLimit: SIGNAL_MONITOR_RECURSION_LIMIT,
+      envVar: 'SIGNAL_MONITOR_TIMEOUT_MS',
+      label: 'Signal monitor agent',
+    },
+  );
 
   return {
     status: result.status,

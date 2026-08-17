@@ -1,7 +1,6 @@
 // ─── Memo Agent — Parallel Section Generation Pipeline ───────────────────────
 // Orchestrates parallel LLM calls to generate all IC memo sections at once.
 
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { buildMemoContext, formatContextForLLM, MemoContext } from './context.js';
 import {
   MEMO_SYSTEM_PROMPT,
@@ -9,9 +8,16 @@ import {
   SectionType,
   COMPREHENSIVE_IC_SECTIONS,
 } from './prompts.js';
-import { getChatModel, isLLMAvailable } from '../../llm.js';
-import { MODEL_REASONING } from '../../../utils/aiModels.js';
+import { trackedClaudeMessage, isAnthropicAvailable } from '../../ai/client.js';
 import { log } from '../../../utils/logger.js';
+import { captureAgentError } from '../../../utils/sentryHelpers.js';
+import { resolveTimeoutMs } from '../agentBounds.js';
+
+// ─── Bounds ──────────────────────────────────────────────────────────
+// Each section is a single LLM call (not a multi-step agent). Cap each
+// at 30s via AbortSignal so a stuck OpenAI request can't pin a worker
+// past Vercel's function limit while billing continues.
+const SECTION_TIMEOUT_MS = 30_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -129,7 +135,6 @@ export async function generateSection(
   }
 
   try {
-    const model = getChatModel(0.7, 2000, 'memo_generation');
     const sectionPrompt = customPrompt ?? promptConfig.prompt;
     const contextText = formatContextForLLM(context);
 
@@ -140,15 +145,35 @@ export async function generateSection(
 
     const userPrompt = `${sectionPrompt}\n\n---\n\n## Deal Context\n\n${contextText}${formatInstruction}`;
 
-    const response = await model.invoke([
-      new SystemMessage(MEMO_SYSTEM_PROMPT),
-      new HumanMessage(userPrompt),
-    ]);
+    // Bound the LLM call — AbortSignal is now forwarded all the way to the
+    // in-flight Anthropic request (Task 1), not just raced client-side.
+    const timeoutMs = resolveTimeoutMs(SECTION_TIMEOUT_MS, 'MEMO_SECTION_TIMEOUT_MS');
+    const abortController = new AbortController();
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        abortController.abort();
+        reject(new Error(`Memo section ${sectionType} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    let result: { text: string; model: string };
+    try {
+      result = await Promise.race([
+        trackedClaudeMessage({
+          operation: 'memo_section_generation',
+          role: 'memo',
+          system: MEMO_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userPrompt }],
+          maxTokens: 2000,
+          signal: abortController.signal,
+        }),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
 
-    const rawText =
-      typeof response.content === 'string'
-        ? response.content
-        : JSON.stringify(response.content);
+    const rawText = result.text;
 
     let content = rawText;
     let tableData: any = undefined;
@@ -180,7 +205,7 @@ export async function generateSection(
       ...(tableData !== undefined ? { tableData } : {}),
       ...(chartConfig !== undefined ? { chartConfig } : {}),
       aiGenerated: true,
-      aiModel: MODEL_REASONING,
+      aiModel: result.model,
       ...(sortOrder !== undefined ? { sortOrder } : {}),
     };
   } catch (err: any) {
@@ -193,6 +218,7 @@ export async function generateSection(
       return generateSection(sectionType, context, customPrompt, sortOrder, attempt);
     }
     log.error(`[memoAgent/pipeline] Error generating section ${sectionType}: ${err?.message}`);
+    captureAgentError(err, { agent: 'memoAgent', node: `pipeline.${sectionType}` }, 'warning');
     return makePlaceholder(
       sectionType,
       title,
@@ -205,13 +231,29 @@ export async function generateSection(
 
 // ─── generateAllSections ──────────────────────────────────────────────────────
 
-export async function generateAllSections(
+export type MemoGenerationStreamEvent =
+  | { type: 'section_start'; sectionType: SectionType; index: number; total: number }
+  | { type: 'section_complete'; sectionType: SectionType; section: GeneratedSection; index: number; total: number }
+  | { type: 'critique_start' }
+  | { type: 'section_revised'; sectionType: SectionType; section: GeneratedSection }
+  | { type: 'done'; sections: GeneratedSection[]; context: MemoContext }
+  | { type: 'error'; message: string };
+
+/**
+ * Streaming counterpart to generateAllSections(). Preserves the existing
+ * batch concurrency (BATCH_SIZE sections in flight at once) but yields a
+ * section_complete event the moment each one finishes, in real completion
+ * order — not gated by waiting for the whole batch like Promise.all does.
+ */
+export async function* generateAllSectionsStreaming(
   dealId: string,
   orgId: string,
   sectionTypes?: SectionType[],
-): Promise<{ sections: GeneratedSection[]; context: MemoContext }> {
-  if (!isLLMAvailable()) {
-    throw new Error('LLM is not available. Check API key configuration.');
+  opts: { signal?: AbortSignal } = {},
+): AsyncGenerator<MemoGenerationStreamEvent> {
+  if (!isAnthropicAvailable()) {
+    yield { type: 'error', message: 'LLM is not available. Check API key configuration.' };
+    return;
   }
 
   const types = sectionTypes ?? COMPREHENSIVE_IC_SECTIONS;
@@ -223,17 +265,40 @@ export async function generateAllSections(
 
   const sections: GeneratedSection[] = [];
 
-  // Process in batches to avoid 429 rate limits
   for (let i = 0; i < types.length; i += BATCH_SIZE) {
-    const batch = types.slice(i, i + BATCH_SIZE);
-    const batchResults = await Promise.all(
-      batch.map((sectionType, batchIndex) =>
-        generateSection(sectionType, context, undefined, i + batchIndex + 1),
-      ),
-    );
-    sections.push(...batchResults);
+    if (opts.signal?.aborted) return;
 
-    // Pause between batches (skip after the last batch)
+    const batch = types.slice(i, i + BATCH_SIZE);
+
+    // Start every section in this batch concurrently — kicking these off
+    // is not gated by yield, so batch concurrency matches the old
+    // Promise.all version exactly. Each promise is tagged with its index
+    // in `pending` so we can identify which one won a given race.
+    const pending = new Map(
+      batch.map((sectionType, batchIndex) => [
+        batchIndex,
+        { sectionType, promise: generateSection(sectionType, context, undefined, i + batchIndex + 1) },
+      ]),
+    );
+
+    for (const { sectionType } of pending.values()) {
+      yield { type: 'section_start', sectionType, index: sections.length + 1, total: types.length };
+    }
+
+    // Yield section_complete in real completion order, not batch order.
+    // generateSection() never rejects (placeholder-on-failure), so this
+    // race is always won by a resolution, never a rejection.
+    while (pending.size > 0) {
+      const entries = [...pending.entries()];
+      const winner = await Promise.race(
+        entries.map(([key, { promise }]) => promise.then((section) => ({ key, section }))),
+      );
+      const { sectionType } = pending.get(winner.key)!;
+      pending.delete(winner.key);
+      sections.push(winner.section);
+      yield { type: 'section_complete', sectionType, section: winner.section, index: sections.length, total: types.length };
+    }
+
     if (i + BATCH_SIZE < types.length) {
       log.debug(`[memoAgent/pipeline] Batch ${Math.floor(i / BATCH_SIZE) + 1} complete, pausing ${BATCH_DELAY_MS}ms`);
       await sleep(BATCH_DELAY_MS);
@@ -242,10 +307,227 @@ export async function generateAllSections(
 
   const generated = sections.filter((s) => s.aiGenerated).length;
   const failed = sections.filter((s) => s.aiModel === 'error').length;
-
   log.info(
     `[memoAgent/pipeline] Completed: ${sections.length} total, ${generated} generated, ${failed} failed`,
   );
 
-  return { sections, context };
+  if (opts.signal?.aborted) return;
+
+  yield { type: 'critique_start' };
+  const graded = await critiqueAndRevise(sections, context);
+  for (const section of graded) {
+    const original = sections.find((s) => s.type === section.type);
+    if (original && original.content !== section.content) {
+      yield { type: 'section_revised', sectionType: section.type as SectionType, section };
+    }
+  }
+
+  yield { type: 'done', sections: graded, context };
+}
+
+/**
+ * Non-streaming wrapper — drains generateAllSectionsStreaming() and
+ * returns just the final result. Used by memos-mutate.ts's
+ * create-with-autoGenerate flow, which doesn't need live progress.
+ */
+export async function generateAllSections(
+  dealId: string,
+  orgId: string,
+  sectionTypes?: SectionType[],
+): Promise<{ sections: GeneratedSection[]; context: MemoContext }> {
+  for await (const event of generateAllSectionsStreaming(dealId, orgId, sectionTypes)) {
+    if (event.type === 'error') throw new Error(event.message);
+    if (event.type === 'done') return { sections: event.sections, context: event.context };
+  }
+  throw new Error('Memo generation stream ended without a result');
+}
+
+// ─── Critique + Revise (Phase 2-C) ─────────────────────────────────────────
+// One critique pass over the assembled memo, one targeted revise pass if it
+// flags anything. Best-effort — any failure returns the original sections
+// unchanged; a memo is never blocked by a grading failure (same non-blocking
+// precedent as financialAgent/nodes/verifyNode.ts).
+
+const CRITIQUE_TIMEOUT_MS = 30_000;
+const REVISE_TIMEOUT_MS = 30_000;
+
+const CRITIQUE_SYSTEM_PROMPT = `You are grading an Investment Committee memo against a fixed rubric before it reaches an analyst. Score honestly — a 3/5 pass bar is deliberately lenient; only fail a dimension for a real, specific problem.
+
+Score each dimension 1-5 and mark it "pass" at 3 or above:
+- thesis_clarity: does the memo state a clear, consistent investment thesis and recommendation, and do the sections support it rather than contradict it?
+- financial_grounding: do cited numbers match across sections and against the verified deal data provided below? Are they plausible, not fabricated?
+- risk_coverage: are the risks raised substantive and specific to this deal, not generic boilerplate?
+- actionability: is the recommendation clear enough for an IC to act on (BUY/PASS/CONDITIONAL plus rationale), not vague hedging?
+
+For any dimension that fails, name the specific section type(s) that need revision in sectionsNeedingRevision, using the exact section type strings shown in the memo (e.g. "EXECUTIVE_SUMMARY"). If every dimension passes, sectionsNeedingRevision must be empty and overallPass must be true.`;
+
+const REVISE_SYSTEM_PROMPT = `You are revising specific sections of an Investment Committee memo to fix problems a grading pass identified. Keep the same HTML formatting conventions as the rest of the memo (h3 sub-headings, p tags, strong for key metrics). Only return the sections listed as needing revision, using their exact section type string — do not invent new sections or touch ones that weren't flagged. Fix the specific issue described for each section; don't rewrite unrelated content.`;
+
+const CRITIQUE_SCHEMA = {
+  type: 'object',
+  properties: {
+    overallPass: { type: 'boolean' },
+    dimensions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', enum: ['thesis_clarity', 'financial_grounding', 'risk_coverage', 'actionability'] },
+          score: { type: 'integer', minimum: 1, maximum: 5 },
+          pass: { type: 'boolean' },
+          issue: { type: 'string' },
+        },
+        required: ['name', 'score', 'pass'],
+      },
+    },
+    sectionsNeedingRevision: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  required: ['overallPass', 'dimensions', 'sectionsNeedingRevision'],
+};
+
+const REVISE_SCHEMA = {
+  type: 'object',
+  properties: {
+    revisedSections: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['type', 'content'],
+      },
+    },
+  },
+  required: ['revisedSections'],
+};
+
+interface CritiqueVerdict {
+  overallPass: boolean;
+  dimensions: Array<{ name: string; score: number; pass: boolean; issue?: string }>;
+  sectionsNeedingRevision: string[];
+}
+
+interface ReviseResult {
+  revisedSections: Array<{ type: string; content: string }>;
+}
+
+/**
+ * Grade the assembled memo against a fixed rubric; revise only the flagged
+ * sections if it fails. Best-effort — see module comment above.
+ */
+export async function critiqueAndRevise(
+  sections: GeneratedSection[],
+  context: MemoContext,
+): Promise<GeneratedSection[]> {
+  try {
+    const memoText = sections
+      .map((s) => `### Section: ${s.type} (${s.title})\n${s.content}`)
+      .join('\n\n');
+    const contextText = formatContextForLLM(context);
+
+    const critiqueTimeoutMs = resolveTimeoutMs(CRITIQUE_TIMEOUT_MS, 'MEMO_CRITIQUE_TIMEOUT_MS');
+    const critiqueController = new AbortController();
+    let critiqueTimeoutHandle: NodeJS.Timeout | undefined;
+    const critiqueTimeoutPromise = new Promise<never>((_, reject) => {
+      critiqueTimeoutHandle = setTimeout(() => {
+        critiqueController.abort();
+        reject(new Error(`Memo critique timed out after ${critiqueTimeoutMs}ms`));
+      }, critiqueTimeoutMs);
+    });
+
+    let critiqueResult: { text: string };
+    try {
+      critiqueResult = await Promise.race([
+        trackedClaudeMessage({
+          operation: 'memo_critique',
+          role: 'memo',
+          system: CRITIQUE_SYSTEM_PROMPT,
+          messages: [{
+            role: 'user',
+            content: `## Verified Deal Data\n\n${contextText}\n\n## Memo Sections\n\n${memoText}`,
+          }],
+          outputSchema: CRITIQUE_SCHEMA,
+          maxTokens: 2000,
+          signal: critiqueController.signal,
+        }),
+        critiqueTimeoutPromise,
+      ]);
+    } finally {
+      if (critiqueTimeoutHandle) clearTimeout(critiqueTimeoutHandle);
+    }
+
+    const verdict: CritiqueVerdict = JSON.parse(critiqueResult.text);
+
+    if (verdict.overallPass || verdict.sectionsNeedingRevision.length === 0) {
+      log.info('[memoAgent/pipeline] Memo passed critique', {
+        dimensions: verdict.dimensions.map((d) => `${d.name}:${d.score}`),
+      });
+      return sections;
+    }
+
+    log.warn('[memoAgent/pipeline] Memo failed critique, revising flagged sections', {
+      sectionsNeedingRevision: verdict.sectionsNeedingRevision,
+      failedDimensions: verdict.dimensions.filter((d) => !d.pass).map((d) => `${d.name}:${d.issue}`),
+    });
+
+    const flaggedSections = sections.filter((s) => verdict.sectionsNeedingRevision.includes(s.type));
+    if (flaggedSections.length === 0) return sections;
+
+    const issuesText = verdict.dimensions
+      .filter((d) => !d.pass)
+      .map((d) => `- ${d.name}: ${d.issue ?? 'below rubric bar'}`)
+      .join('\n');
+    const flaggedText = flaggedSections
+      .map((s) => `### Section: ${s.type} (${s.title})\n${s.content}`)
+      .join('\n\n');
+
+    const reviseTimeoutMs = resolveTimeoutMs(REVISE_TIMEOUT_MS, 'MEMO_REVISE_TIMEOUT_MS');
+    const reviseController = new AbortController();
+    let reviseTimeoutHandle: NodeJS.Timeout | undefined;
+    const reviseTimeoutPromise = new Promise<never>((_, reject) => {
+      reviseTimeoutHandle = setTimeout(() => {
+        reviseController.abort();
+        reject(new Error(`Memo revise timed out after ${reviseTimeoutMs}ms`));
+      }, reviseTimeoutMs);
+    });
+
+    let reviseResult: { text: string; model: string };
+    try {
+      reviseResult = await Promise.race([
+        trackedClaudeMessage({
+          operation: 'memo_revise',
+          role: 'memo',
+          system: REVISE_SYSTEM_PROMPT,
+          messages: [{
+            role: 'user',
+            content: `## Issues Found\n\n${issuesText}\n\n## Sections Needing Revision\n\n${flaggedText}`,
+          }],
+          outputSchema: REVISE_SCHEMA,
+          maxTokens: 6000,
+          signal: reviseController.signal,
+        }),
+        reviseTimeoutPromise,
+      ]);
+    } finally {
+      if (reviseTimeoutHandle) clearTimeout(reviseTimeoutHandle);
+    }
+
+    const revised: ReviseResult = JSON.parse(reviseResult.text);
+    const revisedByType = new Map(revised.revisedSections.map((r) => [r.type, r.content]));
+
+    return sections.map((s) => {
+      const newContent = revisedByType.get(s.type);
+      if (newContent === undefined) return s; // not flagged, or a hallucinated type — leave untouched
+      return { ...s, content: ensureHtmlFormatting(newContent), aiModel: reviseResult.model };
+    });
+  } catch (err: any) {
+    log.warn(`[memoAgent/pipeline] Critique/revise failed, returning ungraded memo: ${err?.message}`);
+    captureAgentError(err, { agent: 'memoAgent', node: 'pipeline.critique' }, 'warning');
+    return sections;
+  }
 }

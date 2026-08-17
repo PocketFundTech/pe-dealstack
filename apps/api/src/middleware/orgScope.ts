@@ -1,8 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'node:crypto';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { findOrCreateUser } from '../services/userService.js';
 import { getCachedUserContext, setCachedUserContext } from './authContextCache.js';
+
+/** Build a slug suffix using a UUID fragment so same-millisecond inserts don't collide. */
+function buildSlug(base: string): string {
+  return `${base}-${randomUUID().slice(0, 8)}`;
+}
 
 /**
  * Organization scoping middleware.
@@ -93,13 +99,31 @@ export async function orgMiddleware(
           .single();
 
         if (newOrg) {
-          await supabase
+          // Race guard: re-fetch User by authId — a parallel request may have
+          // already set organizationId. If so, prefer the existing org and
+          // discard the one we just created (it will be orphaned).
+          const { data: refetched } = await supabase
             .from('User')
-            .update({ organizationId: newOrg.id })
-            .eq('id', userRecord.id);
+            .select('id, organizationId')
+            .eq('authId', req.user.id)
+            .single();
 
-          req.user.organizationId = newOrg.id;
-          log.info('Org middleware: auto-created org for user without one', { userId: userRecord.id, orgId: newOrg.id });
+          if (refetched?.organizationId && refetched.organizationId !== newOrg.id) {
+            log.warn('Org middleware: race detected — parallel request set organizationId, using existing', {
+              userId: userRecord.id,
+              parallelOrgId: refetched.organizationId,
+              discardedOrgId: newOrg.id,
+            });
+            req.user.organizationId = refetched.organizationId;
+          } else {
+            await supabase
+              .from('User')
+              .update({ organizationId: newOrg.id })
+              .eq('id', userRecord.id);
+
+            req.user.organizationId = newOrg.id;
+            log.info('Org middleware: auto-created org for user without one', { userId: userRecord.id, orgId: newOrg.id });
+          }
         }
       } catch (createErr) {
         log.error('Org middleware: failed to auto-create org', createErr);

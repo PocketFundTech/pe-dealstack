@@ -3,7 +3,7 @@
  * Tests the audit log service, API endpoints, and ingest audit integration.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
@@ -94,197 +94,233 @@ describe('AuditLog service', () => {
 });
 
 // ============================================================
-// Audit API Endpoint Tests
+// Audit API Endpoint Tests — exercises the REAL auditRouter.
+//
+// Prior version of this section used the "mini-app" pattern: an inline
+// express() app that reimplemented filtering/pagination against a local
+// mockLogs array. That meant the actual handlers in
+// apps/api/src/routes/audit.ts (Zod query schema, getAuditLogs delegation,
+// org-scoped user-name enrichment) were never executed.
+//
+// This section now mounts the real auditRouter and exercises it via
+// supertest. The auditLog service (getAuditLogs / getAuditSummary) is
+// stubbed at the module level so we control what data flows back into
+// the handler; supabase is stubbed for the user-name enrichment helper.
+//
+// Mini-app fictions corrected:
+//   - The mini-app's resourceId filter accepted any string; the real
+//     handler's Zod schema requires resourceId to be a UUID. The "filter
+//     by resourceId" scenario was rewritten to use a UUID and assert
+//     that the orchestrator service received it.
+//   - The mini-app's userId filter likewise accepted any string; real
+//     handler requires UUID. Same rewrite.
+//   - The mini-app's "return audit trail for entity" + "empty array for
+//     unknown entity" returned in-memory filtered slices. The real
+//     /entity/:entityId handler just calls getAuditLogs with the entityId
+//     unchanged — we now assert the service was called with the right
+//     args, not that the mini-app filter logic matches.
 // ============================================================
 
-describe('GET /api/audit', () => {
-  function createAuditApp() {
-    const app = express();
-    app.use(express.json());
+const auditLogsMockRows = [
+  {
+    id: 'audit-1',
+    userId: '00000000-0000-0000-0000-000000000001',
+    userEmail: 'admin@example.com',
+    action: 'DEAL_CREATED',
+    entityType: 'DEAL',
+    entityId: '11111111-1111-1111-1111-111111111111',
+    resourceName: 'Acme Corp',
+    description: 'Created deal: Acme Corp',
+    metadata: {},
+    severity: 'INFO',
+    createdAt: '2026-02-13T10:00:00Z',
+  },
+];
 
-    // Mock auth
-    app.use((req: any, _res, next) => {
-      req.user = { id: 'user-123', email: 'admin@example.com', role: 'ADMIN' };
-      next();
-    });
+const buildAuditApp = async () => {
+  const { default: auditRouter } = await import('../src/routes/audit.js');
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res, next) => {
+    req.user = {
+      id: '00000000-0000-0000-0000-000000000001',
+      organizationId: 'org-A',
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    };
+    next();
+  });
+  app.use('/api/audit', auditRouter);
+  return app;
+};
 
-    // Mock audit logs data
-    const mockLogs = [
-      {
-        id: 'audit-1',
-        userId: 'user-123',
-        userEmail: 'admin@example.com',
-        action: 'DEAL_CREATED',
-        resourceType: 'DEAL',
-        resourceId: 'deal-1',
-        resourceName: 'Acme Corp',
-        description: 'Created deal: Acme Corp',
-        metadata: {},
-        severity: 'INFO',
-        createdAt: '2026-02-13T10:00:00Z',
+describe('Real /api/audit handlers', () => {
+  let getAuditLogsMock: any;
+  let getAuditSummaryMock: any;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+
+    // Mock the auditLog service (getAuditLogs + getAuditSummary). The
+    // service is what the real router delegates to.
+    vi.doMock('../src/utils/logger.js', () => ({
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    }));
+    vi.doMock('../src/middleware/orgScope.js', () => ({
+      getOrgId: () => 'org-A',
+      verifyDealAccess: vi.fn().mockResolvedValue({ id: 'deal-1' }),
+    }));
+
+    // Stub supabase only for the User name enrichment helper inside the
+    // router. The chain is from('User').select(...).eq().in() → resolves.
+    vi.doMock('../src/supabase.js', () => ({
+      supabase: {
+        from: vi.fn(() => ({
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              in: vi.fn().mockResolvedValue({ data: [], error: null }),
+            })),
+          })),
+        })),
       },
-      {
-        id: 'audit-2',
-        userId: 'user-123',
-        userEmail: 'admin@example.com',
-        action: 'AI_INGEST',
-        resourceType: 'DEAL',
-        resourceId: 'deal-1',
-        resourceName: 'cim.pdf',
-        description: null,
-        metadata: {},
-        severity: 'INFO',
-        createdAt: '2026-02-13T10:01:00Z',
-      },
-      {
-        id: 'audit-3',
-        userId: 'user-456',
-        userEmail: 'analyst@example.com',
-        action: 'DEAL_UPDATED',
-        resourceType: 'DEAL',
-        resourceId: 'deal-1',
-        resourceName: 'Acme Corp',
-        metadata: { changes: { stage: 'DUE_DILIGENCE' } },
-        severity: 'INFO',
-        createdAt: '2026-02-13T11:00:00Z',
-      },
-    ];
+    }));
 
-    // GET /api/audit — list with filtering
-    app.get('/api/audit', (req, res) => {
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-      const offset = parseInt(req.query.offset as string) || 0;
-      let filtered = [...mockLogs];
-
-      if (req.query.resourceId) {
-        filtered = filtered.filter(l => l.resourceId === req.query.resourceId);
-      }
-      if (req.query.resourceType) {
-        filtered = filtered.filter(l => l.resourceType === req.query.resourceType);
-      }
-      if (req.query.action) {
-        filtered = filtered.filter(l => l.action === req.query.action);
-      }
-      if (req.query.userId) {
-        filtered = filtered.filter(l => l.userId === req.query.userId);
-      }
-
-      const paged = filtered.slice(offset, offset + limit);
-      res.json({ success: true, count: filtered.length, limit, offset, logs: paged });
+    getAuditLogsMock = vi
+      .fn()
+      .mockResolvedValue({ data: auditLogsMockRows, error: null, count: 1 });
+    getAuditSummaryMock = vi.fn().mockResolvedValue({
+      totalActions: 3,
+      byAction: { DEAL_CREATED: 1, AI_INGEST: 1, DEAL_UPDATED: 1 },
+      byUser: { 'admin@example.com': 2, 'analyst@example.com': 1 },
+      bySeverity: { INFO: 3 },
     });
 
-    // GET /api/audit/entity/:entityId
-    app.get('/api/audit/entity/:entityId', (req, res) => {
-      const { entityId } = req.params;
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-      const filtered = mockLogs.filter(l => l.resourceId === entityId);
-      res.json({ success: true, entityId, count: filtered.length, logs: filtered.slice(0, limit) });
+    vi.doMock('../src/services/auditLog.js', () => ({
+      getAuditLogs: getAuditLogsMock,
+      getAuditSummary: getAuditSummaryMock,
+      AUDIT_ACTIONS: {},
+      RESOURCE_TYPES: {},
+      SEVERITY: {},
+    }));
+  });
+
+  // Restore the real auditLog module + reset the module registry so the
+  // sibling describes below (AuditLogEntry interface / Ingest routes import
+  // AuditLog) re-import the real, unmocked service.
+  afterAll(() => {
+    vi.doUnmock('../src/services/auditLog.js');
+    vi.doUnmock('../src/supabase.js');
+    vi.doUnmock('../src/middleware/orgScope.js');
+    vi.doUnmock('../src/utils/logger.js');
+    vi.resetModules();
+  });
+
+  // ── GET /api/audit ─────────────────────────────────────────────
+  describe('GET /api/audit', () => {
+    it('returns audit logs and forwards org scoping to getAuditLogs', async () => {
+      const app = await buildAuditApp();
+      const res = await request(app).get('/api/audit');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.count).toBe(1);
+      expect(res.body.logs).toHaveLength(1);
+      // The handler passes organizationId from getOrgId(req) into the service.
+      expect(getAuditLogsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: 'org-A' })
+      );
     });
 
-    // GET /api/audit/summary
-    app.get('/api/audit/summary', (req, res) => {
-      const days = parseInt(req.query.days as string) || 30;
-      res.json({
-        success: true,
-        period: `${days} days`,
-        totalActions: mockLogs.length,
-        byAction: { DEAL_CREATED: 1, AI_INGEST: 1, DEAL_UPDATED: 1 },
-        byUser: { 'admin@example.com': 2, 'analyst@example.com': 1 },
-        bySeverity: { INFO: 3 },
-      });
+    it('forwards resourceId / action / userId filters to getAuditLogs', async () => {
+      const app = await buildAuditApp();
+      const userUuid = '00000000-0000-0000-0000-000000000456';
+      const dealUuid = '11111111-1111-1111-1111-111111111111';
+      const res = await request(app).get(
+        `/api/audit?resourceId=${dealUuid}&action=DEAL_CREATED&userId=${userUuid}`
+      );
+
+      expect(res.status).toBe(200);
+      expect(getAuditLogsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceId: dealUuid,
+          action: 'DEAL_CREATED',
+          userId: userUuid,
+          organizationId: 'org-A',
+        })
+      );
     });
 
-    return app;
-  }
+    it('returns 400 when resourceId is not a UUID (Zod validation)', async () => {
+      // Mini-app accepted any string; real handler's Zod schema requires
+      // resourceId to be z.string().uuid(). Bad input → 400 before service.
+      const app = await buildAuditApp();
+      const res = await request(app).get('/api/audit?resourceId=deal-1');
 
-  let app: express.Express;
-
-  beforeEach(() => {
-    app = createAuditApp();
-  });
-
-  it('should return all audit logs', async () => {
-    const res = await request(app).get('/api/audit');
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.logs).toHaveLength(3);
-    expect(res.body.count).toBe(3);
-  });
-
-  it('should filter by resourceId', async () => {
-    const res = await request(app).get('/api/audit?resourceId=deal-1');
-    expect(res.status).toBe(200);
-    expect(res.body.logs.length).toBeGreaterThan(0);
-    res.body.logs.forEach((log: any) => {
-      expect(log.resourceId).toBe('deal-1');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid query parameters');
+      expect(getAuditLogsMock).not.toHaveBeenCalled();
     });
-  });
 
-  it('should filter by action', async () => {
-    const res = await request(app).get('/api/audit?action=DEAL_CREATED');
-    expect(res.status).toBe(200);
-    expect(res.body.logs).toHaveLength(1);
-    expect(res.body.logs[0].action).toBe('DEAL_CREATED');
-  });
+    it('coerces limit/offset query params and forwards them to the service', async () => {
+      const app = await buildAuditApp();
+      const res = await request(app).get('/api/audit?limit=10&offset=5');
 
-  it('should filter by userId', async () => {
-    const res = await request(app).get('/api/audit?userId=user-456');
-    expect(res.status).toBe(200);
-    expect(res.body.logs).toHaveLength(1);
-    expect(res.body.logs[0].userEmail).toBe('analyst@example.com');
-  });
+      expect(res.status).toBe(200);
+      expect(res.body.limit).toBe(10);
+      expect(res.body.offset).toBe(5);
+      expect(getAuditLogsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 10, offset: 5 })
+      );
+    });
 
-  it('should respect limit and offset', async () => {
-    const res = await request(app).get('/api/audit?limit=1&offset=1');
-    expect(res.status).toBe(200);
-    expect(res.body.logs).toHaveLength(1);
-    expect(res.body.logs[0].id).toBe('audit-2');
-    expect(res.body.limit).toBe(1);
-    expect(res.body.offset).toBe(1);
-  });
+    it('returns 500 when getAuditLogs returns an error', async () => {
+      getAuditLogsMock.mockResolvedValueOnce({ data: null, error: { message: 'db down' }, count: null });
+      const app = await buildAuditApp();
+      const res = await request(app).get('/api/audit');
 
-  it('should return audit trail for a specific entity', async () => {
-    const res = await request(app).get('/api/audit/entity/deal-1');
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.entityId).toBe('deal-1');
-    expect(res.body.logs.length).toBeGreaterThan(0);
-    res.body.logs.forEach((log: any) => {
-      expect(log.resourceId).toBe('deal-1');
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to retrieve audit logs');
     });
   });
 
-  it('should return empty array for unknown entity', async () => {
-    const res = await request(app).get('/api/audit/entity/nonexistent');
-    expect(res.status).toBe(200);
-    expect(res.body.logs).toHaveLength(0);
-    expect(res.body.count).toBe(0);
+  // ── GET /api/audit/entity/:entityId ────────────────────────────
+  describe('GET /api/audit/entity/:entityId', () => {
+    it('forwards entityId + org scoping to getAuditLogs', async () => {
+      const app = await buildAuditApp();
+      const res = await request(app).get('/api/audit/entity/deal-1');
+
+      expect(res.status).toBe(200);
+      expect(res.body.entityId).toBe('deal-1');
+      expect(getAuditLogsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceId: 'deal-1', organizationId: 'org-A' })
+      );
+    });
   });
 
-  it('should return audit summary', async () => {
-    const res = await request(app).get('/api/audit/summary');
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.totalActions).toBe(3);
-    expect(res.body.byAction).toBeDefined();
-    expect(res.body.byUser).toBeDefined();
-    expect(res.body.bySeverity).toBeDefined();
-  });
+  // ── GET /api/audit/summary ─────────────────────────────────────
+  describe('GET /api/audit/summary', () => {
+    it('returns the summary payload with period label', async () => {
+      const app = await buildAuditApp();
+      const res = await request(app).get('/api/audit/summary');
 
-  it('should accept custom days parameter for summary', async () => {
-    const res = await request(app).get('/api/audit/summary?days=7');
-    expect(res.status).toBe(200);
-    expect(res.body.period).toBe('7 days');
-  });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.period).toBe('30 days');
+      expect(res.body.totalActions).toBe(3);
+      expect(res.body.byAction).toBeDefined();
+      // Real handler passes days + orgId into getAuditSummary.
+      expect(getAuditSummaryMock).toHaveBeenCalledWith(30, 'org-A');
+    });
 
-  it('should include required fields in each audit log entry', async () => {
-    const res = await request(app).get('/api/audit');
-    expect(res.status).toBe(200);
-    const log = res.body.logs[0];
-    expect(log).toHaveProperty('id');
-    expect(log).toHaveProperty('action');
-    expect(log).toHaveProperty('createdAt');
-    expect(log).toHaveProperty('severity');
+    it('accepts custom days param and clamps to 90', async () => {
+      const app = await buildAuditApp();
+      const res = await request(app).get('/api/audit/summary?days=7');
+
+      expect(res.status).toBe(200);
+      expect(res.body.period).toBe('7 days');
+      expect(getAuditSummaryMock).toHaveBeenCalledWith(7, 'org-A');
+    });
   });
 });
 

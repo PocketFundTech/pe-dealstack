@@ -51,6 +51,16 @@ const patchStatementSchema = z.object({
   unitScale: z.enum(['MILLIONS', 'THOUSANDS', 'ACTUALS', 'BILLIONS']).optional(),
 });
 
+// ─── Pagination (Task 5.3.3) ──────────────────────────────────
+// Default 100 (a typical deal has <100 statements), cap at 500 to prevent
+// abuse via ?limit=999999. Per Phase 5 of REMEDIATION_ROADMAP.
+const PAGINATION_DEFAULT = 100;
+const PAGINATION_MAX = 500;
+const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(PAGINATION_MAX).default(PAGINATION_DEFAULT),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 // ─── 5a: GET /api/deals/:dealId/financials ────────────────────
 // All stored financial statements for a deal
 
@@ -61,13 +71,22 @@ router.get('/deals/:dealId/financials', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
+    // Validate pagination params; defaults preserve the previous "fetch
+    // everything for a deal" UX since deals rarely have >100 statements.
+    const paginationParsed = paginationSchema.safeParse(req.query);
+    if (!paginationParsed.success) {
+      return res.status(400).json({ error: 'Invalid pagination', details: paginationParsed.error.errors });
+    }
+    const { limit, offset } = paginationParsed.data;
+
     const { data: statements, error } = await supabase
       .from('FinancialStatement')
       .select('*, Document(id, name)')
       .eq('dealId', dealId)
       .eq('isActive', true)
       .order('statementType', { ascending: true })
-      .order('period', { ascending: true });
+      .order('period', { ascending: true })
+      .range(offset, offset + limit - 1);
 
     if (error) throw error;
 
@@ -75,7 +94,14 @@ router.get('/deals/:dealId/financials', async (req, res) => {
     // match the raw-dollar amount in their _source quote before serving.
     correctRowsUnitScale(statements);
 
-    res.json(statements ?? []);
+    // Preserve legacy array response shape (clients depend on `Array.isArray`)
+    // while also exposing pagination on the response headers so future clients
+    // can opt-in without breaking existing ones.
+    const rows = statements ?? [];
+    res.setHeader('X-Pagination-Limit', String(limit));
+    res.setHeader('X-Pagination-Offset', String(offset));
+    res.setHeader('X-Pagination-Has-More', String(rows.length === limit));
+    res.json(rows);
   } catch (err) {
     log.error('GET financials error', err);
     res.status(500).json({ error: 'Failed to fetch financial statements' });
@@ -92,16 +118,23 @@ router.get('/deals/:dealId/financials/summary', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
+    // Aggregate endpoint: we need ALL income rows to build sparklines + headline
+    // metrics. Pagination would skew aggregates, so we cap at PAGINATION_MAX
+    // instead and log if we hit the cap (extremely unlikely for one deal).
     const { data: incomeRows, error } = await supabase
       .from('FinancialStatement')
       .select('*')
       .eq('dealId', dealId)
       .eq('statementType', 'INCOME_STATEMENT')
       .eq('isActive', true)
-      .order('period', { ascending: true });
+      .order('period', { ascending: true })
+      .range(0, PAGINATION_MAX - 1);
 
     if (error) throw error;
 
+    if (incomeRows && incomeRows.length === PAGINATION_MAX) {
+      log.warn('financials summary hit row cap', { dealId, cap: PAGINATION_MAX });
+    }
     // Read-time safety net (see GET /deals/:dealId/financials).
     correctRowsUnitScale(incomeRows);
 

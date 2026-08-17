@@ -6,6 +6,7 @@ import { formatRelativeTime } from "@/lib/formatters";
 import { api } from "@/lib/api";
 import type { DealDetail, Activity } from "./deal-detail-shared";
 import { DealAccessTimeline } from "./deal-access-timeline";
+import { HubSpotFieldsCard } from "@/components/HubSpotFieldsCard";
 
 // ---------------------------------------------------------------------------
 // Overview Tab — always-visible left-panel content (Key Risks,
@@ -30,6 +31,8 @@ export function OverviewTab({
   return (
     <div className="flex flex-col gap-3">
       <KeyRisksSection risks={risks} highlights={highlights} />
+
+      <HubSpotFieldsCard properties={deal.hubspotProperties} />
 
       <DealAccessTimeline dealId={deal.id} />
 
@@ -394,6 +397,7 @@ const ACTIVITY_ICONS: Record<string, { icon: string; color: string; bg: string }
   MEETING_SCHEDULED: { icon: "event", color: "text-green-600", bg: "bg-green-100" },
   CALL_LOGGED: { icon: "call", color: "text-cyan-600", bg: "bg-cyan-100" },
   EMAIL_SENT: { icon: "mail", color: "text-red-600", bg: "bg-red-100" },
+  TASK_ADDED: { icon: "checklist", color: "text-orange-600", bg: "bg-orange-100" },
   STATUS_UPDATED: { icon: "update", color: "text-indigo-600", bg: "bg-indigo-100" },
   TEAM_MEMBER_ADDED: { icon: "person_add", color: "text-emerald-600", bg: "bg-emerald-100" },
 };

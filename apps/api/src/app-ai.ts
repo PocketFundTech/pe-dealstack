@@ -12,6 +12,9 @@ import ingestRouter from './routes/ingest.js';
 import onboardingRouter from './routes/onboarding.js';
 import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
+import dealsScorecardRouter from './routes/deals-scorecard.js';
+import cronSignalScanRouter from './routes/cron-signal-scan.js';
+import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import authWorkspaceEmailRouter from './routes/auth-workspace-email.js';
@@ -150,7 +153,22 @@ app.use('/api/', generalLimiter);
 app.use('/api/ai', aiLimiter);
 app.use('/api/memos/*/chat', aiLimiter);
 app.use('/api/memos/*/sections/*/generate', aiLimiter);
+// Deal chat invokes a LangGraph ReAct agent — see app.ts for rationale.
+app.use('/api/deals/*/chat', aiLimiter);
+// Task 4.1b: remaining LangGraph / multi-call LLM endpoints — mirror app.ts.
+app.use('/api/deals/*/generate-thesis', aiLimiter);
+app.use('/api/deals/*/analyze-risks', aiLimiter);
+app.use('/api/deals/*/financials/extract', aiLimiter);
+app.use('/api/documents/*/extract-financials', aiLimiter);
+app.use('/api/deals/*/scorecard', aiLimiter);              // trackedClaudeMessage
+app.use('/api/portfolio/chat', aiLimiter);
+app.use('/api/conversations/*/messages', aiLimiter);
+app.use('/api/onboarding/enrich-firm', aiLimiter);
 app.use('/api/ingest', writeLimiter);
+
+// Mounted ahead of express.json() — webhook signature verification needs
+// the exact request bytes, so this route parses its own raw body (see app.ts).
+app.use('/api/webhooks/managed-agents', express.raw({ type: 'application/json' }), managedAgentsWebhooksRouter);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -169,6 +187,9 @@ app.use('/api/onboarding', authMiddleware, orgMiddleware, enforceOrgMfaMiddlewar
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, graphsRouter);
 // financials timeseries — /api/deals/:dealId/financials/timeseries
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
+// Deal scorecard (POST /:dealId/scorecard) — runs trackedClaudeMessage, so
+// it lives in the AI bundle; pickBundle routes /api/deals/:id/scorecard here.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsScorecardRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
@@ -182,6 +203,10 @@ app.use('/api/auth', authMiddleware, authWorkspaceEmailRouter);
 // ========================================
 // AI deal chat and analysis endpoints (require auth + org)
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, aiRouter);
+
+// Vercel nightly cron — no user auth; CRON_SECRET is verified inside the
+// router (see routes/cron-signal-scan.ts and vercel.json crons).
+app.use('/api/cron/signal-scan', cronSignalScanRouter);
 
 // AI status endpoint (public - no auth required)
 app.get('/api/ai/status', (_req, res) => {

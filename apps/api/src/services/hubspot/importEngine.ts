@@ -2,14 +2,44 @@ import { supabase } from '../../supabase.js';
 import { log } from '../../utils/logger.js';
 import { HubSpotClient } from './client.js';
 import { mapCompany, mapContact, mapDeal } from './mappers.js';
-import { upsertByHubspotId } from './dedup.js';
-import type { HubSpotObjectType } from './types.js';
+import { mapEngagement } from './engagementMappers.js';
+import { upsertByHubspotId, upsertContactInteractionByHubspotId, upsertDealActivityByHubspotId, type ImportMode } from './dedup.js';
+import type { EngagementType, HubSpotObjectType } from './types.js';
 
-const ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals'];
+const ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals', 'notes', 'calls', 'meetings', 'emails', 'tasks'];
+const ENGAGEMENT_TYPES: EngagementType[] = ['notes', 'calls', 'meetings', 'emails', 'tasks'];
 const BATCH = 100;
 
-interface Counters { total: number; processed: number; created: number; updated: number; skipped: number; failed: number; }
-const emptyCounters = (): Counters => ({ total: 0, processed: 0, created: 0, updated: 0, skipped: 0, failed: 0 });
+/**
+ * Activity.type + a fallback title per engagement type, used when an
+ * engagement has no resolvable contact and falls back to the deal's
+ * activity feed. Mirrors the type strings the deal-chat add_note tool
+ * already writes (apps/api/src/services/agents/dealChatAgent/tools/addNote.ts)
+ * so the deal activity feed renders a matching icon.
+ */
+const DEAL_ACTIVITY_META: Record<EngagementType, { type: string; fallbackTitle: string }> = {
+  notes: { type: 'NOTE_ADDED', fallbackTitle: 'Note' },
+  calls: { type: 'CALL_LOGGED', fallbackTitle: 'Call Logged' },
+  meetings: { type: 'MEETING_SCHEDULED', fallbackTitle: 'Meeting' },
+  emails: { type: 'EMAIL_SENT', fallbackTitle: 'Email' },
+  tasks: { type: 'TASK_ADDED', fallbackTitle: 'Task' },
+};
+
+/**
+ * Deal pipeline stage labels are invariant for the whole import job, but
+ * runImportBatch is called once per ~100-record batch (up to MAX_BATCHES
+ * times). Cache per jobId so we fetch /crm/v3/pipelines/deals once instead of
+ * once per batch. Entries are removed when the job leaves the 'deals' stage.
+ */
+const stageLabelCache = new Map<string, Record<string, string>>();
+
+/** Test-only: clear the cache between test cases. */
+export function resetStageLabelCache(): void {
+  stageLabelCache.clear();
+}
+
+interface Counters { processed: number; created: number; updated: number; failed: number; skipped: number; }
+const emptyCounters = (): Counters => ({ processed: 0, created: 0, updated: 0, failed: 0, skipped: 0 });
 
 async function loadJob(jobId: string) {
   const { data } = await supabase.from('ImportJob').select('*').eq('id', jobId).maybeSingle();
@@ -36,9 +66,41 @@ async function companyNameForHubspotId(orgId: string, hubspotCompanyId: string |
 }
 
 /**
- * Process ONE batch for the job's current object. Returns true if more work remains.
+ * Resolve a HubSpot contact id → the local Contact's id. Engagements
+ * reference contacts by HubSpot id via the associations API.
  */
-export async function runImportBatch(jobId: string, token: string): Promise<boolean> {
+async function contactIdForHubspotId(orgId: string, hubspotContactId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('Contact').select('id')
+    .eq('organizationId', orgId).eq('hubspotId', hubspotContactId).maybeSingle();
+  return (data as { id?: string } | null)?.id ?? null;
+}
+
+/**
+ * Resolve a HubSpot deal id → the local Deal's id. Used as the fallback
+ * association for engagements with no resolvable contact.
+ */
+async function dealIdForHubspotId(orgId: string, hubspotDealId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('Deal').select('id')
+    .eq('organizationId', orgId).eq('hubspotId', hubspotDealId).maybeSingle();
+  return (data as { id?: string } | null)?.id ?? null;
+}
+
+/**
+ * Process ONE batch for the job's current object. Returns true if more work remains.
+ * @param mode 'fill' never overwrites existing local values; 'refresh' lets
+ *   HubSpot win for the fields it maps, so corrections propagate on re-import.
+ */
+export async function runImportBatch(jobId: string, token: string, mode: ImportMode = 'fill'): Promise<boolean> {
+  const more = await runImportBatchInner(jobId, token, mode);
+  // `false` means the job is done (completed/failed/cancelled) — no further
+  // batches will use this jobId's cached stage labels.
+  if (!more) stageLabelCache.delete(jobId);
+  return more;
+}
+
+async function runImportBatchInner(jobId: string, token: string, mode: ImportMode): Promise<boolean> {
   const job = await loadJob(jobId);
   if (!job) return false;
   if (job.status === 'cancelled') return false;
@@ -47,17 +109,87 @@ export async function runImportBatch(jobId: string, token: string): Promise<bool
   const counts = { ...job.objectCounts };
   ORDER.forEach((o) => { if (!counts[o]) counts[o] = emptyCounters(); });
 
+  // Deals in a batch commonly share a company — a portfolio CRM has far
+  // fewer companies than deals. Cache both lookups per batch so a shared
+  // company costs one round-trip instead of one per deal.
+  const companyNameCache = new Map<string, string | null>();
+  const companyIdCache = new Map<string, string | null>();
+  async function companyNameForHubspotIdCached(orgId: string, hubspotCompanyId: string | null) {
+    if (!hubspotCompanyId) return null;
+    if (companyNameCache.has(hubspotCompanyId)) return companyNameCache.get(hubspotCompanyId) ?? null;
+    const name = await companyNameForHubspotId(orgId, hubspotCompanyId);
+    companyNameCache.set(hubspotCompanyId, name);
+    return name;
+  }
+  async function resolveCompanyIdCached(orgId: string, name: string | null) {
+    const key = (name ?? 'Unknown Company').toLowerCase();
+    if (companyIdCache.has(key)) return companyIdCache.get(key) ?? null;
+    const id = await resolveCompanyId(orgId, name);
+    companyIdCache.set(key, id);
+    return id;
+  }
+
+  const contactIdCache = new Map<string, string | null>();
+  async function contactIdForHubspotIdCached(orgId: string, hubspotContactId: string) {
+    if (contactIdCache.has(hubspotContactId)) return contactIdCache.get(hubspotContactId) ?? null;
+    const id = await contactIdForHubspotId(orgId, hubspotContactId);
+    contactIdCache.set(hubspotContactId, id);
+    return id;
+  }
+
+  const dealIdCache = new Map<string, string | null>();
+  async function dealIdForHubspotIdCached(orgId: string, hubspotDealId: string) {
+    if (dealIdCache.has(hubspotDealId)) return dealIdCache.get(hubspotDealId) ?? null;
+    const id = await dealIdForHubspotId(orgId, hubspotDealId);
+    dealIdCache.set(hubspotDealId, id);
+    return id;
+  }
+
   // Pick the current object (first not-yet-finished in ORDER).
   const current = (job.currentObject as HubSpotObjectType) ?? ORDER[0];
   const objectIndex = ORDER.indexOf(current);
 
   let page;
+  let stageLabels: Record<string, string> = {};
   try {
     const properties = await client.listPropertyNames(current);
+    // Deal stages come back as internal ids (opaque numbers on custom
+    // pipelines); resolve them to labels so the stage is meaningful.
+    // Cached per job — this result is the same for every batch of 'deals'.
+    if (current === 'deals') {
+      const cached = stageLabelCache.get(jobId);
+      stageLabels = cached ?? await client.listDealStageLabels();
+      if (!cached) stageLabelCache.set(jobId, stageLabels);
+    }
     page = await client.listPage(current, { limit: BATCH, after: job.cursor ?? undefined, properties });
   } catch (err) {
     log.error(`[hubspot] batch fetch failed for ${current}: ${(err as Error).message}`);
-    await saveJob(jobId, { status: 'failed', error: (err as Error).message, finishedAt: new Date().toISOString() });
+    // A fetch failure for ONE object type (e.g. a missing HubSpot scope for
+    // engagement objects — some portals can't even grant those scopes) must
+    // not discard records already imported for prior object types. Skip this
+    // object type and advance to the next one, mirroring the same
+    // cancel-guarded advance used below for a normally-drained page. Only
+    // fail the whole job if there's no next object type left to try.
+    const nextObject = ORDER[objectIndex + 1] ?? null;
+    if (nextObject) {
+      const { data: updated } = await supabase.from('ImportJob')
+        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running' })
+        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+      if (!updated) return false; // cancelled mid-batch
+      return true;
+    }
+    // No more object types to try. If anything else in this job succeeded
+    // (e.g. Companies/Contacts/Deals imported fine but every engagement
+    // type 403'd on a missing scope), don't report the whole job as
+    // failed — that hides a mostly-successful import behind one object
+    // type's error. The error message is preserved either way.
+    const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
+    await saveJob(jobId, {
+      status: anySucceeded ? 'completed' : 'failed',
+      currentObject: null, cursor: null,
+      error: (err as Error).message,
+      finishedAt: new Date().toISOString(),
+    });
     return false;
   }
 
@@ -68,28 +200,82 @@ export async function runImportBatch(jobId: string, token: string): Promise<bool
         const res = await upsertByHubspotId('Company', job.organizationId, m.hubspotId, {
           name: m.name, industry: m.industry, website: m.website,
           description: m.description, hubspotProperties: m.hubspotProperties,
-        }, { column: 'name', value: m.name });
+        }, { column: 'name', value: m.name }, mode);
         counts.companies[res] += 1;
       } else if (current === 'contacts') {
-        const companyName = await companyNameForHubspotId(
-          job.organizationId, rec.properties.associatedcompanyid ?? null,
-        );
+        // Prefer the associations API; `associatedcompanyid` is a legacy
+        // property that is frequently empty even when an association exists.
+        const associatedCompanyId = rec.associations?.companies?.results?.[0]?.id
+          ?? rec.properties.associatedcompanyid
+          ?? null;
+        const companyName = await companyNameForHubspotIdCached(job.organizationId, associatedCompanyId);
         const m = mapContact(rec, companyName);
         const res = await upsertByHubspotId('Contact', job.organizationId, m.hubspotId, {
           firstName: m.firstName, lastName: m.lastName, email: m.email, phone: m.phone,
           title: m.title, company: m.company, hubspotProperties: m.hubspotProperties,
-        }, { column: 'email', value: m.email });
+        }, { column: 'email', value: m.email }, mode);
         counts.contacts[res] += 1;
-      } else {
-        const m = mapDeal(rec);
-        const companyName = await companyNameForHubspotId(job.organizationId, m.associatedCompanyHubspotId);
+      } else if (current === 'deals') {
+        const m = mapDeal(rec, stageLabels[rec.properties.dealstage ?? ''] ?? null);
+        const companyName = await companyNameForHubspotIdCached(job.organizationId, m.associatedCompanyHubspotId);
         // Deal requires a companyId — resolve or create the Company row.
-        const companyId = await resolveCompanyId(job.organizationId, companyName);
+        const companyId = await resolveCompanyIdCached(job.organizationId, companyName);
         const res = await upsertByHubspotId('Deal', job.organizationId, m.hubspotId, {
           name: m.name, companyId, dealSize: m.dealSize, description: m.description,
+          // Omit when unmapped: Deal.stage is NOT NULL and a null would either
+          // fail the write or reset the deal to the INITIAL_REVIEW default.
+          ...(m.stage ? { stage: m.stage } : {}),
           customFields: m.customFields, hubspotProperties: m.hubspotProperties,
-        }, { column: 'name', value: m.name });
+        }, { column: 'name', value: m.name }, mode);
         counts.deals[res] += 1;
+      } else {
+        // One of the 5 engagement types (notes/calls/meetings/emails/tasks).
+        const m = mapEngagement(current as EngagementType, rec);
+        const resolvedContactIds = (await Promise.all(
+          m.associatedContactHubspotIds.map((hsId) => contactIdForHubspotIdCached(job.organizationId, hsId)),
+        )).filter((id): id is string => id !== null);
+
+        if (resolvedContactIds.length > 0) {
+          // Fan out: one HubSpot engagement can be associated with several
+          // local contacts (e.g. a multi-person meeting) — write one row each.
+          let anyCreated = false;
+          for (const contactId of resolvedContactIds) {
+            const res = await upsertContactInteractionByHubspotId(contactId, m.hubspotId, {
+              type: m.interactionType, title: m.title, description: m.description,
+              date: m.date ?? new Date().toISOString(),
+            }, mode);
+            if (res === 'created') anyCreated = true;
+          }
+          counts[current][anyCreated ? 'created' : 'updated'] += 1;
+        } else {
+          // No resolvable contact: PE workflows routinely log activity at
+          // the deal level with no single contact attached (diligence
+          // notes, internal call recaps) — that isn't missing data, so fall
+          // back to the deal(s) this engagement is associated with instead
+          // of dropping it.
+          const resolvedDealIds = (await Promise.all(
+            m.associatedDealHubspotIds.map((hsId) => dealIdForHubspotIdCached(job.organizationId, hsId)),
+          )).filter((id): id is string => id !== null);
+
+          if (resolvedDealIds.length > 0) {
+            const meta = DEAL_ACTIVITY_META[current as EngagementType];
+            let anyCreated = false;
+            for (const dealId of resolvedDealIds) {
+              const res = await upsertDealActivityByHubspotId(dealId, m.hubspotId, {
+                type: meta.type, title: m.title || meta.fallbackTitle, description: m.description,
+                createdAt: m.date ?? new Date().toISOString(),
+              }, mode);
+              if (res === 'created') anyCreated = true;
+            }
+            counts[current][anyCreated ? 'created' : 'updated'] += 1;
+          } else {
+            // Neither a contact nor a deal resolves — genuinely nothing to
+            // attach this engagement to locally. Tracked separately so the
+            // job response can distinguish "nothing to import" from
+            // "imported everything" instead of looking identical.
+            counts[current].skipped += 1;
+          }
+        }
       }
     } catch (err) {
       counts[current].failed += 1;
@@ -127,9 +313,14 @@ export async function runImportBatch(jobId: string, token: string): Promise<bool
 /** Find the local Company by name (case-insensitive); create a stub if absent. */
 async function resolveCompanyId(orgId: string, name: string | null): Promise<string | null> {
   const target = name ?? 'Unknown Company';
+  // .limit(1) not .maybeSingle(): two companies may legitimately share a name,
+  // and PGRST116 would fail the whole deal record. .order() makes which
+  // duplicate gets adopted deterministic instead of Postgres's unspecified order.
   const { data: found } = await supabase
-    .from('Company').select('id').eq('organizationId', orgId).ilike('name', target).maybeSingle();
-  if (found) return (found as { id: string }).id;
+    .from('Company').select('id').eq('organizationId', orgId).ilike('name', target)
+    .order('createdAt', { ascending: true }).limit(1);
+  const hit = (found as Array<{ id: string }> | null)?.[0];
+  if (hit) return hit.id;
   const { data: created } = await supabase
     .from('Company').insert({ name: target, organizationId: orgId }).select('id').maybeSingle();
   return (created as { id?: string } | null)?.id ?? null;
