@@ -120,6 +120,24 @@ Rules:
 export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balance sheet, and cash flow data from the attached document into the required JSON structure.`;
 
 /**
+ * Container-mode spreadsheet instruction (EXCEL_EXTRACTION_MODE=container,
+ * the default). The workbook is attached as a container_upload, so the model
+ * reads the ACTUAL cells via code execution instead of a flattened text
+ * dump — the flattening step is what drove legacy spreadsheet extraction
+ * accuracy to ~25% (merged cells, "$ in 000s" header rows, pivoted layouts,
+ * multi-table sheets all lose structure in text form).
+ */
+export const EXCEL_CONTAINER_INSTRUCTION = `A spreadsheet file has been uploaded to your code execution environment.
+
+Read the ACTUAL cells with Python (pandas / openpyxl) — never work from a summary or from memory:
+1. List every sheet in the workbook (for CSV, treat the file as one sheet).
+2. For each sheet, print the used cell range INCLUDING header rows, unit/scale rows (e.g. "$ in thousands", "EUR m"), and label columns, exactly as stored. For very large sheets, print the header region plus every row that carries a financial line item.
+3. Identify which sheets/ranges contain financial statements (income statement, balance sheet, cash flow) versus assumptions, schedules, or other content.
+4. Determine unit scale and currency from cells you actually printed — never assume them.
+
+Then extract all income statement, balance sheet, and cash flow data into the required JSON structure. Every value must come from a cell you printed. For sourceQuote use the sheet name + cell reference + printed value (e.g. "IS!B7: 36,286"); for sourcePage use the 1-based sheet index.`;
+
+/**
  * Repair prompt: one pass, targeted at deterministic validator failures.
  *
  * IMPORTANT: `previousJson` is the NORMALIZED result (normalize.ts already

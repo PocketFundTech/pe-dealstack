@@ -140,10 +140,12 @@ beforeEach(() => {
   responses = [];
   eventOrder.length = 0;
   uploadMock.mockClear();
+  uploadMock.mockImplementation(async () => ({ id: 'file_test123' }));
   deleteMock.mockClear();
   extractTextFromExcelMock.mockReset();
   // Default: plenty of readable text so an excel-path test runs all the way through.
   extractTextFromExcelMock.mockReturnValue('Income Statement\nRevenue 2023 100\n' + 'x'.repeat(200));
+  delete process.env.EXCEL_EXTRACTION_MODE;
 });
 
 async function getEngine() {
@@ -346,7 +348,8 @@ describe('extractWithClaude', () => {
     expect(eventOrder).toEqual(['llm', 'llm', 'delete']);
   });
 
-  it('never touches files.upload/files.delete on the excel path', async () => {
+  it('never touches files.upload/files.delete on the excel path when EXCEL_EXTRACTION_MODE=text', async () => {
+    process.env.EXCEL_EXTRACTION_MODE = 'text';
     responses = [isJson(100, 40, 60)];
     const extractWithClaude = await getEngine();
     const out = await extractWithClaude({ fileBuffer: Buffer.from('xlsx-fake'), fileName: 'model.xlsx', fileType: 'excel' });
@@ -354,5 +357,97 @@ describe('extractWithClaude', () => {
     expect(out).not.toBeNull();
     expect(uploadMock).not.toHaveBeenCalled();
     expect(deleteMock).not.toHaveBeenCalled();
+    expect('tools' in calls[0]).toBe(false);
+  });
+});
+
+// ─── Container mode (EXCEL_EXTRACTION_MODE=container, the default) ─────
+// Spreadsheets are attached to a code-execution container so the model
+// reads actual cells instead of a flattened text dump — the fix for the
+// ~25% legacy spreadsheet accuracy. Shipped 2026-08-18.
+describe('extractWithClaude — spreadsheet container mode', () => {
+  it('uploads the workbook and requests code execution with a container_upload block (default mode)', async () => {
+    responses = [isJson(100, 40, 60)];
+    const extractWithClaude = await getEngine();
+    const out = await extractWithClaude({ fileBuffer: Buffer.from('xlsx-fake'), fileName: 'model.xlsx', fileType: 'excel' });
+
+    expect(out).not.toBeNull();
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
+    const req = calls[0];
+    expect(req.tools).toEqual([{ type: 'code_execution_20250825', name: 'code_execution' }]);
+    expect(req.extraBetas).toContain('files-api-2025-04-14');
+    const content = req.messages[0].content;
+    expect(content.some((b: any) => b.type === 'container_upload' && b.file_id === 'file_test123')).toBe(true);
+    // Instruction tells the model to read actual cells, not a text dump.
+    expect(content.some((b: any) => typeof b.text === 'string' && b.text.includes('code execution environment'))).toBe(true);
+    // Uploaded workbook is cleaned up after the run.
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+    // rawText parity still comes from the local flattening.
+    expect(out!.rawText).toContain('Income Statement');
+  });
+
+  it('falls back to text mode when the container call throws, and still succeeds', async () => {
+    const { trackedClaudeMessage } = (await import('../src/services/ai/client.js')) as any;
+    trackedClaudeMessage.mockImplementationOnce(async () => {
+      throw new Error('400 tool not available');
+    });
+    responses = [isJson(100, 40, 60)]; // consumed by the text-mode retry
+    const extractWithClaude = await getEngine();
+    const out = await extractWithClaude({ fileBuffer: Buffer.from('xlsx-fake'), fileName: 'model.xlsx', fileType: 'excel' });
+
+    expect(out).not.toBeNull();
+    expect(out!.classification.statements[0].periods[0].lineItems.revenue).toBe(100);
+    // First (container) attempt uploaded + cleaned up; retry used a text block.
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+    const retry = calls[0]; // the throwing call never pushed to `calls` (mockImplementationOnce bypassed the recorder)
+    expect(retry.messages[0].content.some((b: any) => typeof b.text === 'string' && b.text.includes('converted from Excel'))).toBe(true);
+    expect('tools' in retry).toBe(false);
+  });
+
+  it('falls back to text mode when the workbook upload fails (no throw, no lost extraction)', async () => {
+    uploadMock.mockRejectedValueOnce(new Error('files api down'));
+    responses = [isJson(100, 40, 60)];
+    const extractWithClaude = await getEngine();
+    const out = await extractWithClaude({ fileBuffer: Buffer.from('xlsx-fake'), fileName: 'model.xlsx', fileType: 'excel' });
+
+    expect(out).not.toBeNull();
+    expect(deleteMock).not.toHaveBeenCalled(); // nothing to clean up
+    expect(calls).toHaveLength(1); // single text-mode call
+  });
+
+  it('proceeds in container mode even when local flattening finds no readable text (marker rawText)', async () => {
+    extractTextFromExcelMock.mockReturnValue('');
+    responses = [isJson(100, 40, 60)];
+    const extractWithClaude = await getEngine();
+    const out = await extractWithClaude({ fileBuffer: Buffer.from('weird-xlsb'), fileName: 'model.xlsb', fileType: 'excel' });
+
+    expect(out).not.toBeNull();
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(out!.rawText.startsWith('[claude-native-pdf]')).toBe(true); // no-text-layer marker convention
+  });
+
+  it('csv files take the container path too', async () => {
+    responses = [isJson(100, 40, 60)];
+    const extractWithClaude = await getEngine();
+    const out = await extractWithClaude({ fileBuffer: Buffer.from('a,b\n1,2'), fileName: 'financials.csv', fileType: 'excel' });
+
+    expect(out).not.toBeNull();
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(calls[0].tools).toBeDefined();
+  });
+
+  it('runs the repair pass within container mode, reusing the same container_upload block', async () => {
+    responses = [isJson(100, 40, 90), isJson(100, 40, 60)]; // bad GP then fixed
+    const extractWithClaude = await getEngine();
+    const out = await extractWithClaude({ fileBuffer: Buffer.from('xlsx-fake'), fileName: 'model.xlsx', fileType: 'excel' });
+
+    expect(out!.repairUsed).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(uploadMock).toHaveBeenCalledTimes(1); // one upload across both calls
+    expect(deleteMock).toHaveBeenCalledTimes(1); // cleaned up once, at the end
+    expect(calls[1].messages[0].content.some((b: any) => b.type === 'container_upload')).toBe(true);
+    expect(calls[1].tools).toBeDefined();
   });
 });
