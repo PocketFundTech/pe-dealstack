@@ -38,33 +38,7 @@ export function getAiApp(): Promise<ExpressHandler> {
   return aiAppPromise;
 }
 
-// Decide which bundle handles a given pathname. Mirrors the vercel.json
-// rewrite list exactly so behaviour is unchanged from the legacy standalone
-// functions:
-//   /api/ai/*                                              → ai
-//   /api/deals/:id/{chat,generate-thesis,analyze-risks,
-//                   ai-cache,conversations/*,financials*}  → ai
-//   /api/documents/:id/extract-financials                  → ai
-//   /api/conversations(/*)?                                → ai
-//   /api/memos/*                                           → ai
-//   /api/ingest(/*)?                                       → ai
-//   /api/onboarding(/*)?                                   → ai
-//   everything else under /api/*                           → lite
-const AI_DEAL_SUFFIX_RE =
-  /^\/api\/deals\/[^/]+\/(chat|generate-thesis|analyze-risks|ai-cache|conversations|financials)(\/|$)/;
-const AI_DOC_EXTRACT_RE =
-  /^\/api\/documents\/[^/]+\/extract-financials\/?$/;
-
-export function pickBundle(pathname: string): "ai" | "lite" {
-  if (pathname === "/api/ai" || pathname.startsWith("/api/ai/")) return "ai";
-  if (AI_DEAL_SUFFIX_RE.test(pathname)) return "ai";
-  if (AI_DOC_EXTRACT_RE.test(pathname)) return "ai";
-  if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/"))
-    return "ai";
-  if (pathname === "/api/memos" || pathname.startsWith("/api/memos/")) return "ai";
-  if (pathname === "/api/ingest" || pathname.startsWith("/api/ingest/"))
-    return "ai";
-  if (pathname === "/api/onboarding" || pathname.startsWith("/api/onboarding/"))
-    return "ai";
-  return "lite";
-}
+// pickBundle lives in api-routing.ts (pure function, no dist imports) so it
+// stays unit-testable; re-exported here to keep the route handler's single
+// import site unchanged.
+export { pickBundle } from "./api-routing";

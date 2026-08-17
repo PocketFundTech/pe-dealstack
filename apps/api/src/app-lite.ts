@@ -52,6 +52,9 @@ import firmTeaserRouter from './routes/firm-teaser.js';
 import firmContextRouter from './routes/firm-context.js';
 import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
+import organizationCriteriaRouter from './routes/organization-criteria.js';
+import dealsShareRouter from './routes/deals-share.js';
+import portalRouter from './routes/portal.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
@@ -243,6 +246,9 @@ app.get('/api', (_req, res) => {
 // ========================================
 // Invitation verify/accept must be public -- invitees don't have accounts yet
 app.use('/api/public/invitations', invitationsAcceptRouter);
+// Deal-share portal must be public — external viewers have no accounts;
+// the DealShare token is the credential (see routes/portal.ts).
+app.use('/api/public/portal', portalRouter);
 
 // Integration webhooks + OAuth callbacks + cron must be public — providers
 // POST/GET here without an auth header. Auth is enforced via signed state
@@ -276,6 +282,9 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTrashRouter);
 // financials-timeseries mounted BEFORE dealsRouter so /:dealId/financials/timeseries matches first
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
+// Share-link CRUD (/:dealId/shares) — the public read side lives at
+// /api/public/portal above.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
@@ -298,6 +307,10 @@ app.use('/api/invitations', authMiddleware, orgMiddleware, enforceOrgMfaMiddlewa
 app.use('/api/audit', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditExportRouter);
 app.use('/api/audit', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditRouter);
 // staff-access-webhook router mounted BEFORE generic organizationsRouter so /me/staff-access-webhook matches first
+// Investment criteria (GET/PATCH /criteria) — must precede the generic
+// organizationsRouter for the same specific-before-generic reason as the
+// staff-access-webhook mount below.
+app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, orgStaffWebhookRouter);
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationsRouter);
 app.use('/api/tasks', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, tasksRouter);
