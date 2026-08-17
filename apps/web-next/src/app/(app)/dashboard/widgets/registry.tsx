@@ -12,6 +12,7 @@ import { RecentActivityWidget } from "./recent-activity";
 import { TeamPerformanceWidget } from "./team-performance";
 import { DocumentAlertsWidget } from "./document-alerts";
 import { WatchlistWidget } from "./watchlist";
+import { DealReactivationsWidget } from "./deal-reactivations";
 import { PortfolioSignalsWidget } from "../dashboard-widgets";
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,7 @@ export type WidgetId =
   | "team-performance"
   | "document-alerts"
   | "watchlist"
+  | "deal-reactivations"
   | "portfolio-signals";
 
 export interface WidgetMeta {
@@ -171,6 +173,13 @@ export const WIDGETS: WidgetMeta[] = [
     description: "Companies you're tracking outside the pipeline.",
     icon: "visibility",
     Component: WatchlistWidget,
+  },
+  {
+    id: "deal-reactivations",
+    title: "Worth Revisiting",
+    description: "Passed deals that scored materially better on a re-check.",
+    icon: "restart_alt",
+    Component: DealReactivationsWidget,
   },
   {
     id: "market-multiples",

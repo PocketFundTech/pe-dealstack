@@ -15,6 +15,8 @@ import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeserie
 import dealsScorecardRouter from './routes/deals-scorecard.js';
 import cronSignalScanRouter from './routes/cron-signal-scan.js';
 import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
+import dealsReactivationsRouter from './routes/deals-reactivations.js';
+import cronReactivationRouter from './routes/cron-reactivation.js';
 import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
@@ -191,6 +193,10 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Deal scorecard (POST /:dealId/scorecard) — runs trackedClaudeMessage, so
 // it lives in the AI bundle; pickBundle routes /api/deals/:id/scorecard here.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsScorecardRouter);
+// Reactivations. POST /:dealId/rescore runs the scorecard engine, so pickBundle
+// routes it here; the same router also serves the feed + triage in app-lite.
+// One file, mounted in BOTH bundles — split routing, single implementation.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
@@ -211,6 +217,8 @@ app.use('/api/cron/signal-scan', cronSignalScanRouter);
 // Reminder sweep for outstanding document requests. Lands in the AI bundle
 // only because pickBundle routes ALL /api/cron/* here — it makes no LLM call.
 app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
+// Nightly dormant-deal sweep — re-scores via the scorecard engine.
+app.use('/api/cron/reactivation', cronReactivationRouter);
 
 // AI status endpoint (public - no auth required)
 app.get('/api/ai/status', (_req, res) => {

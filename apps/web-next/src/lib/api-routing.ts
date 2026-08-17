@@ -7,7 +7,8 @@
 // routes added 2026-08-14):
 //   /api/ai/*                                              → ai
 //   /api/deals/:id/{chat,generate-thesis,analyze-risks,
-//     ai-cache,conversations/*,financials*,scorecard}      → ai
+//     ai-cache,conversations/*,financials*,scorecard,
+//     rescore}                                             → ai
 //   /api/documents/:id/extract-financials                  → ai
 //   /api/conversations(/*)?                                → ai
 //   /api/memos/*                                           → ai
@@ -22,7 +23,7 @@
 // mounts (pinned by apps/api/tests/bundle-route-parity.test.ts and
 // api-bundles.test.ts).
 const AI_DEAL_SUFFIX_RE =
-  /^\/api\/deals\/[^/]+\/(chat|generate-thesis|analyze-risks|ai-cache|conversations|financials|scorecard)(\/|$)/;
+  /^\/api\/deals\/[^/]+\/(chat|generate-thesis|analyze-risks|ai-cache|conversations|financials|scorecard|rescore)(\/|$)/;
 const AI_DOC_EXTRACT_RE =
   /^\/api\/documents\/[^/]+\/extract-financials\/?$/;
 

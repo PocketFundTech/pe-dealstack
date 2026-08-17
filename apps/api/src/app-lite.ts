@@ -57,6 +57,7 @@ import dealsShareRouter from './routes/deals-share.js';
 import portalRouter from './routes/portal.js';
 import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
 import docRequestPortalRouter from './routes/doc-request-portal.js';
+import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
@@ -293,6 +294,9 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Doc-request CRUD (/:dealId/doc-requests) — literal segment, so mount
 // BEFORE the generic dealsRouter. Public fulfilment side is above.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
+// Reactivations: literal /reactivations + /:dealId/rescore — mount BEFORE
+// the generic dealsRouter or /:id swallows 'reactivations'.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);

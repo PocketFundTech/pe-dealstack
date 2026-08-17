@@ -15,6 +15,7 @@ import type { FileType } from '../services/agents/financialAgent/index.js';
 import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
 import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
 import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
+import { maybeReactivateAfterExtraction } from '../services/agents/dealReactivation/index.js';
 import { isFinancialDoc } from './financials-extraction-utils.js';
 
 const require = createRequire(import.meta.url);
@@ -401,6 +402,9 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
     // fresh financials exist. Never awaited, never affects this response.
     if (aggregateSuccess) {
       void maybeScoreAfterExtraction(dealId, orgId);
+      // Dormant deals take the reactivation path instead — fresh financials
+      // on a passed deal are the strongest "look again" signal there is.
+      void maybeReactivateAfterExtraction(dealId, orgId);
     }
 
     return res.json({
@@ -542,6 +546,7 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
     // fresh financials exist. Never awaited, never affects this response.
     if (agentResult.status === 'completed') {
       void maybeScoreAfterExtraction(doc.dealId, orgId);
+      void maybeReactivateAfterExtraction(doc.dealId, orgId);
     }
 
     res.json({

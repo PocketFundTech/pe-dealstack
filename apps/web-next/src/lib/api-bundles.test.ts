@@ -18,13 +18,16 @@ describe("pickBundle", () => {
     ["/api/ingest", "ai"],
     ["/api/onboarding/enrich-firm", "ai"],
     ["/api/cron/signal-scan", "ai"], // nightly Vercel cron — signal agent lives in the ai bundle
+    ["/api/deals/123/rescore", "ai"], // manual reactivation re-score runs the scorecard engine
     ["/api/cron/doc-request-reminders", "ai"], // makes no LLM call, but /api/cron/* is an ai-bundle rule
+    ["/api/cron/reactivation", "ai"], // nightly dormant-deal sweep
     ["/api/webhooks/managed-agents", "ai"], // raw-body webhook mounted in app-ai
     // Lite bundle — CRUD paths
     ["/api/deals", "lite"],
     ["/api/deals/123", "lite"],
     ["/api/deals/123/shares", "lite"], // D4 regression: share-link CRUD
     ["/api/deals/123/doc-requests", "lite"], // doc-request CRUD is mounted in app-lite
+    ["/api/deals/reactivations", "lite"], // the feed is a plain read (router is in both bundles)
     ["/api/organizations/criteria", "lite"], // D2 regression: investment criteria
     ["/api/public/portal/sometoken", "lite"], // public portal read
     ["/api/public/doc-requests/sometoken", "lite"], // public broker upload page
