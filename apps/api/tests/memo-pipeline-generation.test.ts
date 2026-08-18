@@ -65,7 +65,7 @@ describe('generateSection', () => {
     expect(trackedClaudeMessage).toHaveBeenCalledTimes(1);
     const call = trackedClaudeMessage.mock.calls[0][0];
     expect(call.role).toBe('memo');
-    expect(call.maxTokens).toBe(2000);
+    expect(call.maxTokens).toBe(8000);
     expect(call.messages).toEqual([{ role: 'user', content: expect.stringContaining('Executive Summary') }]);
 
     expect(section.aiGenerated).toBe(true);
@@ -95,6 +95,54 @@ describe('generateSection', () => {
     const section = await generateSection('FINANCIAL_PERFORMANCE', baseContext());
     expect(section.content).toContain('See table');
     expect(section.tableData).toEqual({ rows: [['Revenue', '10']] });
+  });
+
+  // PROD REGRESSION (2026-08-18 QA pass): maxTokens was 2000, too small for the
+  // JSON-envelope sections (narrative + tableData + chartConfig). All 5 such
+  // sections came back truncated or EMPTY and persisted as blank sections in a
+  // finished-looking memo — the worst failure mode, because it looks like the
+  // model had nothing to say rather than like an error.
+  it('fails loudly (error placeholder) instead of persisting an empty section', async () => {
+    trackedClaudeMessage.mockResolvedValue({
+      text: '',
+      model: 'claude-sonnet-5',
+      stopReason: 'max_tokens',
+      usage: { inputTokens: 500, outputTokens: 8000 },
+    });
+    const { generateSection } = await getPipeline();
+    const section = await generateSection('FINANCIAL_PERFORMANCE', baseContext());
+
+    expect(section.content).not.toBe('');
+    expect(section.content).toContain('Section generation failed');
+    expect(section.content).toContain('token budget');
+    expect(section.aiModel).toBe('error');
+    expect(section.aiGenerated).toBe(false);
+  });
+
+  it('fails loudly on a whitespace-only response too', async () => {
+    trackedClaudeMessage.mockResolvedValue({
+      text: '   \n  ',
+      model: 'claude-sonnet-5',
+      stopReason: 'end_turn',
+      usage: { inputTokens: 500, outputTokens: 2 },
+    });
+    const { generateSection } = await getPipeline();
+    const section = await generateSection('EXECUTIVE_SUMMARY', baseContext());
+    expect(section.content).toContain('Section generation failed');
+    expect(section.aiModel).toBe('error');
+  });
+
+  it('keeps truncated-but-nonempty output rather than discarding it', async () => {
+    trackedClaudeMessage.mockResolvedValue({
+      text: '<p>Partial but useful analysis',
+      model: 'claude-sonnet-5',
+      stopReason: 'max_tokens',
+      usage: { inputTokens: 500, outputTokens: 8000 },
+    });
+    const { generateSection } = await getPipeline();
+    const section = await generateSection('EXECUTIVE_SUMMARY', baseContext());
+    expect(section.content).toContain('Partial but useful analysis');
+    expect(section.aiGenerated).toBe(true);
   });
 
   it('retries once on a 429 and succeeds on the second attempt', async () => {

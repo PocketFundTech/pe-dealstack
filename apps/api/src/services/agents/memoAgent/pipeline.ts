@@ -17,7 +17,10 @@ import { resolveTimeoutMs } from '../agentBounds.js';
 // Each section is a single LLM call (not a multi-step agent). Cap each
 // at 30s via AbortSignal so a stuck OpenAI request can't pin a worker
 // past Vercel's function limit while billing continues.
-const SECTION_TIMEOUT_MS = 30_000;
+// 60s (was 30s): the JSON-envelope sections now have a 4x larger token
+// budget and legitimately take longer to write. Worst case stays inside the
+// 300s function limit — 12 sections / BATCH_SIZE 3 = 4 batches x 60s + delays.
+const SECTION_TIMEOUT_MS = 60_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -156,7 +159,7 @@ export async function generateSection(
         reject(new Error(`Memo section ${sectionType} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
     });
-    let result: { text: string; model: string };
+    let result: { text: string; model: string; stopReason?: string | null };
     try {
       result = await Promise.race([
         trackedClaudeMessage({
@@ -164,7 +167,15 @@ export async function generateSection(
           role: 'memo',
           system: MEMO_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userPrompt }],
-          maxTokens: 2000,
+          // 2000 was too small for the JSON-envelope sections (narrative HTML
+          // + tableData rows + chartConfig in one object) and truncated them
+          // mid-output — or, when the model spent the budget before emitting
+          // any text, produced an EMPTY response that silently persisted as a
+          // blank section. Prod QA 2026-08-18: all 5 JSON sections
+          // (FINANCIAL_PERFORMANCE, QUALITY_OF_EARNINGS, RISK_ASSESSMENT,
+          // EXIT_ANALYSIS, DEAL_STRUCTURE) failed this way while all 7
+          // prose-only sections succeeded.
+          maxTokens: 8000,
           signal: abortController.signal,
         }),
         timeoutPromise,
@@ -174,6 +185,23 @@ export async function generateSection(
     }
 
     const rawText = result.text;
+
+    // An empty or budget-truncated response must FAIL loudly, not persist as
+    // a blank section. Throwing routes it through the catch below, which
+    // renders the visible "[Section generation failed: ...]" placeholder the
+    // UI already knows how to show.
+    if (!rawText.trim()) {
+      throw new Error(
+        result.stopReason === 'max_tokens'
+          ? 'model returned no text before exhausting its token budget'
+          : `model returned an empty response (stop reason: ${result.stopReason ?? 'unknown'})`,
+      );
+    }
+    if (result.stopReason === 'max_tokens') {
+      log.warn(`[memoAgent/pipeline] Section ${sectionType} hit the token budget — output may be truncated`, {
+        chars: rawText.length,
+      });
+    }
 
     let content = rawText;
     let tableData: any = undefined;
