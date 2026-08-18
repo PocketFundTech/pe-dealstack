@@ -26,6 +26,22 @@ import { handleDocumentUpload } from './documents-upload.js';
 import { notifyDealTeam } from './notifications.js';
 import { checkRequestAccess, computeRequestStatus } from '../services/docRequests.js';
 
+/**
+ * Deal has NO `companyName` column — the company is a relation
+ * (Deal.companyId -> Company). Selecting it errors the whole PostgREST
+ * query and returns null data, which reads as "deal not found". That bug
+ * 404'd every valid share link in routes/portal.ts (fixed in #118); this
+ * route had the identical defect.
+ */
+function extractCompanyName(company: unknown): string | null {
+  const c = Array.isArray(company) ? company[0] : company;
+  if (c && typeof c === 'object' && 'name' in c) {
+    const name = (c as { name?: unknown }).name;
+    return typeof name === 'string' ? name : null;
+  }
+  return null;
+}
+
 const router = Router();
 
 // Tighter than the general /api/ limiter: this endpoint is unauthenticated
@@ -104,7 +120,7 @@ router.get('/:token', async (req, res) => {
 
     const { data: deal } = await supabase
       .from('Deal')
-      .select('name, companyName')
+      .select('name, company:Company(name)')
       .eq('id', docRequest.dealId)
       .single();
     if (!deal) return res.status(404).json({ error: 'This link is not valid.' });
@@ -120,7 +136,7 @@ router.get('/:token', async (req, res) => {
     // Strict whitelist — see module comment.
     res.json({
       dealName: deal.name,
-      companyName: deal.companyName,
+      companyName: extractCompanyName((deal as { company?: unknown }).company),
       firmName: org?.name ?? 'A deal team',
       recipientName: docRequest.recipientName,
       message: docRequest.message,

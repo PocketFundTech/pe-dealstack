@@ -25,6 +25,19 @@ vi.mock('../src/services/agents/dealReactivation/index.js', () => ({
   rescorePassedDeal: (...args: any[]) => rescorePassedDeal(...args),
 }));
 
+// Columns Deal actually has in production (verified against the live schema
+// 2026-08-18). companyName and evMultiple are NOT among them.
+const DEAL_COLUMNS = [
+  'id', 'name', 'stage', 'industry', 'description', 'dealSize', 'revenue',
+  'ebitda', 'currency', 'companyId', 'organizationId', 'scorecard',
+  'passReason', 'passedAt', 'revisitAt', 'lastRescoredAt', 'scorecardHistory',
+];
+/** Reject a select naming a column Deal does not have, like PostgREST does. */
+function badColumns(sel: string): string[] {
+  return sel.split(',').map((s) => s.trim())
+    .filter((s) => s && !s.includes('(') && !DEAL_COLUMNS.includes(s));
+}
+
 let reactivationRows: any[] = [];
 let dealRows: any[] = [];
 let reactivationPatch: any = null;
@@ -48,12 +61,16 @@ function tableMock() {
       return chain;
     }
     if (table === 'Deal') {
+      let rejected: string[] = [];
+      const result = () => rejected.length
+        ? { data: null, error: { message: `column Deal.${rejected[0]} does not exist` } }
+        : { data: dealRows, error: null };
       const chain: any = {
-        select: () => chain,
+        select: (sel: string) => { rejected = badColumns(sel); return chain; },
         eq: () => chain,
-        in: async () => ({ data: dealRows, error: null }),
-        single: async () => ({ data: dealRows[0] ?? null, error: null }),
-        then: (resolve: any) => resolve({ data: dealRows, error: null }),
+        in: async () => result(),
+        single: async () => (rejected.length ? result() : { data: dealRows[0] ?? null, error: null }),
+        then: (resolve: any) => resolve(result()),
       };
       return chain;
     }
@@ -82,7 +99,8 @@ beforeEach(() => {
       status: 'NEW', createdAt: '2026-08-17T00:00:00Z', seenAt: null,
     },
   ];
-  dealRows = [{ id: 'deal-1', name: 'Meridian Logistics', companyName: 'Meridian', stage: 'PASSED', passReason: 'Too small', revisitAt: '2026-08-01' }];
+  dealRows = [{ id: 'deal-1', name: 'Meridian Logistics', company: { name: 'Meridian' },
+    stage: 'PASSED', passReason: 'Too small', revisitAt: '2026-08-01' }];
   mockSupabase.from.mockImplementation(tableMock());
   rescorePassedDeal.mockResolvedValue({ reactivated: true, newScore: 78 });
 });

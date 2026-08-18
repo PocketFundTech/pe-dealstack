@@ -31,6 +31,14 @@ vi.mock('../src/routes/notifications.js', () => ({
   resolveUserId: vi.fn(async () => null),
 }));
 
+// The columns Deal actually has in production (verified against the live
+// schema 2026-08-18). companyName and evMultiple are NOT among them.
+const DEAL_COLUMNS = [
+  'id', 'name', 'stage', 'industry', 'description', 'dealSize', 'revenue',
+  'ebitda', 'currency', 'companyId', 'organizationId', 'scorecard',
+  'passReason', 'passedAt', 'revisitAt', 'lastRescoredAt', 'scorecardHistory',
+];
+
 let requestRow: any;
 let itemRows: any[] = [];
 let dealRow: any;
@@ -71,7 +79,26 @@ function tableMock() {
       return { insert: async (row: any) => { recordedEvents.push(row); return { error: null }; } };
     }
     if (table === 'Deal') {
-      return { select: () => ({ eq: () => ({ single: async () => ({ data: dealRow, error: null }) }) }) };
+      // Model PostgREST for real: selecting a column that does not exist
+      // errors the WHOLE query and returns null data. The previous mock
+      // returned its fixture regardless of the select string, which is
+      // exactly why it missed `Deal.companyName` not existing.
+      return {
+        select: (sel: string) => {
+          const bad = sel
+            .split(',')
+            .map((s) => s.trim())
+            .filter((s) => s && !s.includes('(') && !DEAL_COLUMNS.includes(s));
+          return {
+            eq: () => ({
+              single: async () =>
+                bad.length
+                  ? { data: null, error: { message: `column Deal.${bad[0]} does not exist` } }
+                  : { data: dealRow, error: null },
+            }),
+          };
+        },
+      };
     }
     if (table === 'Organization') {
       return { select: () => ({ eq: () => ({ single: async () => ({ data: orgRow, error: null }) }) }) };
@@ -106,7 +133,9 @@ beforeEach(() => {
     { id: 'item-2', requestId: 'req-1', label: 'Balance sheet', docType: 'FINANCIALS', notes: null, required: true, sortOrder: 1, documentId: 'doc-9', fulfilledAt: '2026-08-10T00:00:00Z' },
   ];
   dealRow = {
-    id: 'deal-1', name: 'Project Neptune', companyName: 'NeptuneCo',
+    id: 'deal-1', name: 'Project Neptune',
+    // Company name arrives via the relation join, never as a Deal column.
+    company: { name: 'NeptuneCo' },
     // fields that must NOT surface:
     industry: 'Software', stage: 'DUE_DILIGENCE', revenue: 10, ebitda: 2,
     dealSize: 12, aiThesis: 'secret thesis', scorecard: { overallScore: 88 },

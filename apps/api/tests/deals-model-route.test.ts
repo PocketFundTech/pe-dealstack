@@ -27,6 +27,19 @@ vi.mock('../src/services/auditLog.js', () => ({
   AUDIT_ACTIONS: {}, RESOURCE_TYPES: {}, SEVERITY: {},
 }));
 
+// Columns Deal actually has in production (verified against the live schema
+// 2026-08-18). companyName and evMultiple are NOT among them.
+const DEAL_COLUMNS = [
+  'id', 'name', 'stage', 'industry', 'description', 'dealSize', 'revenue',
+  'ebitda', 'currency', 'companyId', 'organizationId', 'scorecard',
+  'passReason', 'passedAt', 'revisitAt', 'lastRescoredAt', 'scorecardHistory',
+];
+/** Reject a select naming a column Deal does not have, like PostgREST does. */
+function badColumns(sel: string): string[] {
+  return sel.split(',').map((s) => s.trim())
+    .filter((s) => s && !s.includes('(') && !DEAL_COLUMNS.includes(s));
+}
+
 let dealRow: any;
 let statements: any[] = [];
 let modelRow: any = null;
@@ -36,7 +49,15 @@ let documents: any[] = [];
 function tableMock() {
   return (table: string) => {
     if (table === 'Deal') {
-      return { select: () => ({ eq: () => ({ eq: () => ({ single: async () => ({ data: dealRow, error: null }) }) }) }) };
+      return {
+        select: (sel: string) => {
+          const bad = badColumns(sel);
+          return { eq: () => ({ eq: () => ({ single: async () =>
+            bad.length
+              ? { data: null, error: { message: `column Deal.${bad[0]} does not exist` } }
+              : { data: dealRow, error: null } }) }) };
+        },
+      };
     }
     if (table === 'FinancialStatement') {
       const chain: any = {
@@ -102,7 +123,10 @@ function stmt(period: string, revenue: number, ebitda: number, extra: Record<str
 beforeEach(() => {
   vi.clearAllMocks();
   dealAccess = { id: 'deal-1', name: 'Project Neptune' };
-  dealRow = { id: 'deal-1', name: 'Project Neptune', companyName: 'NeptuneCo', currency: 'USD', evMultiple: 5.5 };
+  // dealSize/ebitda give an implied 5.5x entry multiple; company name
+  // comes from the relation join, not a Deal column.
+  dealRow = { id: 'deal-1', name: 'Project Neptune', currency: 'USD',
+    dealSize: 11, ebitda: 2, company: { name: 'NeptuneCo' } };
   statements = [stmt('2023', 9, 1.5), stmt('2024', 10, 2)];
   documents = [{ id: 'doc-1', name: 'CIM.pdf' }];
   modelRow = null;

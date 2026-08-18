@@ -99,7 +99,10 @@ router.post('/folders/:id/generate-insights', async (req: Request, res: Response
     // 2. Get deal context
     const { data: deal } = await supabase
       .from('Deal')
-      .select('name, companyName, industry, stage, revenue, ebitda')
+      // companyName is not a Deal column (relation via Deal.companyId).
+      // Selecting it errored the query, so folder insights were generated
+      // with no deal context at all.
+      .select('name, industry, stage, revenue, ebitda, company:Company(name)')
       .eq('id', folder.dealId)
       .single();
 
@@ -139,7 +142,10 @@ router.post('/folders/:id/generate-insights', async (req: Request, res: Response
     const insights = await generateFolderInsights(
       folder.name,
       {
-        dealName: deal?.name || deal?.companyName || 'Unknown Deal',
+        dealName:
+          deal?.name ||
+          (Array.isArray(deal?.company) ? deal?.company[0]?.name : (deal?.company as { name?: string } | undefined)?.name) ||
+          'Unknown Deal',
         industry: deal?.industry || undefined,
         stage: deal?.stage || undefined,
         revenue: deal?.revenue || undefined,

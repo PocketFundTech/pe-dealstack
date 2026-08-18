@@ -18,6 +18,22 @@ import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import { rescorePassedDeal } from '../services/agents/dealReactivation/index.js';
 
+/**
+ * Deal has NO `companyName` column — the company is a relation
+ * (Deal.companyId -> Company). Selecting it errors the whole PostgREST
+ * query and returns null data, which reads as "deal not found". That bug
+ * 404'd every valid share link in routes/portal.ts (fixed in #118); this
+ * route had the identical defect.
+ */
+function extractCompanyName(company: unknown): string | null {
+  const c = Array.isArray(company) ? company[0] : company;
+  if (c && typeof c === 'object' && 'name' in c) {
+    const name = (c as { name?: unknown }).name;
+    return typeof name === 'string' ? name : null;
+  }
+  return null;
+}
+
 const router = Router();
 
 const FEED_LIMIT = 50;
@@ -50,11 +66,15 @@ router.get('/reactivations', async (req, res) => {
     if (dealIds.length > 0) {
       const { data: deals } = await supabase
         .from('Deal')
-        .select('id, name, companyName, stage, passReason, revisitAt')
+        .select('id, name, stage, passReason, revisitAt, company:Company(name)')
         .eq('organizationId', orgId)
         .in('id', dealIds);
       for (const d of deals ?? []) {
-        dealsById.set(d.id, { name: d.name, companyName: d.companyName, stage: d.stage });
+        dealsById.set(d.id, {
+          name: d.name,
+          companyName: extractCompanyName((d as { company?: unknown }).company),
+          stage: d.stage,
+        });
       }
     }
 

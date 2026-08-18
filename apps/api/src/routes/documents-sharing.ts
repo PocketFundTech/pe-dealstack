@@ -143,10 +143,14 @@ router.post('/deals/:dealId/document-requests', async (req, res) => {
     // Get deal info
     const { data: deal } = await supabase
       .from('Deal')
-      .select('name, companyName')
+      // Deal has no companyName column — company is a relation via
+      // Deal.companyId. Selecting it errored the whole query, so `deal` was
+      // always null and every share email said "a deal".
+      .select('name, company:Company(name)')
       .eq('id', dealId)
       .single();
-    const dealName = deal?.name || deal?.companyName || 'a deal';
+    const relatedCompany = Array.isArray(deal?.company) ? deal?.company[0] : deal?.company;
+    const dealName = deal?.name || (relatedCompany as { name?: string } | undefined)?.name || 'a deal';
 
     // Get deal team members' emails for notification
     const { data: teamMembers } = await supabase

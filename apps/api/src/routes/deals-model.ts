@@ -33,6 +33,30 @@ const router = Router();
 const DEFAULT_CASE = 'Base case';
 
 /**
+ * Deal has NO `companyName` column (company is a relation via
+ * Deal.companyId) and NO `evMultiple` column at all. Selecting either
+ * errors the whole PostgREST query and returns null data, which this route
+ * would read as "deal not found" — a 404 on every model request. Same
+ * defect class as the portal bug fixed in #118.
+ */
+function extractCompanyName(company: unknown): string | null {
+  const c = Array.isArray(company) ? company[0] : company;
+  if (c && typeof c === 'object' && 'name' in c) {
+    const name = (c as { name?: unknown }).name;
+    return typeof name === 'string' ? name : null;
+  }
+  return null;
+}
+
+/** Implied entry multiple = EV / EBITDA, from the columns Deal really has. */
+function impliedEvMultiple(dealSize: unknown, ebitda: unknown): number | null {
+  if (typeof dealSize !== 'number' || typeof ebitda !== 'number') return null;
+  if (!Number.isFinite(dealSize) || !Number.isFinite(ebitda) || ebitda <= 0) return null;
+  const multiple = dealSize / ebitda;
+  return Number.isFinite(multiple) && multiple > 0 ? Math.round(multiple * 100) / 100 : null;
+}
+
+/**
  * Cross-field rules the plain schema can't express. Both of these would
  * otherwise produce a workbook that references an assumption cell which
  * doesn't exist — a silent #REF! rather than a clear 400.
@@ -62,7 +86,7 @@ interface LoadedDeal {
 async function loadModelInputs(dealId: string, orgId: string): Promise<LoadedDeal | null> {
   const { data: deal } = await supabase
     .from('Deal')
-    .select('id, name, companyName, currency, evMultiple')
+    .select('id, name, currency, dealSize, ebitda, company:Company(name)')
     .eq('id', dealId)
     .eq('organizationId', orgId)
     .single();
@@ -84,8 +108,15 @@ async function loadModelInputs(dealId: string, orgId: string): Promise<LoadedDea
     .in('type', ['CIM', 'FINANCIALS'])
     .limit(10);
 
+  const row = deal as Record<string, unknown>;
   return {
-    deal: deal as LoadedDeal['deal'],
+    deal: {
+      id: String(row.id),
+      name: String(row.name),
+      companyName: extractCompanyName(row.company),
+      currency: (row.currency as string | null) ?? null,
+      evMultiple: impliedEvMultiple(row.dealSize, row.ebitda),
+    },
     history: rows,
     currency,
     documentNames: (docs ?? []).map((d: { name: string }) => d.name),
