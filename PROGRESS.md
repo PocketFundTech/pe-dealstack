@@ -115,9 +115,15 @@ While closing out, PRs #117/#118 landed from a QA pass. #118 fixed `routes/porta
 
 Also noted: `tests/rate-limit-ai.test.ts` is intermittently flaky under parallel workers (stateful rate-limit counters). Failed once in a full run, passed in isolation and in two subsequent full runs; the same suite passes on clean `main`. Not caused by this work, but it will bite CI eventually.
 
-#### Still open
+#### `CRON_SECRET` — confirmed present
 
-Founder to confirm `CRON_SECRET` exists for Production in the Vercel project environment. If it does not, the two new crons will not run — and the hardened logging above will now say so explicitly at 07:00/08:00 UTC.
+Founder checked the Vercel project environment on 2026-08-18: `CRON_SECRET` exists, marked Sensitive, scoped to **Production and Preview**, added May 11. Both new crons are therefore live and will fire on schedule — doc-request reminders at 08:00 UTC, dormant-deal reactivation sweep at 07:00 UTC. First real runs expected 2026-08-19.
+
+The hardening in `ba59417` stays valuable regardless: if the variable is ever removed or rotated to empty, the cron now logs an explicit error naming it instead of failing silently forever.
+
+#### Session closed — nothing outstanding
+
+All four features built, migrated, deployed and verified end-to-end. Two production outages found and fixed during the closing pass (`/upload` middleware redirect, `Deal` column selects). No open items.
 
 ---
 
