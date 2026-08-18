@@ -18,7 +18,18 @@ const BATCH_SIZE = 5;
 
 router.post('/', async (req: Request, res: Response) => {
   const auth = req.headers.authorization || '';
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
+
+  // An unset secret and a wrong secret must look IDENTICAL to the caller —
+  // never leak configuration state to an unauthenticated request. But they
+  // are very different operationally: a missing secret means this cron can
+  // never run, silently, forever. Make that one findable in the logs.
+  if (!process.env.CRON_SECRET) {
+    log.error(
+      'CRON_SECRET is not set — the reactivation cron can never run. Set it in the Vercel project environment.',
+    );
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
