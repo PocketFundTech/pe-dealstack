@@ -88,10 +88,12 @@ const NDA_REVIEW_SCHEMA = {
           'clauseKey', 'clauseTitle', 'status', 'severity',
           'quotedText', 'whyItMatters', 'playbookPosition', 'suggestedLanguage',
         ],
+        additionalProperties: false,
       },
     },
   },
   required: ['riskLevel', 'summary', 'findings'],
+  additionalProperties: false,
 };
 
 const SYSTEM_PROMPT = `You are reviewing an incoming NDA on behalf of a private-equity buyer, against that firm's own negotiating playbook. Your reader is a deal partner, not a lawyer: they want to know in 60 seconds what to push back on and what language to send.

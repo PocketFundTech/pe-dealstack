@@ -373,11 +373,12 @@ const CRITIQUE_SCHEMA = {
         type: 'object',
         properties: {
           name: { type: 'string', enum: ['thesis_clarity', 'financial_grounding', 'risk_coverage', 'actionability'] },
-          score: { type: 'integer', minimum: 1, maximum: 5 },
+          score: { type: 'integer', description: '1-5' },
           pass: { type: 'boolean' },
           issue: { type: 'string' },
         },
         required: ['name', 'score', 'pass'],
+        additionalProperties: false,
       },
     },
     sectionsNeedingRevision: {
@@ -386,6 +387,7 @@ const CRITIQUE_SCHEMA = {
     },
   },
   required: ['overallPass', 'dimensions', 'sectionsNeedingRevision'],
+  additionalProperties: false,
 };
 
 const REVISE_SCHEMA = {
@@ -400,10 +402,12 @@ const REVISE_SCHEMA = {
           content: { type: 'string' },
         },
         required: ['type', 'content'],
+        additionalProperties: false,
       },
     },
   },
   required: ['revisedSections'],
+  additionalProperties: false,
 };
 
 interface CritiqueVerdict {

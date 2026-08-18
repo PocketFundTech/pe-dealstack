@@ -35,10 +35,10 @@ export interface Scorecard {
 const SCORECARD_SCHEMA = {
   type: 'object',
   properties: {
-    overallScore: { type: 'integer', minimum: 0, maximum: 100 },
+    overallScore: { type: 'integer', description: '0-100' },
     verdict: { type: 'string', enum: ['GO', 'NO_GO', 'BORDERLINE'] },
-    qualityScore: { type: 'integer', minimum: 0, maximum: 100 },
-    thesisFitScore: { type: 'integer', minimum: 0, maximum: 100 },
+    qualityScore: { type: 'integer', description: '0-100' },
+    thesisFitScore: { type: 'integer', description: '0-100' },
     reasons: {
       type: 'array',
       items: {
@@ -48,10 +48,12 @@ const SCORECARD_SCHEMA = {
           text: { type: 'string' },
         },
         required: ['kind', 'text'],
+        additionalProperties: false,
       },
     },
   },
   required: ['overallScore', 'verdict', 'qualityScore', 'thesisFitScore', 'reasons'],
+  additionalProperties: false,
 };
 
 const SCORECARD_SYSTEM_PROMPT = `You are scoring a private-equity deal against a two-layer rubric for an investment team.
