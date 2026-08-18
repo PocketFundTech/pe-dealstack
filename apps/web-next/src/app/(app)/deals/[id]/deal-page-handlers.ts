@@ -105,11 +105,19 @@ export interface SelectTerminalStageDeps {
 export async function selectTerminalStage(
   stage: string,
   deps: SelectTerminalStageDeps,
+  // Dormant-deal context, supplied only by the PASSED path. A pass with a
+  // reason and a revisit date is what lets the reactivation engine wake
+  // this deal up later; without it a pass is just a dead card.
+  passContext?: { passReason?: string; revisitAt?: string },
 ): Promise<void> {
   const { dealId, setShowTerminalModal, setDeal, loadActivities, showToast } = deps;
   setShowTerminalModal(false);
   try {
-    const updated = await api.patch<DealDetail>(`/deals/${dealId}`, { stage });
+    const updated = await api.patch<DealDetail>(`/deals/${dealId}`, {
+      stage,
+      ...(passContext?.passReason ? { passReason: passContext.passReason } : {}),
+      ...(passContext?.revisitAt ? { revisitAt: passContext.revisitAt } : {}),
+    });
     setDeal(updated);
     loadActivities();
   } catch (err) {

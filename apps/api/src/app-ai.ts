@@ -14,8 +14,12 @@ import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import dealsScorecardRouter from './routes/deals-scorecard.js';
 import cronSignalScanRouter from './routes/cron-signal-scan.js';
+import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
+import dealsReactivationsRouter from './routes/deals-reactivations.js';
+import cronReactivationRouter from './routes/cron-reactivation.js';
 import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
+import ndaReviewRouter from './routes/nda-review.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import authWorkspaceEmailRouter from './routes/auth-workspace-email.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
@@ -190,8 +194,15 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Deal scorecard (POST /:dealId/scorecard) — runs trackedClaudeMessage, so
 // it lives in the AI bundle; pickBundle routes /api/deals/:id/scorecard here.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsScorecardRouter);
+// Reactivations. POST /:dealId/rescore runs the scorecard engine, so pickBundle
+// routes it here; the same router also serves the feed + triage in app-lite.
+// One file, mounted in BOTH bundles — split routing, single implementation.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+// NDA review of INCOMING counterparty paper — runs trackedClaudeMessage,
+// so pickBundle routes /api/deals/:id/nda-reviews to the AI bundle.
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 
 // Auth-scoped self-service routes (MFA bypass active for /api/auth/* in
@@ -207,6 +218,11 @@ app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageCon
 // Vercel nightly cron — no user auth; CRON_SECRET is verified inside the
 // router (see routes/cron-signal-scan.ts and vercel.json crons).
 app.use('/api/cron/signal-scan', cronSignalScanRouter);
+// Reminder sweep for outstanding document requests. Lands in the AI bundle
+// only because pickBundle routes ALL /api/cron/* here — it makes no LLM call.
+app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
+// Nightly dormant-deal sweep — re-scores via the scorecard engine.
+app.use('/api/cron/reactivation', cronReactivationRouter);
 
 // AI status endpoint (public - no auth required)
 app.get('/api/ai/status', (_req, res) => {

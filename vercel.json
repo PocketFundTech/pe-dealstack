@@ -17,6 +17,14 @@
     {
       "path": "/api/integrations/_cron/sync-all",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/doc-request-reminders",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/reactivation",
+      "schedule": "0 7 * * *"
     }
   ]
 }

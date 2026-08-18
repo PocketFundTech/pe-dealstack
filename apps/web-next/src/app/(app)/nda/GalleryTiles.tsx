@@ -77,3 +77,17 @@ export function ImportGdocTile({ onClick }: { onClick: () => void }) {
     />
   );
 }
+
+// The other half of NDAs: we generate ours, but ~90% of what a buyer signs
+// is the broker's paper. This starts a review of THEIR document against the
+// firm's playbook rather than drafting one of ours.
+export function ReviewIncomingTile({ onClick }: { onClick: () => void }) {
+  return (
+    <EntryTile
+      icon="rule"
+      title="Review their NDA"
+      subtitle="Check a broker's paper against your playbook"
+      onClick={onClick}
+    />
+  );
+}

@@ -14,6 +14,7 @@ import { ImportGoogleDocFlow } from "./ImportGoogleDocFlow";
 import { TemplatePicker } from "./TemplatePicker";
 import { TemplateUploadFlow } from "./TemplateUploadFlow";
 import { UploadExistingFlow } from "./UploadExistingFlow";
+import { NdaReviewFlow } from "./NdaReviewFlow";
 import {
   isImportedGdoc,
   type LegalDocTemplate,
@@ -28,6 +29,8 @@ import {
 //   - "uploadTemplate":  inline template upload + verifier (no settings detour)
 //   - "create":          counterparty form (template + deal locked in)
 //   - "uploadExisting":  3-step import flow for an NDA done outside this app
+//   - "reviewIncoming":  redline the COUNTERPARTY's NDA against the firm
+//                        playbook (deal picker -> upload -> report)
 //   - "importGdoc":      2-step "bring your own Google Doc" import flow
 //   - "edit":            full-screen editor for an existing (template/file) row
 //   - "gdocView":        post-import view for an imported-gdoc row (preview +
@@ -45,6 +48,7 @@ type View =
       template: LegalDocTemplate;
     }
   | { mode: "uploadExisting" }
+  | { mode: "reviewIncoming" }
   | { mode: "importGdoc" }
   | { mode: "edit"; doc: LegalDocumentWithDeal }
   | { mode: "gdocView"; doc: LegalDocumentWithDeal };
@@ -382,11 +386,16 @@ export default function NdaPage() {
         error={error}
         onCreate={handleCreate}
         onUploadExisting={handleUploadExisting}
+        onReviewIncoming={() => setView({ mode: "reviewIncoming" })}
         onImportGdoc={handleImportGdoc}
         onEdit={handleEdit}
         onDelete={handleDeleteRequest}
         onDismissError={() => setError(null)}
       />
+
+      {view.mode === "reviewIncoming" && (
+        <NdaReviewFlow onExit={() => setView({ mode: "gallery" })} />
+      )}
 
       <DealPicker
         open={view.mode === "picker"}

@@ -10,6 +10,7 @@ import {
   StageChangeModal,
 } from "./components";
 import { EditDealModal, ManageTeamModal, TerminalStageModal } from "./deal-panels";
+import { PassDealModal } from "./pass-deal-modal";
 import { FullscreenSectionModal } from "./fullscreen-modal";
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,12 @@ export interface DealPageModalsProps {
   showTerminalModal: boolean;
   onTerminalSelect: (stage: string) => Promise<void>;
   onCloseTerminalModal: () => void;
+
+  // Pass context (why + when to revisit)
+  showPassModal: boolean;
+  passSaving: boolean;
+  onConfirmPass: (input: { passReason?: string; revisitAt?: string }) => Promise<void>;
+  onClosePassModal: () => void;
 
   // Edit deal
   showEditModal: boolean;
@@ -80,6 +87,10 @@ export function DealPageModals({
   onConfirmStageChange,
   onCloseStageModal,
   showTerminalModal,
+  showPassModal,
+  passSaving,
+  onConfirmPass,
+  onClosePassModal,
   onTerminalSelect,
   onCloseTerminalModal,
   showEditModal,
@@ -118,6 +129,16 @@ export function DealPageModals({
           dealName={deal.name}
           onSelect={onTerminalSelect}
           onClose={onCloseTerminalModal}
+        />
+      )}
+
+      {/* Pass Deal Modal — reason + revisit date */}
+      {showPassModal && (
+        <PassDealModal
+          dealName={deal.name}
+          saving={passSaving}
+          onConfirm={onConfirmPass}
+          onClose={onClosePassModal}
         />
       )}
 

@@ -40,6 +40,7 @@ import { googleCalendarProvider } from './integrations/googleCalendar/index.js';
 import { outlookProvider } from './integrations/outlook/index.js';
 import { microsoft365Provider } from './integrations/microsoft365/index.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
+import ndaReviewRouter from './routes/nda-review.js';
 import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
@@ -62,7 +63,14 @@ import hubspotImportRouter from './routes/hubspot-import.js';
 import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import dealsShareRouter from './routes/deals-share.js';
+import organizationNdaPlaybookRouter from './routes/organization-nda-playbook.js';
 import portalRouter from './routes/portal.js';
+import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
+import dealsModelRouter from './routes/deals-model.js';
+import docRequestPortalRouter from './routes/doc-request-portal.js';
+import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
+import dealsReactivationsRouter from './routes/deals-reactivations.js';
+import cronReactivationRouter from './routes/cron-reactivation.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -321,6 +329,9 @@ app.use('/api/public/invitations', invitationsAcceptRouter);
 // Deal-share portal must be public — external viewers have no accounts;
 // the DealShare token is the credential (see routes/portal.ts).
 app.use('/api/public/portal', portalRouter);
+// Document-request upload page must be public — brokers/sellers have no
+// accounts; the DocRequest token is the credential (see routes/doc-request-portal.ts).
+app.use('/api/public/doc-requests', docRequestPortalRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens
@@ -346,6 +357,15 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
+// Doc-request CRUD (/:dealId/doc-requests) — literal segment, so mount
+// BEFORE the generic dealsRouter. Public fulfilment side is above.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
+// Deal model (/:dealId/model, /:dealId/model/export) — literal segment,
+// mount BEFORE the generic dealsRouter. No LLM call, so it stays in lite.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsModelRouter);
+// Reactivations: literal /reactivations + /:dealId/rescore — mount BEFORE
+// the generic dealsRouter or /:id swallows 'reactivations'.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
@@ -359,6 +379,9 @@ app.use('/api/documents', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
 app.use('/api/users', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
+// NDA playbook (GET/PATCH /nda-playbook) — literal path, so mount before
+// the generic organizationsRouter for the same reason as criteria.
+app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationNdaPlaybookRouter);
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
 app.use('/api/notifications', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
@@ -394,6 +417,9 @@ app.use('/api/contacts', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware,
 app.use('/api/watchlist', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, watchlistRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+// NDA review of INCOMING counterparty paper — runs trackedClaudeMessage,
+// so pickBundle routes /api/deals/:id/nda-reviews to the AI bundle.
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);
@@ -409,6 +435,8 @@ app.use('/api/internal', authMiddleware, internalRouter);
 // so authMiddleware/orgMiddleware don't apply)
 // ========================================
 app.use('/api/cron/signal-scan', cronSignalScanRouter);
+app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
+app.use('/api/cron/reactivation', cronReactivationRouter);
 
 // ========================================
 // AI Routes (mixed - some protected, some public)

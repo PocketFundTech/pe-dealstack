@@ -54,7 +54,13 @@ import graphsRouter from './routes/graphs.js';
 import dealsFinancialsTimeseriesRouter from './routes/deals-financials-timeseries.js';
 import organizationCriteriaRouter from './routes/organization-criteria.js';
 import dealsShareRouter from './routes/deals-share.js';
+import organizationNdaPlaybookRouter from './routes/organization-nda-playbook.js';
+import ndaReviewRouter from './routes/nda-review.js';
 import portalRouter from './routes/portal.js';
+import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
+import dealsModelRouter from './routes/deals-model.js';
+import docRequestPortalRouter from './routes/doc-request-portal.js';
+import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
@@ -249,6 +255,9 @@ app.use('/api/public/invitations', invitationsAcceptRouter);
 // Deal-share portal must be public — external viewers have no accounts;
 // the DealShare token is the credential (see routes/portal.ts).
 app.use('/api/public/portal', portalRouter);
+// Document-request upload page must be public — brokers/sellers have no
+// accounts; the DocRequest token is the credential (see routes/doc-request-portal.ts).
+app.use('/api/public/doc-requests', docRequestPortalRouter);
 
 // Integration webhooks + OAuth callbacks + cron must be public — providers
 // POST/GET here without an auth header. Auth is enforced via signed state
@@ -285,6 +294,15 @@ app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Share-link CRUD (/:dealId/shares) — the public read side lives at
 // /api/public/portal above.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
+// Doc-request CRUD (/:dealId/doc-requests) — literal segment, so mount
+// BEFORE the generic dealsRouter. Public fulfilment side is above.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
+// Deal model (/:dealId/model, /:dealId/model/export) — literal segment,
+// mount BEFORE the generic dealsRouter. No LLM call, so it stays in lite.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsModelRouter);
+// Reactivations: literal /reactivations + /:dealId/rescore — mount BEFORE
+// the generic dealsRouter or /:id swallows 'reactivations'.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
@@ -310,6 +328,9 @@ app.use('/api/audit', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Investment criteria (GET/PATCH /criteria) — must precede the generic
 // organizationsRouter for the same specific-before-generic reason as the
 // staff-access-webhook mount below.
+// NDA playbook (GET/PATCH /nda-playbook) — literal path, so mount before
+// the generic organizationsRouter for the same reason as criteria.
+app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationNdaPlaybookRouter);
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, orgStaffWebhookRouter);
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationsRouter);
@@ -322,6 +343,11 @@ app.use('/api/watchlist', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware
 app.use('/api/integrations/hubspot', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, hubspotImportRouter);
 app.use('/api/integrations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, integrationsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+// NDA review router lives in BOTH bundles: POST /deals/:id/nda-reviews runs
+// the model (ai bundle), but GET /nda-reviews/:id just reads a saved row and
+// pickBundle sends it to lite. One implementation, mounted twice — mounting
+// it only in app-ai would 404 every read in production.
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 

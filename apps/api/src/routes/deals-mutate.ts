@@ -182,11 +182,28 @@ router.patch('/:id', async (req, res) => {
       }
     }
 
+    // Dormant-deal bookkeeping. A pass is a state with context, not a
+    // dead end (see services/agents/dealReactivation): stamp when it
+    // happened on the way in, and clear the dormant fields on the way
+    // out so a revived deal doesn't keep a stale revisit date that would
+    // make the nightly sweep re-score a live deal.
+    const enteringPassed = data.stage === 'PASSED' && existingDeal.stage !== 'PASSED';
+    const leavingPassed =
+      data.stage !== undefined && data.stage !== 'PASSED' && existingDeal.stage === 'PASSED';
+
+    const passedFields: Record<string, unknown> = {};
+    if (enteringPassed) passedFields.passedAt = new Date().toISOString();
+    if (leavingPassed) {
+      passedFields.passedAt = null;
+      passedFields.revisitAt = null;
+    }
+
     // Update deal
     const { data: deal, error: updateError } = await supabase
       .from('Deal')
       .update({
         ...data,
+        ...passedFields,
         companyId: undefined,
       })
       .eq('id', id)

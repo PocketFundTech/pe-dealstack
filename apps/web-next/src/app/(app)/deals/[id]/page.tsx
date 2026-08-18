@@ -75,6 +75,8 @@ export default function DealDetailPage() {
 
   // Terminal stage modal (Close Deal: Won/Lost/Passed)
   const [showTerminalModal, setShowTerminalModal] = useState(false);
+  const [showPassModal, setShowPassModal] = useState(false);
+  const [passSaving, setPassSaving] = useState(false);
 
   // Edit deal modal
   const [showEditModal, setShowEditModal] = useState(false);
@@ -229,14 +231,36 @@ export default function DealDetailPage() {
       loadActivities,
     });
 
-  const handleTerminalSelect = (stage: string) =>
-    selectTerminalStage(stage, {
+  // PASSED gets a second step: capture why, and when to look again. Every
+  // other terminal stage closes immediately as before.
+  const handleTerminalSelect = async (stage: string) => {
+    if (stage === "PASSED") {
+      setShowTerminalModal(false);
+      setShowPassModal(true);
+      return;
+    }
+    await selectTerminalStage(stage, {
       dealId,
       setShowTerminalModal,
       setDeal,
       loadActivities,
       showToast,
     });
+  };
+
+  const handleConfirmPass = async (passContext: { passReason?: string; revisitAt?: string }) => {
+    setPassSaving(true);
+    try {
+      await selectTerminalStage(
+        "PASSED",
+        { dealId, setShowTerminalModal, setDeal, loadActivities, showToast },
+        passContext,
+      );
+      setShowPassModal(false);
+    } finally {
+      setPassSaving(false);
+    }
+  };
 
   const handleDeleteDeal = () => {
     if (!deal) return;
@@ -393,6 +417,10 @@ export default function DealDetailPage() {
           setStageError("");
         }}
         showTerminalModal={showTerminalModal}
+        showPassModal={showPassModal}
+        passSaving={passSaving}
+        onConfirmPass={handleConfirmPass}
+        onClosePassModal={() => setShowPassModal(false)}
         onTerminalSelect={handleTerminalSelect}
         onCloseTerminalModal={() => setShowTerminalModal(false)}
         showEditModal={showEditModal}

@@ -27,6 +27,7 @@ export const WIDGET_CATEGORY: Record<WidgetId, string> = {
   "deal-funnel":        "deals",
   "recent-activity":    "deals",
   "watchlist":          "deals",
+  "deal-reactivations": "deals",
   "key-contacts":       "team",
   "team-performance":   "team",
   "document-alerts":    "documents",

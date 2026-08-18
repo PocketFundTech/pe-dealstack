@@ -26,6 +26,11 @@ export const createDealSchema = z.object({
   source: z.string().nullable().optional(),
   currency: z.string().optional().default('USD'),
   customFields: z.record(z.string(), z.any()).optional().default({}),
+  // Dormant-deal context (see services/agents/dealReactivation). A pass is
+  // not a dead end: the reason and the revisit date are what let a deal
+  // wake up months later with the thinking still attached.
+  passReason: z.string().max(1000).nullable().optional(),
+  revisitAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });
 
 export const updateDealSchema = createDealSchema.partial();
