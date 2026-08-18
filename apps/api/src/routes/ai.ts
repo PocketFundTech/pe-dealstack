@@ -139,85 +139,10 @@ router.post('/ai/chat/stream', async (req, res) => {
   }
 });
 
-// POST /api/deals/:dealId/chat - Chat with AI about a deal (ReAct Agent)
-router.post('/deals/:dealId/chat', async (req, res) => {
-  try {
-    if (!isLLMAvailable()) {
-      return res.status(503).json({
-        error: 'AI service unavailable',
-        message: 'No LLM API key configured',
-      });
-    }
-
-    const { dealId } = req.params;
-    const orgId = getOrgId(req);
-    const { message, history = [] } = chatMessageSchema.parse(req.body);
-
-    // Verify deal belongs to user's org
-    const dealAccess = await verifyDealAccess(dealId, orgId);
-    if (!dealAccess) {
-      return res.status(404).json({ error: 'Deal not found' });
-    }
-
-    // Fetch deal data for context string
-    const { data: deal, error: dealError } = await supabase
-      .from('Deal')
-      .select(`
-        *,
-        company:Company(*)
-      `)
-      .eq('id', dealId)
-      .single();
-
-    if (dealError || !deal) {
-      return res.status(404).json({ error: 'Deal not found' });
-    }
-
-    // Build deal context string for the agent
-    const dealContext = generateDealContext(deal);
-
-    // Run the ReAct agent with tools (search_documents, get_deal_financials, compare_deals, etc.)
-    const result = await runDealChatAgent({
-      dealId,
-      orgId,
-      message,
-      dealContext,
-      history,
-      userId: req.user?.id ?? undefined,
-    });
-
-    // Log activity (fire-and-forget)
-    supabase.from('Activity').insert({
-      dealId,
-      type: 'NOTE_ADDED',
-      title: 'AI Chat Query',
-      description: message.substring(0, 100) + (message.length > 100 ? '...' : ''),
-      metadata: { type: 'ai_chat' },
-    });
-
-    // Save messages to database (fire-and-forget)
-    const userId = req.user?.id || null;
-    supabase.from('ChatMessage').insert([
-      { dealId, userId, role: 'user', content: message },
-      { dealId, userId, role: 'assistant', content: result.response, metadata: { model: result.model } },
-    ]);
-
-    res.json({
-      response: result.response,
-      model: result.model,
-      dealId,
-      ...(result.updates && { updates: result.updates }),
-      ...(result.action && { action: result.action }),
-    });
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ error: 'Validation error', details: error.errors });
-    }
-    log.error('Error in AI chat', error);
-    const { statusCode, userMessage } = classifyAIErrorObject(error);
-    res.status(statusCode).json({ error: userMessage });
-  }
-});
+// POST /api/deals/:dealId/chat is served by routes/deals-chat-ai.ts, mounted
+// in app-ai.ts ahead of this router. A legacy-only duplicate used to live
+// here and, being matched first, silently shadowed the DEAL_CHAT_ENGINE
+// streaming handler in production (2026-08-18). Do not re-add it.
 
 // GET /api/deals/:dealId/chat/history - Get chat history for a deal
 router.get('/deals/:dealId/chat/history', async (req, res) => {
