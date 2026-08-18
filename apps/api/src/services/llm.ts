@@ -52,9 +52,25 @@ const config: LLMConfig = {
   chatProvider:
     (process.env.LLM_CHAT_PROVIDER as LLMProvider) ||
     (isAnthropicEnabled() ? 'anthropic' : 'openai'),
-  fastProvider: (process.env.LLM_FAST_PROVIDER as LLMProvider) || 'openai',
+  // Same cascade as chatProvider: prefer Anthropic when its key is present.
+  // Previously hardcoded to 'openai', which meant clearing LLM_FAST_PROVIDER
+  // silently routed every tier-3/4 call (classification, sentiment, quick
+  // summaries) back to OpenAI — a provider this product no longer bills and
+  // whose account is currently at zero credits (prod, 2026-08-18). The
+  // env var still wins when set explicitly.
+  fastProvider:
+    (process.env.LLM_FAST_PROVIDER as LLMProvider) ||
+    (isAnthropicEnabled() ? 'anthropic' : 'openai'),
   embeddingProvider: 'gemini',
 };
+
+/**
+ * Resolved provider selection (read once at module load). Exported so the
+ * provider-cascade defaults are testable — see tests/llm-provider-config.test.ts.
+ */
+export function getLLMConfig(): Readonly<LLMConfig> {
+  return config;
+}
 
 // ─── Model Registry ────────────────────────────────────────────────
 
