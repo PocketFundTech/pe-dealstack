@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import aiRouter from './routes/ai.js';
 import chatRouter from './routes/chat.js';
+import dealsChatAiRouter from './routes/deals-chat-ai.js';
 import financialsRouter from './routes/financials.js';
 import memosRouter from './routes/memos.js';
 import ingestRouter from './routes/ingest.js';
@@ -184,6 +185,14 @@ app.use(requestIdMiddleware);
 // Protected Routes (require authentication + org resolution)
 // ========================================
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
+// Deal chat — POST /api/deals/:dealId/chat. This is the DEAL_CHAT_ENGINE-aware
+// handler (streaming SSE + legacy JSON, financial-context tables, history
+// caps). pickBundle routes /api/deals/:id/chat to THIS bundle, so it must be
+// mounted here — and BEFORE aiRouter, which historically carried an older
+// legacy-only duplicate of the same path that silently shadowed every chat
+// improvement (found 2026-08-18: streaming was "on" for days but never
+// executed in production). The duplicate in routes/ai.ts is removed.
+app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsChatAiRouter);
 app.use('/api/ingest', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ingestRouter);
 app.use('/api/memos', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, memosRouter);
 app.use('/api/onboarding', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, onboardingRouter);
