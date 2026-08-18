@@ -35,6 +35,15 @@ describe("isAppRouteRequiringAuth", () => {
     expect(isAppRouteRequiringAuth("/help-center")).toBe(false);
   });
 
+  it("lets token-gated external pages through unauthenticated", () => {
+    // These are opened by people with NO account — a broker following an
+    // emailed link, or a client viewing a shared deal. Redirecting them to
+    // /login kills the feature outright, and no API-level test catches it
+    // because middleware only runs on real page navigations.
+    expect(isAppRouteRequiringAuth("/portal/some-share-token")).toBe(false);
+    expect(isAppRouteRequiringAuth("/upload/some-request-token")).toBe(false);
+  });
+
   it("lets API and Next internals pass through", () => {
     expect(isAppRouteRequiringAuth("/api/deals")).toBe(false);
     expect(isAppRouteRequiringAuth("/api/ai/market-sentiment")).toBe(false);

@@ -18,6 +18,7 @@ const PUBLIC_PAGE_PREFIXES = [
   "/terms-of-service",
   "/security",
   "/portal", // external deal-share portal — token IS the credential
+  "/upload", // broker/seller document-request upload — token IS the credential
 
   "/pricing",
   "/documentation",
