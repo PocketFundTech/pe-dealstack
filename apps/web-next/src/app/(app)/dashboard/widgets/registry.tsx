@@ -197,4 +197,7 @@ export const WIDGETS: WidgetMeta[] = [
   },
 ];
 
-export const DEFAULT_VISIBLE: WidgetId[] = ["quick-actions", "deal-funnel", "upcoming-deadlines"];
+// portfolio-signals ships visible: it is a headline capability (scans every
+// active deal for leadership/financial/market shifts) that was invisible by
+// default AND broken by a GET/POST mismatch, so nobody had ever seen it work.
+export const DEFAULT_VISIBLE: WidgetId[] = ["quick-actions", "deal-funnel", "upcoming-deadlines", "portfolio-signals"];
