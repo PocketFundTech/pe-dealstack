@@ -27,6 +27,15 @@ interface ShareRow {
   revokedAt: string | null;
 }
 
+/**
+ * Supabase typegen shapes an embedded relation as an object or a one-element
+ * array depending on the FK's cardinality inference — normalise either.
+ */
+function extractCompanyName(company: unknown): string | null {
+  const c = Array.isArray(company) ? company[0] : company;
+  return (c as { name?: string | null } | null | undefined)?.name ?? null;
+}
+
 /** Resolve + validate a share token. Returns {share} or {status, error}. */
 async function resolveShare(token: string): Promise<{ share?: ShareRow; status?: number; error?: string }> {
   const { data: share } = await supabase
@@ -60,7 +69,7 @@ router.get('/:token', async (req, res) => {
 
     const { data: deal } = await supabase
       .from('Deal')
-      .select('id, name, companyName, industry, stage, description, dealSize, revenue, ebitda, currency')
+      .select('id, name, industry, stage, description, dealSize, revenue, ebitda, currency, company:Company(name)')
       .eq('id', share.dealId)
       .single();
     if (!deal) return res.status(404).json({ error: 'This link is not valid.' });
@@ -82,7 +91,10 @@ router.get('/:token', async (req, res) => {
       // Strict whitelist — see module comment.
       deal: {
         name: deal.name,
-        companyName: deal.companyName,
+        // Deal has no companyName column — it's a relation (Deal.companyId → Company).
+        // Selecting the non-existent column made this query fail and 404 EVERY valid
+        // share link (found 2026-08-18 by the authenticated QA pass).
+        companyName: extractCompanyName(deal.company),
         industry: deal.industry,
         stage: deal.stage,
         description: deal.description,

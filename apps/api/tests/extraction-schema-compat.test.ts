@@ -1,46 +1,106 @@
 /**
- * PROD REGRESSION (2026-08-18): DEAL_READ_JSON_SCHEMA used
- * `minimum: 0, maximum: 100` on number fields. The structured-output
- * (output_config.format) schema validator rejects those keywords —
- * "For 'number' type, properties maximum, minimum are not supported" —
- * which 400'd EVERY INGEST_ENGINE=claude deal read in production (the
- * fallback ladder then hit a legacy chain with exhausted OpenAI credits,
- * turning a silent degradation into a full ingest outage).
+ * Every structured-output schema in the codebase must be written INSIDE the
+ * API's accepted JSON-Schema subset at the source, not just rescued by
+ * normalizeOutputSchema() at the boundary (see services/ai/schemaCompat.ts).
  *
- * This test recursively scans every structured-output schema this codebase
- * sends for the constraint keywords that validator rejects, so the class
- * of bug is caught at test time, not by the first production upload.
- * (Sibling of deal-chat-tool-schemas.test.ts, which does the same for
- * tool input_schema's `type: [...]` arrays.)
+ * Why both layers: the normalizer stops the 400s; this test stops the
+ * repo from lying about what it sends. Four separately-authored schemas
+ * (deal reader, scorecard, NDA review, memo critique/revise) shipped
+ * out-of-subset on 2026-08-18 alone — the first version of this test only
+ * scanned two exported constants and missed the module-private ones, which
+ * is why it now scans SOURCE TEXT of every file that passes an
+ * `outputSchema:` to the AI client.
+ *
+ * Rules enforced (each maps to a real production 400):
+ *   - no `minimum` / `maximum` / `exclusive*` / `multipleOf` keywords
+ *   - every `type: 'object'` schema literal carries `additionalProperties: false`
+ *   - no `type: [ ... ]` arrays (use anyOf)
  */
 import { describe, it, expect } from 'vitest';
-import { DEAL_READ_JSON_SCHEMA } from '../src/services/extraction/claudeDealReader.js';
-import { EXTRACTION_JSON_SCHEMA } from '../src/services/extraction/extractionSchema.js';
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { fileURLToPath } from 'url';
+import path from 'path';
 
-const REJECTED_NUMBER_KEYWORDS = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf'];
+const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../src');
 
-function findRejectedKeywords(node: unknown, path: string, hits: string[]): void {
-  if (node === null || typeof node !== 'object') return;
-  if (Array.isArray(node)) {
-    node.forEach((item, i) => findRejectedKeywords(item, `${path}[${i}]`, hits));
-    return;
+function walk(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (full.endsWith('.ts') && !full.endsWith('.test.ts')) out.push(full);
   }
-  const obj = node as Record<string, unknown>;
-  for (const kw of REJECTED_NUMBER_KEYWORDS) {
-    if (kw in obj) hits.push(`${path}.${kw}`);
-  }
-  for (const [key, value] of Object.entries(obj)) {
-    findRejectedKeywords(value, `${path}.${key}`, hits);
-  }
+  return out;
 }
 
-describe('structured-output schemas — no unsupported constraint keywords', () => {
-  it.each([
-    ['DEAL_READ_JSON_SCHEMA', DEAL_READ_JSON_SCHEMA],
-    ['EXTRACTION_JSON_SCHEMA', EXTRACTION_JSON_SCHEMA],
-  ])('%s contains no number-constraint keywords the API rejects', (name, schema) => {
-    const hits: string[] = [];
-    findRejectedKeywords(schema, name, hits);
-    expect(hits, `unsupported constraint keywords (move ranges into descriptions): ${hits.join(', ')}`).toEqual([]);
-  });
+/** Files that hand a schema to trackedClaudeMessage's outputSchema. */
+const schemaFiles = walk(srcDir).filter((f) => {
+  const src = readFileSync(f, 'utf-8');
+  return /outputSchema:/.test(src) && !f.endsWith('services/ai/client.ts');
 });
+
+/**
+ * Pull the text of every `type: 'object'` schema-literal region so we can
+ * check for additionalProperties. Approach: find each `type: 'object'`,
+ * then scan forward to the matching close of its enclosing `{ ... }`.
+ */
+function objectLiteralRegions(src: string): string[] {
+  const regions: string[] = [];
+  const re = /type:\s*['"]object['"]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    // Walk backwards to the `{` that opens this literal.
+    let open = src.lastIndexOf('{', m.index);
+    if (open < 0) continue;
+    // Walk forward to its matching `}`.
+    let depth = 0;
+    let end = -1;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end > 0) regions.push(src.slice(open, end + 1));
+  }
+  return regions;
+}
+
+describe('structured-output schemas stay inside the API-accepted subset (source scan)', () => {
+  it('found the schema-bearing files', () => {
+    expect(schemaFiles.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each(schemaFiles.map((f) => [path.relative(srcDir, f), f]))(
+    '%s — no number-range keywords, no type arrays, every object has additionalProperties:false',
+    (_rel, file) => {
+      const src = readFileSync(file, 'utf-8');
+      // Only inspect the schema-literal regions, not arbitrary code.
+      const regions = objectLiteralRegions(src);
+      const problems: string[] = [];
+      for (const region of regions) {
+        // Skip regions that aren't JSON-schema-ish (no `properties`/`items`/`enum`).
+        if (!/properties\s*:|items\s*:|enum\s*:/.test(region)) continue;
+        if (/\b(minimum|maximum|exclusiveMinimum|exclusiveMaximum|multipleOf)\s*:/.test(region)) {
+          problems.push('number range keyword');
+        }
+        if (/type:\s*\[/.test(region)) problems.push('type array (use anyOf)');
+        // The outermost object literal we captured is a `type: 'object'` schema —
+        // it must declare additionalProperties at ITS OWN depth (depth-1 key).
+        const topLevelHasAP = /^\{[^{}]*additionalProperties\s*:\s*false/m.test(
+          region.replace(/\{[^{}]*\}/g, (inner, offset) => (offset === 0 ? inner : '{}')),
+        ) || /additionalProperties\s*:\s*false/.test(stripNested(region));
+        if (!topLevelHasAP) problems.push('object missing additionalProperties:false');
+      }
+      expect(problems, problems.join('; ')).toEqual([]);
+    },
+  );
+});
+
+/** Remove all nested `{...}` blocks, leaving only the top-level keys of a literal. */
+function stripNested(region: string): string {
+  let out = region.slice(1, -1); // drop outer braces
+  let prev: string;
+  do {
+    prev = out;
+    out = out.replace(/\{[^{}]*\}/g, '');
+  } while (out !== prev);
+  return out;
+}

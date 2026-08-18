@@ -13,6 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { log } from '../../utils/logger.js';
 import { recordUsageEvent } from '../usage/trackedLLM.js';
 import { getModelConfig, type AiRole } from './models.js';
+import { normalizeOutputSchema } from './schemaCompat.js';
 
 let _client: Anthropic | null = null;
 
@@ -92,7 +93,10 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
   if (opts.tools && opts.tools.length > 0) request.tools = opts.tools;
   if (cfg.fallbacks) request.fallbacks = cfg.fallbacks;
   if (opts.outputSchema) {
-    request.output_config = { format: { type: 'json_schema', schema: opts.outputSchema } };
+    // Normalized at the boundary so an out-of-subset schema (missing
+    // additionalProperties:false, number min/max, type arrays) can never
+    // 400 a production call again — see schemaCompat.ts for the incident log.
+    request.output_config = { format: { type: 'json_schema', schema: normalizeOutputSchema(opts.outputSchema) } };
   }
   // `signal` is SDK RequestOptions (2nd argument to .stream()), NEVER a body
   // field — a body-level `signal` serializes into the JSON payload and the

@@ -24,6 +24,7 @@ let documents: any[] = [];
 let memos: any[] = [];
 let orgRow: any = { name: 'Acme Capital' };
 let recordedViews: any[] = [];
+let dealSelects: string[] = [];
 let docRow: any;
 
 function tableMock() {
@@ -35,7 +36,25 @@ function tableMock() {
       return { insert: async (row: any) => { recordedViews.push(row); return { error: null }; } };
     }
     if (table === 'Deal') {
-      return { select: () => ({ eq: () => ({ single: async () => ({ data: dealRow, error: null }) }) }) };
+      return {
+        select: (cols: string) => {
+          dealSelects.push(cols);
+          // Mirror PostgREST: selecting a column that doesn't exist on Deal
+          // errors and yields data:null (this is exactly how the real
+          // 2026-08-18 bug 404'd every valid share link — `companyName` is a
+          // relation, not a column). Only the real column list + embedded
+          // relation succeeds.
+          const requestsBogusColumn = /\bcompanyName\b/.test(cols);
+          return {
+            eq: () => ({
+              single: async () =>
+                requestsBogusColumn
+                  ? { data: null, error: { message: 'column Deal.companyName does not exist' } }
+                  : { data: dealRow, error: null },
+            }),
+          };
+        },
+      };
     }
     if (table === 'Organization') {
       return { select: () => ({ eq: () => ({ single: async () => ({ data: orgRow, error: null }) }) }) };
@@ -85,7 +104,8 @@ async function buildApp() {
 beforeEach(() => {
   vi.clearAllMocks();
   shareRow = validShare();
-  dealRow = { id: 'deal-1', name: 'Project Neptune', companyName: 'NeptuneCo', industry: 'Software', stage: 'DUE_DILIGENCE', description: 'desc', dealSize: 12, revenue: 10, ebitda: 2, currency: 'USD' };
+  dealRow = { id: 'deal-1', name: 'Project Neptune', company: { name: 'NeptuneCo' }, industry: 'Software', stage: 'DUE_DILIGENCE', description: 'desc', dealSize: 12, revenue: 10, ebitda: 2, currency: 'USD' };
+  dealSelects = [];
   statements = [{ statementType: 'INCOME_STATEMENT', period: 'FY2023', lineItems: { Revenue: 10 } }];
   documents = [{ id: 'doc-1', name: 'CIM.pdf', type: 'CIM', fileSize: 1000 }];
   memos = [];
@@ -101,6 +121,10 @@ describe('GET /api/public/portal/:token', () => {
     const res = await request(app).get('/api/public/portal/tok');
     expect(res.status).toBe(200);
     expect(res.body.deal.name).toBe('Project Neptune');
+    // companyName is derived from the embedded Company relation, never a Deal
+    // column — the select must ask for the relation (regression 2026-08-18).
+    expect(res.body.deal.companyName).toBe('NeptuneCo');
+    expect(dealSelects.some((c) => /company:Company\(name\)/.test(c))).toBe(true);
     expect(res.body.share.sharedBy).toBe('Acme Capital');
     expect(res.body.financials).toHaveLength(1);
     expect(res.body.documents).toHaveLength(1);
