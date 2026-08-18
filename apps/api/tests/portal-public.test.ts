@@ -106,7 +106,7 @@ beforeEach(() => {
   shareRow = validShare();
   dealRow = { id: 'deal-1', name: 'Project Neptune', company: { name: 'NeptuneCo' }, industry: 'Software', stage: 'DUE_DILIGENCE', description: 'desc', dealSize: 12, revenue: 10, ebitda: 2, currency: 'USD' };
   dealSelects = [];
-  statements = [{ statementType: 'INCOME_STATEMENT', period: 'FY2023', lineItems: { Revenue: 10 } }];
+  statements = [{ statementType: 'INCOME_STATEMENT', period: 'FY2023', unitScale: 'MILLIONS', currency: 'USD', lineItems: { revenue: 10, ebitda_margin_pct: 19.6, revenue_source: 'Revenue 10,000' } }];
   documents = [{ id: 'doc-1', name: 'CIM.pdf', type: 'CIM', fileSize: 1000 }];
   memos = [];
   recordedViews = [];
@@ -124,6 +124,13 @@ describe('GET /api/public/portal/:token', () => {
     // companyName is derived from the embedded Company relation, never a Deal
     // column — the select must ask for the relation (regression 2026-08-18).
     expect(res.body.deal.companyName).toBe('NeptuneCo');
+    // `*_source` provenance keys are internal extraction breadcrumbs — they
+    // must never reach an external viewer (regression 2026-08-18: they were
+    // rendered as line items on the client-facing portal).
+    for (const stmt of res.body.financials ?? []) {
+      expect(Object.keys(stmt.lineItems)).not.toContain('revenue_source');
+      expect(Object.keys(stmt.lineItems).some((k: string) => k.endsWith('_source'))).toBe(false);
+    }
     expect(dealSelects.some((c) => /company:Company\(name\)/.test(c))).toBe(true);
     expect(res.body.share.sharedBy).toBe('Acme Capital');
     expect(res.body.financials).toHaveLength(1);
