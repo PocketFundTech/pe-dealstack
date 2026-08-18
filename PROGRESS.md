@@ -91,9 +91,17 @@ Merged to `main` as `a475821` and deployed. Two corrections surfaced during inte
 - 15/15 live production smoke probes passing against `https://lmmos.ai`
 - All 4 migrations verified live post-deploy
 
-#### Open item
+#### Closing pass — remaining items
 
-`CRON_SECRET` presence in the Vercel production environment could not be verified from outside — both new cron routes return 401 whether the secret is wrong OR unset. The pre-existing signal-scan cron implies it is set, but if it is not, both new crons will silently never run. Needs a founder check in the Vercel dashboard.
+**`agent-memory-migration.sql`** — checked, already applied. All four tables (`AgentMemoryIndustry`, `AgentMemoryExtraction`, `AgentMemoryDealHistory`, `NarrativeInsightCache`) exist. Dates from Sessions 31-34, not pending. (First check reported MISSING — a `Prefer: count=exact` header turned PostgREST's success into a 206 that was misread. Re-checked correctly.)
+
+**Branch protection** — `main` requires PR + 1 review + code-owner review, with `enforce_admins: false`. Founder confirmed the admin bypass is deliberate (emergency-hotfix path). Going forward: default to PRs, push direct only on explicit request, and note that a direct push skips CI entirely since the workflows are `pull_request`-triggered.
+
+**`CRON_SECRET` hardening** (`ba59417`) — the secret's presence in Vercel prod is unverifiable from outside: both cron routes return an identical 401 whether the secret is wrong or unset. That response behaviour is correct (never leak configuration state to an unauthenticated caller) but it meant a misconfigured environment would fail invisibly forever. The two cases are now distinguishable in the logs: a missing secret logs an explicit error naming the variable and the cron; a wrong secret stays an ordinary rejected request with no error log, so the real signal isn't buried in noise.
+
+#### Still open
+
+Founder to confirm `CRON_SECRET` exists for Production in the Vercel project environment. If it does not, the two new crons will not run — and the hardened logging above will now say so explicitly at 07:00/08:00 UTC.
 
 ---
 
