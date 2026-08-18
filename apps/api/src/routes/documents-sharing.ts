@@ -169,17 +169,16 @@ router.post('/deals/:dealId/document-requests', async (req, res) => {
         await resend.emails.send({
           from: `PE OS <${fromEmail}>`,
           to: recipientEmails,
-          subject: `Document Requested: ${documentName} — ${dealName}`,
+          subject: `${requesterName} asked for ${documentName} — ${dealName}`,
           html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff;">
               <div style="background: linear-gradient(135deg, #003366, #0055aa); padding: 32px; text-align: center; border-radius: 8px 8px 0 0;">
                 <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">PE OS</h1>
-                <p style="color: #b3d1ff; margin: 8px 0 0; font-size: 14px;">Document Request</p>
               </div>
               <div style="padding: 32px;">
-                <h2 style="color: #003366; margin: 0 0 16px; font-size: 20px;">Document Requested</h2>
+                <h2 style="color: #003366; margin: 0 0 16px; font-size: 20px;">${requesterName} pulled a doc on ${dealName}.</h2>
                 <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                  <strong>${requesterName}</strong> has requested the following document for <strong>${dealName}</strong>:
+                  They want this from the data room:
                 </p>
                 <div style="background: #f8f9fa; border-left: 4px solid #003366; padding: 16px 20px; margin: 20px 0; border-radius: 0 8px 8px 0;">
                   <p style="color: #003366; font-size: 18px; font-weight: 600; margin: 0;">${documentName}</p>
@@ -188,14 +187,14 @@ router.post('/deals/:dealId/document-requests', async (req, res) => {
                 <div style="text-align: center; margin: 32px 0;">
                   <a href="${vdrUrl}"
                      style="background: linear-gradient(135deg, #003366, #0055aa); color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; display: inline-block; font-size: 16px; font-weight: 600;">
-                    Open Data Room
+                    Open the data room
                   </a>
                 </div>
               </div>
               <hr style="border: none; border-top: 1px solid #eef2f7; margin: 0;" />
               <div style="padding: 20px 32px; text-align: center;">
                 <p style="color: #aaa; font-size: 12px; margin: 0;">
-                  PE OS — AI-Powered Private Equity CRM
+                  PE OS
                 </p>
               </div>
             </div>
