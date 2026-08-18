@@ -448,7 +448,11 @@ export function PortfolioSignalsWidget() {
             setResult(null);
             setError(null);
             try {
-              const res = await api.get<PortfolioSignalsResult>("/ai/scan-signals");
+              // POST, not GET: the route is `router.post('/ai/scan-signals')`.
+              // The widget shipped calling GET, so every scan 404'd and the
+              // feature looked broken/unbuilt (found 2026-08-18 — the backend
+              // has been returning real signals the whole time).
+              const res = await api.post<PortfolioSignalsResult>("/ai/scan-signals", {});
               setResult(res);
             } catch (err) {
               console.warn("[dashboard] scan-signals failed:", err);
