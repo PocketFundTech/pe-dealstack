@@ -145,7 +145,7 @@ export default function DataRoomOverviewPage() {
                     setNewName("");
                   }
                 }}
-                placeholder="e.g., Project Apollo, Acme Corp Acquisition"
+                placeholder="e.g., Project Wagoner, Wagoner Industrial Add-On"
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-sm text-slate-900 placeholder:text-slate-400"
               />
               <p className="mt-2 text-xs text-slate-400">

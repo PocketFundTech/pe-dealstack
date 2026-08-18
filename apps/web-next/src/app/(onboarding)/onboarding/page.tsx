@@ -44,7 +44,7 @@ export default function OnboardingPage() {
   const [showSkip, setShowSkip] = useState(false);
 
   const [firmData, setFirmData] = useState<FirmData>({ url: "", linkedin: "", aum: "", sectors: [] });
-  const [sampleDealId, setSampleDealId] = useState<string | null>(null); // "luktara" | "pinecrest" | null
+  const [sampleDealId, setSampleDealId] = useState<string | null>(null); // "wagoner" | null
   const [cimFile, setCimFile] = useState<File | null>(null);
   // Legacy starts with 2 team invite rows (onboarding-tasks.js team hydrator calls addRow() twice).
   const [teamInvites, setTeamInvites] = useState<TeamInvite[]>([

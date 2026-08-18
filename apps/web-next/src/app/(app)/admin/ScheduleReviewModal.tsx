@@ -107,7 +107,7 @@ export function ScheduleReviewModal({
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="e.g., IC Meeting — TechCorp SaaS"
+          placeholder="e.g., IC Meeting — Wagoner Industrial"
           className={INPUT_CLS}
         />
       </div>

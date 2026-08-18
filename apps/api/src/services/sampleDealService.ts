@@ -2,94 +2,107 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 
 /**
- * Creates a fully-loaded Lukhtara sample deal for a new organization.
- * Includes: Company, Deal, VDR Folders, FinancialStatements, Activities.
- * Uses existing `tags` field with ['sample'] — no schema changes needed.
+ * Creates a fully-loaded Wagoner Industrial Supply sample deal for a new
+ * organization. Includes: Company, Deal, VDR Folders, FinancialStatements,
+ * Activities. Uses existing `tags` field with ['sample'] — no schema changes
+ * needed.
+ *
+ * Financials are internally consistent at 1-decimal precision in $M:
+ * - Income statement reconciles GP, OI, NI across all 3 years
+ * - Balance sheet totals tie L&E both years
+ * - Cash flow ties NI + D&A + ΔWC – capex – debt – divs to ΔCash
  */
 
-const LUKHTARA_COMPANY = {
-  name: 'Lukhtara Industries',
-  industry: 'Manufacturing & Distribution',
-  website: 'https://lukhtara.example.com',
-  description: 'Diversified manufacturing company specializing in industrial components and distribution across South Asia. Strong revenue growth with expanding margins.',
+const WAGONER_COMPANY = {
+  name: 'Wagoner Industrial Supply',
+  industry: 'Industrial Distribution',
+  website: 'https://wagoner.example.com',
+  description: 'Greenville, SC-based industrial distributor specializing in bearings, fasteners, fluid power, and MRO consumables. Family-owned, 3rd generation. Serves tier-1 manufacturing customers across the upstate SC and western NC corridor.',
 };
 
-const LUKHTARA_DEAL = {
-  name: 'Lukhtara Industries — Acquisition',
+const WAGONER_DEAL = {
+  name: 'Wagoner Industrial Supply — Acquisition',
   stage: 'DUE_DILIGENCE',
   status: 'ACTIVE',
-  industry: 'Manufacturing & Distribution',
-  description: 'Potential acquisition of Lukhtara Industries, a diversified manufacturer with strong regional presence. Company shows consistent revenue growth and improving margins across core segments.',
-  aiThesis: 'Strong manufacturing base with expanding distribution network. Revenue growing at 15% CAGR with EBITDA margins improving from 18% to 22%. Key risks: customer concentration (top 5 = 45% revenue) and raw material price volatility.',
-  revenue: 125.0,
-  ebitda: 27.5,
+  industry: 'Industrial Distribution',
+  description: 'Buyout of Wagoner Industrial Supply, a 60-year-old family-owned industrial distributor serving the upstate SC manufacturing belt. Founder (Sarah Wagoner-Hayes, 58) approaching retirement with no family successor. Recently signed multi-year contract with a new EV battery plant in upstate SC drives forward growth. Real estate held separately — sale-leaseback opportunity included.',
+  aiThesis: 'Greenville-based industrial distributor, 60-year family business now 3rd generation. Revenue $9.8M → $12.4M (12% CAGR), EBITDA margins expanding 10% → 15% on pricing pass-through and product mix rationalization. Founder retiring; sale timed pre-ramp of new $1.2M/yr EV battery plant contract — captures de-risking premium without giving away post-ramp upside. Deal $9.5M (5x trailing EBITDA), with separate real estate sale-leaseback option. Key risks: (1) customer concentration, top 5 = 45% revenue (mitigant: 10+ year relationships, auto-renewing contracts); (2) founder-held supplier/customer relationships (mitigant: 12-month transition, 22-year-tenure GM); (3) no ERP, runs on QuickBooks + Excel (mitigant: ~$200K NetSuite capex post-close); (4) warehouse near 90% utilization (mitigant: adjacent 2-acre parcel available for $0.8M); (5) macro/cyclicality tracks regional manufacturing PMI (mitigant: EV plant contract is 5-year fixed-price floor).',
+  revenue: 12.4,
+  ebitda: 1.9,
   irrProjected: 22.5,
   mom: 2.8,
-  dealSize: 185.0,
-  icon: 'factory',
+  dealSize: 9.5,
+  icon: 'warehouse',
   priority: 'HIGH',
   tags: ['sample'],
 };
 
-const LUKHTARA_FOLDERS = [
+const WAGONER_FOLDERS = [
   { name: 'Financials', description: 'Financial statements and models' },
   { name: 'Legal', description: 'Legal documents and agreements' },
   { name: 'Company Overview', description: 'Company presentations and background' },
 ];
 
-// Income Statement line items (in millions USD)
+// Income Statement line items (in millions USD).
+// Reconciles: GP = Rev − COGS; OI = GP − SG&A − R&D − D&A;
+// Pretax = OI − Interest + Other; NI = Pretax − Tax. EBITDA = OI + D&A.
 const INCOME_STATEMENT_ITEMS: Record<string, Record<string, number>> = {
   '2023': {
-    revenue: 125.0, costOfGoodsSold: 78.5, grossProfit: 46.5,
-    sellingGeneralAdmin: 12.8, researchDevelopment: 3.2, depreciation: 4.5,
-    operatingIncome: 26.0, interestExpense: 2.8, otherIncome: 1.3,
-    pretaxIncome: 24.5, incomeTax: 6.1, netIncome: 18.4,
+    revenue: 12.4, costOfGoodsSold: 8.5, grossProfit: 3.9,
+    sellingGeneralAdmin: 2.0, researchDevelopment: 0, depreciation: 0.2,
+    operatingIncome: 1.7, interestExpense: 0.1, otherIncome: 0,
+    pretaxIncome: 1.6, incomeTax: 0.4, netIncome: 1.2,
   },
   '2022': {
-    revenue: 108.0, costOfGoodsSold: 69.1, grossProfit: 38.9,
-    sellingGeneralAdmin: 11.5, researchDevelopment: 2.9, depreciation: 4.0,
-    operatingIncome: 20.5, interestExpense: 3.1, otherIncome: 0.8,
-    pretaxIncome: 18.2, incomeTax: 4.6, netIncome: 13.6,
+    revenue: 11.2, costOfGoodsSold: 7.8, grossProfit: 3.4,
+    sellingGeneralAdmin: 2.0, researchDevelopment: 0, depreciation: 0.2,
+    operatingIncome: 1.2, interestExpense: 0.1, otherIncome: 0,
+    pretaxIncome: 1.1, incomeTax: 0.3, netIncome: 0.8,
   },
   '2021': {
-    revenue: 92.0, costOfGoodsSold: 60.7, grossProfit: 31.3,
-    sellingGeneralAdmin: 10.2, researchDevelopment: 2.5, depreciation: 3.6,
-    operatingIncome: 15.0, interestExpense: 3.4, otherIncome: 0.5,
-    pretaxIncome: 12.1, incomeTax: 3.0, netIncome: 9.1,
+    revenue: 9.8, costOfGoodsSold: 7.0, grossProfit: 2.8,
+    sellingGeneralAdmin: 1.8, researchDevelopment: 0, depreciation: 0.2,
+    operatingIncome: 0.8, interestExpense: 0.1, otherIncome: 0,
+    pretaxIncome: 0.7, incomeTax: 0.2, netIncome: 0.5,
   },
 };
 
+// Balance Sheet line items (in millions USD). Totals tie: L&E = Assets.
 const BALANCE_SHEET_ITEMS: Record<string, Record<string, number>> = {
   '2023': {
-    cash: 18.2, accountsReceivable: 22.5, inventory: 15.8, otherCurrentAssets: 3.5,
-    totalCurrentAssets: 60.0, propertyPlantEquipment: 45.0, intangibleAssets: 8.5,
-    goodwill: 12.0, otherNonCurrentAssets: 4.5, totalAssets: 130.0,
-    accountsPayable: 14.2, shortTermDebt: 8.0, accruedLiabilities: 6.8,
-    totalCurrentLiabilities: 29.0, longTermDebt: 32.0, otherLiabilities: 5.0,
-    totalLiabilities: 66.0, totalEquity: 64.0, totalLiabilitiesAndEquity: 130.0,
+    cash: 0.5, accountsReceivable: 1.8, inventory: 1.6, otherCurrentAssets: 0.1,
+    totalCurrentAssets: 4.0, propertyPlantEquipment: 0.8, intangibleAssets: 0.1,
+    goodwill: 0, otherNonCurrentAssets: 0.1, totalAssets: 5.0,
+    accountsPayable: 0.9, shortTermDebt: 0.3, accruedLiabilities: 0.3,
+    totalCurrentLiabilities: 1.5, longTermDebt: 0.5, otherLiabilities: 0.1,
+    totalLiabilities: 2.1, totalEquity: 2.9, totalLiabilitiesAndEquity: 5.0,
   },
   '2022': {
-    cash: 14.5, accountsReceivable: 19.8, inventory: 14.2, otherCurrentAssets: 3.0,
-    totalCurrentAssets: 51.5, propertyPlantEquipment: 41.0, intangibleAssets: 9.0,
-    goodwill: 12.0, otherNonCurrentAssets: 4.0, totalAssets: 117.5,
-    accountsPayable: 12.5, shortTermDebt: 7.5, accruedLiabilities: 6.0,
-    totalCurrentLiabilities: 26.0, longTermDebt: 35.0, otherLiabilities: 4.5,
-    totalLiabilities: 65.5, totalEquity: 52.0, totalLiabilitiesAndEquity: 117.5,
+    cash: 0.4, accountsReceivable: 1.5, inventory: 1.4, otherCurrentAssets: 0.1,
+    totalCurrentAssets: 3.4, propertyPlantEquipment: 0.7, intangibleAssets: 0.1,
+    goodwill: 0, otherNonCurrentAssets: 0.1, totalAssets: 4.3,
+    accountsPayable: 0.7, shortTermDebt: 0.3, accruedLiabilities: 0.3,
+    totalCurrentLiabilities: 1.3, longTermDebt: 0.6, otherLiabilities: 0.1,
+    totalLiabilities: 2.0, totalEquity: 2.3, totalLiabilitiesAndEquity: 4.3,
   },
 };
 
+// Cash Flow line items (in millions USD).
+// Reconciles: NI + D&A + ΔWC = OCF; OCF + ICF + FCF = ΔCash.
+// 2023: 1.1 − 0.3 − 0.7 = +0.1, prior cash 0.4 → 0.5 ✓
+// 2022: 0.7 − 0.3 − 0.3 = +0.1, prior cash 0.3 → 0.4 ✓ (2021 ending implied)
 const CASH_FLOW_ITEMS: Record<string, Record<string, number>> = {
   '2023': {
-    netIncome: 18.4, depreciation: 4.5, changesInWorkingCapital: -3.2,
-    operatingCashFlow: 19.7, capitalExpenditures: -8.5, acquisitions: 0,
-    investingCashFlow: -8.5, debtIssuance: -3.0, dividends: -4.5,
-    financingCashFlow: -7.5, netChangeInCash: 3.7,
+    netIncome: 1.2, depreciation: 0.2, changesInWorkingCapital: -0.3,
+    operatingCashFlow: 1.1, capitalExpenditures: -0.3, acquisitions: 0,
+    investingCashFlow: -0.3, debtIssuance: -0.1, dividends: -0.6,
+    financingCashFlow: -0.7, netChangeInCash: 0.1,
   },
   '2022': {
-    netIncome: 13.6, depreciation: 4.0, changesInWorkingCapital: -2.1,
-    operatingCashFlow: 15.5, capitalExpenditures: -7.0, acquisitions: 0,
-    investingCashFlow: -7.0, debtIssuance: 2.0, dividends: -3.5,
-    financingCashFlow: -1.5, netChangeInCash: 7.0,
+    netIncome: 0.8, depreciation: 0.2, changesInWorkingCapital: -0.3,
+    operatingCashFlow: 0.7, capitalExpenditures: -0.3, acquisitions: 0,
+    investingCashFlow: -0.3, debtIssuance: -0.1, dividends: -0.2,
+    financingCashFlow: -0.3, netChangeInCash: 0.1,
   },
 };
 
@@ -98,7 +111,7 @@ export async function createSampleDeal(orgId: string, userId: string): Promise<s
     // 1. Create Company
     const { data: company, error: companyErr } = await supabase
       .from('Company')
-      .insert({ ...LUKHTARA_COMPANY, organizationId: orgId })
+      .insert({ ...WAGONER_COMPANY, organizationId: orgId })
       .select('id')
       .single();
 
@@ -108,7 +121,7 @@ export async function createSampleDeal(orgId: string, userId: string): Promise<s
     const { data: deal, error: dealErr } = await supabase
       .from('Deal')
       .insert({
-        ...LUKHTARA_DEAL,
+        ...WAGONER_DEAL,
         companyId: company.id,
         organizationId: orgId,
         assignedTo: userId,
@@ -119,7 +132,7 @@ export async function createSampleDeal(orgId: string, userId: string): Promise<s
     if (dealErr) throw dealErr;
 
     // 3. Create VDR Folders
-    const folderInserts = LUKHTARA_FOLDERS.map(f => ({
+    const folderInserts = WAGONER_FOLDERS.map(f => ({
       ...f,
       dealId: deal.id,
       createdBy: userId,
@@ -186,7 +199,7 @@ export async function createSampleDeal(orgId: string, userId: string): Promise<s
         dealId: deal.id,
         type: 'DEAL_CREATED',
         title: 'Sample deal created',
-        description: 'Lukhtara Industries added as a sample deal to help you explore PE OS.',
+        description: 'Wagoner Industrial Supply added as a sample deal to help you explore PE OS.',
         userId,
       },
       {
@@ -200,7 +213,7 @@ export async function createSampleDeal(orgId: string, userId: string): Promise<s
 
     await supabase.from('Activity').insert(activities);
 
-    log.info('Sample deal created for new org', { orgId, dealId: deal.id, company: 'Lukhtara Industries' });
+    log.info('Sample deal created for new org', { orgId, dealId: deal.id, company: 'Wagoner Industrial Supply' });
     return deal.id;
   } catch (error) {
     log.error('Failed to create sample deal', error, { orgId });

@@ -35,8 +35,7 @@ export function CimTaskModal({
   // Legacy: when a sample deal is selected, the dropzone transforms to show
   // a green check + sample name (onboarding-tasks.js cim hydrator).
   const SAMPLE_NAMES: Record<string, string> = {
-    luktara: "Luktara Industries -- Specialty Chemicals CIM",
-    pinecrest: "Pinecrest Dermatology -- Healthcare Roll-up",
+    wagoner: "Wagoner Industrial Supply — Industrial Distribution CIM",
   };
   const sampleSelected = sampleId !== null && !file;
 
@@ -136,27 +135,17 @@ export function CimTaskModal({
         />
       </div>
 
-      <div className="text-[12px] text-text-muted text-center my-3">— or try one of these —</div>
+      <div className="text-[12px] text-text-muted text-center my-3">— or try a sample —</div>
 
       <div className="space-y-2">
         <SampleOption
-          id="luktara"
-          title="Luktara Industries"
-          subtitle="Specialty chemicals · $28M EBITDA · 11 red flags"
+          id="wagoner"
+          title="Wagoner Industrial Supply"
+          subtitle="Industrial distribution · $1.9M EBITDA · founder-led, 3rd gen"
           demoBadge
-          selected={sampleId === "luktara"}
+          selected={sampleId === "wagoner"}
           onSelect={() => {
-            onSample("luktara");
-            onFile(null);
-          }}
-        />
-        <SampleOption
-          id="pinecrest"
-          title="Pinecrest Dermatology"
-          subtitle="Healthcare roll-up · $160M revenue"
-          selected={sampleId === "pinecrest"}
-          onSelect={() => {
-            onSample("pinecrest");
+            onSample("wagoner");
             onFile(null);
           }}
         />

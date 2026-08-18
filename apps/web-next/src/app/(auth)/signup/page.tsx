@@ -197,7 +197,7 @@ export default function SignupPage() {
                   value={firmName}
                   onChange={(e) => setFirmName(e.target.value)}
                   className={inputClass}
-                  placeholder="Meridian Capital Partners"
+                  placeholder="Acme Capital Partners"
                   required
                 />
               </div>

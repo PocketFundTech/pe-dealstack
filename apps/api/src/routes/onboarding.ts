@@ -503,14 +503,14 @@ router.get('/research-status', async (req: Request, res: Response) => {
 });
 
 // POST /api/onboarding/create-demo-deal
-// Creates the Luktara Industries sample deal when user selects it during onboarding
+// Creates the Wagoner Industrial Supply sample deal when user selects it during onboarding
 router.post('/create-demo-deal', async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
     const { sampleId } = req.body;
-    if (sampleId !== 'luktara' && sampleId !== 'pinecrest') {
+    if (sampleId !== 'wagoner') {
       return res.status(400).json({ error: 'Invalid sample deal ID' });
     }
 
