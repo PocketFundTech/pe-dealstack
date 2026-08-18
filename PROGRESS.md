@@ -5,6 +5,100 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 65 — August 18, 2026
+
+#### Timestamp: August 18, 2026 — 02:30-13:45 IST
+
+#### Goal: Build and ship the four highest-leverage features identified from the demo-call research, then deploy to production.
+
+**How the four were chosen.** Re-read all 19 demo calls (`.planning/demo-research/demo-calls.md`), the Pascal action plan, and the beachhead/GTM doc, then diffed every ask against what already shipped on `main`. The pattern: the screening half of the funnel was already built (scorecard, client portal, teaser go/no-go, integrations, memos). Every remaining high-value gap sits AFTER the point where a user decides a deal is interesting. Full spec: `docs/plans/2026-08-18-four-feature-build-spec.md`.
+
+#### 1. Document Requests — ask a broker for what is missing
+
+**Problem:** extraction tells the user in 30 seconds that the balance sheet is missing, then abandons them. They email the broker manually, chase for a week, and hand-upload whatever arrives. (Pascal Tier-1 BUILD; Julian M17 "4 hrs/wk requesting missing docs"; Christopher M13 "waiting a month for add-backs"; Peter M19 "respond to broker in 2-3 days across 15-20 deals/mo".)
+
+**Built:** checklist templates (Standard DD / Financials only / QoE prep / Legal & corporate), tokenized public upload page at `/upload/[token]`, Resend email delivery, per-item fulfilment tracking, manual + nightly reminders (3-day floor, 5-day gap, cap 3).
+
+**Key decision:** broker uploads run through `handleDocumentUpload` — the SAME single document pipeline as internal uploads (magic-byte validation, storage, dedup, extraction, VDR folder, RAG) — with `organizationId` derived from the DocRequest row. The token is the credential, so the destination is never caller-controlled. The public GET payload is pinned to an exact key set by test so a future widened `select` can't leak `aiThesis` or `scorecard` to an outsider.
+
+**Bug found by test:** a disallowed file type returned 500 (multer error escaping to Express's default handler) instead of an actionable 400.
+
+#### 2. Deal Reactivation — dormant deals that wake up
+
+**Problem:** a passed deal was a dead card in a column nobody opens; the CRM got less valuable as it filled. (Aryamaan M8, Beco Capital: invests in 4 of 1,500/yr — "the other 1,496 still matter". Martin M14: "a 4/10 becomes an 8/10 in 6-12 months. No tool does this".)
+
+**Built:** PASSED becomes a dormant state carrying a pass reason and a revisit date. Four triggers re-score against current criteria (new financials, changed thesis, revisit date, manual). Material improvements surface on a dashboard widget as "Meridian Logistics: 40 → 78, now inside your size range".
+
+**Root-cause discipline — the cost gate:** eligibility is decided off data already in hand (newest financial per deal, criteria timestamp, revisit date, 14-day cooldown) BEFORE any LLM call. Without it a firm with 300 passed deals would burn 300 LLM calls a night and eat their tier allowance. Pinned by a test asserting the scorer is never called when nothing changed. `PATCH /organizations/criteria` now stamps `updatedAt` — the signal the gate reads.
+
+**Bug found by test:** the revisit check was anchored to `T23:59:59Z`, which would have silently deferred every revisit by a full day.
+
+#### 3. NDA Redlining — review the counterparty's paper
+
+**Problem:** we generated our own NDAs and e-signed them, but ~90% of what a buyer signs is the broker's paper, and that was untouched. (Daniel M4: "30 min manual, up to 5x/day = 2.5 hrs/day" — the largest single time saving quoted in any of the 19 calls.)
+
+**Built:** upload the counterparty NDA, get clause-by-clause findings against a firm playbook, ranked worst-first, with paste-ready replacement language. Ships a default 15-clause buy-side playbook so it works before anyone configures anything; firms override it at `Organization.settings.ndaPlaybook` (no migration).
+
+**Root-cause discipline — grounding:** every quoted span is verified as a verbatim substring of the parsed document before it is persisted or displayed. Whitespace and typographic variants are normalised; digits and words are NOT — "five (5) years" must never match "seven (7) years". Failed quotes are KEPT and flagged (a disappearing finding hides a misbehaving model), the UI suppresses the language with a warning, and each failure logs so the unverified-quote rate stays monitorable. This is Julian M12's LLM-contamination complaint answered concretely.
+
+**Scope cut, stated openly:** no `.docx` with Word tracked changes in v1 — `mammoth` is docx→html only and the existing export path round-trips through Google Drive. v1 ships the in-app report plus copy-to-clipboard.
+
+#### 4. Excel Model Export — the artifact firms actually send
+
+**Problem:** the deliverable a deal team sends its IC and its lender is a spreadsheet. We produced prose and the extraction's value was discarded at the last step. (Evan M15, Himanshu M11, Daniel Callahan — asked unprompted in three separate calls.)
+
+**Built:** seven-sheet `.xlsx` — Cover, Assumptions, Historicals, Projections, Returns (sources & uses, debt schedule, DSCR, IRR, MoM), Sensitivity, Notes.
+
+**Core invariant:** every derived cell is a live Excel formula pointing at the Assumptions sheet, so changing the exit multiple recalculates the model. Pinned by a test that reads the generated file back and fails on any bare number in the projection block. Historicals are written as plain values on purpose — history is fact and must not move when an assumption changes.
+
+**Three bugs found before shipping:**
+- `wacc` and `dscrTarget` were inert input cells and `cashSweepPct` never reached the sheet at all. An input the user can change that moves nothing silently breaks the "this model is live" promise. Added an invariant test (every assumption must drive ≥1 formula), then wired cash sweep into amortisation, DSCR target into a headroom line, and WACC into a DCF cross-check.
+- Cross-sheet ranges emitted `Sheet!A1:Sheet!B2`, which Excel tolerates and Google Sheets rejects.
+- Units: values are normalised to millions before reaching the workbook (`unitScale` can be THOUSANDS/ACTUALS), and mixed currencies are refused with a 400 rather than silently summed.
+
+#### Migrations (the founder's hard gate)
+
+Founder directive: build everything, then run all SQL in Supabase in one pass, and treat an unconfirmed migration as a blocker on any completion claim — not a footnote. Tracked in `docs/PENDING-MIGRATIONS.md`.
+
+All four run by the founder on 2026-08-18 and verified live against the database: 6 new tables, 6 new `Deal` columns, FK + CHECK constraints enforcing (pg 23503/23514), RLS blocking the anon key on every new table (pg 42501 on write, 0 rows on read).
+
+**Verification lesson:** the first RLS probe came back green and was wrong — it returned `PGRST204`, meaning PostgREST rejected the payload shape before it ever reached the database. Re-probed with per-table valid payloads to force Postgres itself to decide.
+
+#### Deploy
+
+Merged to `main` as `a475821` and deployed. Two corrections surfaced during integration:
+
+1. **The four branches were stacked, not independent.** Each was created while standing on the previous one, so `feat/model-export` already contained all seven commits. This had been reported to the founder twice as "independent, mergeable in any order" — wrong, and it changed the merge strategy.
+2. **`main` had moved 8 commits** (PRs #114-#116: native CIM ingest, CI lint cleanup). Merged `origin/main` into the stack first and resolved there — one conflict, `package-lock.json`, regenerated via `npm install` rather than hand-merged.
+
+#### Production bug caught by live smoke test — `/upload/[token]` returned 307
+
+**Problem:** the broker upload page redirected to `/login`. A broker clicking the emailed link would land on a login screen — the feature was dead in production.
+
+**Root cause:** `/upload` was missing from `PUBLIC_PAGE_PREFIXES` in `src/lib/supabase/routing.ts`. `/portal` was already listed with the comment "token IS the credential"; `/upload` needed to sit beside it.
+
+**Why nothing caught it:** middleware only runs on real page navigations, so the entire API test suite was green while the feature was broken. Fixed in `ab158d1` with a routing test covering both token-gated external pages.
+
+#### Verification (all run, output confirmed)
+
+- API: **1514 → 1744** tests passing, 0 failures
+- web-next: **279 → 288** tests passing, 0 failures
+- `tsc --noEmit`: clean in both apps
+- Lint: **0 errors** (main's PR #115 cleared the prior 19; this work adds none)
+- Production build (`npm run build`): **exit 0**
+- Bundle-route parity test: passing
+- All 12 new routes verified mounted in the bundle `pickBundle` actually sends them to
+- 15/15 live production smoke probes passing against `https://lmmos.ai`
+- All 4 migrations verified live post-deploy
+
+#### Open item
+
+`CRON_SECRET` presence in the Vercel production environment could not be verified from outside — both new cron routes return 401 whether the secret is wrong OR unset. The pre-existing signal-scan cron implies it is set, but if it is not, both new crons will silently never run. Needs a founder check in the Vercel dashboard.
+
+---
+
+---
+
 ### Session 64 — July 31, 2026
 
 #### Timestamp: July 31, 2026 — 19:00-19:45 IST
