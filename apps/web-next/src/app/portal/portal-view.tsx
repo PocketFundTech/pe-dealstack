@@ -5,7 +5,7 @@
 
 import DOMPurify from "dompurify";
 import Link from "next/link";
-import { formatCurrency } from "@/lib/formatters";
+import { formatCurrency, formatFinancialValue, formatPercent } from "@/lib/formatters";
 
 // Same allowlist approach as memo-builder/editor.tsx's sanitizeHtml — memo
 // content is stored as HTML; strip everything unsafe before rendering.
@@ -35,7 +35,7 @@ export interface PortalPayload {
     ebitda?: number | null;
     currency?: string | null;
   };
-  financials?: Array<{ statementType: string; period: string; lineItems: Record<string, number> }>;
+  financials?: Array<{ statementType: string; period: string; lineItems: Record<string, number>; unitScale?: string | null; currency?: string | null }>;
   documents?: Array<{ id: string; name: string; type?: string | null; fileSize?: number | null }>;
   memos?: Array<{ id: string; title: string; sections: Array<{ title: string; content: string }> }>;
 }
@@ -53,6 +53,36 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className="text-lg font-bold text-gray-900">{value}</div>
     </div>
   );
+}
+
+// Percentage/ratio line items (`ebitda_margin_pct`, `gross_margin_pct`) are
+// unitless — formatting them as currency printed "$40.3M" for a 40.3% gross
+// margin on a CLIENT-FACING page (found 2026-08-18 by browser QA). Mirrors
+// isPctKey in the internal deal-financials formatters.
+function isPctKey(key: string): boolean {
+  return key.endsWith("_pct") || key.endsWith("_margin");
+}
+
+/** snake_case metric key -> human label ("ppe_net" -> "PP&E, net"). */
+const LABEL_OVERRIDES: Record<string, string> = {
+  cogs: "COGS",
+  sga: "SG&A",
+  da: "D&A",
+  ebit: "EBIT",
+  ebitda: "EBITDA",
+  ppe_net: "PP&E, net",
+  fcf: "Free cash flow",
+  capex: "CapEx",
+};
+
+function humanizeMetric(key: string): string {
+  if (LABEL_OVERRIDES[key]) return LABEL_OVERRIDES[key];
+  const base = key.replace(/_pct$/, "");
+  const label = base
+    .split("_")
+    .map((w) => LABEL_OVERRIDES[w] ?? w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+  return key.endsWith("_pct") ? `${label} %` : label;
 }
 
 export function PortalView({ state, token }: { state: PortalState; token: string }) {
@@ -121,11 +151,19 @@ export function PortalView({ state, token }: { state: PortalState; token: string
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <tbody>
-                        {Object.entries(s.lineItems || {}).map(([label, value]) => (
+                        {Object.entries(s.lineItems || {})
+                          .filter(([label]) => !label.endsWith("_source"))
+                          .map(([label, value]) => (
                           <tr key={label} className="border-t border-gray-100">
-                            <td className="py-1.5 text-gray-600">{label}</td>
-                            <td className="py-1.5 text-right font-medium text-gray-900">
-                              {typeof value === "number" ? formatCurrency(value, deal.currency ?? undefined) : String(value)}
+                            <td className="py-1.5 text-gray-600">{humanizeMetric(label)}</td>
+                            <td className="py-1.5 text-right font-medium text-gray-900 tabular-nums">
+                              {typeof value !== "number"
+                                ? String(value)
+                                : isPctKey(label)
+                                  ? formatPercent(value)
+                                  : formatFinancialValue(value, (s.unitScale ?? undefined) as never, {
+                                      currency: s.currency ?? deal.currency ?? undefined,
+                                    })}
                             </td>
                           </tr>
                         ))}

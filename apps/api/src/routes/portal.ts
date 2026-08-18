@@ -108,11 +108,20 @@ router.get('/:token', async (req, res) => {
     if (share.includeFinancials) {
       const { data: statements } = await supabase
         .from('FinancialStatement')
-        .select('statementType, period, lineItems')
+        .select('statementType, period, lineItems, unitScale, currency')
         .eq('dealId', share.dealId)
         .eq('isActive', true)
         .order('period', { ascending: false });
-      payload.financials = statements ?? [];
+      // Strip `*_source` provenance keys before they leave the building. They
+      // are internal extraction breadcrumbs ("Adjusted EBITDA 6,900 8,400
+      // 10,200"), not metrics — an external viewer was seeing them rendered
+      // as line items with dollar signs (found 2026-08-18 by browser QA).
+      payload.financials = (statements ?? []).map((s: { lineItems: Record<string, unknown> | null }) => ({
+        ...s,
+        lineItems: Object.fromEntries(
+          Object.entries(s.lineItems ?? {}).filter(([k]) => !k.endsWith('_source')),
+        ),
+      }));
     }
 
     if (share.includeDocuments) {
