@@ -99,6 +99,22 @@ Merged to `main` as `a475821` and deployed. Two corrections surfaced during inte
 
 **`CRON_SECRET` hardening** (`ba59417`) — the secret's presence in Vercel prod is unverifiable from outside: both cron routes return an identical 401 whether the secret is wrong or unset. That response behaviour is correct (never leak configuration state to an unauthenticated caller) but it meant a misconfigured environment would fail invisibly forever. The two cases are now distinguishable in the logs: a missing secret logs an explicit error naming the variable and the cron; a wrong secret stays an ordinary rejected request with no error log, so the real signal isn't buried in noise.
 
+#### Post-deploy: two features were silently 100% broken in production
+
+While closing out, PRs #117/#118 landed from a QA pass. #118 fixed `routes/portal.ts` selecting `companyName` off `Deal` — a column that does not exist. Auditing every `Deal` select in the repo against the live schema found the same defect in five more places, three of them in this session's work:
+
+- `doc-request-portal.ts` — 404'd EVERY valid broker upload link. Document Requests was 100% dead.
+- `deals-model.ts` — selected BOTH `companyName` and `evMultiple` (neither exists). Model Export was 100% dead. Entry multiple is now derived as `dealSize / ebitda`.
+- `deals-reactivations.ts` — feed rendered with null deal names.
+- `documents-sharing.ts` (pre-existing) — every share email said "a deal".
+- `folders-insights.ts` (pre-existing) — folder AI insights generated with no deal context, silently.
+
+**Root cause of the miss:** PostgREST errors the *whole* query when a select names a missing column and returns null data, which each call site read as "not found". The tests could not catch it because the `Deal` mocks returned their fixture regardless of the select string. All three route suites now model PostgREST for real (unknown column → error + null data) and carry the actual production column list — verified red against the unfixed routes, green after.
+
+**Verified in production end-to-end:** created a real `DocRequest` against a live deal, fetched `/api/public/doc-requests/<token>` anonymously → 200 with correct deal name, company name via the relation, firm name, items, the exact whitelist key set, and no leaked fields. Test row deleted (0 rows remaining). All five corrected selects execute cleanly against the live schema.
+
+Also noted: `tests/rate-limit-ai.test.ts` is intermittently flaky under parallel workers (stateful rate-limit counters). Failed once in a full run, passed in isolation and in two subsequent full runs; the same suite passes on clean `main`. Not caused by this work, but it will bite CI eventually.
+
 #### Still open
 
 Founder to confirm `CRON_SECRET` exists for Production in the Vercel project environment. If it does not, the two new crons will not run — and the hardened logging above will now say so explicitly at 07:00/08:00 UTC.
