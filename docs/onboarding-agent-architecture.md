@@ -1,4 +1,4 @@
-# PE OS -- Onboarding & Firm Research Agent Architecture
+# Avise -- Onboarding & Firm Research Agent Architecture
 
 ## 1. User Flow: Signup to Dashboard
 

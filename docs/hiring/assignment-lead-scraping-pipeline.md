@@ -1,17 +1,17 @@
-# PE OS — Technical Assignment
+# Avise — Technical Assignment
 
 ## Lead Scraping Pipeline — Yellow Pages USA & Yelp
 
-> **Company:** PE OS — AI-Powered CRM for Private Equity
+> **Company:** Avise — AI-Powered CRM for Private Equity
 > **Format:** Fork the repo, complete all 5 tasks, submit a single PR
 > **Time:** 5-7 days (part-time, use any AI tools you want)
 > **Stack:** Node.js / Express / TypeScript / Supabase (PostgreSQL) / GPT-4o
 
 ---
 
-## About PE OS
+## About Avise
 
-PE OS is an AI-powered CRM for private equity firms. Deal teams use our platform to source deals, manage pipeline, and evaluate companies. One of the biggest pain points: **finding companies to acquire.**
+Avise is an AI-powered CRM for private equity firms. Deal teams use our platform to source deals, manage pipeline, and evaluate companies. One of the biggest pain points: **finding companies to acquire.**
 
 Your assignment: **build a lead scraping pipeline** that pulls business data from Yellow Pages USA and Yelp, enriches it with AI, and feeds it into our deal pipeline as potential acquisition targets.
 

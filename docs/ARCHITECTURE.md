@@ -1,4 +1,4 @@
-# PE OS Technical Architecture
+# Avise Technical Architecture
 
 **For Y Combinator Demo & Technical Review**
 **Version:** 1.0
@@ -7,11 +7,11 @@
 
 ## System Overview
 
-PE OS is an AI-powered CRM platform for Private Equity firms, enabling deal management, document analysis, and investment memo generation.
+Avise is an AI-powered CRM platform for Private Equity firms, enabling deal management, document analysis, and investment memo generation.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                              PE OS Architecture                               │
+│                              Avise Architecture                               │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   ┌────────────────────────────────────────────────────────────────────┐    │

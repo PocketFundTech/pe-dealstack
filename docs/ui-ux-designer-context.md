@@ -1,4 +1,4 @@
-# PE OS — UI/UX Designer Context Document
+# Avise — UI/UX Designer Context Document
 
 > Product: AI-powered CRM for Private Equity deal management
 > Stack: Vanilla JS frontend + React (VDR only) | Tailwind CSS | Material Symbols icons
@@ -79,7 +79,7 @@
 
 ```
 +---------------------------+
-| [icon] PE OS        [<<]  |  64px header
+| [icon] Avise        [<<]  |  64px header
 +---------------------------+
 | [icon] Dashboard          |
 | [icon] Deals              |
@@ -361,7 +361,7 @@ AI-powered deal creation — upload a document and the AI extracts company info,
 Bulk import for firms migrating from spreadsheets or other CRMs.
 
 - **Step 1 — Upload:** Drag-and-drop CSV/Excel or paste tabular data. Two tabs (Upload File vs Paste Data). Max 5MB, 500 deals per import.
-- **Step 2 — AI Column Mapping:** GPT-4o analyzes source columns and suggests mappings to PE OS fields. Each mapping shows confidence score — green (>=80%) = auto-matched, amber (<80%) = needs review. Unmapped columns shown as "Custom Field" (orange badge) — stored in deal's `customFields` JSONB. User can override any mapping via dropdown.
+- **Step 2 — AI Column Mapping:** GPT-4o analyzes source columns and suggests mappings to Avise fields. Each mapping shows confidence score — green (>=80%) = auto-matched, amber (<80%) = needs review. Unmapped columns shown as "Custom Field" (orange badge) — stored in deal's `customFields` JSONB. User can override any mapping via dropdown.
 - **Step 3 — Preview:** Table showing mapped data (max 50 rows). Valid/invalid row counts. Shows data transformations: `$5M` → 5, `15%` → 0.15, `3.5x` → 3.5. "Import N Deals" button.
 - **Step 4 — Results:** Success/failure summary. Green check = "X deals imported successfully!" Shows: deals created, new companies auto-created, failed rows with reasons (e.g., "Row 12: Missing company name").
 - **Why it matters:** Firms switching from Excel tracking can import their entire pipeline in one shot with AI mapping — no manual column matching.
@@ -604,7 +604,7 @@ Upload → "Pending Analysis" (gray) → Text extraction → "Ready for AI" (amb
 - **70+ financial line items** across 3 statement types
 
 **6. AI Financial Analysis** (collapsible, hidden until financials exist)
-- **Why it matters:** Once financials are extracted, PE OS runs a full analysis suite automatically — QoE scores, ratios, red flags, valuation screens. This is the "intelligence layer" on top of raw numbers.
+- **Why it matters:** Once financials are extracted, Avise runs a full analysis suite automatically — QoE scores, ratios, red flags, valuation screens. This is the "intelligence layer" on top of raw numbers.
 - **7 tabs:**
 
 | Tab | What It Shows | Why PE Professionals Need It |
@@ -664,7 +664,7 @@ All AI features use the emerald accent (`#059669`) to visually distinguish them 
 | **AI Search / Portfolio Chat** | Header (all pages) | Natural language queries across all deals and documents | Cmd+K or search bar |
 | **Deal Chat** | Deal detail page | Conversational Q&A about a specific deal with financial context | Type in chat panel |
 | **Deal Ingestion** | Header button | AI reads uploaded CIM/PDF and extracts company info + financials to create a deal | "Ingest Deal Data" button |
-| **Deal Import Mapping** | CRM page | GPT-4o auto-maps CSV/Excel columns to PE OS fields during bulk import | "Import Deals" button |
+| **Deal Import Mapping** | CRM page | GPT-4o auto-maps CSV/Excel columns to Avise fields during bulk import | "Import Deals" button |
 | **Financial Extraction** | Deal page / VDR | AI reads PDF/Excel documents and populates 70+ financial line items across 3 statement types | Automatic on upload or manual "Re-extract" |
 | **Financial Analysis** | Deal page | Runs QoE scoring, ratio analysis, DuPont decomposition, LBO screening, red flag detection on extracted financials | Automatic after extraction |
 | **Folder Insights** | VDR | Analyzes all documents in a folder for completeness, red flags, and missing documents | "Generate AI Insights" button |
@@ -687,7 +687,7 @@ Guides first-time users through the product. Shown only to new accounts.
 
 ### Welcome Modal (first login only)
 - Full-screen modal with rocket icon and backdrop blur
-- Title: "Welcome to PE OS"
+- Title: "Welcome to Avise"
 - 3 step cards explaining the product:
   1. Upload a CIM → AI extracts financials in seconds
   2. Chat with Your Deals → Ask natural language questions

@@ -1,4 +1,4 @@
-# LangChain & LangGraph Integration — PE OS
+# LangChain & LangGraph Integration — Avise
 
 ---
 

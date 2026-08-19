@@ -1,4 +1,4 @@
-# PE OS — Go-To-Market Strategy
+# Avise — Go-To-Market Strategy
 
 **Product:** AI-Powered CRM for Private Equity Deal Management
 **Stage:** Early-stage, live product on Vercel (pe-dealstack.vercel.app)
@@ -71,7 +71,7 @@ Skip the waitlist. The product is live. Instead, offer a **14-day free trial** w
 ### Landing Page Must-Haves
 Your `landingpage.html` needs these specific sections:
 1. **Hero:** "AI-Powered Deal Management for PE" + 30-sec demo GIF showing CIM upload → financial extraction
-2. **Pain → Solution:** 3 panels — (a) Manual CIM analysis takes hours → AI does it in 30 seconds, (b) Scattered deal data → unified pipeline, (c) $50K/yr CRM tools → PE OS at 10% of the cost
+2. **Pain → Solution:** 3 panels — (a) Manual CIM analysis takes hours → AI does it in 30 seconds, (b) Scattered deal data → unified pipeline, (c) $50K/yr CRM tools → Avise at 10% of the cost
 3. **Live Product Screenshots:** Deal pipeline, VDR, financial extraction results, memo builder
 4. **Social Proof:** Even without customers — use "Built by PE professionals" + logos of tech stack (Supabase, OpenAI, etc.) + "Trusted by X deals processed"
 5. **Pricing:** Transparent. Show 2 tiers. Don't hide pricing behind "Contact Sales."
@@ -96,7 +96,7 @@ Your `landingpage.html` needs these specific sections:
 #### 1. LinkedIn (Highest Priority)
 PE professionals live on LinkedIn. This is your #1 channel.
 
-- **Launch post format:** Personal story + product. "After watching PE associates spend 6 hours per CIM on manual data entry, I built PE OS..."
+- **Launch post format:** Personal story + product. "After watching PE associates spend 6 hours per CIM on manual data entry, I built Avise..."
 - **Include:** Demo GIF, 3 bullet features, pricing, link
 - **When:** Tuesday or Wednesday, 8:00 AM EST
 - **Tag:** 5-10 PE professionals you know. Ask 20 people to comment in the first hour (algorithm boost)
@@ -147,8 +147,8 @@ Good for credibility + backlinks, but PE buyers aren't browsing PH.
 
 **3 Communities to Engage:**
 1. **SearchFunder.com** — Search fund / ETA operators actively building deal flow. Underserved by existing tools. Become a regular contributor before pitching.
-2. **PE Stack (pestack.com)** — PE technology review community. Get PE OS listed and reviewed.
-3. **Emerging Manager community on LinkedIn** — Follow/engage with accounts like @PrivateEquityGuy, @BuyoutInsider. Comment on their posts consistently for 4 weeks before sharing PE OS.
+2. **PE Stack (pestack.com)** — PE technology review community. Get Avise listed and reviewed.
+3. **Emerging Manager community on LinkedIn** — Follow/engage with accounts like @PrivateEquityGuy, @BuyoutInsider. Comment on their posts consistently for 4 weeks before sharing Avise.
 
 **2 Partnership Opportunities:**
 1. **PE-focused accounting firms** (Grant Thornton PE practice, BDO, Citrin Cooperman) — they advise emerging managers on tech stack. Offer referral commission (15-20% first year).
@@ -200,7 +200,7 @@ Good for credibility + backlinks, but PE buyers aren't browsing PH.
 
 Based on competitive positioning:
 
-| | DealCloud | 4Degrees | Affinity | **PE OS** |
+| | DealCloud | 4Degrees | Affinity | **Avise** |
 |---|-----------|----------|----------|-----------|
 | Price | $50K+/yr | $25K+/yr | $30K+/yr | **$6-18K/yr** |
 | AI Extraction | No | No | No | **Yes** |
@@ -229,4 +229,4 @@ Based on competitive positioning:
 
 ---
 
-*Generated using PE OS GTM Strategy Framework — March 25, 2026*
+*Generated using Avise GTM Strategy Framework — March 25, 2026*

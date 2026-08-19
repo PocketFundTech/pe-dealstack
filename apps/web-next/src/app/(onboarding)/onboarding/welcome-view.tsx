@@ -31,7 +31,7 @@ export function WelcomeView({
             <span className="block text-text-muted">Three short steps.</span>
           </h1>
           <p className="mt-5 text-[15px] text-text-secondary max-w-lg leading-relaxed">
-            Tell us who you are, drop in a CIM, and we&apos;ll show you what PE OS does. No prompts to write. No training required.
+            Tell us who you are, drop in a CIM, and we&apos;ll show you what Avise does. No prompts to write. No training required.
           </p>
           <div className="mt-8 flex items-center gap-3 flex-wrap">
             <button

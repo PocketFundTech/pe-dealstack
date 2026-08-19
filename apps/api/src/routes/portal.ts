@@ -83,7 +83,7 @@ router.get('/:token', async (req, res) => {
     const payload: Record<string, unknown> = {
       share: {
         label: share.label,
-        sharedBy: org?.name ?? 'a PE OS user',
+        sharedBy: org?.name ?? 'a Avise user',
         includeFinancials: share.includeFinancials,
         includeDocuments: share.includeDocuments,
         includeMemos: share.includeMemos,

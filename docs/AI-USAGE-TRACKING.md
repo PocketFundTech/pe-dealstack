@@ -7,7 +7,7 @@
 
 ## Why it exists
 
-PE OS is in beta. Every user on the platform shares a single OpenAI/OpenRouter/Gemini/Anthropic API key. Before this system existed, there was zero per-user attribution of AI consumption. If a user — intentionally or not — triggered runaway token use (scripted abuse, a leaked auth token, a misbehaving agent loop), we had no way to know who caused it, no way to measure the impact, and no way to intervene before the invoice arrived.
+Avise is in beta. Every user on the platform shares a single OpenAI/OpenRouter/Gemini/Anthropic API key. Before this system existed, there was zero per-user attribution of AI consumption. If a user — intentionally or not — triggered runaway token use (scripted abuse, a leaked auth token, a misbehaving agent loop), we had no way to know who caused it, no way to measure the impact, and no way to intervene before the invoice arrived.
 
 Concretely: roughly 20 server files were making LLM calls with no idea who initiated them. The OpenAI/OpenRouter dashboard is a single unbucketed total. We could not answer "who consumed the most yesterday?" or "which operation drove the spike?" The system also needed to exist *now* — before any paid-tier work — so that when we introduce billing later, the attribution data is already there. Building it retroactively from API logs would be lossy and painful.
 

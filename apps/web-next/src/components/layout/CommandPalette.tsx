@@ -368,7 +368,7 @@ export function CommandPalette() {
             </kbd>
             {" "}Open
           </span>
-          <span className="text-gray-400">PE OS Command Palette</span>
+          <span className="text-gray-400">Avise Command Palette</span>
         </div>
       </div>
     </div>,

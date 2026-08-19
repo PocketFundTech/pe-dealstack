@@ -3,7 +3,7 @@
 > **Audience:** Engineers joining the team. Read this once; you'll know what every directory does.
 > **Last verified:** 2026-04-29 against the live codebase.
 
-PE OS is a multi-tenant AI-native CRM for private-equity firms. It is a Turborepo monorepo with **two frontends** (a Next.js 16 app that is the primary product surface and a legacy vanilla JS app being migrated away from) and **one Express API** backed by Supabase.
+Avise is a multi-tenant AI-native CRM for private-equity firms. It is a Turborepo monorepo with **two frontends** (a Next.js 16 app that is the primary product surface and a legacy vanilla JS app being migrated away from) and **one Express API** backed by Supabase.
 
 ## Top-down picture
 

@@ -1,4 +1,4 @@
-# PE OS — AI-Native Deal CRM for Private Equity
+# Avise — AI-Native Deal CRM for Private Equity
 
 A multi-tenant AI-powered CRM purpose-built for PE firms and search funds. Track deal flow, ingest CIMs, extract financials with a self-correcting agent, draft IC memos, and run portfolio-wide AI analysis.
 

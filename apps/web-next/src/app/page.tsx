@@ -45,7 +45,7 @@ export default function LandingPage() {
                 </div>
                 {/*
                   Removed: an unqualified "SOC 2 Type II Compliant" badge.
-                  PE OS is not certified — SOC 2 Type I is in progress, per
+                  Avise is not certified — SOC 2 Type I is in progress, per
                   /security. Only our sub-processors hold Type II. Do not
                   reinstate any compliance badge until an auditor issues the
                   report; state sub-processor certifications on /security only,
@@ -162,7 +162,7 @@ export default function LandingPage() {
             <div className="col-span-2 lg:col-span-2">
               <div className="flex items-center gap-2 mb-4">
                 <Logo className="size-6 text-primary" />
-                <h2 className="text-lg font-bold text-[#111418]">PE OS</h2>
+                <h2 className="text-lg font-bold text-[#111418]">Avise</h2>
               </div>
               <p className="text-slate-500 text-sm leading-relaxed mb-6 max-w-xs">
                 The operating system for the modern private equity firm. Intelligence, automation, and execution in one platform.
@@ -201,7 +201,7 @@ export default function LandingPage() {
             </div>
           </div>
           <div className="border-t border-slate-200 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-            <p className="text-sm text-slate-400">&copy; 2026 PE OS. All rights reserved.</p>
+            <p className="text-sm text-slate-400">&copy; 2026 Avise. All rights reserved.</p>
             <div className="flex gap-6 text-sm text-slate-400">
               <Link className="hover:text-primary transition-colors" href="/privacy-policy">Privacy Policy</Link>
               <Link className="hover:text-primary transition-colors" href="/terms-of-service">Terms of Service</Link>

@@ -3,9 +3,9 @@ import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 import { PricingTable } from "./PricingTable";
 
 export const metadata: Metadata = {
-  title: "Institutional Pricing Plans - PE OS",
+  title: "Institutional Pricing Plans - Avise",
   description:
-    "Flexible pricing plans for PE OS. From emerging managers to global institutions, find the right plan for your private equity firm's needs.",
+    "Flexible pricing plans for Avise. From emerging managers to global institutions, find the right plan for your private equity firm's needs.",
 };
 
 type Cell = { type: "text"; value: string } | { type: "check" } | { type: "cross" };
@@ -156,7 +156,7 @@ export default function PricingPage() {
               Ready to modernize your deal flow?
             </h2>
             <p className="text-[#64748b] text-center max-w-2xl mb-8">
-              Join the hundreds of investment firms already using PE OS to gain a
+              Join the hundreds of investment firms already using Avise to gain a
               competitive information advantage.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">

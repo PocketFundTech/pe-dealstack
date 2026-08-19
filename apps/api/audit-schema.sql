@@ -1,5 +1,5 @@
 -- ============================================================
--- Audit Log Schema for PE OS
+-- Audit Log Schema for Avise
 -- Tracks all sensitive actions for compliance and security
 -- ============================================================
 

@@ -115,7 +115,7 @@ function AcceptInviteContent() {
         <div className="max-w-[1280px] mx-auto px-6 h-16 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3 text-[#111418] cursor-pointer select-none">
             <Logo className="size-8 text-primary" />
-            <h2 className="text-xl font-bold leading-tight tracking-tight">PE OS</h2>
+            <h2 className="text-xl font-bold leading-tight tracking-tight">Avise</h2>
           </Link>
           <div className="flex items-center gap-4">
             <span className="text-sm font-medium text-[#617289] hidden sm:block">
@@ -357,7 +357,7 @@ function AcceptInviteContent() {
       {/* Footer */}
       <footer className="border-t border-[#e5e7eb] py-6 bg-white">
         <div className="max-w-[1280px] mx-auto px-6 text-center text-sm text-[#617289]">
-          &copy; 2026 PE OS. All rights reserved.
+          &copy; 2026 Avise. All rights reserved.
         </div>
       </footer>
     </div>

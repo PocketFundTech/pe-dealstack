@@ -10,20 +10,20 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: {
-    default: "PE OS — Private Equity Operating System",
-    template: "%s | PE OS",
+    default: "Avise — Private Equity Operating System",
+    template: "%s | Avise",
   },
   description: "AI-powered deal flow management, institutional CRM, and portfolio intelligence for modern Private Equity firms.",
   icons: { icon: "/favicon.svg" },
   openGraph: {
-    title: "PE OS — Private Equity Operating System",
+    title: "Avise — Private Equity Operating System",
     description: "Automate deal flow analysis and unify your institutional CRM with the world's first AI-native PE operating system.",
     type: "website",
-    siteName: "PE OS",
+    siteName: "Avise",
   },
   twitter: {
     card: "summary_large_image",
-    title: "PE OS — Private Equity Operating System",
+    title: "Avise — Private Equity Operating System",
     description: "AI-powered deal flow management for modern Private Equity firms.",
   },
   robots: {

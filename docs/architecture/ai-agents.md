@@ -1,6 +1,6 @@
 # AI Agents
 
-> Eight agents power every AI feature in PE OS. They live in [`apps/api/src/services/agents/`](../../apps/api/src/services/agents/) and all route through the unified LLM client at [`services/llm.ts`](../../apps/api/src/services/llm.ts).
+> Eight agents power every AI feature in Avise. They live in [`apps/api/src/services/agents/`](../../apps/api/src/services/agents/) and all route through the unified LLM client at [`services/llm.ts`](../../apps/api/src/services/llm.ts).
 
 Big picture: [`docs/diagrams/12-ai-agents-architecture.mmd`](../diagrams/12-ai-agents-architecture.mmd).
 

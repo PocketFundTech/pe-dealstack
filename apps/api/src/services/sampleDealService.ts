@@ -186,7 +186,7 @@ export async function createSampleDeal(orgId: string, userId: string): Promise<s
         dealId: deal.id,
         type: 'DEAL_CREATED',
         title: 'Sample deal created',
-        description: 'Lukhtara Industries added as a sample deal to help you explore PE OS.',
+        description: 'Lukhtara Industries added as a sample deal to help you explore Avise.',
         userId,
       },
       {

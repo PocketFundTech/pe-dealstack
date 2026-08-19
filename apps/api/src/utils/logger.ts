@@ -1,5 +1,5 @@
 /**
- * Structured Logger for PE OS API
+ * Structured Logger for Avise API
  * Uses Pino for fast, structured logging
  */
 

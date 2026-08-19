@@ -1,11 +1,11 @@
-# PE OS — AI Features Testing Guide
+# Avise — AI Features Testing Guide
 
 **For:** QA / Non-technical team members
 **Last Updated:** March 10, 2026
 **What this covers:** Step-by-step instructions to test all 5 AI-powered features built in Sessions 35-36.
 
 > **Prerequisites:**
-> - You must be logged in to PE OS
+> - You must be logged in to Avise
 > - You need at least 1 deal and 1 contact in the system
 > - The API server must be running (ask the dev team if unsure)
 

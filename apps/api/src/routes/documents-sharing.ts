@@ -171,13 +171,13 @@ router.post('/deals/:dealId/document-requests', async (req, res) => {
 
       try {
         await resend.emails.send({
-          from: `PE OS <${fromEmail}>`,
+          from: `Avise <${fromEmail}>`,
           to: recipientEmails,
           subject: `Document Requested: ${documentName} — ${dealName}`,
           html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff;">
               <div style="background: linear-gradient(135deg, #003366, #0055aa); padding: 32px; text-align: center; border-radius: 8px 8px 0 0;">
-                <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">PE OS</h1>
+                <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">Avise</h1>
                 <p style="color: #b3d1ff; margin: 8px 0 0; font-size: 14px;">Document Request</p>
               </div>
               <div style="padding: 32px;">
@@ -199,7 +199,7 @@ router.post('/deals/:dealId/document-requests', async (req, res) => {
               <hr style="border: none; border-top: 1px solid #eef2f7; margin: 0;" />
               <div style="padding: 20px 32px; text-align: center;">
                 <p style="color: #aaa; font-size: 12px; margin: 0;">
-                  PE OS — AI-Powered Private Equity CRM
+                  Avise — AI-Powered Private Equity CRM
                 </p>
               </div>
             </div>

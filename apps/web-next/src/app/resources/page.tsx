@@ -3,9 +3,9 @@ import Link from "next/link";
 import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 
 export const metadata: Metadata = {
-  title: "Resources - PE OS",
+  title: "Resources - Avise",
   description:
-    "Resources for PE OS users. Documentation, API reference, help center and more — a richer landing page is coming soon.",
+    "Resources for Avise users. Documentation, API reference, help center and more — a richer landing page is coming soon.",
 };
 
 const RESOURCE_LINKS = [

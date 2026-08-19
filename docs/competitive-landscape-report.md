@@ -1,7 +1,7 @@
 # PE CRM Competitive Landscape Report
 
 **Date:** March 15, 2026
-**Purpose:** Market research for PE OS positioning, pricing, and feature prioritization
+**Purpose:** Market research for Avise positioning, pricing, and feature prioritization
 
 ---
 
@@ -14,7 +14,7 @@
 5. [AI Adoption in Private Equity](#5-ai-adoption-in-private-equity)
 6. [AI Due Diligence Tools (Adjacent Competitors)](#6-ai-due-diligence-tools-adjacent-competitors)
 7. [PE Tech Stack Landscape](#7-pe-tech-stack-landscape)
-8. [Strategic Implications for PE OS](#8-strategic-implications-for-pe-os)
+8. [Strategic Implications for Avise](#8-strategic-implications-for-avise)
 
 ---
 
@@ -457,7 +457,7 @@
 - PE firms prioritizing AI for EBITDA growth: predictive pricing, supply chain optimization, customer analytics
 - Hyperscalers invested ~$415B in AI infrastructure in 2025; $5-8 trillion expected by 2030
 
-### AI Due Diligence Market (Direct Competition for PE OS Financial Features)
+### AI Due Diligence Market (Direct Competition for Avise Financial Features)
 - **ToltIQ:** AI-driven due diligence platform; bulk document querying, data chat for Excel, document summaries
 - **Keye:** Built by PE investors; transforms raw deal files into structured, investor-ready outputs
 - **F2:** Coordinator agent breaks questions into tasks across data room documents
@@ -468,7 +468,7 @@
 
 ## 6. AI Due Diligence Tools (Adjacent Competitors)
 
-These tools overlap with PE OS's financial extraction and analysis capabilities:
+These tools overlap with Avise's financial extraction and analysis capabilities:
 
 | Tool | Focus | Key Capability |
 |------|-------|----------------|
@@ -479,7 +479,7 @@ These tools overlap with PE OS's financial extraction and analysis capabilities:
 | **Dealroom.net** | VDR + AI | AI-powered data room analysis |
 | **Datasite** | Secure M&A platform | Data rooms, complex transaction management |
 
-**PE OS differentiator:** None of these tools combine CRM + deal management + AI financial extraction + LangGraph agent analysis in a single platform. They are point solutions for due diligence only.
+**Avise differentiator:** None of these tools combine CRM + deal management + AI financial extraction + LangGraph agent analysis in a single platform. They are point solutions for due diligence only.
 
 ---
 
@@ -487,7 +487,7 @@ These tools overlap with PE OS's financial extraction and analysis capabilities:
 
 Modern PE firms need tools across these categories:
 
-| Category | Common Tools | PE OS Coverage |
+| Category | Common Tools | Avise Coverage |
 |----------|-------------|----------------|
 | **CRM/Deal Flow** | DealCloud, Affinity, 4Degrees | Yes (core) |
 | **Company Intelligence** | Grata, PitchBook, S&P Capital IQ | Partial (AI sourcing potential) |
@@ -499,15 +499,15 @@ Modern PE firms need tools across these categories:
 | **Communication** | Outlook, Zoom, Teams | Via integrations |
 | **Document Analysis** | ToltIQ, Keye, F2 | Yes (built-in) |
 
-**Key insight:** No single platform covers the full PE tech stack. PE OS's combination of CRM + VDR + AI financial analysis is unique.
+**Key insight:** No single platform covers the full PE tech stack. Avise's combination of CRM + VDR + AI financial analysis is unique.
 
 ---
 
-## 8. Strategic Implications for PE OS
+## 8. Strategic Implications for Avise
 
 ### 8.1 Competitive Positioning
 
-**PE OS occupies a unique position** that no existing competitor matches:
+**Avise occupies a unique position** that no existing competitor matches:
 - **CRM + VDR + AI Financial Intelligence** in one platform
 - DealCloud has CRM + deal management but no AI financial extraction
 - Affinity has relationship intelligence but no VDR or financial analysis

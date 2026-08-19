@@ -144,7 +144,7 @@ export function Sidebar() {
         <Link href="/dashboard" className="flex items-center gap-2 text-primary">
           <Logo className="size-7 shrink-0" />
           {!collapsed && (
-            <h2 className="logo-text text-xl font-bold tracking-tight text-primary">PE OS</h2>
+            <h2 className="logo-text text-xl font-bold tracking-tight text-primary">Avise</h2>
           )}
         </Link>
       </div>

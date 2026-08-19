@@ -108,7 +108,7 @@ export default function SignupPage() {
               <path d="M12 2L2 12L12 22L22 12L12 2Z" fill="#003366" />
             </svg>
             <span className="font-display font-bold text-[15px] tracking-tight text-primary">
-              PE OS
+              Avise
             </span>
           </Link>
           <div className="flex items-center gap-4">
@@ -138,7 +138,7 @@ export default function SignupPage() {
               Create your workspace
             </h1>
             <p className="mt-2 text-[14px] text-text-secondary">
-              Set up your PE OS account in under a minute.
+              Set up your Avise account in under a minute.
             </p>
           </div>
 

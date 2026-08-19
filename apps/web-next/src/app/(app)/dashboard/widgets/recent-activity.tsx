@@ -137,7 +137,7 @@ export function RecentActivityWidget() {
                     <div className="flex-1 pt-0.5">
                       <p className="text-sm text-text-main">
                         <span className={`font-semibold${isAI ? " text-primary" : ""}`}>
-                          {isAI ? "PE OS AI" : userName}
+                          {isAI ? "Avise AI" : userName}
                         </span>{" "}
                         {l.description || l.action.toLowerCase().replace(/_/g, " ")}
                         {entityName && (

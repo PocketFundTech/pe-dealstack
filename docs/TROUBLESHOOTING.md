@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-Common issues and their solutions for PE OS.
+Common issues and their solutions for Avise.
 
 ---
 

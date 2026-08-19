@@ -1,4 +1,4 @@
-# PE OS Deployment Runbook
+# Avise Deployment Runbook
 
 **Platform:** Render.com
 **Production URL:** https://pe-os.onrender.com
@@ -12,7 +12,7 @@
 │                      Render.com                          │
 │                                                          │
 │   ┌──────────────────────────────────────────────────┐  │
-│   │          PE OS Web Service (Free tier)            │  │
+│   │          Avise Web Service (Free tier)            │  │
 │   │          Node.js — Express API + Static Frontend  │  │
 │   │                                                    │  │
 │   │  Build: npm ci --include=dev && npm run build:prod│  │

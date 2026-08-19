@@ -1,4 +1,4 @@
-# PE OS API Documentation
+# Avise API Documentation
 
 **Version:** v0.1.0
 **Base URL:** `https://pe-os.onrender.com/api` (Production)

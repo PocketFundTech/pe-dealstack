@@ -10,7 +10,7 @@ import {
 export const metadata: Metadata = {
   title: "Privacy Policy",
   description:
-    "PE OS Privacy Policy. Learn how we collect, use, and protect your data when you use our private equity platform.",
+    "Avise Privacy Policy. Learn how we collect, use, and protect your data when you use our private equity platform.",
 };
 
 export default function PrivacyPolicyPage() {
@@ -23,13 +23,13 @@ export default function PrivacyPolicyPage() {
       <section>
         <LegalH2>1. Introduction</LegalH2>
         <LegalP>
-          PE OS (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) is committed to protecting your
+          Avise (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) is committed to protecting your
           privacy. This Privacy Policy explains how we collect, use, disclose,
           and safeguard your information when you use our AI-powered private
           equity operating system platform.
         </LegalP>
         <LegalP>
-          By accessing or using PE OS, you agree to the terms of this Privacy
+          By accessing or using Avise, you agree to the terms of this Privacy
           Policy. If you do not agree with the terms of this Privacy Policy,
           please do not access the platform.
         </LegalP>

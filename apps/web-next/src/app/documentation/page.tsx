@@ -3,9 +3,9 @@ import Link from "next/link";
 import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 
 export const metadata: Metadata = {
-  title: "Documentation - PE OS",
+  title: "Documentation - Avise",
   description:
-    "Comprehensive guides and documentation to help you set up and configure PE OS for your private equity firm.",
+    "Comprehensive guides and documentation to help you set up and configure Avise for your private equity firm.",
 };
 
 type FeatureGuide = {
@@ -98,11 +98,11 @@ const FEATURE_GUIDES: FeatureGuide[] = [
       },
       {
         heading: "URL Research",
-        body: "Enter a company website URL and PE OS scrapes the homepage plus common subpages (About, Company, Team, Leadership, Products, Services) — up to 10 paths in parallel — to build a comprehensive company profile. Optionally preview the extraction before creating a deal.",
+        body: "Enter a company website URL and Avise scrapes the homepage plus common subpages (About, Company, Team, Leadership, Products, Services) — up to 10 paths in parallel — to build a comprehensive company profile. Optionally preview the extraction before creating a deal.",
       },
       {
         heading: "Email Forwarding",
-        body: "Upload .eml email files exported from Gmail or Outlook. PE OS extracts deal data from the email body and automatically processes any PDF attachments.",
+        body: "Upload .eml email files exported from Gmail or Outlook. Avise extracts deal data from the email body and automatically processes any PDF attachments.",
       },
       {
         heading: "Confidence Scores",
@@ -154,7 +154,7 @@ const FEATURE_GUIDES: FeatureGuide[] = [
       },
       {
         heading: "Multi-Document Analysis",
-        body: "When a deal has 2+ documents, PE OS automatically cross-references them to detect conflicts (e.g., different revenue figures in CIM vs teaser), fill data gaps, and synthesize insights across all sources.",
+        body: "When a deal has 2+ documents, Avise automatically cross-references them to detect conflicts (e.g., different revenue figures in CIM vs teaser), fill data gaps, and synthesize insights across all sources.",
       },
     ],
   },
@@ -247,7 +247,7 @@ export default function DocumentationPage() {
           </h1>
           <p className="text-lg text-[#64748b] max-w-3xl mx-auto">
             Comprehensive guides to help you set up, configure, and get the most
-            out of PE OS for your firm.
+            out of Avise for your firm.
           </p>
         </div>
       </div>

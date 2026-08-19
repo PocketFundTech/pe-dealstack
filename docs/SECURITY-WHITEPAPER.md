@@ -1,8 +1,8 @@
-# PE OS — Security & Data Protection
+# Avise — Security & Data Protection
 
 ## Overview
 
-PE OS is an AI-powered deal management platform built for private equity firms handling confidential investment data — CIMs, financial models, legal documents, and proprietary deal intelligence. Security is foundational to our architecture, not an afterthought.
+Avise is an AI-powered deal management platform built for private equity firms handling confidential investment data — CIMs, financial models, legal documents, and proprietary deal intelligence. Security is foundational to our architecture, not an afterthought.
 
 This document details our security controls, infrastructure certifications, and data protection practices.
 
@@ -10,7 +10,7 @@ This document details our security controls, infrastructure certifications, and 
 
 ## Infrastructure & Certifications
 
-All PE OS data is processed and stored on **SOC 2 Type II certified infrastructure**:
+All Avise data is processed and stored on **SOC 2 Type II certified infrastructure**:
 
 | Provider | Role | Certification |
 |----------|------|---------------|
@@ -18,7 +18,7 @@ All PE OS data is processed and stored on **SOC 2 Type II certified infrastructu
 | **Vercel** | Application Hosting (Serverless) | SOC 2 Type II |
 | **OpenAI** | AI Processing (GPT-4o) | SOC 2 Type II |
 
-No PE OS data is stored on unmanaged servers or developer machines. All production infrastructure is managed by enterprise-grade cloud providers.
+No Avise data is stored on unmanaged servers or developer machines. All production infrastructure is managed by enterprise-grade cloud providers.
 
 ---
 
@@ -61,7 +61,7 @@ No PE OS data is stored on unmanaged servers or developer machines. All producti
 
 ### Tenant Isolation
 
-PE OS enforces hard organizational data isolation at the application layer:
+Avise enforces hard organizational data isolation at the application layer:
 
 - Every database row in scoped tables is tagged with `organizationId`
 - All API route handlers verify access via centralized access-verification helpers (`verifyDealAccess()` / `verifyContactAccess()` / `verifyDocumentAccess()` / `verifyFolderAccess()` / `verifyConversationAccess()`)
@@ -75,7 +75,7 @@ PE OS enforces hard organizational data isolation at the application layer:
 
 ### Rate Limiting
 
-PE OS enforces three tiers of rate limiting at the API gateway:
+Avise enforces three tiers of rate limiting at the API gateway:
 
 | Tier | Endpoint Scope | Limit | Window |
 |------|---------------|-------|--------|

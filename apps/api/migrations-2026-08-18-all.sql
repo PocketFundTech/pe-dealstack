@@ -1,5 +1,5 @@
 -- ================================================================
--- PE OS — combined migration, 2026-08-18
+-- Avise — combined migration, 2026-08-18
 --
 -- Runs all three feature migrations in dependency order:
 --   1. Document Requests   (doc-request-migration.sql)

@@ -3,9 +3,9 @@ import Link from "next/link";
 import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 
 export const metadata: Metadata = {
-  title: "Company - PE OS",
+  title: "Company - Avise",
   description:
-    "About PE OS. Our company page is coming soon — meet the team behind the AI-powered operating system for private equity.",
+    "About Avise. Our company page is coming soon — meet the team behind the AI-powered operating system for private equity.",
 };
 
 export default function CompanyPage() {
@@ -17,7 +17,7 @@ export default function CompanyPage() {
         </h1>
         <p className="text-lg text-[#64748b] mb-8">
           We&apos;re drafting the story of who we are and why we&apos;re
-          building PE OS. Until then, browse the platform or reach out — we
+          building Avise. Until then, browse the platform or reach out — we
           love hearing from prospective customers and collaborators.
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">

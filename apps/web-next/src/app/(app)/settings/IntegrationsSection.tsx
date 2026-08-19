@@ -459,7 +459,7 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
                 Overwrite existing values with HubSpot data
               </span>
               <span className="block text-text-muted">
-                Off by default: fields already filled in PE OS are left untouched. Turn this on to
+                Off by default: fields already filled in Avise are left untouched. Turn this on to
                 re-import after correcting records in HubSpot.
               </span>
             </span>

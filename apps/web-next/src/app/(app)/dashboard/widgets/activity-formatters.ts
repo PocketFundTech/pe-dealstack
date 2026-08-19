@@ -93,7 +93,7 @@ export function isAIAction(log: AuditLog): boolean {
 }
 
 export function getActorName(log: AuditLog): string {
-  if (isAIAction(log)) return "PE OS AI";
+  if (isAIAction(log)) return "Avise AI";
   return log.userName || log.userEmail?.split("@")[0] || "System";
 }
 

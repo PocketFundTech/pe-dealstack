@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: {
     default: "Sign In",
-    template: "%s | PE OS",
+    template: "%s | Avise",
   },
-  description: "Access your PE OS account — AI-powered deal flow management for Private Equity.",
+  description: "Access your Avise account — AI-powered deal flow management for Private Equity.",
   robots: { index: false, follow: false },
 };
 

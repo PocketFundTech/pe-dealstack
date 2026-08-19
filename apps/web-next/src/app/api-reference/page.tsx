@@ -4,9 +4,9 @@ import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 import { EndpointSections } from "./sections";
 
 export const metadata: Metadata = {
-  title: "API Reference - PE OS",
+  title: "API Reference - Avise",
   description:
-    "PE OS REST API reference. Build custom integrations with authentication, deals, ingestion, documents, memos, export, and audit endpoints.",
+    "Avise REST API reference. Build custom integrations with authentication, deals, ingestion, documents, memos, export, and audit endpoints.",
 };
 
 const RATE_LIMITS = [
@@ -47,7 +47,7 @@ export default function ApiReferencePage() {
             API Reference
           </h1>
           <p className="text-lg text-[#64748b] max-w-3xl mx-auto mb-8">
-            Build custom integrations with the PE OS REST API. All endpoints
+            Build custom integrations with the Avise REST API. All endpoints
             require authentication via Bearer token.
           </p>
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-[#e2e8f0] font-mono text-sm">
@@ -69,7 +69,7 @@ export default function ApiReferencePage() {
         </div>
         <div className="p-6 rounded-xl bg-white border border-[#e2e8f0] shadow-sm mb-6">
           <p className="text-[#64748b] mb-4">
-            PE OS uses{" "}
+            Avise uses{" "}
             <strong className="text-[#111418]">Supabase Auth</strong> with JWT
             tokens. Obtain a token by signing in through the Supabase Auth API,
             then include it as a Bearer token in all requests.
@@ -130,7 +130,7 @@ Authorization: Bearer YOUR_SUPABASE_JWT_TOKEN`}</code>
             Need help with integrations?
           </h2>
           <p className="text-[#64748b] mb-8">
-            Contact our team for guidance on building custom integrations with PE OS.
+            Contact our team for guidance on building custom integrations with Avise.
           </p>
           <a
             href="mailto:hello@pocket-fund.com"

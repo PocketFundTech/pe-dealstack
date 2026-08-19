@@ -7,7 +7,7 @@ Manual testing guide for the new user onboarding experience.
 ## Prerequisites
 
 - A modern browser (Chrome, Firefox, Safari, or Edge)
-- Access to the PE OS staging/production environment
+- Access to the Avise staging/production environment
 - A **new email address** that has not been used to sign up before (each test requires a fresh account)
 - Optionally: a second email address to test team invitations
 

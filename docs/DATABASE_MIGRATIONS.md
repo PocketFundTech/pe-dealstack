@@ -1,10 +1,10 @@
-# PE OS - Database Migrations Guide
+# Avise - Database Migrations Guide
 
-This document explains how to manage database schema changes in PE OS using Supabase.
+This document explains how to manage database schema changes in Avise using Supabase.
 
 ## Overview
 
-PE OS uses **Supabase PostgreSQL** as its database. Migrations are SQL files that should be run in the Supabase SQL Editor in a specific order.
+Avise uses **Supabase PostgreSQL** as its database. Migrations are SQL files that should be run in the Supabase SQL Editor in a specific order.
 
 ## Migration Files Location
 

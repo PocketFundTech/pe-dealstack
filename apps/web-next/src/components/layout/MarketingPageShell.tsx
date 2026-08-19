@@ -47,7 +47,7 @@ export function MarketingPageShell({
           <Link href="/" className="flex items-center gap-3">
             <Logo className="size-8 text-primary" />
             <h2 className="text-lg font-bold leading-tight tracking-[-0.015em] text-[#111418]">
-              PE OS
+              Avise
             </h2>
           </Link>
           <nav className="hidden md:flex items-center gap-8">
@@ -95,7 +95,7 @@ export function MarketingPageShell({
           <div className="flex items-center gap-3">
             <Logo className="size-6 text-primary" />
             <span className="text-sm font-medium text-[#64748b]">
-              &copy; 2026 PE OS. All rights reserved.
+              &copy; 2026 Avise. All rights reserved.
             </span>
           </div>
           <div className="flex flex-wrap justify-center gap-6">
