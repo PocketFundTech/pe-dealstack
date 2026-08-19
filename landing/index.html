@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PE OS — Deal Flow Management for Small M&A Teams</title>
+<meta name="description" content="Stop drowning in deal flow. PE OS helps small M&A teams manage 20-50 deals per week and analyze them in minutes, not days.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #09090b;
+    --surface: #111113;
+    --border: #1c1c1f;
+    --border-hover: #2a2a2e;
+    --text: #fafafa;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-soft: rgba(59, 130, 246, 0.08);
+    --accent-border: rgba(59, 130, 246, 0.2);
+    --green: #22c55e;
+    --radius: 12px;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: 'Space Grotesk', sans-serif;
+    line-height: 1.15;
+  }
+
+  .container {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* ── NAV ── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    padding: 16px 0;
+    background: rgba(9, 9, 11, 0.8);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .nav-logo {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    text-decoration: none;
+    letter-spacing: -0.5px;
+  }
+  .nav-logo span { color: var(--accent); }
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+  }
+  .nav-links a {
+    font-size: 14px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--text); }
+  .nav-cta {
+    background: var(--accent) !important;
+    color: #fff !important;
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-weight: 500;
+    font-size: 14px;
+    transition: background 0.2s;
+  }
+  .nav-cta:hover { background: var(--accent-hover) !important; }
+
+  /* ── HERO ── */
+  .hero {
+    padding: 160px 0 100px;
+    text-align: center;
+    position: relative;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 50%; transform: translateX(-50%);
+    width: 800px; height: 600px;
+    background: radial-gradient(ellipse, rgba(59, 130, 246, 0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 100px;
+    margin-bottom: 24px;
+  }
+  .hero h1 {
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: -1.5px;
+    margin-bottom: 20px;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .hero p {
+    font-size: 19px;
+    color: var(--text-secondary);
+    max-width: 580px;
+    margin: 0 auto 36px;
+    line-height: 1.6;
+  }
+  .hero-buttons {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    padding: 14px 28px;
+    border-radius: 10px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  .btn-secondary {
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 14px 28px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .btn-secondary:hover { border-color: var(--border-hover); color: var(--text); }
+  .hero-note {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 12px;
+  }
+
+  /* ── PRODUCT SCREENSHOT ── */
+  .hero-product {
+    margin-top: 64px;
+    position: relative;
+  }
+  .screenshot-frame {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.4);
+  }
+  .screenshot-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .screenshot-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--border-hover);
+  }
+  .screenshot-placeholder {
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: linear-gradient(135deg, #111113 0%, #1a1a2e 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 15px;
+    font-style: italic;
+  }
+
+  /* ── SOCIAL PROOF ── */
+  .social-proof {
+    padding: 60px 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+  .social-proof p {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+  .social-proof .proof-line {
+    font-size: 15px;
+    color: var(--text-secondary);
+  }
+  .social-proof .proof-line strong {
+    color: var(--text);
+  }
+
+  /* ── PROBLEM ── */
+  .problem {
+    padding: 100px 0;
+    border-top: 1px solid var(--border);
+  }
+  .section-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+  }
+  .problem h2 {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 16px;
+    max-width: 600px;
+  }
+  .problem > .container > p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    max-width: 560px;
+    margin-bottom: 48px;
+  }
+  .pain-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+  .pain-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+  .pain-card .pain-number {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+    display: block;
+  }
+  .pain-card h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .pain-card p {
+    font-size: 14px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  /* ── FEATURES ── */
+  .features {
+    padding: 100px 0;
+    border-top: 1px solid var(--border);
+  }
+  .features h2 {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 16px;
+  }
+  .features > .container > p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    max-width: 520px;
+    margin-bottom: 64px;
+  }
+  .feature-block {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    align-items: center;
+    margin-bottom: 80px;
+  }
+  .feature-block:nth-child(even) {
+    direction: rtl;
+  }
+  .feature-block:nth-child(even) > * {
+    direction: ltr;
+  }
+  .feature-text h3 {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .feature-text p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    margin-bottom: 20px;
+  }
+  .feature-bullets {
+    list-style: none;
+  }
+  .feature-bullets li {
+    font-size: 14px;
+    color: var(--text-secondary);
+    padding: 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .feature-bullets li::before {
+    content: '';
+    width: 6px; height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .feature-screenshot {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .feature-screenshot .screenshot-placeholder {
+    aspect-ratio: 4/3;
+  }
+
+  /* ── VIDEO ── */
+  .video-section {
+    padding: 100px 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+  .video-section h2 {
+    font-size: 36px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+  .video-section > .container > p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    margin-bottom: 48px;
+  }
+  .video-frame {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    max-width: 800px;
+    margin: 0 auto;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.3);
+  }
+  .video-placeholder {
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: linear-gradient(135deg, #111113 0%, #0f172a 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 15px;
+  }
+  .play-btn {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .play-btn::after {
+    content: '';
+    width: 0; height: 0;
+    border-left: 18px solid #fff;
+    border-top: 11px solid transparent;
+    border-bottom: 11px solid transparent;
+    margin-left: 4px;
+  }
+
+  /* ── HOW IT WORKS ── */
+  .how-it-works {
+    padding: 100px 0;
+    border-top: 1px solid var(--border);
+  }
+  .how-it-works h2 {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 64px;
+    text-align: center;
+  }
+  .steps-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+  }
+  .step-card {
+    text-align: center;
+    padding: 32px 24px;
+  }
+  .step-num {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 20px;
+  }
+  .step-card h4 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .step-card p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
+  /* ── PRICING ── */
+  .pricing {
+    padding: 100px 0;
+    border-top: 1px solid var(--border);
+  }
+  .pricing h2 {
+    font-size: 40px;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .pricing > .container > p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin-bottom: 48px;
+  }
+  .pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  .price-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+  }
+  .price-card.featured {
+    border-color: var(--accent);
+    position: relative;
+  }
+  .price-card.featured::before {
+    content: 'MOST POPULAR';
+    position: absolute;
+    top: -11px; left: 50%; transform: translateX(-50%);
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 12px;
+    border-radius: 100px;
+    letter-spacing: 0.5px;
+  }
+  .price-card h3 {
+    font-size: 18px;
+    margin-bottom: 4px;
+  }
+  .price-card .price-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+  }
+  .price-card .price {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 40px;
+    font-weight: 700;
+  }
+  .price-card .price-period {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    display: block;
+  }
+  .price-card ul {
+    list-style: none;
+    margin-bottom: 24px;
+  }
+  .price-card ul li {
+    font-size: 14px;
+    color: var(--text-secondary);
+    padding: 7px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .price-card ul li::before {
+    content: '✓';
+    color: var(--green);
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .price-btn {
+    display: block;
+    text-align: center;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .price-btn.primary { background: var(--accent); color: #fff; }
+  .price-btn.primary:hover { background: var(--accent-hover); }
+  .price-btn.outline { border: 1px solid var(--border); color: var(--text); }
+  .price-btn.outline:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── FOUNDER ── */
+  .founder {
+    padding: 100px 0;
+    border-top: 1px solid var(--border);
+  }
+  .founder-block {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 32px;
+    align-items: center;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+  .founder-avatar {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    color: var(--text-muted);
+  }
+  .founder-text h3 {
+    font-size: 18px;
+    margin-bottom: 4px;
+  }
+  .founder-text .founder-role {
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  .founder-text p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+  }
+  .founder-text p strong { color: var(--text); }
+
+  /* ── FINAL CTA ── */
+  .final-cta {
+    padding: 120px 0;
+    text-align: center;
+    border-top: 1px solid var(--border);
+    position: relative;
+  }
+  .final-cta::before {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 600px; height: 400px;
+    background: radial-gradient(ellipse, rgba(59, 130, 246, 0.05) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .final-cta h2 {
+    font-size: 44px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 16px;
+  }
+  .final-cta p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    margin-bottom: 32px;
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* ── FOOTER ── */
+  footer {
+    padding: 40px 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+  footer p {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  footer a {
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+  footer a:hover { color: var(--accent); }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 768px) {
+    .hero { padding: 120px 0 60px; }
+    .hero h1 { font-size: 36px; }
+    .pain-grid, .steps-grid, .pricing-grid { grid-template-columns: 1fr; }
+    .feature-block { grid-template-columns: 1fr; gap: 32px; }
+    .feature-block:nth-child(even) { direction: ltr; }
+    .nav-links a:not(.nav-cta) { display: none; }
+    .founder-block { grid-template-columns: 1fr; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── NAV ── -->
+<nav>
+  <div class="container">
+    <a href="/" class="nav-logo">PE <span>OS</span></a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#demo">Demo</a>
+      <a href="/login">Login</a>
+      <a href="/signup" class="nav-cta">Get Started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── HERO ── -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-eyebrow">Now in beta — free for early teams</div>
+    <h1>Stop drowning in deal flow.</h1>
+    <p>PE OS helps small M&A teams manage 20-50 deals per week and analyze them in minutes, not days. Built by operators who close deals, not consultants who advise on them.</p>
+    <div class="hero-buttons">
+      <a href="/signup" class="btn-primary">Start Free →</a>
+      <a href="#demo" class="btn-secondary">Watch Demo</a>
+    </div>
+    <p class="hero-note">No credit card required. Set up in under 3 minutes.</p>
+
+    <!-- PRODUCT SCREENSHOT -->
+    <div class="hero-product">
+      <div class="screenshot-frame">
+        <div class="screenshot-bar">
+          <span class="screenshot-dot"></span>
+          <span class="screenshot-dot"></span>
+          <span class="screenshot-dot"></span>
+        </div>
+        <div class="screenshot-placeholder">
+          <!-- REPLACE: Main dashboard screenshot showing deal pipeline view with 20+ active deals -->
+          [Screenshot: Main dashboard — deal pipeline with active deals, status columns, AI analysis badges]
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── SOCIAL PROOF ── -->
+<section class="social-proof">
+  <div class="container">
+    <p>From advisory to software</p>
+    <p class="proof-line">Built from the methodology behind <strong><a href="https://kautilya-pe.com" style="color: inherit; text-decoration: underline; text-underline-offset: 3px;">Kautilya</a></strong> — a buy-side advisory that constructs proprietary acquisition pipelines for middle-market buyers.</p>
+  </div>
+</section>
+
+<!-- ── PROBLEM ── -->
+<section class="problem">
+  <div class="container">
+    <p class="section-label">The Problem</p>
+    <h2>Your deal flow is outpacing your team.</h2>
+    <p>You're seeing 20-50 opportunities per week. You're reviewing CIMs in tabs, tracking deals in spreadsheets, and losing good ones because there's just not enough hours.</p>
+    <div class="pain-grid">
+      <div class="pain-card">
+        <span class="pain-number">80:1</span>
+        <h4>Deal-to-close ratio</h4>
+        <p>You review 80 opportunities for every 1 that closes. Most of that screening is still manual.</p>
+      </div>
+      <div class="pain-card">
+        <span class="pain-number">4+ hrs</span>
+        <h4>Per CIM review</h4>
+        <p>Reading a 50-page CIM, extracting financials, flagging risks, building a preliminary model. Every. Single. Time.</p>
+      </div>
+      <div class="pain-card">
+        <span class="pain-number">$50K+</span>
+        <h4>Enterprise tool cost</h4>
+        <p>DealCloud, Altvia, Dynamo — all built for billion-dollar funds. You're a 3-person shop doing $5M deals.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FEATURES ── -->
+<section class="features" id="features">
+  <div class="container">
+    <p class="section-label">What PE OS Does</p>
+    <h2>Manage and analyze at deal speed.</h2>
+    <p>Upload CIMs, track pipeline, get instant analysis. Everything your team needs in one place.</p>
+
+    <!-- Feature 1: Deal Ingestion -->
+    <div class="feature-block">
+      <div class="feature-text">
+        <h3>Upload a CIM. Get structured analysis in 2 minutes.</h3>
+        <p>Drop in a CIM, teaser, or NDA. PE OS extracts financials, flags risks, identifies quality-of-earnings issues, and drafts a preliminary IC memo — automatically.</p>
+        <ul class="feature-bullets">
+          <li>Revenue, EBITDA, margins extracted instantly</li>
+          <li>Customer concentration and working capital flags</li>
+          <li>Addback and normalization identification</li>
+          <li>Auto-generated investment thesis + red flags</li>
+        </ul>
+      </div>
+      <div class="feature-screenshot">
+        <div class="screenshot-placeholder">
+          <!-- REPLACE: Screenshot showing a CIM uploaded with structured financial extraction on the right panel -->
+          [Screenshot: CIM analysis view — PDF on left, structured extraction + red flags on right]
+        </div>
+      </div>
+    </div>
+
+    <!-- Feature 2: Pipeline Management -->
+    <div class="feature-block">
+      <div class="feature-text">
+        <h3>Your entire pipeline, one view.</h3>
+        <p>Every deal, every stage, every note — visible at a glance. No more tab-switching between spreadsheets, email, and shared drives. Filter by sector, EBITDA, geography, status.</p>
+        <ul class="feature-bullets">
+          <li>Kanban and table views for deal stages</li>
+          <li>Filter by sector, size, geography, custom tags</li>
+          <li>Activity timeline per deal</li>
+          <li>Team assignments and handoffs</li>
+        </ul>
+      </div>
+      <div class="feature-screenshot">
+        <div class="screenshot-placeholder">
+          <!-- REPLACE: Screenshot of pipeline kanban view with deals in stages (Screening, IC Review, LOI, DD, Close) -->
+          [Screenshot: Pipeline kanban — deals flowing through Screening → IC Review → LOI → DD → Close]
+        </div>
+      </div>
+    </div>
+
+    <!-- Feature 3: Chat with Deals -->
+    <div class="feature-block">
+      <div class="feature-text">
+        <h3>Ask questions. Get answers from your deals.</h3>
+        <p>Natural language search across your entire deal history. "Show me all manufacturing deals over $3M EBITDA that passed IC." "What was the customer concentration on the Ohio HVAC deal?"</p>
+        <ul class="feature-bullets">
+          <li>Query across all uploaded documents</li>
+          <li>Cross-deal pattern recognition</li>
+          <li>Instant recall of any deal detail</li>
+          <li>Exportable summaries and comparisons</li>
+        </ul>
+      </div>
+      <div class="feature-screenshot">
+        <div class="screenshot-placeholder">
+          <!-- REPLACE: Screenshot of chat interface with a deal query and AI response showing structured data -->
+          [Screenshot: Chat interface — "Show me SaaS deals >$2M EBITDA from Q1" → table of matching deals]
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── VIDEO DEMO ── -->
+<section class="video-section" id="demo">
+  <div class="container">
+    <p class="section-label">See It In Action</p>
+    <h2>From CIM to analysis in 2 minutes.</h2>
+    <p>Watch a real CIM get uploaded, analyzed, and turned into a structured deal brief.</p>
+    <div class="video-frame">
+      <iframe width="100%" style="aspect-ratio:16/9;border:none;" src="https://www.youtube.com/embed/9mQC_HHFt28?start=2" title="PE OS Demo" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+    </div>
+  </div>
+</section>
+
+<!-- ── HOW IT WORKS ── -->
+<section class="how-it-works">
+  <div class="container">
+    <h2>Up and running in 3 minutes.</h2>
+    <div class="steps-grid">
+      <div class="step-card">
+        <div class="step-num">1</div>
+        <h4>Create your workspace</h4>
+        <p>Sign up with your work email. Invite your team. No implementation, no onboarding calls, no setup fees.</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">2</div>
+        <h4>Upload your first deal</h4>
+        <p>Drop a CIM, teaser, or any deal document. PE OS analyzes it and creates a structured deal record automatically.</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">3</div>
+        <h4>Manage and analyze at speed</h4>
+        <p>Track your pipeline, ask questions across deals, share analysis with your team. The more deals you add, the smarter it gets.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── PRICING ── -->
+<section class="pricing" id="pricing">
+  <div class="container">
+    <h2>Simple pricing. No surprises.</h2>
+    <p>Start free. Upgrade when you need more capacity.</p>
+    <div class="pricing-grid">
+
+      <div class="price-card">
+        <h3>Starter</h3>
+        <p class="price-desc">For solo operators and small teams</p>
+        <span class="price">$99</span>
+        <span class="price-period">per seat / month</span>
+        <ul>
+          <li>Up to 3 team members</li>
+          <li>25 deal analyses / month</li>
+          <li>Pipeline management</li>
+          <li>Chat with deals</li>
+          <li>Email support</li>
+        </ul>
+        <a href="/signup" class="price-btn outline">Start Free Trial</a>
+      </div>
+
+      <div class="price-card featured">
+        <h3>Pro</h3>
+        <p class="price-desc">For active deal teams</p>
+        <span class="price">$149</span>
+        <span class="price-period">per seat / month</span>
+        <ul>
+          <li>Up to 10 team members</li>
+          <li>Unlimited deal analyses</li>
+          <li>Advanced pipeline + custom fields</li>
+          <li>Cross-deal pattern search</li>
+          <li>Priority support + onboarding</li>
+          <li>API access</li>
+        </ul>
+        <a href="/signup?plan=pro" class="price-btn primary">Start Free Trial</a>
+      </div>
+
+      <div class="price-card">
+        <h3>Team</h3>
+        <p class="price-desc">For firms with multiple deal teams</p>
+        <span class="price">$199</span>
+        <span class="price-period">per seat / month</span>
+        <ul>
+          <li>Unlimited team members</li>
+          <li>Everything in Pro</li>
+          <li>SSO + admin controls</li>
+          <li>Custom integrations</li>
+          <li>Dedicated account manager</li>
+          <li>SLA guarantee</li>
+        </ul>
+        <a href="/signup?plan=team" class="price-btn outline">Contact Sales</a>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── FOUNDER ── -->
+<section class="founder">
+  <div class="container">
+    <div class="founder-block">
+      <div class="founder-avatar">D</div>
+      <div class="founder-text">
+        <h3>Dev Shah</h3>
+        <p class="founder-role">Founder — <a href="https://kautilya-pe.com" style="color: var(--accent); text-decoration: none;">Kautilya</a> Advisory</p>
+        <p>We build proprietary acquisition pipelines for buy-side firms — sector mapping, target identification, outreach, analysis. <strong>PE OS is that same process, productized.</strong> The methodology that powers our advisory work, now available as software for teams who want to run it themselves.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FINAL CTA ── -->
+<section class="final-cta">
+  <div class="container">
+    <h2>Your deals won't wait. Neither should your tools.</h2>
+    <p>Start managing your pipeline and analyzing deals in minutes. Free to try, no credit card required.</p>
+    <a href="/signup" class="btn-primary">Get Started Free →</a>
+  </div>
+</section>
+
+<!-- ── FOOTER ── -->
+<footer>
+  <div class="container">
+    <p>PE OS &nbsp;·&nbsp; <a href="https://lmmos.ai">lmmos.ai</a> &nbsp;·&nbsp; Built by <a href="https://twitter.com/devlikesbizness">@devlikesbizness</a> &nbsp;·&nbsp; <a href="mailto:dev@pocketfund.io">dev@pocketfund.io</a></p>
+  </div>
+</footer>
+
+</body>
+</html>
