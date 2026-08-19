@@ -184,7 +184,7 @@ function MfaSection({ onToast }: { onToast: (msg: string, type: "success" | "err
     const supabase = createClient();
     const { data, error } = await supabase.auth.mfa.enroll({
       factorType: "totp",
-      issuer: "PE OS",
+      issuer: "Avise",
     });
     if (error || !data) {
       setEnrollError(error?.message || "Failed to start enrollment");

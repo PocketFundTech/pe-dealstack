@@ -12,7 +12,7 @@ export function LandingNavbar() {
       <div className="px-4 md:px-10 lg:px-40 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Logo className="size-8 text-primary" />
-          <h2 className="text-lg font-bold leading-tight tracking-[-0.015em] text-[#111418]">PE OS</h2>
+          <h2 className="text-lg font-bold leading-tight tracking-[-0.015em] text-[#111418]">Avise</h2>
         </div>
         <nav className="hidden lg:flex items-center gap-8">
           <a className="text-sm font-medium text-primary" href="#features">Platform</a>

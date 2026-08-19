@@ -1,5 +1,5 @@
 /**
- * PE OS — URL Validation & Normalization Helpers
+ * Avise — URL Validation & Normalization Helpers
  *
  * Shared utilities for validating LinkedIn, social media, and website URLs.
  * Handles country subdomains (in.linkedin.com, uk.linkedin.com),

@@ -36,7 +36,7 @@ Return JSON:
 {
   "issuesWithPriorExtraction": ["<specific issue with numbers>", ...],
   "rootCauseDiagnosis": "<one-paragraph explanation of why the agent failed>",
-  "promptingFixForPEOS": "<one-paragraph proposed prompt change>"
+  "promptingFixForAvise": "<one-paragraph proposed prompt change>"
 }`;
 
 /** Format `dealRecord.revenue` etc. — stored in millions per schema. */
@@ -148,8 +148,8 @@ export async function generateExtractionQualityFeedback(input: {
         ? parsed.rootCauseDiagnosis.trim()
         : '';
     const promptingFix =
-      typeof parsed.promptingFixForPEOS === 'string'
-        ? parsed.promptingFixForPEOS.trim()
+      typeof parsed.promptingFixForAvise === 'string'
+        ? parsed.promptingFixForAvise.trim()
         : '';
 
     if (issues.length === 0 && !rootCause && !promptingFix) {
@@ -163,7 +163,7 @@ export async function generateExtractionQualityFeedback(input: {
     return {
       issuesWithPriorExtraction: issues,
       rootCauseDiagnosis: rootCause,
-      promptingFixForPEOS: promptingFix,
+      promptingFixForAvise: promptingFix,
     };
   } catch (err) {
     log.error('extractionFeedback: generation failed', {

@@ -1,6 +1,6 @@
 # Supabase Authentication Configuration Guide
 
-This guide explains how to configure Supabase Authentication for PE OS.
+This guide explains how to configure Supabase Authentication for Avise.
 
 ## Prerequisites
 
@@ -31,23 +31,23 @@ Customize the emails Supabase sends to users.
 
 #### Confirmation Email (signup)
 ```
-Subject: Confirm your PE OS account
+Subject: Confirm your Avise account
 
 Hi,
 
-Click the link below to verify your email address and activate your PE OS account:
+Click the link below to verify your email address and activate your Avise account:
 
 {{ .ConfirmationURL }}
 
 If you didn't create an account, you can safely ignore this email.
 
 Best regards,
-The PE OS Team
+The Avise Team
 ```
 
 #### Password Reset Email
 ```
-Subject: Reset your PE OS password
+Subject: Reset your Avise password
 
 Hi,
 
@@ -60,7 +60,7 @@ This link expires in 24 hours.
 If you didn't request this, you can safely ignore this email.
 
 Best regards,
-The PE OS Team
+The Avise Team
 ```
 
 ## 3. Configure Redirect URLs

@@ -1,4 +1,4 @@
-# PE OS — AI-Powered CRM for Private Equity
+# Avise — AI-Powered CRM for Private Equity
 
 ## Project Structure
 

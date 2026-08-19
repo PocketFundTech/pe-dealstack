@@ -3,9 +3,9 @@ import Link from "next/link";
 import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 
 export const metadata: Metadata = {
-  title: "Help Center - PE OS",
+  title: "Help Center - Avise",
   description:
-    "Find answers to common questions about PE OS. FAQs on account setup, deal management, AI features, security, billing, and troubleshooting.",
+    "Find answers to common questions about Avise. FAQs on account setup, deal management, AI features, security, billing, and troubleshooting.",
 };
 
 type Faq = { q: string; a: React.ReactNode };
@@ -82,7 +82,7 @@ const CATEGORIES: Category[] = [
     faqs: [
       {
         q: "What file types can I upload?",
-        a: "PE OS supports PDF, Word (.docx), Excel (.xlsx, .csv), plain text (.txt), and email (.eml) files. Maximum file size is 50MB. Excel files with multiple rows are processed as bulk imports, creating one deal per row.",
+        a: "Avise supports PDF, Word (.docx), Excel (.xlsx, .csv), plain text (.txt), and email (.eml) files. Maximum file size is 50MB. Excel files with multiple rows are processed as bulk imports, creating one deal per row.",
       },
       {
         q: "How do deal stages work?",
@@ -99,7 +99,7 @@ const CATEGORIES: Category[] = [
       },
       {
         q: "Can I import deals from a company website URL?",
-        a: 'Yes. Go to Deal Intake, select the "Enter URL" tab, and paste the company\'s website. PE OS scrapes multiple pages (About, Team, Products, etc.) and uses AI to extract deal-relevant information. You can preview the extraction before creating the deal.',
+        a: 'Yes. Go to Deal Intake, select the "Enter URL" tab, and paste the company\'s website. Avise scrapes multiple pages (About, Team, Products, etc.) and uses AI to extract deal-relevant information. You can preview the extraction before creating the deal.',
       },
       {
         q: "How do I export my deal data?",
@@ -128,7 +128,7 @@ const CATEGORIES: Category[] = [
     faqs: [
       {
         q: "How does AI data extraction work?",
-        a: "When you upload a document, PE OS extracts the text content, then sends it to GPT-4 with a specialized prompt for PE deal analysis. The AI identifies company name, industry, revenue, EBITDA, margins, employee count, and more. Each field gets a confidence score (0-100%). Fields below 60% are flagged for manual review. Financial data is also validated against PE industry norms.",
+        a: "When you upload a document, Avise extracts the text content, then sends it to GPT-4 with a specialized prompt for PE deal analysis. The AI identifies company name, industry, revenue, EBITDA, margins, employee count, and more. Each field gets a confidence score (0-100%). Fields below 60% are flagged for manual review. Financial data is also validated against PE industry norms.",
       },
       {
         q: 'What is "Chat with Deals"?',
@@ -136,7 +136,7 @@ const CATEGORIES: Category[] = [
       },
       {
         q: "What does multi-document analysis do?",
-        a: "When a deal has 2 or more documents, PE OS can cross-reference them to detect conflicts (e.g., different revenue figures in the CIM vs teaser), fill data gaps (one doc has info the other doesn't), and synthesize insights across all sources. This runs automatically when you upload additional documents, or you can trigger it manually.",
+        a: "When a deal has 2 or more documents, Avise can cross-reference them to detect conflicts (e.g., different revenue figures in the CIM vs teaser), fill data gaps (one doc has info the other doesn't), and synthesize insights across all sources. This runs automatically when you upload additional documents, or you can trigger it manually.",
       },
       {
         q: "Is my data used to train AI models?",
@@ -153,11 +153,11 @@ const CATEGORIES: Category[] = [
     faqs: [
       {
         q: "How is my data encrypted?",
-        a: "PE OS uses AES-256-GCM encryption for sensitive deal data at rest, with unique initialization vectors per encryption. All data in transit is protected with TLS 1.3. Database connections use SSL. Encryption keys are managed server-side and never exposed to clients.",
+        a: "Avise uses AES-256-GCM encryption for sensitive deal data at rest, with unique initialization vectors per encryption. All data in transit is protected with TLS 1.3. Database connections use SSL. Encryption keys are managed server-side and never exposed to clients.",
       },
       {
         q: "What is the audit trail?",
-        a: "Every action in PE OS is logged to an immutable audit trail — deal creation, edits, deletions, document uploads, AI extractions, exports, and login events. Audit logs cannot be modified or deleted (INSERT-ONLY), meeting SEC/regulatory requirements. Admins can filter logs by date, action type, resource, and severity.",
+        a: "Every action in Avise is logged to an immutable audit trail — deal creation, edits, deletions, document uploads, AI extractions, exports, and login events. Audit logs cannot be modified or deleted (INSERT-ONLY), meeting SEC/regulatory requirements. Admins can filter logs by date, action type, resource, and severity.",
       },
       {
         q: "Can I export or delete all my data?",
@@ -174,7 +174,7 @@ const CATEGORIES: Category[] = [
     faqs: [
       {
         q: "Is there a free trial?",
-        a: "Yes. PE OS offers a 14-day free trial with full access to Mid-Market tier features. No credit card required. You can import deals, use AI features, invite team members, and evaluate the platform risk-free.",
+        a: "Yes. Avise offers a 14-day free trial with full access to Mid-Market tier features. No credit card required. You can import deals, use AI features, invite team members, and evaluate the platform risk-free.",
       },
       {
         q: "What plans are available?",
@@ -215,11 +215,11 @@ const CATEGORIES: Category[] = [
       },
       {
         q: "The page is loading slowly. What can I do?",
-        a: "PE OS is hosted on Render's free tier, which may experience a cold start delay of up to 50 seconds after periods of inactivity. Once warmed up, subsequent requests are fast. For production use, we recommend upgrading to a paid tier for always-on performance.",
+        a: "Avise is hosted on Render's free tier, which may experience a cold start delay of up to 50 seconds after periods of inactivity. Once warmed up, subsequent requests are fast. For production use, we recommend upgrading to a paid tier for always-on performance.",
       },
       {
         q: 'I\'m getting a "session expired" error. What do I do?',
-        a: "Authentication tokens expire after 1 hour for security. Simply refresh the page or log in again. If you're being logged out frequently, make sure your browser isn't blocking cookies or local storage for the PE OS domain.",
+        a: "Authentication tokens expire after 1 hour for security. Simply refresh the page or log in again. If you're being logged out frequently, make sure your browser isn't blocking cookies or local storage for the Avise domain.",
       },
     ],
   },

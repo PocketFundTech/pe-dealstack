@@ -1,4 +1,4 @@
-# PE OS — HubSpot Import Testing Guide
+# Avise — HubSpot Import Testing Guide
 
 **For:** QA / Non-technical team members
 **Last Updated:** 2026-08-12
@@ -7,7 +7,7 @@
 
 > **Prerequisites:**
 >
-> - You must be logged in to PE OS as an org admin
+> - You must be logged in to Avise as an org admin
 > - You need a HubSpot account you can create a **Private App** in (a free HubSpot developer test account works fine — don't point this at a real client's live HubSpot portal for a first test pass)
 > - All of #88/#89/#91/#100/#79 are merged and deployed to production as of 2026-08-11, and the `hubspotId` column migration (`apps/api/hubspot-engagement-import-migration.sql`) has been run manually in Supabase — both confirmed, you're clear to start
 > - **This is genuinely the first live test of this feature end to end.** Everything up to now has been verified against automated tests and mocks, never against HubSpot's real API — treat anything that looks off as worth reporting, not as "probably just me"
@@ -41,7 +41,7 @@ Before testing, create a small, deliberately messy set of test records in HubSpo
 ### Get your Private App token
 
 1. In HubSpot: **Settings → Integrations → Private Apps → Create a private app**
-2. Under **Scopes**, grant all 11 of the following (the error message in PE OS will also list these if you forget one):
+2. Under **Scopes**, grant all 11 of the following (the error message in Avise will also list these if you forget one):
    - `crm.objects.companies.read`
    - `crm.objects.contacts.read`
    - `crm.objects.deals.read`
@@ -53,7 +53,7 @@ Before testing, create a small, deliberately messy set of test records in HubSpo
    - `crm.schemas.companies.read`
    - `crm.schemas.contacts.read`
    - `crm.schemas.deals.read`
-3. Copy the token — it starts with `pat-`. You'll paste it into PE OS in Test 1.
+3. Copy the token — it starts with `pat-`. You'll paste it into Avise in Test 1.
 
 > **Note:** three of the object-read scope names (`calls.read`, `meetings.read`, `tasks.read`) were not independently confirmed against HubSpot's own docs when this was built — if any of them don't appear in your portal's scope picker, that's expected and worth reporting back, not a sign you're doing something wrong. The three `crm.schemas.*` scopes are what let custom-field discovery work at all — without them, custom fields silently don't import (see Test 6).
 
@@ -98,7 +98,7 @@ Before testing, create a small, deliberately messy set of test records in HubSpo
 ### What to check — field accuracy:
 - [ ] Your test Company's `fund_vintage` custom field, industry, address, employee count, and website all made it in (custom field appears on the deal/contact linked to it — see Test 3 for where)
 - [ ] Contacts show job title, phone, **and** mobile phone (not just phone)
-- [ ] The Deal's stage matches what you set in HubSpot — specifically, if you used an ambiguous name like "1st Pass Review," confirm it did **not** get mapped to a "declined/passed" state in PE OS. Open the deal and check its pipeline stage.
+- [ ] The Deal's stage matches what you set in HubSpot — specifically, if you used an ambiguous name like "1st Pass Review," confirm it did **not** get mapped to a "declined/passed" state in Avise. Open the deal and check its pipeline stage.
 - [ ] The Deal's close date and amount are correct
 - [ ] The two duplicate-named companies both imported without one overwriting the other or the import erroring out
 
@@ -106,7 +106,7 @@ Before testing, create a small, deliberately messy set of test records in HubSpo
 1. Click **Import from HubSpot** a second time, still with "Overwrite" unchecked
 2. [ ] Counts don't double (re-import matches existing records, doesn't create duplicates)
 3. Go into HubSpot and change the Company's industry field, then re-import
-4. [ ] With "Overwrite" **unchecked**: the changed value should NOT overwrite what's already in PE OS
+4. [ ] With "Overwrite" **unchecked**: the changed value should NOT overwrite what's already in Avise
 5. Check **"Overwrite existing values with HubSpot data"** and re-import
 6. [ ] With "Overwrite" **checked**: the changed value from HubSpot now DOES win
 
@@ -126,13 +126,13 @@ Before testing, create a small, deliberately messy set of test records in HubSpo
 3. Open the linked Deal and check its overview tab for the same kind of card
 
 ### What to expect:
-- The card lists field/value pairs for anything HubSpot sent that doesn't have a dedicated PE OS column — this is where your `fund_vintage` custom field should appear
+- The card lists field/value pairs for anything HubSpot sent that doesn't have a dedicated Avise column — this is where your `fund_vintage` custom field should appear
 - Dates (like a close date stored in this blob) render as readable dates, not raw numbers
 - If there are more than 8 fields, a "Show N more" button appears
 
 ### What to check:
 - [ ] `fund_vintage` (or whatever custom field you created) appears with a readable label, not the raw HubSpot internal name
-- [ ] No card appears at all for a record that was **not** imported from HubSpot (e.g. a contact you created manually in PE OS) — the card should only show up when there's actually HubSpot data to display
+- [ ] No card appears at all for a record that was **not** imported from HubSpot (e.g. a contact you created manually in Avise) — the card should only show up when there's actually HubSpot data to display
 
 ---
 
@@ -153,7 +153,7 @@ Before testing, create a small, deliberately messy set of test records in HubSpo
 - If your test Meeting had 2+ attendees, it should appear on **each** attendee's contact page, not just one
 
 ### What to check:
-- [ ] All 5 types you logged in HubSpot show up somewhere in PE OS
+- [ ] All 5 types you logged in HubSpot show up somewhere in Avise
 - [ ] The multi-attendee meeting appears on every attendee's feed
 - [ ] Re-running the import doesn't duplicate these entries
 - [ ] An engagement in HubSpot associated with a **company only** (no contact) — expected to be silently skipped, not imported anywhere. This is a known, deliberate scope decision, not a bug.
@@ -171,7 +171,7 @@ This is the scenario that motivated the most back-and-forth in this feature's bu
 
 ### Steps:
 1. In HubSpot, create a **second** Private App token with only the original 3 scopes: `crm.objects.companies.read`, `crm.objects.contacts.read`, `crm.objects.deals.read` — deliberately leave out all 5 engagement scopes
-2. Disconnect your current connection in PE OS, connect with this new token
+2. Disconnect your current connection in Avise, connect with this new token
 3. Run **Import from HubSpot**
 
 ### What to expect:
@@ -200,7 +200,7 @@ This is the specific silent-failure mode PR #79 exists to prevent: a token with 
 
 ### Steps:
 1. In HubSpot, create a **third** Private App token with all 8 object-read scopes (companies/contacts/deals + the 5 engagement types) but **deliberately leave out all 3 `crm.schemas.*` scopes**
-2. Disconnect your current connection in PE OS, connect with this new token
+2. Disconnect your current connection in Avise, connect with this new token
 3. Run **Import from HubSpot**
 4. Open the Contact/Deal linked to your test Company (the one with the `fund_vintage` custom field from Step 0) and check the "Imported from HubSpot" card
 

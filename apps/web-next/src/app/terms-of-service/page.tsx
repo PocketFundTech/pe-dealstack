@@ -10,7 +10,7 @@ import {
 export const metadata: Metadata = {
   title: "Terms of Service",
   description:
-    "PE OS Terms of Service. Read our terms and conditions for using the PE OS platform.",
+    "Avise Terms of Service. Read our terms and conditions for using the Avise platform.",
 };
 
 export default function TermsOfServicePage() {
@@ -24,7 +24,7 @@ export default function TermsOfServicePage() {
         <LegalH2>1. Agreement to Terms</LegalH2>
         <LegalP>
           These Terms of Service (&quot;Terms&quot;) constitute a legally binding
-          agreement between you and PE OS (&quot;Company,&quot; &quot;we,&quot;
+          agreement between you and Avise (&quot;Company,&quot; &quot;we,&quot;
           &quot;us,&quot; or &quot;our&quot;) governing your access to and use of our
           AI-powered private equity operating system platform.
         </LegalP>
@@ -40,7 +40,7 @@ export default function TermsOfServicePage() {
         <LegalP>
           You must be at least 18 years old and have the legal authority to
           enter into these Terms on behalf of yourself or the organization you
-          represent. By using PE OS, you represent and warrant that you meet
+          represent. By using Avise, you represent and warrant that you meet
           these eligibility requirements.
         </LegalP>
       </section>
@@ -75,14 +75,14 @@ export default function TermsOfServicePage() {
         <LegalH2>5. Intellectual Property</LegalH2>
         <LegalH3>5.1 Our Property</LegalH3>
         <LegalP>
-          PE OS, including its software, design, features, AI models, and
+          Avise, including its software, design, features, AI models, and
           content, is owned by us and protected by intellectual property laws.
           You receive a limited, non-exclusive, non-transferable license to use
           the platform in accordance with these Terms.
         </LegalP>
         <LegalH3>5.2 Your Content</LegalH3>
         <LegalP>
-          You retain ownership of the data and content you upload to PE OS. By
+          You retain ownership of the data and content you upload to Avise. By
           uploading content, you grant us a limited license to process, store,
           and analyze your data solely to provide our services to you.
         </LegalP>
@@ -118,7 +118,7 @@ export default function TermsOfServicePage() {
         <LegalH2>8. Disclaimers</LegalH2>
         <div className="bg-[#fef3c7] border border-[#f59e0b] rounded-xl p-6 mb-4">
           <p className="text-[#92400e] leading-relaxed">
-            <strong>Important:</strong> PE OS provides tools and AI-generated
+            <strong>Important:</strong> Avise provides tools and AI-generated
             insights for informational purposes only. Our platform does not
             constitute financial, legal, or investment advice. You are solely
             responsible for your investment decisions.
@@ -135,7 +135,7 @@ export default function TermsOfServicePage() {
       <section>
         <LegalH2>9. Limitation of Liability</LegalH2>
         <LegalP>
-          TO THE MAXIMUM EXTENT PERMITTED BY LAW, PE OS SHALL NOT BE LIABLE FOR
+          TO THE MAXIMUM EXTENT PERMITTED BY LAW, Avise SHALL NOT BE LIABLE FOR
           ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE
           DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF PROFITS, DATA, OR
           BUSINESS OPPORTUNITIES, ARISING FROM YOUR USE OF THE SERVICE.
@@ -145,7 +145,7 @@ export default function TermsOfServicePage() {
       <section>
         <LegalH2>10. Indemnification</LegalH2>
         <LegalP>
-          You agree to indemnify and hold harmless PE OS and its officers,
+          You agree to indemnify and hold harmless Avise and its officers,
           directors, employees, and agents from any claims, damages, losses, or
           expenses arising from your use of the service, violation of these
           Terms, or infringement of any third-party rights.

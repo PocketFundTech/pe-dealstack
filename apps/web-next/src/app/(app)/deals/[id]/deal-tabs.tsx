@@ -247,7 +247,7 @@ export function ChatTab({
                 <span className="material-symbols-outlined text-white text-lg">smart_toy</span>
               </div>
               <div className="flex flex-col gap-1">
-                <span className="text-xs font-bold text-text-muted ml-1">PE OS AI</span>
+                <span className="text-xs font-bold text-text-muted ml-1">Avise AI</span>
                 <div className="ai-bubble-gradient border border-border-subtle rounded-2xl rounded-tl-none p-4 text-sm text-text-secondary shadow-sm">
                   {deal?.aiThesis ? (
                     <>
@@ -286,7 +286,7 @@ export function ChatTab({
                   <span className="material-symbols-outlined text-white text-lg">smart_toy</span>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <span className="text-xs font-bold text-text-muted ml-1">PE OS AI</span>
+                  <span className="text-xs font-bold text-text-muted ml-1">Avise AI</span>
                   <div className="ai-bubble-gradient border border-border-subtle rounded-2xl rounded-tl-none p-4 text-sm text-text-secondary shadow-sm">
                     <AiMessageBody content={msg.content} />
                     {msg.action && msg.action.url && msg.action.label && (

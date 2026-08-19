@@ -1,4 +1,4 @@
-# PE OS — Demo Day Cheatsheet
+# Avise — Demo Day Cheatsheet
 
 > Keep this open on a second monitor during demo calls.
 > One page. Everything you need.
@@ -20,17 +20,17 @@
 ## 🎯 30-Second Pitch (pick the right version for your audience)
 
 **Version A — For PE Operators (GPs, Partners, Principals):**
-> "PE OS is the AI-powered deal operating system for private equity. Instead of copying financials from CIMs into Excel for hours, you drag the PDF in and in 30 seconds you have structured financials, a risk flag, and a chatbot that answers math questions about the deal with citations. Think of it as replacing Excel + Notion + a junior analyst for the early-stage screening work."
+> "Avise is the AI-powered deal operating system for private equity. Instead of copying financials from CIMs into Excel for hours, you drag the PDF in and in 30 seconds you have structured financials, a risk flag, and a chatbot that answers math questions about the deal with citations. Think of it as replacing Excel + Notion + a junior analyst for the early-stage screening work."
 
 **Version B — For Investment Analysts / Associates:**
-> "PE OS is what I wish I had when I was reviewing 50 CIMs a week. You upload a CIM, AI extracts the financials, flags risks, and you can ask it things like 'what's the EBITDA margin trend' and get real answers with formulas — not made up numbers. Your memos practically write themselves."
+> "Avise is what I wish I had when I was reviewing 50 CIMs a week. You upload a CIM, AI extracts the financials, flags risks, and you can ask it things like 'what's the EBITDA margin trend' and get real answers with formulas — not made up numbers. Your memos practically write themselves."
 
 **Version C — For Non-Technical Stakeholders:**
-> "PE OS turns your deal pipeline into an AI-powered command center. Upload any deal document and get instant financial analysis, risk flags, and a team workspace. It's built specifically for private equity workflows — deal rooms, investment memos, pipeline tracking, all in one place."
+> "Avise turns your deal pipeline into an AI-powered command center. Upload any deal document and get instant financial analysis, risk flags, and a team workspace. It's built specifically for private equity workflows — deal rooms, investment memos, pipeline tracking, all in one place."
 
 ---
 
-## 🔍 Discovery Questions (ask FIRST, before opening PE OS)
+## 🔍 Discovery Questions (ask FIRST, before opening Avise)
 
 Take notes on screen so they see you listening.
 
@@ -124,7 +124,7 @@ Then:
 
 ## 📧 Post-Call Follow-up (send within 2 hours)
 
-**Subject:** PE OS for [Firm Name] — recap + invite link
+**Subject:** Avise for [Firm Name] — recap + invite link
 
 ```
 Hi [Name],

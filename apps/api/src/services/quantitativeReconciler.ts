@@ -329,7 +329,7 @@ function emptyFeedback(): ExtractionQualityFeedback {
   return {
     issuesWithPriorExtraction: [],
     rootCauseDiagnosis: '',
-    promptingFixForPEOS: '',
+    promptingFixForAvise: '',
   };
 }
 

@@ -1,4 +1,4 @@
-# PE OS — Documentation
+# Avise — Documentation
 
 > The complete docs tree. Last updated 2026-04-29 against the live codebase.
 
@@ -102,7 +102,7 @@ In-flight work is tracked in [`superpowers/plans/`](./superpowers/plans/) and [`
 
 - [Beta Launch Kit](./BETA-LAUNCH-KIT.md)
 - [Demo Cheatsheet](./DEMO-CHEATSHEET.md)
-- [PE OS Product Summary](./PE-OS-PRODUCT-SUMMARY.md)
+- [Avise Product Summary](./AVISE-PRODUCT-SUMMARY.md)
 - [Competitive Landscape](./competitive-landscape-report.md)
 
 ## Hiring

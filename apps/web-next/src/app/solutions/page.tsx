@@ -3,9 +3,9 @@ import Link from "next/link";
 import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 
 export const metadata: Metadata = {
-  title: "Solutions - PE OS",
+  title: "Solutions - Avise",
   description:
-    "Solutions for private equity firms — coming soon. Learn how PE OS supports sourcing, diligence, portfolio operations, and reporting.",
+    "Solutions for private equity firms — coming soon. Learn how Avise supports sourcing, diligence, portfolio operations, and reporting.",
 };
 
 export default function SolutionsPage() {
@@ -16,7 +16,7 @@ export default function SolutionsPage() {
           Solutions
         </h1>
         <p className="text-lg text-[#64748b] mb-8">
-          We&apos;re putting the finishing touches on a deep dive into how PE OS
+          We&apos;re putting the finishing touches on a deep dive into how Avise
           supports sourcing, diligence, portfolio operations, and LP reporting
           across firm sizes. Check back soon — or reach out if you&apos;d like a
           tailored walkthrough today.

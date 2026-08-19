@@ -7,7 +7,7 @@ Manual testing guide for the AI-powered firm research and enrichment agent.
 ## Prerequisites
 
 - A modern browser (Chrome, Firefox, Safari, or Edge)
-- Access to the PE OS staging/production environment
+- Access to the Avise staging/production environment
 - A user account (new or existing)
 - Internet connectivity (the agent scrapes websites and runs DuckDuckGo searches)
 

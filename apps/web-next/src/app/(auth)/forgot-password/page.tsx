@@ -53,7 +53,7 @@ export default function ForgotPasswordPage() {
               </span>
             </div>
             <h2 className="text-xl font-bold leading-tight tracking-tight">
-              PE OS
+              Avise
             </h2>
           </Link>
           <div className="flex items-center gap-4">
@@ -205,7 +205,7 @@ export default function ForgotPasswordPage() {
 
       {/* Footer */}
       <footer className="w-full py-6 text-center text-xs text-gray-400">
-        &copy; 2026 PE OS. All rights reserved.
+        &copy; 2026 Avise. All rights reserved.
       </footer>
     </div>
   );

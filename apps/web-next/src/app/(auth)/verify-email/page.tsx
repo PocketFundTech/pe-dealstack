@@ -189,7 +189,7 @@ function VerifyEmailContent() {
         <div className="max-w-[1280px] mx-auto px-6 h-16 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3 cursor-pointer select-none">
             <Logo className="size-8 text-primary" />
-            <h2 className="text-xl font-bold leading-tight tracking-tight">PE OS</h2>
+            <h2 className="text-xl font-bold leading-tight tracking-tight">Avise</h2>
           </Link>
         </div>
       </header>
@@ -347,7 +347,7 @@ function VerifyEmailContent() {
 
       {/* Footer */}
       <footer className="w-full py-6 text-center text-xs text-text-muted">
-        &copy; 2026 PE OS. All rights reserved.
+        &copy; 2026 Avise. All rights reserved.
       </footer>
     </div>
   );

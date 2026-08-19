@@ -1,6 +1,6 @@
-# PE OS — Complete Product Feature Guide
+# Avise — Complete Product Feature Guide
 
-> **Product:** AI-powered CRM for private equity / M&A deal management ("PE OS")
+> **Product:** AI-powered CRM for private equity / M&A deal management ("Avise")
 > **Audience:** Onboarding, sales/demo, hiring, and internal reference
 > **Prepared for:** Ganesh · **Date:** 2026-07-13
 > **Source of truth:** `apps/web-next` (Next.js frontend) + `apps/api` (Express API), current `main`-tracking state.
@@ -562,7 +562,7 @@ These are **built but partial** in the current app — flag them accordingly in 
 - **Market Sentiment** dashboard widget is "Coming Soon" (backend live).
 - **Contacts insight cards** beyond the relationship Score are stubbed off (endpoints live).
 - **CSV/Excel bulk deal import** exists at the API level but has **no column-mapping UI**; deal creation flows through the AI ingest modal.
-- **No HubSpot import** exists in the current (web-next) product. *(A legacy HubSpot import shipped in the older `apps/web` frontend; it is not part of PE OS.)*
+- **No HubSpot import** exists in the current (web-next) product. *(A legacy HubSpot import shipped in the older `apps/web` frontend; it is not part of Avise.)*
 - **Internal AI usage console** (`/internal/usage`) is staff-only tooling, not a customer feature.
 
 _All routes, labels, and behaviors above were verified against the current `apps/web-next` and `apps/api` source._

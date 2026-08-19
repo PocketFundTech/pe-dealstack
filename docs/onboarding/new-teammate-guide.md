@@ -182,7 +182,7 @@ Ask in Slack / DM if you're stuck more than 30 minutes — the team prefers chat
 
 ## Glossary
 
-- **PE OS** — the product (this repo).
+- **Avise** — the product (this repo).
 - **CIM** — Confidential Information Memorandum — the doc a banker sends with a deal.
 - **IC memo** — Investment Committee memo — the internal write-up to get approval.
 - **VDR** — Virtual Data Room — folder-based document workspace per deal.

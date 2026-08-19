@@ -119,7 +119,7 @@ export function PortalView({ state, token }: { state: PortalState; token: string
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold" style={{ color: "#003366" }}>{deal.name}</h1>
-            <p className="text-xs text-gray-500">Shared by {share.sharedBy} via PE OS</p>
+            <p className="text-xs text-gray-500">Shared by {share.sharedBy} via Avise</p>
           </div>
           <span className="px-2 py-1 rounded-md bg-blue-50 border border-blue-200 text-[10px] font-bold uppercase tracking-wider" style={{ color: "#003366" }}>
             Read-only
@@ -230,7 +230,7 @@ export function PortalView({ state, token }: { state: PortalState; token: string
       </main>
 
       <footer className="max-w-4xl mx-auto px-6 pb-8 text-center text-[11px] text-gray-400">
-        Powered by <Link href="/" className="font-semibold" style={{ color: "#003366" }}>PE OS</Link> — deal management for private equity teams
+        Powered by <Link href="/" className="font-semibold" style={{ color: "#003366" }}>Avise</Link> — deal management for private equity teams
       </footer>
     </div>
   );

@@ -1,4 +1,4 @@
-# PE OS Security Documentation
+# Avise Security Documentation
 
 **For Y Combinator Due Diligence**
 **Version:** 1.0
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-PE OS implements enterprise-grade security practices to protect sensitive private equity deal data. Our security architecture is designed around the principle of defense in depth, with multiple layers of protection at every level of the stack.
+Avise implements enterprise-grade security practices to protect sensitive private equity deal data. Our security architecture is designed around the principle of defense in depth, with multiple layers of protection at every level of the stack.
 
 ---
 
@@ -61,7 +61,7 @@ PE OS implements enterprise-grade security practices to protect sensitive privat
 
 ### Multi-Tenant Authorization
 
-PE OS is a multi-tenant application where each "firm" is isolated:
+Avise is a multi-tenant application where each "firm" is isolated:
 
 ```typescript
 // Firm-based data isolation

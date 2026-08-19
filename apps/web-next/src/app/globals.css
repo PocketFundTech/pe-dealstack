@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  /* PE OS Design System — Banker Blue */
+  /* Avise Design System — Banker Blue */
   --color-primary: #003366;
   --color-primary-hover: #002855;
   --color-primary-light: #E6EEF5;
@@ -241,7 +241,7 @@ body {
 }
 
 /* ============================================================
-   PE OS — Toast Notification System
+   Avise — Toast Notification System
    Ported from notifications.js. Stacked slide-in
    toasts at top-right with progress timer bar.
    ============================================================ */
@@ -283,7 +283,7 @@ body {
 }
 
 /* ============================================================
-   PE OS — Page Transition Fade-in
+   Avise — Page Transition Fade-in
    Subtle fade-in on route load, matching legacy layout.js.
    ============================================================ */
 
@@ -326,7 +326,7 @@ body {
 .chat-markdown li { margin-bottom: 0.15rem; }
 
 /* ============================================================
-   PE OS — Skeleton Loading Shimmer
+   Avise — Skeleton Loading Shimmer
    Reusable skeleton classes for premium loading states.
    Uses the existing design system colors.
    ============================================================ */
@@ -450,7 +450,7 @@ body {
 }
 
 /* ============================================================
-   PE OS — Micro-interactions & Hover Effects
+   Avise — Micro-interactions & Hover Effects
    Premium polish layer. Applied globally.
    ============================================================ */
 

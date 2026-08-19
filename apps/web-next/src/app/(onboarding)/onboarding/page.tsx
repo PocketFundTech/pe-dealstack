@@ -321,7 +321,7 @@ function TopNav({ doneCount, onSkip }: { doneCount: number; onSkip: () => void }
       <div className="max-w-6xl mx-auto px-6 py-3.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Logo className="size-[22px] shrink-0 text-primary" />
-          <span className="font-bold text-[15px] tracking-tight text-primary">PE OS</span>
+          <span className="font-bold text-[15px] tracking-tight text-primary">Avise</span>
           <span className="text-[11px] text-text-muted font-mono uppercase tracking-wider ml-2 hidden sm:inline">
             Getting started
           </span>

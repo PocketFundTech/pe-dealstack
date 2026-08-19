@@ -224,7 +224,7 @@ export interface RecommendedAction {
 export interface ExtractionQualityFeedback {
   issuesWithPriorExtraction: string[];
   rootCauseDiagnosis: string;
-  promptingFixForPEOS: string;
+  promptingFixForAvise: string;
 }
 
 export interface DocumentSet {

@@ -33,7 +33,7 @@ const paginationSchema = z.object({
 });
 
 // System prompt for deal analysis
-const DEAL_ANALYST_PROMPT = `You are an expert Private Equity investment analyst assistant for PE OS, a deal management platform.
+const DEAL_ANALYST_PROMPT = `You are an expert Private Equity investment analyst assistant for Avise, a deal management platform.
 
 Your role is to help investment professionals analyze deals, documents, and make informed decisions. You have access to:
 - Deal information (financials, metrics, stage)

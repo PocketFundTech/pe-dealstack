@@ -112,7 +112,7 @@ export default function ResetPasswordPage() {
             <div className="size-8 rounded bg-primary/10 flex items-center justify-center text-primary">
               <span className="material-symbols-outlined text-2xl">bar_chart</span>
             </div>
-            <h2 className="text-xl font-bold leading-tight tracking-tight">PE OS</h2>
+            <h2 className="text-xl font-bold leading-tight tracking-tight">Avise</h2>
           </Link>
         </div>
       </header>
@@ -295,7 +295,7 @@ export default function ResetPasswordPage() {
 
       {/* Footer */}
       <footer className="w-full py-6 text-center text-xs text-gray-400">
-        &copy; 2026 PE OS. All rights reserved.
+        &copy; 2026 Avise. All rights reserved.
       </footer>
     </div>
   );

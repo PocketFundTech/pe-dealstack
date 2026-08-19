@@ -16,7 +16,7 @@ const AI_AGENTS = [
 ];
 
 // Previous values ("10x Faster diligence", "15hrs Saved per deal", "SOC 2
-// Enterprise ready") were unsourced and, in the SOC 2 case, untrue — PE OS is
+// Enterprise ready") were unsourced and, in the SOC 2 case, untrue — Avise is
 // not certified. Replaced with capabilities that are verifiable in the product.
 const STATS = [
   { value: "3-layer", label: "Financial extraction" },
@@ -412,7 +412,7 @@ export default function LoginPage() {
 
           {/* Footer */}
           <div className="mt-10 pt-6 border-t border-gray-100 flex items-center justify-center text-xs text-slate-400">
-            <p>&copy; 2026 PE OS.</p>
+            <p>&copy; 2026 Avise.</p>
           </div>
         </div>
       </div>

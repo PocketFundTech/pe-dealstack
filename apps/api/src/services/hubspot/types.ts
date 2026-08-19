@@ -38,7 +38,7 @@ export interface MappedDeal {
   hubspotId: string;
   name: string;
   dealSize: number | null;
-  /** null when the HubSpot stage has no PE OS equivalent — leave the deal alone. */
+  /** null when the HubSpot stage has no Avise equivalent — leave the deal alone. */
   stage: DealStage | null;
   description: string | null;
   associatedCompanyHubspotId: string | null;

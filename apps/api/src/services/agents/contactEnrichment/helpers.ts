@@ -38,7 +38,7 @@ export async function scrapeCompanyWebsite(domain: string): Promise<{ title: str
     const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`https://${domain}`, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PEOSBot/1.0)' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AviseBot/1.0)' },
     });
     clearTimeout(timeout);
     if (!res.ok) return null;

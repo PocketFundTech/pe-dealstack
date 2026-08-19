@@ -14,7 +14,7 @@ function rest(properties: Record<string, string | null>, std: Set<string>): Reco
 }
 
 /**
- * HubSpot deal-stage label → PE OS Deal.stage.
+ * HubSpot deal-stage label → Avise Deal.stage.
  * Labels are free text per pipeline, so we match on normalised keywords and
  * return null when nothing fits — better to leave the stage alone than to
  * guess a deal into the wrong pipeline column.

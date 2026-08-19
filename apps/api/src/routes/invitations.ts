@@ -72,19 +72,19 @@ export async function sendInvitationEmail(
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
 
     const { data, error } = await resend.emails.send({
-      from: `PE OS <${fromEmail}>`,
+      from: `Avise <${fromEmail}>`,
       to: [email],
-      subject: `You're invited to join ${firmName} on PE OS`,
+      subject: `You're invited to join ${firmName} on Avise`,
       html: `
         <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff;">
           <div style="background: linear-gradient(135deg, #003366, #0055aa); padding: 32px; text-align: center; border-radius: 8px 8px 0 0;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">PE OS</h1>
+            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">Avise</h1>
             <p style="color: #b3d1ff; margin: 8px 0 0; font-size: 14px;">AI-Powered Private Equity CRM</p>
           </div>
           <div style="padding: 32px;">
             <h2 style="color: #003366; margin: 0 0 16px; font-size: 20px;">You're Invited! 🎉</h2>
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-              <strong>${inviterName}</strong> has invited you to join <strong>${firmName}</strong> on PE OS.
+              <strong>${inviterName}</strong> has invited you to join <strong>${firmName}</strong> on Avise.
             </p>
             <p style="color: #555; font-size: 15px; line-height: 1.6;">
               You've been assigned the role of <strong>${role}</strong>. Click the button below to create your account and get started.
@@ -100,7 +100,7 @@ export async function sendInvitationEmail(
           <hr style="border: none; border-top: 1px solid #eef2f7; margin: 0;" />
           <div style="padding: 20px 32px; text-align: center;">
             <p style="color: #aaa; font-size: 12px; margin: 0;">
-              PE OS — AI-Powered Private Equity CRM<br/>
+              Avise — AI-Powered Private Equity CRM<br/>
               If you didn't expect this invitation, you can safely ignore this email.
             </p>
           </div>

@@ -1,4 +1,4 @@
-# PE OS — Beta Launch Kit
+# Avise — Beta Launch Kit
 
 **Goal:** Onboard 10-15 beta users, validate PMF, collect feedback, iterate fast
 **Date:** March 27, 2026
@@ -90,7 +90,7 @@
 
 - [ ] **Build onboarding checklist widget** — After signup, show a persistent card:
   ```
-  Getting Started with PE OS
+  Getting Started with Avise
   ☐ Create your first deal
   ☐ Upload a CIM or financial document
   ☐ Review AI-extracted financials
@@ -179,14 +179,14 @@
 4. What would make you recommend this to a peer?
 
 **Day 30 — Decision Call (15 min)**
-1. NPS question: "How likely to recommend PE OS? (0-10)"
+1. NPS question: "How likely to recommend Avise? (0-10)"
 2. Conversion: "We're moving to paid plans next month — interested?"
 3. Testimonial ask: "Can I quote you on [thing they said]?"
 
 ### Onboarding Checklist (In-App)
 
 ```
-Welcome to PE OS Beta! 🎯
+Welcome to Avise Beta! 🎯
 
 Here's how to get started:
 
@@ -228,9 +228,9 @@ Here's how to get started:
 ### Beta Feedback Survey (Send Week 2 + Week 4)
 
 ```
-PE OS Beta Feedback — [Week X]
+Avise Beta Feedback — [Week X]
 
-1. How often did you use PE OS this week?
+1. How often did you use Avise this week?
    ○ Daily  ○ 2-3 times  ○ Once  ○ Didn't use it
 
 2. Which features did you use? (check all)
@@ -246,10 +246,10 @@ PE OS Beta Feedback — [Week X]
 5. Did AI Financial Extraction work well on your documents?
    ○ Perfect  ○ Mostly accurate  ○ Needed corrections  ○ Didn't work
 
-6. How likely are you to recommend PE OS to a colleague? (0-10)
+6. How likely are you to recommend Avise to a colleague? (0-10)
    [NPS slider]
 
-7. If PE OS cost $499/month, would you pay for it?
+7. If Avise cost $499/month, would you pay for it?
    ○ Definitely  ○ Probably  ○ Unsure  ○ No
 
 8. What's missing? What would make this a must-have?
@@ -285,7 +285,7 @@ Create a Google Sheet with tabs:
 | **Retention (Week 2→4)** | 70% still active in week 4 | Login tracking | <50% — novelty wore off, not habit-forming |
 
 ### PMF Signal (Sean Ellis Test)
-Ask every beta user: **"How would you feel if you could no longer use PE OS?"**
+Ask every beta user: **"How would you feel if you could no longer use Avise?"**
 - Very disappointed → PMF signal
 - Somewhat disappointed → Getting close
 - Not disappointed → Not there yet
@@ -314,11 +314,11 @@ Share this with beta users proactively (builds trust):
 ### Beta Invitation Email
 
 ```
-Subject: You're invited to beta test PE OS — AI-powered deal management
+Subject: You're invited to beta test Avise — AI-powered deal management
 
 Hi [Name],
 
-I'm building PE OS — an AI-powered CRM specifically for private equity deal management.
+I'm building Avise — an AI-powered CRM specifically for private equity deal management.
 We're looking for 10 PE professionals to beta test it (free for 3 months).
 
 What it does:
@@ -337,17 +337,17 @@ What I'd ask from you:
 Interested? Reply to this email and I'll set up your account today.
 
 [Your name]
-Founder, PE OS
+Founder, Avise
 ```
 
 ### Beta Welcome Email (After Signup)
 
 ```
-Subject: Welcome to PE OS Beta — here's how to get started
+Subject: Welcome to Avise Beta — here's how to get started
 
 Hi [Name],
 
-Your PE OS account is live! Here's everything you need:
+Your Avise account is live! Here's everything you need:
 
 🔗 Login: https://pe-dealstack.vercel.app/login
 📹 2-min Demo: [LOOM LINK]
@@ -371,11 +371,11 @@ Thanks for being an early believer,
 ### Week 2 Check-In
 
 ```
-Subject: Quick check-in — how's PE OS working for you?
+Subject: Quick check-in — how's Avise working for you?
 
 Hi [Name],
 
-It's been 2 weeks since you started using PE OS. Quick questions:
+It's been 2 weeks since you started using Avise. Quick questions:
 
 1. Have you uploaded any CIMs? How was the extraction?
 2. What's the most useful feature so far?
@@ -395,7 +395,7 @@ Subject: Would you be willing to share a quick quote?
 
 Hi [Name],
 
-You mentioned that [specific thing they said about PE OS].
+You mentioned that [specific thing they said about Avise].
 Would you be comfortable if I used that as a testimonial on our website?
 
 Something like:
@@ -501,4 +501,4 @@ After 4-6 weeks of beta, evaluate:
 
 ---
 
-*Reference alongside: [PE-OS-PRODUCT-SUMMARY.md](PE-OS-PRODUCT-SUMMARY.md) | [GTM-STRATEGY.md](GTM-STRATEGY.md)*
+*Reference alongside: [AVISE-PRODUCT-SUMMARY.md](AVISE-PRODUCT-SUMMARY.md) | [GTM-STRATEGY.md](GTM-STRATEGY.md)*

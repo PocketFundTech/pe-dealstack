@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-This document lists every environment variable used by PE OS.
+This document lists every environment variable used by Avise.
 
 ---
 

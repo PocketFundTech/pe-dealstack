@@ -1,4 +1,4 @@
-# PE OS — Security Testing Checklist
+# Avise — Security Testing Checklist
 
 **For:** QA Team / Founders
 **Purpose:** Verify all security features are working before running real deal data
@@ -8,7 +8,7 @@
 
 ## Quick Summary — What We Built & Why
 
-PE OS now has **6 layers of security** protecting deal data:
+Avise now has **6 layers of security** protecting deal data:
 
 1. **Private Document Storage** — All deal files (CIMs, financials, legal) are locked behind authentication. No one can access them with just a URL.
 2. **Signed URLs** — When you preview/download a document, you get a temporary link that expires in 1 hour. Can't be bookmarked or shared permanently.
@@ -38,7 +38,7 @@ PE OS now has **6 layers of security** protecting deal data:
 | # | Test | Steps | Expected Result | Pass? |
 |---|------|-------|-----------------|-------|
 | 2.1 | Enable 2FA | Login → Settings → Security → Click "Enable" under Two-Factor Authentication | QR code appears | |
-| 2.2 | Scan QR code | Open Google Authenticator / Authy → Scan the QR code | App shows "PE OS" with 6-digit rotating code | |
+| 2.2 | Scan QR code | Open Google Authenticator / Authy → Scan the QR code | App shows "Avise" with 6-digit rotating code | |
 | 2.3 | Verify enrollment | Enter the 6-digit code from your authenticator app → Click "Verify & Enable 2FA" | Success message, status shows "Enabled" | |
 | 2.4 | Login with 2FA | Logout → Login with email + password | After password, shows 6-digit code input screen | |
 | 2.5 | Correct code works | Enter correct 6-digit code from authenticator | Redirected to CRM dashboard | |
@@ -124,4 +124,4 @@ PE OS now has **6 layers of security** protecting deal data:
 
 ### What to tell customers
 
-> "PE OS encrypts all data at rest (AES-256) and in transit (TLS 1.2+). Documents are stored in private cloud storage with time-limited access links. We offer two-factor authentication, role-based access control, and maintain a complete audit trail of all document access. Our infrastructure providers (Supabase, Vercel, OpenAI) are all SOC 2 Type II certified."
+> "Avise encrypts all data at rest (AES-256) and in transit (TLS 1.2+). Documents are stored in private cloud storage with time-limited access links. We offer two-factor authentication, role-based access control, and maintain a complete audit trail of all document access. Our infrastructure providers (Supabase, Vercel, OpenAI) are all SOC 2 Type II certified."

@@ -1,17 +1,17 @@
-# PE OS — Technical Assignment
+# Avise — Technical Assignment
 
 ## Financial Extraction Pipeline
 
-> **Company:** PE OS — AI-Powered CRM for Private Equity
+> **Company:** Avise — AI-Powered CRM for Private Equity
 > **Format:** Fork the repo, complete all 5 tasks, submit a single PR
 > **Time:** 5-7 days (part-time, use any AI tools you want)
 > **Stack:** Node.js / Express / TypeScript / Supabase (PostgreSQL) / GPT-4o
 
 ---
 
-## About PE OS
+## About Avise
 
-PE OS is an AI-powered CRM for private equity firms. Deal teams upload financial documents (CIMs, Excel models, PDFs) and our platform extracts structured financial data, runs analysis, and powers an AI chat assistant.
+Avise is an AI-powered CRM for private equity firms. Deal teams upload financial documents (CIMs, Excel models, PDFs) and our platform extracts structured financial data, runs analysis, and powers an AI chat assistant.
 
 Your assignment: **build the core financial extraction pipeline** that takes raw documents and turns them into clean, structured financial data.
 

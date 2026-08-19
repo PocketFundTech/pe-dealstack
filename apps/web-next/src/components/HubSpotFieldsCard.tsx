@@ -5,7 +5,7 @@ import { visibleHubspotFields } from "@/lib/hubspotFields";
 
 // ---------------------------------------------------------------------------
 // Renders the `hubspotProperties` blob imported from HubSpot — every property
-// the client had on the record that PE OS has no dedicated column for
+// the client had on the record that Avise has no dedicated column for
 // (custom fields, addresses, lifecycle stage, close date, ...).
 //
 // Without this the importer's work is invisible: the data lands in the JSONB

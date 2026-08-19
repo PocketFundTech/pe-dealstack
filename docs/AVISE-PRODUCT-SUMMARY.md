@@ -1,13 +1,13 @@
-# PE OS — Product Summary for Strategy & GTM Planning
+# Avise — Product Summary for Strategy & GTM Planning
 
 **Last Updated:** March 27, 2026
 **For:** Product Team, Strategy, ICP Definition, Sales Enablement
 
 ---
 
-## What is PE OS?
+## What is Avise?
 
-PE OS is an **AI-native deal management platform for private equity**. It replaces the manual, spreadsheet-driven workflow PE firms use to source deals, run due diligence, and manage relationships — with an intelligent system that reads documents, extracts financials, flags risks, and writes investment memos.
+Avise is an **AI-native deal management platform for private equity**. It replaces the manual, spreadsheet-driven workflow PE firms use to source deals, run due diligence, and manage relationships — with an intelligent system that reads documents, extracts financials, flags risks, and writes investment memos.
 
 **One-liner:** "The Intelligence Layer for Private Equity"
 
@@ -173,7 +173,7 @@ Ask questions about any deal in natural language.
 
 ## Competitive Positioning
 
-| Capability | PE OS | DealCloud | 4Degrees | Affinity | Altvia |
+| Capability | Avise | DealCloud | 4Degrees | Affinity | Altvia |
 |-----------|-------|-----------|----------|----------|--------|
 | **AI Financial Extraction** | Yes (auto) | No | No | No | No |
 | **AI Deal Chat** | Yes (6 tools) | No | No | No | No |
@@ -189,7 +189,7 @@ Ask questions about any deal in natural language.
 
 ## User Roles & Workflows
 
-### Who Uses PE OS?
+### Who Uses Avise?
 
 | Role | Primary Workflows | Time Saved |
 |------|-------------------|------------|
@@ -230,9 +230,9 @@ Signup → Create Org → Invite Team → Create Deal → Upload CIM
 |--------|---------------|
 | **CIMs Processed / Week** | Core value metric — are users using the wedge feature? |
 | **Extraction Accuracy %** | Product quality — do users trust the AI output? |
-| **Deals Created / Org** | Adoption depth — are they moving real deal flow into PE OS? |
+| **Deals Created / Org** | Adoption depth — are they moving real deal flow into Avise? |
 | **Chat Messages / Deal** | Engagement — is the AI assistant useful enough to talk to? |
-| **Memos Generated** | Value delivery — are they producing output with PE OS? |
+| **Memos Generated** | Value delivery — are they producing output with Avise? |
 | **Invite-to-Activate Rate** | Team adoption — does it spread within the firm? |
 | **Time from Signup to First CIM Upload** | Activation speed — how fast do they hit the "aha moment"? |
 

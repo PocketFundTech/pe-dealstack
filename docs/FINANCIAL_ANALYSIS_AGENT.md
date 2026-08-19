@@ -9,7 +9,7 @@
 
 ### What It Does
 
-The Financial Intelligence Agent is the core analytical engine of PE OS. When a deal team uploads financial documents (CIMs, P&Ls, balance sheets, Excel models), the agent:
+The Financial Intelligence Agent is the core analytical engine of Avise. When a deal team uploads financial documents (CIMs, P&Ls, balance sheets, Excel models), the agent:
 
 1. **Extracts** — Reads the document and pulls out structured financial data (Income Statement, Balance Sheet, Cash Flow)
 2. **Validates** — Cross-checks the numbers (do rows add up? does Net Income flow through all 3 statements?)

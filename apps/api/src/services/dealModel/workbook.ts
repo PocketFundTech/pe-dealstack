@@ -606,7 +606,7 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
   const { assumptions, history, context } = input;
 
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'PE OS';
+  wb.creator = 'Avise';
   wb.created = new Date(context.generatedAt);
 
   writeCover(wb.addWorksheet(SHEETS.cover), context);

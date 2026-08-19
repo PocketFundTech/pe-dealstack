@@ -1,6 +1,6 @@
-# PE OS — Web (Next.js)
+# Avise — Web (Next.js)
 
-PE OS is the Next.js frontend for Pocket Fund's AI-powered CRM for private equity. It replaced the legacy vanilla-JS app at `apps/web` in April 2026 and is now the primary product surface — deals, VDR, financials, memo builder, dashboard, admin, deal chat, and the onboarding flow all live here.
+Avise is the Next.js frontend for Pocket Fund's AI-powered CRM for private equity. It replaced the legacy vanilla-JS app at `apps/web` in April 2026 and is now the primary product surface — deals, VDR, financials, memo builder, dashboard, admin, deal chat, and the onboarding flow all live here.
 
 For a top-down view of the monorepo (API, agents, schema, diagrams), see the root [`README.md`](../../README.md).
 

@@ -1,6 +1,6 @@
 # Flow — Deal Ingest (single-deal CIM upload)
 
-Drop a CIM, teaser, or paste a URL → PE OS auto-creates a `Deal` with extracted financials. This is the path used by the onboarding "Upload first deal" step and by the deal-detail "Add document" affordance.
+Drop a CIM, teaser, or paste a URL → Avise auto-creates a `Deal` with extracted financials. This is the path used by the onboarding "Upload first deal" step and by the deal-detail "Add document" affordance.
 
 ## Sequence
 

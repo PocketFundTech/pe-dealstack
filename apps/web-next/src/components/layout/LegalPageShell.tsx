@@ -34,7 +34,7 @@ export function LegalPageShell({
           <Link href="/" className="flex items-center gap-3">
             <Logo className="size-8 text-primary" />
             <h2 className="text-lg font-bold leading-tight tracking-[-0.015em] text-[#111418]">
-              PE OS
+              Avise
             </h2>
           </Link>
           <div className="flex items-center gap-4">
@@ -81,7 +81,7 @@ export function LegalPageShell({
           <div className="flex items-center gap-3">
             <Logo className="size-6 text-primary" />
             <span className="text-sm font-medium text-slate-500">
-              &copy; 2026 PE OS. All rights reserved.
+              &copy; 2026 Avise. All rights reserved.
             </span>
           </div>
           <div className="flex gap-6 text-sm">

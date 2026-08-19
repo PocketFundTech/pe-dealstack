@@ -1,5 +1,5 @@
 -- ============================================================
--- Security Hardening Migration — PE OS
+-- Security Hardening Migration — Avise
 -- Run this AFTER switching the 'documents' bucket to private
 -- in the Supabase Dashboard.
 -- ============================================================

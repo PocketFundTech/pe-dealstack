@@ -1,6 +1,6 @@
-# PE OS — AI Features QA Testing Guide
+# Avise — AI Features QA Testing Guide
 
-**Purpose:** Thoroughly test every AI feature in PE OS before recording the Loom demo video. Test happy paths, edge cases, and error handling. Document any bugs found.
+**Purpose:** Thoroughly test every AI feature in Avise before recording the Loom demo video. Test happy paths, edge cases, and error handling. Document any bugs found.
 
 **URL:** https://lmmos.ai/login
 **Prerequisites:** Active account with at least 1 deal (with uploaded documents + extracted financials), a few contacts, and documents in the Data Room.
@@ -194,7 +194,7 @@ For each failed test, note:
 **Expected:**
 - Your message appears on the right side (light gray background)
 - A typing indicator (three bouncing dots) appears while AI thinks
-- AI response appears on the left with "PE OS AI • GPT-4" label and a blue gradient avatar
+- AI response appears on the left with "Avise AI • GPT-4" label and a blue gradient avatar
 - Response contains a relevant summary of the deal
 
 - [ ] Message sends successfully
@@ -949,7 +949,7 @@ These are NOT bugs — do not report these:
 
 7. **"AI can make mistakes"** disclaimer — This appears below the chat input on Deal Chat and Memo Chat. This is intentional.
 
-8. **Deal Chat says "PE OS AI • GPT-4"** — Even though the backend may use GPT-4o, the label says GPT-4. This is cosmetic.
+8. **Deal Chat says "Avise AI • GPT-4"** — Even though the backend may use GPT-4o, the label says GPT-4. This is cosmetic.
 
 ---
 
