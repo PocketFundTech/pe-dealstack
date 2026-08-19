@@ -5,6 +5,54 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 66 — August 19, 2026
+
+#### Timestamp: August 19, 2026 — 14:10-15:50 IST
+
+#### Goal: Integrate the landing page the dev built in `dev-pf66/pe-os`, deploy it on a new domain — which turned into discovering the product had already been rebranded, and renaming PE OS → Avise across the codebase.
+
+#### 1. The landing page integration that should not have shipped
+
+**Task as given:** take `landing-page/index.html` from the private `dev-pf66/pe-os` repo and deploy it on a new domain, verbatim, no rewrites.
+
+**Built:** copied the file byte-identical (sha256 `16f8e80f…03bb99`) to `landing/`, added a no-build `vercel.json` so a new project would not inherit the monorepo Next.js build from the root config, created Vercel project `avise`, deployed, attached `avise.io` + `www.avise.io`. Opened as PR #123.
+
+**Flagged before deploying, all left as-authored per founder direction:** dark `#09090b` theme against the app's light banker-blue system; four `[Screenshot: …]` placeholders occupying ~24% of the page; pricing of `$99/$149/$199` contradicting `lmmos.ai/pricing` at `$249/$599/Custom`; and relative `/signup` + `/login` CTAs that would 404 on any standalone domain.
+
+**Root cause of the surprise — DNS activated someone else's site.** After the founder set the Namecheap records, `avise.io` returned 200 but served **185,442 bytes titled "The deals aren't what take the time."** — not our 26,848-byte page. `avise.io` was already registered and verified inside a Vercel account outside this team, attached to a finished, branded **AVISE** Next.js site. Vercel routes a domain by Host header to whichever project has it *verified*; before the DNS change the domain sat on Namecheap parking and served nothing, so pointing it at Vercel is what switched the other site on. Confirmed by three signals: `vercel domains add` returned 403 "Not authorized to use avise.io", the project domain stayed `verified: false` with `reason: pending_domain_verification`, and a sweep of every scope on the account (one team, one personal user, six projects) found `avise.io` on none of them.
+
+**Decision:** did not claim the domain. Vercel offered the `_vercel` TXT ownership challenge, but adding it would have transferred `avise.io` off the other project and replaced a finished brand site with a 27KB static page. Closed PR #123 unmerged, deleted the `avise` Vercel project, released both domain claims, and verified the AVISE site was unaffected (still 200, 185,442 bytes).
+
+**Correctable detail worth recording:** the Vercel apex IP is issued **per project**, not per account. Reusing `216.198.79.1` from the live `lmmos.ai` would have been wrong; querying `GET /v6/domains/avise.io/config` returned `216.150.1.1` / `216.150.16.1` and a project-specific `fa270aa67e6f4331.vercel-dns-016.com` CNAME target. The widely-quoted `76.76.21.21` comes back only as a rank-2 legacy fallback.
+
+#### 2. Product rename: PE OS → Avise
+
+**Trigger:** the AVISE site is the newer brand. Founder direction — remove PE OS everywhere and switch to Avise.
+
+**Scope (95 files + 1 rename, 256 insertions / 256 deletions — balanced, as a pure rename should be):**
+- App code: auth pages, marketing pages, invitation and document-share email templates, AI system prompts, Excel export creator metadata, TOTP issuer, sidebar, command palette, page `<title>`/OpenGraph metadata.
+- Current-facing docs: README, ARCHITECTURE, SECURITY + whitepaper, product/features guides, hiring assignments, mermaid diagrams, onboarding.
+- Internal identifiers: `promptingFixForPEOS` → `promptingFixForAvise` (checked against SQL and JSON first — code-only, not persisted, so the LLM prompt schema and its parser could be renamed together safely), `PEOSBot` → `AviseBot`.
+- `docs/PE-OS-PRODUCT-SUMMARY.md` → `docs/AVISE-PRODUCT-SUMMARY.md` with both inbound references updated.
+
+**Deliberately not renamed, and why:** dated changelogs and historical records (`PROGRESS.md`, `compact.md`, `docs/archive`, `docs/plans`, `docs/superpowers`, `docs/testing`, session QA checklists) document work done when the product *was* PE OS — rewriting them would falsify the record. `pe-os` as a Render service identifier (`render.yaml`, `DEPLOYMENT.md`) is infrastructure, not branding. The 18 `https://pe-os.onrender.com` URLs are factual references to a real host.
+
+**MFA note:** the TOTP issuer is now `"Avise"`. Existing users are unaffected — the issuer is display-only inside the `otpauth://` URI and the shared secret is untouched — but authenticator apps keep showing "PE OS" until re-enrollment.
+
+**Verified:** `shared` + `api` tsc clean; `web-next` tsc clean; `web-next` lint 0 errors (27 pre-existing warnings); api suite **1766 passed / 0 failed** across 169 files. Shipped as PR #124, merged. Production deploy READY and confirmed live — `lmmos.ai` serves `<title>Avise — Private Equity Operating System</title>` with zero "PE OS" in the HTML.
+
+#### Open items
+
+Four old-brand values left in place because inventing replacements would be worse than leaving them visible:
+1. `mailto:contact@pe-os.com` — live footer link, `apps/web-next/src/app/page.tsx:172`. Standard elsewhere is `hello@pocket-fund.com`.
+2. `https://pe-os.onrender.com/api` — shown to users as the API base URL, `apps/web-next/src/app/api-reference/page.tsx:56`. Points at legacy Render, so likely already wrong independent of the rebrand.
+3. `security@peos.app` / `incidents@peos.app` — security contacts in `docs/SECURITY.md` and the whitepaper.
+4. `PE-OS-Sales-Playbook.pdf` (untracked binary) and a `Peos AI Model.pdf` code comment.
+
+Also unresolved: the product now brands as Avise but still lives on `lmmos.ai`, while `avise.io` serves a separate site from an account this team does not control.
+
+---
+
 ### Session 65 — August 18, 2026
 
 #### Timestamp: August 18, 2026 — 02:30-13:45 IST
