@@ -178,7 +178,7 @@ Rate limits are keyed by authenticated user ID (falling back to client IP via `X
 
 ## Contact
 
-For security questions or to request a detailed security assessment, contact: **security@peos.app**
+For security questions or to request a detailed security assessment, contact: **hello@pocket-fund.com**
 
 ---
 

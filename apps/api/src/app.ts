@@ -151,6 +151,7 @@ app.set('trust proxy', 1);
 // CORS - whitelist allowed origins (configurable via ALLOWED_ORIGINS env var)
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = [
+  'https://app.avise.io',
   'https://lmmos.ai',
   'https://www.lmmos.ai',
   'https://pe-dealstack.vercel.app',

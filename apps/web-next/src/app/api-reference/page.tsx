@@ -53,7 +53,7 @@ export default function ApiReferencePage() {
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-[#e2e8f0] font-mono text-sm">
             <span className="text-[#64748b]">Base URL:</span>
             <span className="text-primary font-semibold">
-              https://pe-os.onrender.com/api
+              https://app.avise.io/api
             </span>
           </div>
         </div>
