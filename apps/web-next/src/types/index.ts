@@ -13,6 +13,16 @@ export interface AppUser {
   avatar: string;
   preferences: Record<string, unknown>;
   isInternal: boolean;
+  // Populated from GET /users/me's `organization` join (Organization table).
+  // Null/undefined for users whose org row doesn't resolve (or pre-migration
+  // accounts). Used for org-gated features like the Outreach nav item.
+  organization?: {
+    id: string;
+    name: string;
+    slug: string;
+    logo?: string | null;
+    plan?: string;
+  } | null;
 }
 
 export interface DealScorecard {

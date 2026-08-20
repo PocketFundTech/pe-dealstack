@@ -7,7 +7,17 @@ export type NavItem = {
   memberOnly?: boolean;
   isAI?: boolean;
   divider?: boolean;
+  // Restricts visibility to users whose organization.slug is in this list.
+  // Undefined/omitted means no org restriction (visible to all orgs, subject
+  // to the other flags above).
+  orgSlugAllowlist?: string[];
 };
+
+// Cicero Capital's Organization.slug. No Organization row exists for Cicero
+// Capital yet -- a separate migration is being written in parallel to create
+// it. Referenced here (instead of a magic string) so the nav gate and the
+// /outreach page re-check agree on the exact value.
+export const CICERO_CAPITAL_ORG_SLUG = "cicero-capital";
 
 export const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard", href: "/dashboard" },
@@ -18,6 +28,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "admin", label: "Admin", icon: "admin_panel_settings", href: "/admin", adminOnly: true },
   { id: "divider", label: "", icon: "", href: "", divider: true },
   { id: "ai-reports", label: "AI Reports", icon: "auto_awesome", href: "/memo-builder", isAI: true, memberOnly: true },
+  { id: "outreach", label: "Outreach", icon: "campaign", href: "/outreach", orgSlugAllowlist: [CICERO_CAPITAL_ORG_SLUG] },
 ];
 
 export const STAGES = [
