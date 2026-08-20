@@ -169,6 +169,69 @@ export function getOrgId(req: Request): string {
 }
 
 /**
+ * Middleware factory that restricts a router to a single organization,
+ * identified by slug. Use for features gated to one specific tenant (e.g.
+ * the Outreach pipeline board, currently Cicero Capital only) rather than
+ * gated by role.
+ *
+ * Must run after orgMiddleware (reads req.user.organizationId, which
+ * orgMiddleware attaches) — mount it after authMiddleware, orgMiddleware,
+ * enforceOrgMfaMiddleware, matching the other org-scoped routers in app.ts.
+ *
+ * req.user carries organizationId but NOT the org's slug (see
+ * types/express.d.ts) — orgMiddleware never looks it up — so this does one
+ * extra Organization lookup per request.
+ *
+ * SECURITY: this is a real authorization boundary, not a UX nicety — per
+ * this project's trust model (see rls-hardening-migration.sql), RLS is
+ * deny-all and Express is where access control actually happens. Unlike
+ * enforceOrgMfaMiddleware (which fails OPEN on a transient lookup error,
+ * because MFA is a soft policy), this fails CLOSED: any missing org, lookup
+ * error, or slug mismatch returns 403. Never let a lookup failure fall
+ * through to next().
+ */
+export function requireOrgSlug(slug: string) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const orgId = req.user?.organizationId;
+    if (!orgId) {
+      res.status(403).json({
+        error: 'Forbidden',
+        message: 'You must belong to an organization to access this resource',
+      });
+      return;
+    }
+
+    try {
+      const { data: org, error } = await supabase
+        .from('Organization')
+        .select('slug')
+        .eq('id', orgId)
+        .single();
+
+      if (error || !org || org.slug !== slug) {
+        res.status(403).json({
+          error: 'Forbidden',
+          message: 'This resource is not available to your organization',
+        });
+        return;
+      }
+
+      next();
+    } catch (err) {
+      log.error('requireOrgSlug middleware error', err);
+      // Fail closed — see SECURITY note above.
+      res.status(403).json({
+        error: 'Forbidden',
+        message: 'This resource is not available to your organization',
+      });
+    }
+  };
+}
+
+/** Gates a router to the Cicero Capital org (Organization.slug === 'cicero-capital'). */
+export const requireCiceroCapital = requireOrgSlug('cicero-capital');
+
+/**
  * Verify a deal belongs to the user's organization.
  * Use in deal-child routes (documents, folders, activities, financials).
  * Returns the deal record or null if not found / not in org.
@@ -243,4 +306,35 @@ export async function verifyConversationAccess(conversationId: string, orgId: st
   if (!conv?.dealId) return null;
   const deal = await verifyDealAccess(conv.dealId, orgId);
   return deal ? conv : null;
+}
+
+/**
+ * Verify an Outreach pipeline stage belongs to the user's organization.
+ * Use before writing an OutreachContact.stageId (create or move) so a
+ * guessed/foreign stage id can't be used to file a contact under another
+ * org's stage.
+ * Returns the stage record or null if not found / not in org.
+ */
+export async function verifyOutreachStageAccess(stageId: string, orgId: string) {
+  const { data } = await supabase
+    .from('OutreachStage')
+    .select('id, organizationId')
+    .eq('id', stageId)
+    .eq('organizationId', orgId)
+    .single();
+  return data;
+}
+
+/**
+ * Verify an Outreach contact belongs to the user's organization.
+ * Returns the contact record or null if not found / not in org.
+ */
+export async function verifyOutreachContactAccess(contactId: string, orgId: string) {
+  const { data } = await supabase
+    .from('OutreachContact')
+    .select('id, organizationId, stageId')
+    .eq('id', contactId)
+    .eq('organizationId', orgId)
+    .single();
+  return data;
 }

@@ -1,0 +1,216 @@
+import { Router } from 'express';
+import type { Request } from 'express';
+import { z } from 'zod';
+import { supabase } from '../supabase.js';
+import { getOrgId, verifyOutreachStageAccess, verifyOutreachContactAccess } from '../middleware/orgScope.js';
+import { log } from '../utils/logger.js';
+
+// Outreach: manual pipeline-tracking board. Org-gated to Cicero Capital only
+// — see requireCiceroCapital in middleware/orgScope.ts, applied at the
+// app.ts/app-lite.ts mount, not here (this router assumes the caller has
+// already been authorized for the org).
+
+const router = Router();
+
+const outreachChannels = ['proprietary', 'broker'] as const;
+
+const createContactSchema = z.object({
+  stageId: z.string().uuid('stageId must be a valid UUID'),
+  name: z.string().min(1, 'Name is required').max(200),
+  company: z.string().max(200).optional().or(z.literal('')),
+  email: z.string().email().optional().or(z.literal('')),
+  phone: z.string().max(30).optional().or(z.literal('')),
+  channel: z.enum(outreachChannels).optional(),
+  notes: z.string().max(5000).optional().or(z.literal('')),
+});
+
+const updateContactSchema = z.object({
+  stageId: z.string().uuid('stageId must be a valid UUID').optional(),
+  name: z.string().min(1, 'Name is required').max(200).optional(),
+  company: z.string().max(200).optional().or(z.literal('')),
+  email: z.string().email().optional().or(z.literal('')),
+  phone: z.string().max(30).optional().or(z.literal('')),
+  channel: z.enum(outreachChannels).optional(),
+  notes: z.string().max(5000).optional().or(z.literal('')),
+});
+
+// ─── GET /stages — List outreach stages, ordered by position ────
+
+router.get('/stages', async (req: Request, res) => {
+  try {
+    const orgId = getOrgId(req);
+
+    const { data: stages, error } = await supabase
+      .from('OutreachStage')
+      .select('*')
+      .eq('organizationId', orgId)
+      .order('position', { ascending: true });
+
+    if (error) throw error;
+
+    res.json({ stages: stages || [] });
+  } catch (error) {
+    log.error('List outreach stages error', error);
+    res.status(500).json({ error: 'Failed to list outreach stages' });
+  }
+});
+
+// ─── GET /contacts — List outreach contacts ──────────────────────
+
+router.get('/contacts', async (req: Request, res) => {
+  try {
+    const orgId = getOrgId(req);
+
+    const { data: contacts, error } = await supabase
+      .from('OutreachContact')
+      .select('*')
+      .eq('organizationId', orgId)
+      .order('createdAt', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ contacts: contacts || [] });
+  } catch (error) {
+    log.error('List outreach contacts error', error);
+    res.status(500).json({ error: 'Failed to list outreach contacts' });
+  }
+});
+
+// ─── POST /contacts — Create outreach contact ────────────────────
+
+router.post('/contacts', async (req: Request, res) => {
+  try {
+    const validation = createContactSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
+    }
+
+    const data = validation.data;
+    const orgId = getOrgId(req);
+
+    // Never trust a client-supplied stageId without verifying it belongs to
+    // the caller's org first — a guessed/foreign stageId would otherwise let
+    // a contact be filed under another org's stage.
+    const stage = await verifyOutreachStageAccess(data.stageId, orgId);
+    if (!stage) {
+      return res.status(400).json({ error: 'Invalid stageId' });
+    }
+
+    // organizationId and createdBy come from the authenticated request only
+    // — never trust these from the request body.
+    const { data: contact, error } = await supabase
+      .from('OutreachContact')
+      .insert({
+        organizationId: orgId,
+        stageId: data.stageId,
+        name: data.name,
+        company: data.company || null,
+        email: data.email || null,
+        phone: data.phone || null,
+        channel: data.channel || 'proprietary',
+        notes: data.notes || null,
+        createdBy: req.user?.id || null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      log.error('Supabase insert error', { code: error.code, message: error.message, details: error.details, hint: error.hint });
+      return res.status(500).json({ error: 'Failed to create outreach contact', details: error.message });
+    }
+
+    log.info('Outreach contact created', { contactId: contact.id, orgId });
+
+    res.status(201).json(contact);
+  } catch (error: any) {
+    log.error('Create outreach contact error', error);
+    res.status(500).json({ error: 'Failed to create outreach contact', details: error?.message });
+  }
+});
+
+// ─── PATCH /contacts/:id — Update outreach contact ───────────────
+
+router.patch('/contacts/:id', async (req: Request, res) => {
+  try {
+    const { id } = req.params;
+    const validation = updateContactSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
+    }
+
+    const data = validation.data;
+    const orgId = getOrgId(req);
+
+    const existing = await verifyOutreachContactAccess(id, orgId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Outreach contact not found' });
+    }
+
+    // If the contact is being moved to a new stage, that stage must also
+    // belong to the caller's org.
+    if (data.stageId !== undefined) {
+      const stage = await verifyOutreachStageAccess(data.stageId, orgId);
+      if (!stage) {
+        return res.status(400).json({ error: 'Invalid stageId' });
+      }
+    }
+
+    const updates: Record<string, any> = { updatedAt: new Date().toISOString() };
+    if (data.stageId !== undefined) updates.stageId = data.stageId;
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.company !== undefined) updates.company = data.company || null;
+    if (data.email !== undefined) updates.email = data.email || null;
+    if (data.phone !== undefined) updates.phone = data.phone || null;
+    if (data.channel !== undefined) updates.channel = data.channel;
+    if (data.notes !== undefined) updates.notes = data.notes || null;
+
+    const { data: contact, error } = await supabase
+      .from('OutreachContact')
+      .update(updates)
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!contact) return res.status(404).json({ error: 'Outreach contact not found' });
+
+    log.info('Outreach contact updated', { contactId: id });
+
+    res.json(contact);
+  } catch (error) {
+    log.error('Update outreach contact error', error);
+    res.status(500).json({ error: 'Failed to update outreach contact' });
+  }
+});
+
+// ─── DELETE /contacts/:id — Delete outreach contact ──────────────
+
+router.delete('/contacts/:id', async (req: Request, res) => {
+  try {
+    const { id } = req.params;
+    const orgId = getOrgId(req);
+
+    const existing = await verifyOutreachContactAccess(id, orgId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Outreach contact not found' });
+    }
+
+    const { error } = await supabase
+      .from('OutreachContact')
+      .delete()
+      .eq('id', id)
+      .eq('organizationId', orgId);
+
+    if (error) throw error;
+
+    log.info('Outreach contact deleted', { contactId: id });
+
+    res.status(204).send();
+  } catch (error) {
+    log.error('Delete outreach contact error', error);
+    res.status(500).json({ error: 'Failed to delete outreach contact' });
+  }
+});
+
+export default router;

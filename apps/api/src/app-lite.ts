@@ -61,9 +61,10 @@ import dealsDocRequestsRouter from './routes/deals-doc-requests.js';
 import dealsModelRouter from './routes/deals-model.js';
 import docRequestPortalRouter from './routes/doc-request-portal.js';
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
+import outreachRouter from './routes/outreach.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
-import { orgMiddleware } from './middleware/orgScope.js';
+import { orgMiddleware, requireCiceroCapital } from './middleware/orgScope.js';
 import { usageContextMiddleware } from './middleware/usageContext.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
@@ -361,6 +362,10 @@ app.use('/api/auth', authMiddleware, authWorkspaceEmailRouter);
 
 // User-facing usage rollup (org-scoped)
 app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);
+
+// Outreach pipeline-tracking board — Cicero Capital only (requireCiceroCapital
+// 403s any other org, even with a valid session and a guessed record id).
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachRouter);
 
 // Internal admin (Pocket Fund team only — gate is inside the router via requireInternalAdmin)
 // Note: NO orgMiddleware — internal routes intentionally query across orgs.
