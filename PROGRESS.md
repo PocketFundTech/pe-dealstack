@@ -5,6 +5,59 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 67 — August 20, 2026
+
+#### Timestamp: August 20, 2026 — 16:45-17:20 IST
+
+#### Goal: Give the app an Avise-branded domain and clear the last old-brand strings, without breaking the dev's marketing site on the apex.
+
+#### 1. `app.avise.io` — the app gets an Avise address
+
+**Problem:** after the PE OS → Avise rename shipped (Session 66), the product was called Avise but the address bar still read `lmmos.ai`. A rename changes labels; it cannot change DNS.
+
+**Why not just take `avise.io`:** the apex is verified inside a Vercel account outside this team and serves the dev's finished AVISE marketing site. Claiming it would have replaced that site. Used the conventional split instead — marketing on the apex, product on `app.`.
+
+**Built:** added `app.avise.io` to the `pe-dealstack` project. Because the apex is claimed elsewhere, Vercel required a `_vercel` TXT ownership proof on top of the CNAME, so this needed two Namecheap records rather than one:
+- `TXT` `_vercel` → `vc-domain-verify=app.avise.io,93e11c46a064deea9de0`
+- `CNAME` `app` → `013772fbabbc47c2.vercel-dns-017.com`
+
+**Root cause of a 20-minute stall:** DNS was correct and propagating at both the authoritative nameserver and every public resolver, but the domain sat at `verified: false` and no certificate issued. Vercel's background verification poller simply never picked the TXT up. An explicit `POST /v9/projects/<project>/domains/<domain>/verify` flipped it to `verified: true` immediately and the cert issued seconds later. **If DNS is provably correct and Vercel still shows pending, trigger verify explicitly rather than waiting.**
+
+**Live:** `https://app.avise.io/login` serves `<title>Sign In | Avise</title>`. `lmmos.ai` and the dev's `avise.io` both unaffected throughout.
+
+#### 2. Last old-brand strings (PR #126, merged + deployed)
+
+- **CORS:** added `https://app.avise.io` to the allowlist in all three server bundles (`app.ts`, `app-lite.ts`, `app-ai.ts`). Additive — `lmmos.ai` and the Vercel alias stay allowed.
+- **API reference base URL:** was `https://pe-os.onrender.com/api` — a legacy Render host displayed to users as the live endpoint, so wrong independent of branding. Now `https://app.avise.io/api`.
+- **Footer contact:** `contact@pe-os.com` → `hello@pocket-fund.com`.
+- **Security contacts:** `security@peos.app` / `incidents@peos.app` → `hello@pocket-fund.com`. Those mailboxes are not ours; a security contact that bounces is worse than a generic one that is monitored. Swap to a dedicated address when one exists.
+
+**Verified live:** `app.avise.io/api-reference` renders `https://app.avise.io/api`, footer renders `mailto:hello@pocket-fund.com`, zero legacy brand strings in the served HTML. Both app domains serve the identical build. tsc clean on shared/api/web-next; api suite 169 files / 1766 passed / 0 failed.
+
+#### Rename status, measured
+
+`PE OS` in `apps/` and `packages/`: **0 occurrences.** Remaining 159 occurrences across 36 files are all — verified programmatically — the deliberately excluded historical records (`PROGRESS.md`, `compact.md`, `docs/archive`, `docs/plans`, `docs/superpowers`, `docs/testing`, dated QA checklists). No current-facing file was missed.
+
+#### Open — the cutover is NOT done
+
+`app.avise.io` is an addition, not a move. `lmmos.ai` is still canonical: it is what `APP_URL` points at, what OAuth callbacks are registered against, and where every existing bookmark and email link goes. Nothing redirects. Flipping it requires, in order:
+
+1. Add `app.avise.io` to **Supabase Auth** Site URL + redirect allowlist. **Do this regardless of the cutover** — `forgot-password` builds its link from `window.location.origin`, so a reset requested from `app.avise.io` already sends Supabase a redirect that may not be allowlisted.
+2. Update **Google Cloud** OAuth redirect URIs (Gmail, Calendar).
+3. Update **Azure** OAuth redirect URIs (Outlook, M365).
+4. Re-verify the **Google Drive** domain.
+5. Change `APP_URL` + `NEXT_PUBLIC_APP_URL` in Vercel env.
+6. Flip `lmmos.ai` → 308 → `app.avise.io`.
+
+Steps 1-4 are console-only. Doing 5-6 before them would break OAuth mid-flight.
+
+#### Two loose ends not in our control
+
+- **The dev's SIGN IN button** hardcodes `href="https://pe-dealstack.vercel.app"` on `avise.io` and `avise.io/company`, so users land on the raw unbranded Vercel URL. Fix is either the dev updating the link to `https://app.avise.io`, or a 308 on `pe-dealstack.vercel.app` → `app.avise.io` from our side (attempted; blocked by a permission guard).
+- **`www.avise.io` is broken** — returns a TLS verification failure (`HTTP 000`, `ssl_verify_result=1`). The `www` CNAME points at the dev's project, whose certificate has not issued. Apex `avise.io` is fine. Their side to fix.
+
+---
+
 ### Session 66 — August 19, 2026
 
 #### Timestamp: August 19, 2026 — 14:10-15:50 IST
