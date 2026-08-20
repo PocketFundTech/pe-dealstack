@@ -412,9 +412,9 @@ Total Security Tests     - 128 tests
 
 | Role | Contact |
 |------|---------|
-| Security Lead | security@peos.app |
-| Incident Response | incidents@peos.app |
-| Vulnerability Reports | security@peos.app |
+| Security Lead | hello@pocket-fund.com |
+| Incident Response | hello@pocket-fund.com |
+| Vulnerability Reports | hello@pocket-fund.com |
 
 ---
 
