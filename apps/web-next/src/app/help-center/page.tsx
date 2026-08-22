@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: "Help Center - Avise",
   description:
     "Find answers to common questions about Avise. FAQs on account setup, deal management, AI features, security, billing, and troubleshooting.",
+  alternates: { canonical: "/help-center" },
 };
 
 type Faq = { q: string; a: React.ReactNode };

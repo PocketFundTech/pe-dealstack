@@ -1,0 +1,12 @@
+# Avise
+
+> Deal flow software, institutional CRM, and AI-powered deal analysis for search funds, independent sponsors, and emerging private equity managers.
+
+Avise replaces the manual, spreadsheet-driven workflow PE firms use to source deals, run due diligence, and manage relationships — with an AI system that reads documents, extracts financials, flags risks, and writes investment memos.
+
+## Product
+
+- [Pricing](/pricing): Plans for boutique, mid-market, and enterprise PE firms.
+- [Security & Trust](/security): Encryption, tenant isolation, sub-processors, compliance roadmap.
+- [Documentation](/documentation): Setup guides and feature walkthroughs.
+- [Help Center](/help-center): FAQs on account setup, deal management, AI features, billing.

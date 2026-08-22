@@ -6,6 +6,10 @@ export const metadata: Metadata = {
   title: "Solutions - Avise",
   description:
     "Solutions for private equity firms — coming soon. Learn how Avise supports sourcing, diligence, portfolio operations, and reporting.",
+  // Placeholder copy below ("finishing touches", "check back soon") isn't
+  // enough content to rank or to represent the brand well in search — keep
+  // this out of the index until the real page ships, then remove.
+  robots: { index: false, follow: true },
 };
 
 export default function SolutionsPage() {
