@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { getInitials, formatRelativeTime } from "@/lib/formatters";
-import { CHANNEL_CONFIG, type OutreachContact, type OutreachStage } from "./types";
+import { CHANNEL_CONFIG, REPLY_INTENT_CONFIG, type OutreachContact, type OutreachStage } from "./types";
 
 // ---------------------------------------------------------------------------
 // Outreach Kanban Card — click opens the detail/edit modal; the overflow
@@ -127,6 +127,28 @@ export function OutreachCard({
         >
           {channel.label}
         </span>
+        {contact.needsReview && (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-300"
+            title="Needs review — reply intent unclear"
+          >
+            <span className="material-symbols-outlined text-[12px]">warning</span>
+            Needs review
+          </span>
+        )}
+        {contact.replyIntent && !contact.needsReview && (
+          <span
+            className={cn(
+              "px-2 py-0.5 rounded-full border text-[10px] font-medium",
+              REPLY_INTENT_CONFIG[contact.replyIntent].bg,
+              REPLY_INTENT_CONFIG[contact.replyIntent].border,
+              REPLY_INTENT_CONFIG[contact.replyIntent].text,
+            )}
+            title={`Latest reply: ${REPLY_INTENT_CONFIG[contact.replyIntent].label}`}
+          >
+            {REPLY_INTENT_CONFIG[contact.replyIntent].label}
+          </span>
+        )}
         {contact.assignedTo && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-background-body text-text-muted text-[10px] font-medium border border-border-subtle">
             <span className="material-symbols-outlined text-[12px]">person</span>

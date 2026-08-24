@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, NotFoundError } from "@/lib/api";
 import { useToast } from "@/providers/ToastProvider";
+import { cn } from "@/lib/cn";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { OutreachColumn } from "./OutreachColumn";
 import { ContactFormModal } from "./ContactFormModal";
@@ -14,6 +15,7 @@ import {
   type OutreachContact,
   type OutreachContactFormValues,
   type OutreachStage,
+  type SyncRepliesResult,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +45,14 @@ export function OutreachBoard() {
   // Contact id currently mid-enrichment, if any — drives the loading state on
   // the "Enrich" action wherever it's triggered from (card menu or modal).
   const [enrichingId, setEnrichingId] = useState<string | null>(null);
+
+  // Contact id currently having its "needs review" flag cleared, if any —
+  // drives the loading state on the modal's "Mark reviewed" action.
+  const [markingReviewedId, setMarkingReviewedId] = useState<string | null>(null);
+
+  // True while a board-wide POST /outreach/sync-replies call is in flight —
+  // drives the loading state on the "Sync Replies" header button.
+  const [syncingReplies, setSyncingReplies] = useState(false);
 
   const orderedStages = sortStagesByPosition(stages);
 
@@ -203,6 +213,69 @@ export function OutreachBoard() {
     }
   }
 
+  // ─── Mark reviewed ──────────────────────────────────────────────────────
+  // Clears a flagged contact's needsReview flag once a human has read the
+  // reply and made a judgment call. A plain partial PATCH, same pattern as
+  // handleMove above.
+
+  async function handleMarkReviewed(contactId: string) {
+    if (markingReviewedId) return;
+    setMarkingReviewedId(contactId);
+    try {
+      const updated = await api.patch<OutreachContact>(`/outreach/contacts/${contactId}`, {
+        needsReview: false,
+      });
+      setContacts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      setEditingContact((prev) => (prev && prev.id === updated.id ? updated : prev));
+      showToast("Marked as reviewed", "success");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to update contact";
+      showToast(message, "error");
+    } finally {
+      setMarkingReviewedId(null);
+    }
+  }
+
+  // ─── Sync replies ───────────────────────────────────────────────────────
+  // Board-level "check for new replies" action — pulls from Reply.io and
+  // runs Claude intent-classification server-side. Reply.io may not be
+  // configured yet, same "not run" idiom as handleEnrich above. On success,
+  // refetch the whole board so any newly-updated lastReplyText/replyIntent/
+  // needsReview show up across every card.
+
+  async function handleSyncReplies() {
+    if (syncingReplies) return;
+    setSyncingReplies(true);
+    try {
+      const result = await api.post<SyncRepliesResult>("/outreach/sync-replies", {});
+      if ("reason" in result) {
+        showToast(result.reason, "info");
+      } else {
+        const { checked, newReplies, flaggedForReview } = result;
+        await loadBoard();
+        const contactWord = `contact${checked !== 1 ? "s" : ""}`;
+        if (newReplies === 0) {
+          showToast(`Checked ${checked} ${contactWord} — no new replies`, "success");
+        } else {
+          const replyWord = newReplies === 1 ? "reply" : "replies";
+          const reviewPart =
+            flaggedForReview > 0
+              ? `, ${flaggedForReview} need${flaggedForReview === 1 ? "s" : ""} review`
+              : "";
+          showToast(
+            `Checked ${checked} ${contactWord} — ${newReplies} new ${replyWord}${reviewPart}`,
+            "success",
+          );
+        }
+      }
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to sync replies";
+      showToast(message, "error");
+    } finally {
+      setSyncingReplies(false);
+    }
+  }
+
   // ─── Render ─────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -251,16 +324,31 @@ export function OutreachBoard() {
           {contacts.length} contact{contacts.length !== 1 ? "s" : ""} across {orderedStages.length} stage
           {orderedStages.length !== 1 ? "s" : ""}
         </p>
-        <button
-          type="button"
-          disabled={orderedStages.length === 0}
-          onClick={() => openCreate(orderedStages[0]?.id ?? "")}
-          className="flex items-center gap-2 px-4 py-2 text-white rounded-lg shadow-sm hover:bg-[#002855] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ backgroundColor: "#003366" }}
-        >
-          <span className="material-symbols-outlined text-[18px]">person_add</span>
-          Add Contact
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleSyncReplies}
+            disabled={syncingReplies}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border-subtle bg-surface-card text-text-secondary shadow-sm hover:bg-primary-light hover:text-[#003366] hover:border-primary/30 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span
+              className={cn("material-symbols-outlined text-[18px]", syncingReplies && "animate-spin")}
+            >
+              {syncingReplies ? "progress_activity" : "sync"}
+            </span>
+            {syncingReplies ? "Syncing..." : "Sync Replies"}
+          </button>
+          <button
+            type="button"
+            disabled={orderedStages.length === 0}
+            onClick={() => openCreate(orderedStages[0]?.id ?? "")}
+            className="flex items-center gap-2 px-4 py-2 text-white rounded-lg shadow-sm hover:bg-[#002855] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ backgroundColor: "#003366" }}
+          >
+            <span className="material-symbols-outlined text-[18px]">person_add</span>
+            Add Contact
+          </button>
+        </div>
       </div>
 
       {orderedStages.length === 0 ? (
@@ -304,6 +392,12 @@ export function OutreachBoard() {
           enriching={formMode === "edit" && editingContact ? enrichingId === editingContact.id : false}
           onEnrich={
             formMode === "edit" && editingContact ? () => handleEnrich(editingContact.id) : undefined
+          }
+          markingReviewed={
+            formMode === "edit" && editingContact ? markingReviewedId === editingContact.id : false
+          }
+          onMarkReviewed={
+            formMode === "edit" && editingContact ? () => handleMarkReviewed(editingContact.id) : undefined
           }
         />
       )}

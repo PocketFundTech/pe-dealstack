@@ -6,6 +6,7 @@ import { formatRelativeTime } from "@/lib/formatters";
 import {
   OUTREACH_CHANNELS,
   CHANNEL_CONFIG,
+  REPLY_INTENT_CONFIG,
   sortStagesByPosition,
   type OutreachContact,
   type OutreachContactFormValues,
@@ -31,6 +32,8 @@ export function ContactFormModal({
   onClose,
   enriching,
   onEnrich,
+  markingReviewed,
+  onMarkReviewed,
 }: {
   mode: "create" | "edit";
   /** Present only in edit mode — used for the read-only metadata footer. */
@@ -45,6 +48,10 @@ export function ContactFormModal({
   enriching?: boolean;
   /** Present only in edit mode — triggers POST /outreach/contacts/:id/enrich. */
   onEnrich?: () => void;
+  /** True while a "Mark reviewed" call for this contact is in flight. */
+  markingReviewed?: boolean;
+  /** Present only in edit mode — clears needsReview via PATCH /outreach/contacts/:id. */
+  onMarkReviewed?: () => void;
 }) {
   const [form, setForm] = useState<OutreachContactFormValues>(initialValues);
   const orderedStages = sortStagesByPosition(stages);
@@ -211,6 +218,62 @@ export function ContactFormModal({
               placeholder="Any additional context about this contact..."
             />
           </div>
+
+          {mode === "edit" && contact && (contact.lastReplyText || contact.replyIntent || contact.needsReview) && (
+            <div className="rounded-lg border border-border-subtle bg-background-body p-3 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">
+                  Latest Reply
+                </span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {contact.needsReview && (
+                    <span
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-300"
+                      title="Needs review — reply intent unclear"
+                    >
+                      <span className="material-symbols-outlined text-[12px]">warning</span>
+                      Needs review
+                    </span>
+                  )}
+                  {contact.replyIntent && (
+                    <span
+                      className={cn(
+                        "px-2 py-0.5 rounded-full border text-[10px] font-medium",
+                        REPLY_INTENT_CONFIG[contact.replyIntent].bg,
+                        REPLY_INTENT_CONFIG[contact.replyIntent].border,
+                        REPLY_INTENT_CONFIG[contact.replyIntent].text,
+                      )}
+                    >
+                      {REPLY_INTENT_CONFIG[contact.replyIntent].label}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {contact.lastReplyText ? (
+                <p className="text-sm text-text-main whitespace-pre-wrap">{contact.lastReplyText}</p>
+              ) : (
+                <p className="text-sm text-text-muted italic">No reply text available.</p>
+              )}
+              {contact.needsReview && onMarkReviewed && (
+                <button
+                  type="button"
+                  onClick={onMarkReviewed}
+                  disabled={markingReviewed}
+                  className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 text-xs font-medium hover:bg-amber-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span
+                    className={cn(
+                      "material-symbols-outlined text-[14px]",
+                      markingReviewed && "animate-spin",
+                    )}
+                  >
+                    {markingReviewed ? "progress_activity" : "check_circle"}
+                  </span>
+                  {markingReviewed ? "Marking..." : "Mark reviewed"}
+                </button>
+              )}
+            </div>
+          )}
 
           {mode === "edit" && contact && (
             <p className="text-[11px] text-text-muted border-t border-border-subtle pt-3">

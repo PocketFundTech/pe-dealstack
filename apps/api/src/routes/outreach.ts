@@ -5,7 +5,8 @@ import { supabase } from '../supabase.js';
 import { getOrgId, verifyOutreachStageAccess, verifyOutreachContactAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import { enrichContact, getConfiguredProviders } from '../services/outreachEnrichment.js';
-import { listCampaigns, addContactToCampaign } from '../services/replyIoService.js';
+import { listCampaigns, addContactToCampaign, checkForNewReplies } from '../services/replyIoService.js';
+import { recordOutreachReply } from '../services/outreachReplyRecorder.js';
 
 // Outreach: manual pipeline-tracking board. Org-gated to Cicero Capital only
 // — see requireCiceroCapital in middleware/orgScope.ts, applied at the
@@ -420,6 +421,87 @@ router.post('/contacts/:id/send', async (req: Request, res) => {
   } catch (error) {
     log.error('Send outreach contact via Reply.io error', error);
     res.status(500).json({ error: 'Failed to send outreach contact' });
+  }
+});
+
+// ─── POST /sync-replies — on-demand Reply.io reply sync ─────────────
+//
+// Pull-based fallback for reply detection, same idiom as
+// routes/legal-documents.ts's POST /legal-documents/check-signatures (see
+// services/legalDocSignaturePollService.ts): the registered webhook
+// (routes/outreach-webhooks.ts) needs a stable public URL this deployment
+// doesn't have yet, so this on-demand poll is how replies get noticed until
+// then — callable by a human now (a "Sync replies" button), and later by a
+// cron the same way pollOrgSignatures is. No request body needed; runs
+// across every contact in the caller's org that has a replyIoCampaignId.
+//
+// Newly-found replies are persisted (lastReplyText/lastReplyAt) and run
+// through the reply-intent classifier (replyIntent/needsReview) via
+// services/outreachReplyRecorder.ts — the exact same persistence path the
+// webhook route uses, so poll and webhook classify identically once the
+// webhook is usable again.
+
+router.post('/sync-replies', async (req: Request, res) => {
+  try {
+    const orgId = getOrgId(req);
+
+    const { data: contacts, error } = await supabase
+      .from('OutreachContact')
+      .select('id, email, company, name, channel, sentAt, lastReplyAt')
+      .eq('organizationId', orgId)
+      .not('replyIoCampaignId', 'is', null);
+
+    if (error) throw error;
+
+    const rows = contacts || [];
+
+    const result = await checkForNewReplies(
+      rows.map((c) => ({
+        contactId: c.id,
+        email: c.email,
+        lastReplyAt: c.lastReplyAt,
+        sentAt: c.sentAt,
+      })),
+    );
+
+    if (!result.configured) {
+      return res.status(200).json({ checked: 0, newReplies: 0, flaggedForReview: 0, reason: 'Reply.io is not configured (REPLY_IO_API_KEY not set)' });
+    }
+
+    if (result.error) {
+      return res.status(502).json({ error: result.error });
+    }
+
+    const byId = new Map(rows.map((c) => [c.id, c]));
+
+    let flaggedForReview = 0;
+    for (const reply of result.replies) {
+      const contact = byId.get(reply.contactId);
+      if (!contact) continue; // shouldn't happen — defensive
+
+      const recorded = await recordOutreachReply({
+        contactId: reply.contactId,
+        name: contact.name,
+        company: contact.company,
+        channel: contact.channel,
+        replyText: reply.replyText,
+        replyDate: reply.replyDate,
+      });
+
+      if (recorded.needsReview) flaggedForReview++;
+    }
+
+    log.info('Outreach reply sync completed', {
+      orgId,
+      checked: rows.length,
+      newReplies: result.replies.length,
+      flaggedForReview,
+    });
+
+    res.json({ checked: rows.length, newReplies: result.replies.length, flaggedForReview });
+  } catch (error) {
+    log.error('Sync outreach replies error', error);
+    res.status(500).json({ error: 'Failed to sync Reply.io replies' });
   }
 });
 

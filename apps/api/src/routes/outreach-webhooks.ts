@@ -23,6 +23,7 @@ import { Router, type Request, type Response } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { verifyReplyIoWebhookSecret } from '../services/replyIoService.js';
+import { recordOutreachReply } from '../services/outreachReplyRecorder.js';
 
 const router = Router();
 
@@ -74,9 +75,12 @@ router.post('/:secret', async (req: Request, res: Response) => {
     // limit(1) rather than .single()/.maybeSingle() — OutreachContact has
     // no unique constraint on email, so more than one row could match; take
     // the first rather than letting a duplicate-email edge case error out.
+    // Select name/company/channel too — not just id — since
+    // recordOutreachReply passes them to the reply-intent classifier as
+    // context.
     const { data: contacts, error: contactError } = await supabase
       .from('OutreachContact')
-      .select('id')
+      .select('id, name, company, channel')
       .eq('organizationId', org.id)
       .eq('email', email)
       .limit(1);
@@ -97,19 +101,22 @@ router.post('/:secret', async (req: Request, res: Response) => {
     const replyDate =
       replyDateRaw && !Number.isNaN(Date.parse(replyDateRaw)) ? new Date(replyDateRaw).toISOString() : new Date().toISOString();
 
-    const { error: updateError } = await supabase
-      .from('OutreachContact')
-      .update({
-        lastReplyText: replyText ? replyText.slice(0, 20000) : null,
-        lastReplyAt: replyDate,
-        updatedAt: new Date().toISOString(),
-      })
-      .eq('id', contact.id);
+    // Persistence + reply-intent classification shared with the on-demand
+    // poll path (routes/outreach.ts POST /sync-replies) — see
+    // services/outreachReplyRecorder.ts.
+    const result = await recordOutreachReply({
+      contactId: contact.id,
+      name: contact.name,
+      company: contact.company,
+      channel: contact.channel,
+      replyText: replyText ?? null,
+      replyDate,
+    });
 
-    if (updateError) {
-      log.error('reply-io webhook: failed to record reply', updateError);
+    if (!result.persisted) {
+      log.error('reply-io webhook: failed to record reply', { contactId: contact.id, eventType });
     } else {
-      log.info('reply-io webhook: recorded reply', { contactId: contact.id, eventType });
+      log.info('reply-io webhook: recorded reply', { contactId: contact.id, eventType, needsReview: result.needsReview });
     }
 
     return res.status(200).end();

@@ -319,6 +319,240 @@ export async function addContactToCampaign(
   }
 }
 
+// ─── On-demand reply sync — researched against Reply.io's own docs, Aug 2026 ───
+//
+// Same problem as legalDocSignaturePollService.ts: the registered-webhook
+// path (routes/outreach-webhooks.ts) needs a stable public URL that this
+// deployment doesn't have yet (PR-preview Vercel URLs aren't practical to
+// register with Reply.io). Until there's a verified prod domain, reply
+// detection has to work by on-demand polling instead — this section is that
+// poll, mirroring legalDocSignaturePollService.pollOrgSignatures's shape
+// (an on-demand batch check, callable by a human now and a cron later).
+//
+// Reply.io v3 does NOT expose a "does this contact have status=replied"
+// endpoint that also returns reply text/date, and nothing is batchable by a
+// list of contacts. Endpoints actually considered (all under
+// https://docs.reply.io/api-reference/):
+//
+//   - GET /v3/contacts/{id}/statuses — returns a per-sequence
+//     `emailDisposition.isReplied` boolean. Rejected: single-contact only
+//     (no batch), no reply text, no reply timestamp at all. Also requires a
+//     Reply.io contact id, which this codebase never stores (OutreachContact
+//     only persists replyIoCampaignId, not a per-contact id) — using this
+//     endpoint would mean an extra lookup call per contact just to get an id
+//     to poll with.
+//   - GET /v3/contacts/{id}/activities — generic activity feed
+//     (`activityType`/`sourceType`/free-form `content`), not documented as
+//     reply-specific and still single-contact/no-email-matching.
+//   - POST /v3/contacts/mark-or-unmark-as-replied — a WRITE endpoint (lets
+//     you set the flag), not a read path.
+//
+// What this uses instead — the Inbox surface ("Replies handled through the
+// unified Inbox" per the docs' own API index):
+//
+//   1. POST /v3/inbox/threads/filter — batch, date-bounded
+//      (docs.reply.io/api-reference/inbox/filter-inbox-threads). Body takes
+//      `channels` + a `from`/`to` ISO 8601 date-time range filtered against
+//      each thread's `lastActivityDate`; response items include
+//      `contact.email` (so threads map back to OutreachContact rows without
+//      needing a stored Reply.io contact id) and `lastActivityDate`, but
+//      only a truncated `bodyPreview` of the last message — not reliably the
+//      full reply text, and "last message" isn't necessarily inbound (could
+//      be our own follow-up).
+//   2. GET /v3/inbox/threads/{id}/messages — per-thread message history
+//      (docs.reply.io/api-reference/inbox/list-messages-in-an-inbox-thread).
+//      Each message has `isOutbound` (true = sent by us, false = received)
+//      plus `date` and `body` (full text, "may contain HTML"). Called once
+//      per thread that (1) matched a tracked contact by email and (2) has
+//      lastActivityDate after that contact's cutoff — not for every thread
+//      returned by step 1 — to pull out the latest genuinely inbound message
+//      and confirm it's actually new (a thread's most recent activity can be
+//      an outbound send, which isn't a reply at all).
+//
+// This gives text + date + batch-by-email in two calls per sync run (plus
+// one extra call per thread that actually has new activity), which is the
+// closest thing v3 has to "list new replies since X" without a webhook.
+
+const INBOX_PAGE_SIZE = 500;
+const INBOX_MAX_PAGES = 3; // bounded — up to 1,500 threads per sync run, ample for this org's volume
+
+export interface ReplyIoContactRef {
+  /** OutreachContact.id (our DB id) — NOT a Reply.io id. */
+  contactId: string;
+  email: string | null;
+  /** ISO timestamp. Prefer this as the "since" cutoff when set. */
+  lastReplyAt?: string | null;
+  /** ISO timestamp. Fallback cutoff when the contact has never replied. */
+  sentAt?: string | null;
+}
+
+export interface NewReplyFound {
+  contactId: string;
+  /** Plain text, HTML tags stripped. Null if Reply.io returned no body. */
+  replyText: string | null;
+  /** ISO timestamp of the reply message itself. */
+  replyDate: string;
+}
+
+export interface CheckForNewRepliesResult {
+  configured: boolean;
+  replies: NewReplyFound[];
+  /** Set when configured=true but the live call to Reply.io failed. */
+  error?: string;
+}
+
+/** Strips HTML tags and collapses whitespace — thread messages "may contain
+ *  HTML" per Reply.io's docs; lastReplyText elsewhere in this feature (the
+ *  webhook path's `email_text`) is plain text, so this keeps both paths'
+ *  stored text consistent and keeps the classifier prompt clean. */
+function stripHtml(input: string): string {
+  return input
+    .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Fetches the latest genuinely INBOUND message in a thread that's newer
+ * than `sinceMs`, or null if there isn't one (e.g. the thread's most recent
+ * activity was actually our own outbound follow-up). top=100 is generous
+ * for a single email thread; Reply.io's own default page ordering is
+ * oldest-first per the docs, so this scans the full page for the max date
+ * rather than assuming the last item is newest.
+ */
+async function latestInboundMessageSince(
+  threadId: number,
+  sinceMs: number,
+): Promise<{ body: string | null; date: string } | null> {
+  const res = await fetchWithTimeout(
+    `${REPLY_IO_BASE_URL}/inbox/threads/${threadId}/messages?top=100`,
+    { headers: authHeaders() },
+    15000,
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    log.warn('replyIoService: list thread messages failed', { threadId, status: res.status, body: body.slice(0, 500) });
+    return null;
+  }
+
+  const data: any = await res.json().catch(() => null);
+  const items: any[] = Array.isArray(data?.items) ? data.items : [];
+
+  let latest: { body: string | null; date: string; ms: number } | null = null;
+  for (const msg of items) {
+    if (msg?.isOutbound) continue;
+    const ms = Date.parse(msg?.date);
+    if (Number.isNaN(ms) || ms <= sinceMs) continue;
+    if (!latest || ms > latest.ms) {
+      const rawBody = typeof msg.body === 'string' ? msg.body : null;
+      latest = { body: rawBody ? stripHtml(rawBody) : null, date: new Date(ms).toISOString(), ms };
+    }
+  }
+
+  return latest ? { body: latest.body, date: latest.date } : null;
+}
+
+/**
+ * Given a batch of OutreachContact rows that have been sent via Reply.io,
+ * checks for any reply newer than each contact's cutoff (lastReplyAt if
+ * they've replied before, else sentAt) and returns the ones with a new
+ * reply + its text/date. Never throws — same soft-fail idiom as
+ * addContactToCampaign: not-configured and upstream failures both come back
+ * as a result object, not an exception.
+ */
+export async function checkForNewReplies(contacts: ReplyIoContactRef[]): Promise<CheckForNewRepliesResult> {
+  if (!REPLY_IO_API_KEY) {
+    log.info('replyIoService: checkForNewReplies skipped — REPLY_IO_API_KEY not set');
+    return { configured: false, replies: [] };
+  }
+
+  // Per-contact cutoff, keyed by lowercased email (Reply.io inbox threads
+  // are matched back to our contacts by contact.email — see module header).
+  // Contacts without an email or without any cutoff to measure "new"
+  // against (never sent, so no sentAt) are silently excluded, not errored.
+  const cutoffByEmail = new Map<string, { contactId: string; sinceMs: number }>();
+  for (const c of contacts) {
+    if (!c.email) continue;
+    const since = c.lastReplyAt || c.sentAt;
+    if (!since) continue;
+    const sinceMs = Date.parse(since);
+    if (Number.isNaN(sinceMs)) continue;
+    cutoffByEmail.set(c.email.toLowerCase(), { contactId: c.contactId, sinceMs });
+  }
+
+  if (cutoffByEmail.size === 0) {
+    return { configured: true, replies: [] };
+  }
+
+  const globalSinceMs = Math.min(...Array.from(cutoffByEmail.values()).map((v) => v.sinceMs));
+
+  try {
+    const threads: any[] = [];
+    let skip = 0;
+    for (let page = 0; page < INBOX_MAX_PAGES; page++) {
+      const res = await fetchWithTimeout(
+        `${REPLY_IO_BASE_URL}/inbox/threads/filter?top=${INBOX_PAGE_SIZE}&skip=${skip}`,
+        {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            channels: ['email'],
+            from: new Date(globalSinceMs).toISOString(),
+          }),
+        },
+        15000,
+      );
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        log.warn('replyIoService: filter inbox threads failed', { status: res.status, body: body.slice(0, 500) });
+        return { configured: true, replies: [], error: `Reply.io returned HTTP ${res.status}` };
+      }
+
+      const data: any = await res.json().catch(() => null);
+      const items: any[] = Array.isArray(data?.items) ? data.items : [];
+      threads.push(...items);
+
+      if (!data?.hasMore || items.length === 0) break;
+      skip += INBOX_PAGE_SIZE;
+    }
+
+    const replies: NewReplyFound[] = [];
+
+    for (const thread of threads) {
+      const email: string | undefined = thread?.contact?.email;
+      if (!email) continue;
+
+      const match = cutoffByEmail.get(email.toLowerCase());
+      if (!match) continue; // thread belongs to a contact we're not tracking, or already checked
+
+      const lastActivityMs = Date.parse(thread?.lastActivityDate);
+      if (Number.isNaN(lastActivityMs) || lastActivityMs <= match.sinceMs) continue;
+
+      const inbound = await latestInboundMessageSince(thread.id, match.sinceMs);
+      if (!inbound) continue; // thread has new activity, but it was outbound (not a reply)
+
+      replies.push({ contactId: match.contactId, replyText: inbound.body, replyDate: inbound.date });
+    }
+
+    return { configured: true, replies };
+  } catch (err) {
+    log.warn('replyIoService: checkForNewReplies threw', { error: errMessage(err) });
+    return { configured: true, replies: [], error: errMessage(err) };
+  }
+}
+
 // ─── Webhook secret verification ────────────────────────────────────
 
 /**
