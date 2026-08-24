@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAppRouteRequiringAuth, isAuthOnlyPage } from "./routing";
+import { isAppRouteRequiringAuth, isAuthOnlyPage, isRootLanding } from "./routing";
 
 describe("isAppRouteRequiringAuth", () => {
   it("gates protected app pages behind auth", () => {
@@ -92,5 +92,18 @@ describe("isAuthOnlyPage", () => {
   it("doesn't match app routes", () => {
     expect(isAuthOnlyPage("/dashboard")).toBe(false);
     expect(isAuthOnlyPage("/")).toBe(false);
+  });
+});
+
+describe("isRootLanding", () => {
+  it("matches only the bare root", () => {
+    expect(isRootLanding("/")).toBe(true);
+  });
+
+  it("doesn't match anything else", () => {
+    expect(isRootLanding("/dashboard")).toBe(false);
+    expect(isRootLanding("/signup")).toBe(false);
+    expect(isRootLanding("/pricing")).toBe(false);
+    expect(isRootLanding("")).toBe(false);
   });
 });
