@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { isAppRouteRequiringAuth, isAuthOnlyPage } from "./routing";
+import { isAppRouteRequiringAuth, isAuthOnlyPage, isRootLanding } from "./routing";
 
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -13,7 +13,11 @@ export async function updateSession(request: NextRequest) {
   // session cookie) for the routes that actually gate on it.
   const needsAuthGate = isAppRouteRequiringAuth(pathname);
   const redirectAwayWhenSignedIn = isAuthOnlyPage(pathname);
-  if (!needsAuthGate && !redirectAwayWhenSignedIn) {
+  // "/" is a routing decision, not a page — see isRootLanding. It needs the
+  // auth call to know which way to send the visitor, so it opts into the
+  // Supabase round-trip that the other public/marketing pages skip.
+  const isRoot = isRootLanding(pathname);
+  if (!needsAuthGate && !redirectAwayWhenSignedIn && !isRoot) {
     return NextResponse.next({ request });
   }
 
@@ -67,6 +71,16 @@ export async function updateSession(request: NextRequest) {
   if (user && redirectAwayWhenSignedIn) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
+    return NextResponse.redirect(url);
+  }
+
+  // Root of the app subdomain: marketing lives on avise.io, so "/" here only
+  // routes — signed-in users to the dashboard, everyone else to signup. This
+  // is also what makes the marketing site's SIGN IN link (which points at the
+  // bare origin) land somewhere useful.
+  if (isRoot) {
+    const url = request.nextUrl.clone();
+    url.pathname = user ? "/dashboard" : "/signup";
     return NextResponse.redirect(url);
   }
 

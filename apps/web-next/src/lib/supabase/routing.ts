@@ -62,3 +62,17 @@ export function isAppRouteRequiringAuth(pathname: string): boolean {
 export function isAuthOnlyPage(pathname: string): boolean {
   return AUTH_ONLY_PAGES.some((page) => matchesPrefix(pathname, page));
 }
+
+/**
+ * Is this the root of the app subdomain?
+ *
+ * app.avise.io is the product surface; the marketing site lives on avise.io
+ * (built and deployed separately). So "/" here is a routing decision rather
+ * than a page — signed-in users belong on /dashboard, everyone else on
+ * /signup. This also gives the marketing site's SIGN IN link a correct
+ * destination without us being able to edit that link, since it points at the
+ * bare origin.
+ */
+export function isRootLanding(pathname: string): boolean {
+  return pathname === "/";
+}
