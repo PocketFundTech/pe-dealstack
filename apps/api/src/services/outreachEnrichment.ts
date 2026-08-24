@@ -59,7 +59,9 @@
 //   and Anymail Finder are.
 
 import { log } from '../utils/logger.js';
+import { supabase } from '../supabase.js';
 import { PERSONAL_DOMAINS } from './agents/contactEnrichment/state.js';
+import { recordTouch } from './outreachTouchLog.js';
 
 const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
 const ANYMAIL_FINDER_API_KEY = process.env.ANYMAIL_FINDER_API_KEY;
@@ -386,4 +388,90 @@ export async function enrichContact(contact: EnrichmentContact): Promise<EnrichC
   }
 
   return { updates, enrichmentData, sourcesUsed };
+}
+
+// ─── Persist helper ──────────────────────────────────────────────────
+//
+// Fetches one OutreachContact, runs it through enrichContact() above, and
+// persists the result with the exact same fill-blank-only semantics as the
+// manual "Enrich" button (routes/outreach.ts POST /contacts/:id/enrich):
+// enrichmentData/enrichmentSource/enrichedAt always update (they record the
+// attempt itself), every other field only fills in when currently
+// null/empty. Extracted here so a second caller — the Private Circle
+// import route's auto-enrichment trigger for newly-created, email-less
+// contacts (routes/outreach-private-circle-import.ts) — gets identical
+// persist behaviour without duplicating it. The manual Enrich route is
+// left as-is (it also needs to return the full updated row to its caller,
+// which this helper doesn't); this is purely additive.
+
+export interface EnrichAndPersistResult {
+  /** False only when zero enrichment providers are configured at all — nothing was attempted. */
+  attempted: boolean;
+  /** True when this run filled in a previously-blank email. */
+  emailFilled: boolean;
+  sourcesUsed: string[];
+}
+
+export async function enrichAndPersistOutreachContact(orgId: string, contactId: string): Promise<EnrichAndPersistResult> {
+  const configuredProviders = getConfiguredProviders();
+  if (configuredProviders.length === 0) {
+    return { attempted: false, emailFilled: false, sourcesUsed: [] };
+  }
+
+  const { data: contact, error: fetchError } = await supabase
+    .from('OutreachContact')
+    .select('*')
+    .eq('id', contactId)
+    .eq('organizationId', orgId)
+    .single();
+
+  if (fetchError || !contact) {
+    log.warn('enrichAndPersistOutreachContact: contact not found', { contactId, orgId });
+    return { attempted: true, emailFilled: false, sourcesUsed: [] };
+  }
+
+  const result = await enrichContact({
+    id: contact.id,
+    name: contact.name,
+    email: contact.email,
+    phone: contact.phone,
+    company: contact.company,
+    linkedinUrl: contact.linkedinUrl,
+  });
+
+  const updates: Record<string, any> = {
+    updatedAt: new Date().toISOString(),
+    enrichedAt: new Date().toISOString(),
+    enrichmentData: { ...(contact.enrichmentData || {}), ...result.enrichmentData },
+    enrichmentSource: Array.from(new Set([...(contact.enrichmentSource || []), ...result.sourcesUsed])),
+  };
+
+  const emailFilled = Boolean(result.updates.email && !contact.email);
+  if (emailFilled) updates.email = result.updates.email;
+  if (result.updates.phone && !contact.phone) updates.phone = result.updates.phone;
+  if (result.updates.title && !contact.title) updates.title = result.updates.title;
+  if (result.updates.linkedinUrl && !contact.linkedinUrl) updates.linkedinUrl = result.updates.linkedinUrl;
+  if (result.updates.company && !contact.company) updates.company = result.updates.company;
+
+  const { error: updateError } = await supabase
+    .from('OutreachContact')
+    .update(updates)
+    .eq('id', contactId)
+    .eq('organizationId', orgId);
+
+  if (updateError) {
+    log.error('enrichAndPersistOutreachContact: failed to persist enrichment', updateError, { contactId });
+    return { attempted: true, emailFilled: false, sourcesUsed: [] };
+  }
+
+  await recordTouch({
+    organizationId: orgId,
+    contactId,
+    channel: 'enrichment',
+    type: 'enriched',
+    direction: 'outbound',
+    metadata: { providersConfigured: configuredProviders, sourcesUsed: result.sourcesUsed, trigger: 'private_circle_import' },
+  });
+
+  return { attempted: true, emailFilled, sourcesUsed: result.sourcesUsed };
 }

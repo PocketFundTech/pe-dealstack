@@ -7,6 +7,7 @@ import {
   OUTREACH_CHANNELS,
   CHANNEL_CONFIG,
   REPLY_INTENT_CONFIG,
+  SOURCE_PROVIDER_CONFIG,
   sortStagesByPosition,
   type OutreachContact,
   type OutreachContactFormValues,
@@ -34,6 +35,8 @@ export function ContactFormModal({
   onEnrich,
   markingReviewed,
   onMarkReviewed,
+  confirmingMatchReview,
+  onConfirmMatchReview,
 }: {
   mode: "create" | "edit";
   /** Present only in edit mode — used for the read-only metadata footer. */
@@ -52,6 +55,14 @@ export function ContactFormModal({
   markingReviewed?: boolean;
   /** Present only in edit mode — clears needsReview via PATCH /outreach/contacts/:id. */
   onMarkReviewed?: () => void;
+  /** True while a "Confirm as new contact" call for this contact is in flight. */
+  confirmingMatchReview?: boolean;
+  /** Present only in edit mode — clears needsMatchReview via PATCH
+   *  /outreach/contacts/:id. Distinct from onMarkReviewed: this resolves the
+   *  Private Circle import's duplicate-detection flag, not reply-intent
+   *  review. No merge action here by design — combining duplicate records
+   *  stays a manual, out-of-band step. */
+  onConfirmMatchReview?: () => void;
 }) {
   const [form, setForm] = useState<OutreachContactFormValues>(initialValues);
   const orderedStages = sortStagesByPosition(stages);
@@ -86,9 +97,19 @@ export function ContactFormModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle sticky top-0 bg-surface-card z-10">
-          <h3 className="text-lg font-bold text-text-main">
-            {mode === "edit" ? "Edit Contact" : "Add Contact"}
-          </h3>
+          <div>
+            <h3 className="text-lg font-bold text-text-main">
+              {mode === "edit" ? "Edit Contact" : "Add Contact"}
+            </h3>
+            {mode === "edit" && contact?.sourceProvider && SOURCE_PROVIDER_CONFIG[contact.sourceProvider] && (
+              <p className="mt-0.5 flex items-center gap-1 text-[11px] text-text-muted">
+                <span className="material-symbols-outlined text-[12px]">
+                  {SOURCE_PROVIDER_CONFIG[contact.sourceProvider]!.icon}
+                </span>
+                {SOURCE_PROVIDER_CONFIG[contact.sourceProvider]!.label}
+              </p>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -100,6 +121,42 @@ export function ContactFormModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-4">
+          {mode === "edit" && contact?.needsMatchReview && (
+            <div className="rounded-lg border border-violet-300 bg-violet-50 p-3 flex flex-col gap-2">
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[14px] text-violet-700">content_copy</span>
+                <span className="text-xs font-bold uppercase tracking-wider text-violet-700">
+                  Possible Duplicate
+                </span>
+              </div>
+              {contact.matchReviewReason ? (
+                <p className="text-sm text-violet-900 whitespace-pre-wrap">{contact.matchReviewReason}</p>
+              ) : (
+                <p className="text-sm text-violet-700 italic">
+                  Flagged as a possible duplicate during the Private Circle import.
+                </p>
+              )}
+              {onConfirmMatchReview && (
+                <button
+                  type="button"
+                  onClick={onConfirmMatchReview}
+                  disabled={confirmingMatchReview}
+                  className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-violet-300 text-violet-700 text-xs font-medium hover:bg-violet-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span
+                    className={cn(
+                      "material-symbols-outlined text-[14px]",
+                      confirmingMatchReview && "animate-spin",
+                    )}
+                  >
+                    {confirmingMatchReview ? "progress_activity" : "check_circle"}
+                  </span>
+                  {confirmingMatchReview ? "Confirming..." : "Confirm as new contact"}
+                </button>
+              )}
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-text-main mb-1.5">
               Name <span className="text-red-500">*</span>
@@ -161,6 +218,11 @@ export function ContactFormModal({
                 className={inputCls}
                 placeholder="Acme Holdings"
               />
+              {mode === "edit" && contact?.cin && (
+                <p className="mt-1 text-[11px] text-text-muted">
+                  CIN: <span className="font-mono">{contact.cin}</span>
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-text-main mb-1.5">Title</label>

@@ -3,7 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { getInitials, formatRelativeTime } from "@/lib/formatters";
-import { CHANNEL_CONFIG, REPLY_INTENT_CONFIG, type OutreachContact, type OutreachStage } from "./types";
+import {
+  CHANNEL_CONFIG,
+  REPLY_INTENT_CONFIG,
+  SOURCE_PROVIDER_CONFIG,
+  type OutreachContact,
+  type OutreachStage,
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Outreach Kanban Card — click opens the detail/edit modal; the overflow
@@ -127,6 +133,15 @@ export function OutreachCard({
         >
           {channel.label}
         </span>
+        {contact.needsMatchReview && (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 text-[10px] font-bold border border-violet-300"
+            title={contact.matchReviewReason || "Possible duplicate — flagged during Private Circle import"}
+          >
+            <span className="material-symbols-outlined text-[12px]">content_copy</span>
+            Possible duplicate
+          </span>
+        )}
         {contact.needsReview && (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-300"
@@ -165,6 +180,15 @@ export function OutreachCard({
           </span>
         )}
       </div>
+
+      {contact.sourceProvider && SOURCE_PROVIDER_CONFIG[contact.sourceProvider] && (
+        <p className="mt-1.5 flex items-center gap-1 text-[10px] text-text-muted">
+          <span className="material-symbols-outlined text-[11px]">
+            {SOURCE_PROVIDER_CONFIG[contact.sourceProvider]!.icon}
+          </span>
+          {SOURCE_PROVIDER_CONFIG[contact.sourceProvider]!.label}
+        </p>
+      )}
     </div>
   );
 }

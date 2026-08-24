@@ -15,6 +15,10 @@
 //      flaggedForReview: 0, reason } -- confirmed against the actual
 //      backend response, not the enrich endpoint's { enriched: false }
 //      shape this was originally guessed to match)
+//   POST   /outreach/import/private-circle -> PrivateCircleImportResult
+//     (multipart file upload — a CSV export from Private Circle — built in
+//      parallel under apps/api/; goes through authFetchRaw, not api.post,
+//      per the multipart convention in deal-intake/components.tsx)
 
 export interface OutreachStage {
   id: string;
@@ -64,6 +68,26 @@ export interface OutreachContact {
    *  contact can read what the reply said; confirm the field name with the
    *  backend agent once /outreach/sync-replies lands. */
   lastReplyText?: string | null;
+  /** Where this contact's record originated. `null` covers contacts created
+   *  before this field existed. Distinct from `enrichmentSource` (which
+   *  providers enriched the record) — this is about the *source of the row
+   *  itself*. */
+  sourceProvider: "clay" | "private_circle" | "manual" | null;
+  /** True when the Private Circle CSV importer's duplicate-detection flagged
+   *  this contact as a possible match against an existing company/contact
+   *  during bulk import. Entirely distinct from `needsReview` (which is
+   *  about reply-intent classification) — this is a bulk-import data-quality
+   *  concern, so it gets its own badge/treatment rather than reusing the
+   *  amber "Needs review" one. A human clears it via "Confirm as new
+   *  contact" once they've checked it isn't actually a duplicate; merging
+   *  duplicate records is explicitly out of scope here. */
+  needsMatchReview: boolean;
+  /** Human-readable explanation of why `needsMatchReview` was set, e.g.
+   *  "Possible duplicate of existing contact Jane Smith at Acme Holdings". */
+  matchReviewReason: string | null;
+  /** Corporate Identification Number — populated by the Private Circle
+   *  importer when the source CSV includes it. Read-only in the UI. */
+  cin: string | null;
 }
 
 /** Editable fields for the create/edit form (all strings for controlled inputs). */
@@ -112,6 +136,20 @@ export interface SyncRepliesNotRunResult {
 
 export type SyncRepliesResult = SyncRepliesSummary | SyncRepliesNotRunResult;
 
+/** `POST /outreach/import/private-circle` response — a bulk CSV import, not
+ *  a single-contact mutation. `received` is the row count parsed from the
+ *  CSV; `created`/`updated` are how those rows were reconciled against
+ *  existing contacts; `flaggedForReview` is how many tripped the
+ *  duplicate-detection heuristic (`needsMatchReview`); `enriched` is how
+ *  many got enrichment data attached during the same pass. */
+export interface PrivateCircleImportResult {
+  received: number;
+  created: number;
+  updated: number;
+  flaggedForReview: number;
+  enriched: number;
+}
+
 export const OUTREACH_CHANNELS: OutreachChannel[] = ["proprietary", "broker"];
 
 export const REPLY_INTENTS: ReplyIntent[] = [
@@ -148,6 +186,18 @@ export const CHANNEL_CONFIG: Record<
 > = {
   proprietary: { label: "Proprietary", bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
   broker: { label: "Broker", bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
+};
+
+/** Humanized label + icon for the two importer-driven `sourceProvider`
+ *  values. Deliberately excludes `manual` and `null` — those are the
+ *  default/expected state (a human-entered contact) and aren't worth a
+ *  badge; `clay` and `private_circle` are the ones worth a small
+ *  provenance note. Kept as a muted informational label, not a colored
+ *  pill — much lower visual weight than the needsReview / needsMatchReview
+ *  / enriched badges. */
+export const SOURCE_PROVIDER_CONFIG: Partial<Record<NonNullable<OutreachContact["sourceProvider"]>, { label: string; icon: string }>> = {
+  clay: { label: "via Clay", icon: "bolt" },
+  private_circle: { label: "via Private Circle", icon: "table_view" },
 };
 
 export function sortStagesByPosition(stages: OutreachStage[]): OutreachStage[] {
