@@ -44,6 +44,7 @@ import ndaReviewRouter from './routes/nda-review.js';
 import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
 import outreachWebhooksRouter from './routes/outreach-webhooks.js';
+import outreachClayImportWebhookRouter from './routes/outreach-clay-import-webhook.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import dealAccessTimelineRouter from './routes/deal-access-timeline.js';
 import dealsTrashRouter from './routes/deals-trash.js';
@@ -73,6 +74,7 @@ import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.j
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
 import outreachRouter from './routes/outreach.js';
+import outreachReplyIoRouter from './routes/outreach-replyio.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -351,6 +353,13 @@ app.use('/api/webhooks', dropboxSignWebhookRouter);
 // and services/replyIoService.ts (Reply.io has no native webhook signing).
 app.use('/api/webhooks/reply-io', outreachWebhooksRouter);
 
+// Clay inbound sourcing webhook — public, no auth header (Clay can't carry
+// a Supabase session either). Authenticity = our own shared secret in the
+// URL path segment (CLAY_IMPORT_WEBHOOK_SECRET), same pattern as the
+// Reply.io webhook above — see routes/outreach-clay-import-webhook.ts and
+// services/outreachClayImport.ts.
+app.use('/api/webhooks/clay-import', outreachClayImportWebhookRouter);
+
 // ========================================
 // Protected Routes (require authentication + org resolution)
 // ========================================
@@ -434,6 +443,10 @@ app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Outreach pipeline-tracking board — Cicero Capital only (requireCiceroCapital
 // 403s any other org, even with a valid session and a guessed record id).
 app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachRouter);
+// Reply.io send/campaigns/sync-replies routes — split into their own file
+// to keep routes/outreach.ts under this repo's 500-line convention (see
+// AGENTS.md). Same base path + middleware chain as outreachRouter above.
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachReplyIoRouter);
 
 // ========================================
 // Internal Admin Routes (requireInternalAdmin gate inside router)

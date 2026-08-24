@@ -44,6 +44,7 @@ import legalDocumentsRouter from './routes/legal-documents.js';
 import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
 import outreachWebhooksRouter from './routes/outreach-webhooks.js';
+import outreachClayImportWebhookRouter from './routes/outreach-clay-import-webhook.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 // (disabled — see banner below)
 // import legalDocWebhooksRouter from './routes/legal-doc-webhooks.js';
@@ -63,6 +64,7 @@ import dealsModelRouter from './routes/deals-model.js';
 import docRequestPortalRouter from './routes/doc-request-portal.js';
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import outreachRouter from './routes/outreach.js';
+import outreachReplyIoRouter from './routes/outreach-replyio.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { orgMiddleware, requireCiceroCapital } from './middleware/orgScope.js';
@@ -279,6 +281,13 @@ app.use('/api/webhooks', dropboxSignWebhookRouter);
 // and services/replyIoService.ts (Reply.io has no native webhook signing).
 app.use('/api/webhooks/reply-io', outreachWebhooksRouter);
 
+// Clay inbound sourcing webhook — public, no auth header (Clay can't carry
+// a Supabase session either). Authenticity = our own shared secret in the
+// URL path segment (CLAY_IMPORT_WEBHOOK_SECRET), same pattern as the
+// Reply.io webhook above — see routes/outreach-clay-import-webhook.ts and
+// services/outreachClayImport.ts.
+app.use('/api/webhooks/clay-import', outreachClayImportWebhookRouter);
+
 // ─── DISABLED UNTIL PROD (Drive push signature detection) ───────────────
 // files.watch push needs a GCP-domain-verified HTTPS callback; *.vercel.app
 // cannot be verified, so push never fires on preview/Vercel. Active detection
@@ -373,6 +382,10 @@ app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // Outreach pipeline-tracking board — Cicero Capital only (requireCiceroCapital
 // 403s any other org, even with a valid session and a guessed record id).
 app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachRouter);
+// Reply.io send/campaigns/sync-replies routes — split into their own file
+// to keep routes/outreach.ts under this repo's 500-line convention (see
+// AGENTS.md). Same base path + middleware chain as outreachRouter above.
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachReplyIoRouter);
 
 // Internal admin (Pocket Fund team only — gate is inside the router via requireInternalAdmin)
 // Note: NO orgMiddleware — internal routes intentionally query across orgs.

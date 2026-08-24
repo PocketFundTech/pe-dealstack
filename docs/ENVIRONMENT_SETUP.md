@@ -67,6 +67,21 @@ Powers the "Send" action on the Outreach pipeline board (`GET /api/outreach/camp
 
 Reply.io does not sign or authenticate its outbound webhook calls in any way — no signature header, no HMAC, no shared-secret mechanism exists on their side (confirmed by searching their entire bundled OpenAPI spec for "signature"/"hmac"/"secret": zero matches). `REPLY_IO_WEBHOOK_SECRET` is therefore our own scheme: set it here, then give Reply.io the **exact same value** as a URL path segment when registering the webhook subscription on their side — `https://<your-api-domain>/api/webhooks/reply-io/<that value>` — either via their dashboard (Settings → Integrations → Webhooks → Add webhook, event = "Contact replied"/"Email replied") or via `POST /v3/webhooks` on their API (both are supported; the dashboard is not the only option). Leaving `REPLY_IO_WEBHOOK_SECRET` unset means the webhook route rejects every inbound request with 401 — fail closed, not silently-open.
 
+### Clay inbound sourcing webhook (optional — Cicero Capital board only)
+
+Powers `POST /api/webhooks/clay-import/:secret` — the reverse direction from the Clay enrichment integration above (Clay calling **us**, not us calling Clay). Clay has no query/search API to call outward, so sourcing works by a human filtering/synthesizing a company list inside Clay's own UI (industry, location, employee size), then Clay pushes the resulting rows out via an outbound "Send Webhook" action a human configures inside Clay's table. See `services/outreachClayImport.ts` for the full expected payload shape and de-dupe logic.
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `CLAY_IMPORT_WEBHOOK_SECRET` | A long random value **we** define (e.g. `openssl rand -hex 32`) — same "our own shared secret in the URL" scheme as `REPLY_IO_WEBHOOK_SECRET`, since Clay can't sign or authenticate this call for us either | Generate it yourself |
+
+Operator setup:
+1. Generate a secret and set it here.
+2. Inside Clay's table, add a "Send Webhook" (or equivalent HTTP output) action pointed at `https://<your-api-domain>/api/webhooks/clay-import/<that same value>`.
+3. Map Clay's column output to the payload shape documented at the top of `services/outreachClayImport.ts` — `companyName` is required; `contactName`, `email`, `phone`, `title`, `linkedinUrl`, `location`, `employeeSize`, `industry`, `sourceUrl`, and `cin` (Corporate Identification Number, the most reliable de-dupe key when available) are all optional. The payload can be a bare array of rows, `{ "rows": [...] }`, or a single un-wrapped row object, depending on how Clay's action is configured to fire.
+
+De-duplication is deliberately conservative: an exact CIN, email, or normalized-company-name match updates the existing contact; anything less certain (fuzzy/partial name similarity, no email or CIN to confirm) creates a **new** contact flagged `needsMatchReview: true` for a human to resolve rather than silently merging. Leaving `CLAY_IMPORT_WEBHOOK_SECRET` unset means the webhook route rejects every inbound request with 401 — fail closed, same as Reply.io's webhook.
+
 ### AI Usage Tracking (optional — pricing tuning)
 
 These four variables control the per-unit cost recorded for non-LLM AI providers. Defaults are hardcoded in source; set in Vercel project settings to override without a deploy.

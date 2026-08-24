@@ -4,7 +4,7 @@
 // (routes/outreach-webhooks.ts, currently unusable outside prod, see
 // services/replyIoService.ts's module header) and the on-demand poll
 // (routes/outreach.ts POST /sync-replies) — end up in the exact same place:
-// a contact has a new reply, and it needs the same three things done to it:
+// a contact has a new reply, and it needs the same things done to it:
 //   1. lastReplyText / lastReplyAt written.
 //   2. Claude's reply-intent read (services/replyIntentClassifier.ts) run
 //      over that text.
@@ -12,6 +12,10 @@
 //      (see classifyReplyIntent's doc comment): needsReview flags anything
 //      the classifier couldn't confidently read, in which case replyIntent
 //      is left unset rather than persisting an unconfident guess.
+//   4. An OutreachTouch row appended (services/outreachTouchLog.ts) —
+//      channel:'email', type:'replied', direction:'inbound' — so the reply
+//      shows up in the contact's event history, not just as a snapshot on
+//      the OutreachContact row.
 //
 // Pulled out here so neither route re-implements the persistence shape —
 // both call recordOutreachReply() with the raw reply text/date they found.
@@ -19,8 +23,13 @@
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { classifyReplyIntent } from './replyIntentClassifier.js';
+import { recordTouch } from './outreachTouchLog.js';
 
 export interface RecordOutreachReplyInput {
+  /** Required to write the OutreachTouch row below — not used for
+   *  authorization; the caller must already have verified contactId
+   *  belongs to this org before calling. */
+  organizationId: string;
   contactId: string;
   /** Only used as classifier context — not trusted for authorization; the
    *  caller must already have verified contactId belongs to the org. */
@@ -73,6 +82,26 @@ export async function recordOutreachReply(input: RecordOutreachReplyInput): Prom
   }
 
   const { error } = await supabase.from('OutreachContact').update(updates).eq('id', input.contactId);
+
+  // Touch log: recorded regardless of whether the OutreachContact update
+  // above succeeded — a reply genuinely happened either way, and
+  // recordTouch is itself soft-fail (see outreachTouchLog.ts), so this can
+  // never turn a partial failure into a thrown error here.
+  await recordTouch({
+    organizationId: input.organizationId,
+    contactId: input.contactId,
+    channel: 'email',
+    type: 'replied',
+    direction: 'inbound',
+    occurredAt: input.replyDate,
+    metadata: {
+      replyText: input.replyText ? input.replyText.slice(0, 5000) : null,
+      classified: !!classification,
+      needsReview: classification?.needsReview ?? false,
+      replyIntent: classification && !classification.needsReview ? classification.intent : null,
+      persisted: !error,
+    },
+  });
 
   if (error) {
     log.error('recordOutreachReply: failed to persist reply', { contactId: input.contactId, message: error.message });

@@ -105,6 +105,7 @@ router.post('/:secret', async (req: Request, res: Response) => {
     // poll path (routes/outreach.ts POST /sync-replies) — see
     // services/outreachReplyRecorder.ts.
     const result = await recordOutreachReply({
+      organizationId: org.id,
       contactId: contact.id,
       name: contact.name,
       company: contact.company,

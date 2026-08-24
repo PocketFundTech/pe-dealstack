@@ -63,8 +63,8 @@
 // verifyReplyIoWebhookSecret() below, routes/outreach-webhooks.ts for where
 // it's enforced, and .env.example for the operator-facing setup steps.
 
-import { timingSafeEqual } from 'node:crypto';
 import { log } from '../utils/logger.js';
+import { verifySharedWebhookSecret } from '../utils/webhookSecret.js';
 
 const REPLY_IO_API_KEY = process.env.REPLY_IO_API_KEY;
 const REPLY_IO_WEBHOOK_SECRET = process.env.REPLY_IO_WEBHOOK_SECRET;
@@ -559,19 +559,11 @@ export async function checkForNewReplies(contacts: ReplyIoContactRef[]): Promise
  * Verifies the shared secret Reply.io echoes back on every inbound webhook
  * call (as a URL path segment — see routes/outreach-webhooks.ts). Reply.io
  * has no native signing (see module header above for the full research
- * trail) — this is our own scheme, not theirs. Constant-time comparison,
- * same pattern as integrations/dropboxSign/client.ts's verifyWebhookEvent.
- *
- * Fails CLOSED: returns false whenever REPLY_IO_WEBHOOK_SECRET isn't
- * configured, or the provided value is missing/empty — an unconfigured
- * secret must never be treated as "anything passes".
+ * trail) — this is our own scheme, not theirs. See utils/webhookSecret.ts
+ * for the constant-time comparison + fail-closed contract (shared with
+ * routes/outreach-clay-import-webhook.ts's CLAY_IMPORT_WEBHOOK_SECRET,
+ * the same "our own secret in the URL" pattern for a second provider).
  */
 export function verifyReplyIoWebhookSecret(provided: string | undefined | null): boolean {
-  if (!REPLY_IO_WEBHOOK_SECRET || !provided) return false;
-
-  const expectedBuf = Buffer.from(REPLY_IO_WEBHOOK_SECRET, 'utf8');
-  const providedBuf = Buffer.from(provided, 'utf8');
-  if (expectedBuf.length !== providedBuf.length) return false;
-
-  return timingSafeEqual(expectedBuf, providedBuf);
+  return verifySharedWebhookSecret(REPLY_IO_WEBHOOK_SECRET, provided);
 }
