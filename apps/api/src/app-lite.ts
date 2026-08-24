@@ -43,6 +43,7 @@ import { microsoft365Provider } from './integrations/microsoft365/index.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
 import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
+import outreachWebhooksRouter from './routes/outreach-webhooks.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 // (disabled — see banner below)
 // import legalDocWebhooksRouter from './routes/legal-doc-webhooks.js';
@@ -271,6 +272,12 @@ app.use('/api/integrations', integrationsPublicRouter);
 // with no auth header (authenticity = HMAC event_hash, verified in the route).
 // MUST be mounted BEFORE the authenticated routers below.
 app.use('/api/webhooks', dropboxSignWebhookRouter);
+
+// Reply.io reply-event webhook — public, no auth header (Reply.io can't
+// carry a Supabase session). Authenticity = our own shared secret in the
+// URL path segment, verified inside the route — see routes/outreach-webhooks.ts
+// and services/replyIoService.ts (Reply.io has no native webhook signing).
+app.use('/api/webhooks/reply-io', outreachWebhooksRouter);
 
 // ─── DISABLED UNTIL PROD (Drive push signature detection) ───────────────
 // files.watch push needs a GCP-domain-verified HTTPS callback; *.vercel.app

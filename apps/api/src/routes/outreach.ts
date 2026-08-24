@@ -5,6 +5,7 @@ import { supabase } from '../supabase.js';
 import { getOrgId, verifyOutreachStageAccess, verifyOutreachContactAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import { enrichContact, getConfiguredProviders } from '../services/outreachEnrichment.js';
+import { listCampaigns, addContactToCampaign } from '../services/replyIoService.js';
 
 // Outreach: manual pipeline-tracking board. Org-gated to Cicero Capital only
 // — see requireCiceroCapital in middleware/orgScope.ts, applied at the
@@ -23,6 +24,10 @@ const createContactSchema = z.object({
   phone: z.string().max(30).optional().or(z.literal('')),
   channel: z.enum(outreachChannels).optional(),
   notes: z.string().max(5000).optional().or(z.literal('')),
+});
+
+const sendContactSchema = z.object({
+  campaignId: z.string().min(1, 'campaignId is required'),
 });
 
 const updateContactSchema = z.object({
@@ -298,6 +303,123 @@ router.post('/contacts/:id/enrich', async (req: Request, res) => {
   } catch (error) {
     log.error('Enrich outreach contact error', error);
     res.status(500).json({ error: 'Failed to enrich outreach contact' });
+  }
+});
+
+// ─── GET /campaigns — List Reply.io campaigns for the Send picker ───
+//
+// See services/replyIoService.ts for the researched API version + auth
+// details. No REPLY_IO_API_KEY configured is an expected, normal state
+// (same as the enrich providers above) — 200 with configured:false, not an
+// error. A configured key that fails the live call (bad key, Reply.io
+// outage, etc.) is a real error worth a non-200 so the UI can surface it.
+
+router.get('/campaigns', async (req: Request, res) => {
+  try {
+    const result = await listCampaigns();
+
+    if (!result.configured) {
+      return res.status(200).json({ configured: false, campaigns: [], reason: 'Reply.io is not configured (REPLY_IO_API_KEY not set)' });
+    }
+
+    if (result.error) {
+      return res.status(502).json({ configured: true, campaigns: [], error: result.error });
+    }
+
+    res.json({ configured: true, campaigns: result.campaigns });
+  } catch (error) {
+    log.error('List Reply.io campaigns error', error);
+    res.status(500).json({ error: 'Failed to list Reply.io campaigns' });
+  }
+});
+
+// ─── POST /contacts/:id/send — Send outreach contact via Reply.io ───
+//
+// Creates/finds the contact in Reply.io and enrolls it in the chosen
+// campaign (services/replyIoService.ts addContactToCampaign) — this is what
+// actually triggers Reply.io to start emailing them. On success, records
+// replyIoCampaignId + sentAt on the OutreachContact row. Reply tracking
+// (lastReplyText/lastReplyAt) is populated later, out-of-band, by the
+// inbound webhook in routes/outreach-webhooks.ts.
+
+router.post('/contacts/:id/send', async (req: Request, res) => {
+  try {
+    const { id } = req.params;
+    const validation = sendContactSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
+    }
+
+    const orgId = getOrgId(req);
+
+    const existing = await verifyOutreachContactAccess(id, orgId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Outreach contact not found' });
+    }
+
+    const { data: contact, error: fetchError } = await supabase
+      .from('OutreachContact')
+      .select('*')
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .single();
+
+    if (fetchError || !contact) {
+      return res.status(404).json({ error: 'Outreach contact not found' });
+    }
+
+    const { campaignId } = validation.data;
+
+    const result = await addContactToCampaign(campaignId, {
+      name: contact.name,
+      email: contact.email,
+      company: contact.company,
+      phone: contact.phone,
+      linkedinUrl: contact.linkedinUrl,
+    });
+
+    if (!result.configured) {
+      return res.status(200).json({ sent: false, reason: result.reason || 'Reply.io is not configured' });
+    }
+
+    if (!result.success) {
+      // `reason` = a precondition we can name (no email / bad campaignId) —
+      // caller's mistake, 400. `error` = a genuine Reply.io API failure —
+      // upstream problem, 502. Same distinction outreachEnrichment.ts's
+      // per-provider results make between "no_match" and "error".
+      if (result.reason) {
+        return res.status(400).json({ error: result.reason });
+      }
+      return res.status(502).json({ error: result.error || 'Failed to send via Reply.io' });
+    }
+
+    const updates = {
+      updatedAt: new Date().toISOString(),
+      replyIoCampaignId: campaignId,
+      sentAt: new Date().toISOString(),
+    };
+
+    const { data: updated, error: updateError } = await supabase
+      .from('OutreachContact')
+      .update(updates)
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+    if (!updated) return res.status(404).json({ error: 'Outreach contact not found' });
+
+    log.info('Outreach contact sent via Reply.io', {
+      contactId: id,
+      campaignId,
+      replyIoContactId: result.replyIoContactId,
+    });
+
+    res.json(updated);
+  } catch (error) {
+    log.error('Send outreach contact via Reply.io error', error);
+    res.status(500).json({ error: 'Failed to send outreach contact' });
   }
 });
 

@@ -12,16 +12,20 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { log } from '../../utils/logger.js';
 import { recordUsageEvent } from '../usage/trackedLLM.js';
+import { resolveAnthropicAuth, hasAnthropicCredentials } from '../anthropic.js';
 import { getModelConfig, type AiRole } from './models.js';
 import { normalizeOutputSchema } from './schemaCompat.js';
 
 let _client: Anthropic | null = null;
 
 export function getAnthropicClient(): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is not set — AI features unavailable');
+  if (!_client) {
+    const authOptions = resolveAnthropicAuth();
+    if (!authOptions) {
+      throw new Error('ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN is not set — AI features unavailable');
+    }
+    _client = new Anthropic(authOptions);
   }
-  if (!_client) _client = new Anthropic();
   return _client;
 }
 
@@ -30,9 +34,9 @@ export function _resetAnthropicClient(): void {
   _client = null;
 }
 
-/** True when ANTHROPIC_API_KEY is configured — cheap check, no client construction. */
+/** True when ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is configured — cheap check, no client construction. */
 export function isAnthropicAvailable(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return hasAnthropicCredentials();
 }
 
 export class AIRefusalError extends Error {

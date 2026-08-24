@@ -186,7 +186,7 @@ export async function generateTeaser({
   firmContext,
 }: GenerateArgs): Promise<{ headline: string; fits: TeaserFit[] }> {
   if (!isClaudeEnabled() || !anthropic) {
-    throw new Error('Claude is not enabled (ANTHROPIC_API_KEY missing)');
+    throw new Error('Claude is not enabled (ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN missing)');
   }
 
   const profileName = profile.name?.trim() || 'Investment Profile';
@@ -288,7 +288,7 @@ export async function generateSystemPrompt({
   today,
 }: GeneratePromptArgs): Promise<string> {
   if (!isClaudeEnabled() || !anthropic) {
-    throw new Error('Claude is not enabled (ANTHROPIC_API_KEY missing)');
+    throw new Error('Claude is not enabled (ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN missing)');
   }
 
   const profileName = name?.trim() || 'Investment Profile';

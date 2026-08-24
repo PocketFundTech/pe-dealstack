@@ -28,8 +28,18 @@ The server will exit on startup if these are missing.
 |----------|-------------|-----------------|
 | `OPENAI_API_KEY` | OpenAI API key for GPT-4 chat, thesis generation, and memo AI | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | `GEMINI_API_KEY` | Google Gemini API key for RAG document search | [makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey) |
+| `ANTHROPIC_API_KEY` | Anthropic API key — preferred tier-1 provider (deal chat, memos, extraction reasoning, financial cross-verification via `@langchain/anthropic`) | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
+| `ANTHROPIC_OAUTH_TOKEN` | **Alternative** to `ANTHROPIC_API_KEY` — use only when you have a Claude subscription OAuth access token instead of a standard API key. See below. | `claude setup-token` (Claude Code CLI) |
 
 AI features gracefully degrade when keys are missing — the app works without them, but AI chat and document analysis will be disabled.
+
+#### `ANTHROPIC_OAUTH_TOKEN` — alternative Claude auth
+
+Every Claude-gated call site in this codebase (`services/anthropic.ts`, `utils/aiModels.ts`, `services/claudeFinancialClassifier.ts`, `services/financialCrossVerify.ts`, `services/ai/client.ts`, `services/llm.ts`, the financial-agent cross-verify node) accepts **either** `ANTHROPIC_API_KEY` **or** `ANTHROPIC_OAUTH_TOKEN` — you do not need both. Priority when both happen to be set: `ANTHROPIC_API_KEY` always wins, since it's the existing, unambiguous mechanism and every other caller already assumes it — `ANTHROPIC_OAUTH_TOKEN` is a fallback for setups that don't have (or don't want to use) a standard API key.
+
+- **Format:** `sk-ant-oat01-...` — a Claude subscription OAuth access token, distinct from a standard API key (`sk-ant-api03-...`). Minted with `claude setup-token` (the Claude Code CLI) or the equivalent Claude Agent SDK OAuth login flow. Requires a Claude Pro, Max, Team, or Enterprise plan on the account you authenticate with.
+- **How it authenticates (different from a standard key):** an API key is sent as the `x-api-key` header; an OAuth token is *not*. It's sent as `Authorization: Bearer <token>`, and the Messages API additionally requires the `anthropic-beta: oauth-2025-04-20` header on that auth path. Sending both an API key and an OAuth token in the same request is rejected — this codebase's auth resolution (`resolveAnthropicAuth()` in `services/anthropic.ts`) only ever sends one.
+- **Expiry — known limitation, no auto-refresh:** `claude setup-token` tokens are valid for **about one year** and have no refresh-token counterpart — Anthropic's own docs describe minting a fresh one interactively when it lapses, not a background refresh call. Nothing in this codebase renews `ANTHROPIC_OAUTH_TOKEN` automatically, so when it expires every Claude call using it will start failing with 401s until someone manually generates a new token (`claude setup-token`) and updates the env var. If this matters for your deployment, prefer `ANTHROPIC_API_KEY` instead, or set a calendar reminder to rotate the token well before its ~1-year expiry.
 
 ### Outreach contact enrichment (optional — Cicero Capital board only)
 
@@ -43,6 +53,19 @@ Powers the "Enrich" action on the Outreach pipeline board (`POST /api/outreach/c
 | `CLAY_WEBHOOK_URL` | Per-table webhook URL generated inside Clay's UI (Sources → Webhook) | Created per-workspace inside Clay, not a fixed host |
 
 Clay is architecturally different from the other two: it has no synchronous "enrich and get data back" REST API, only a per-table webhook you POST a contact to, which Clay enriches asynchronously (minutes, not milliseconds) via columns configured in its UI. `CLAY_API_KEY` alone does nothing — `CLAY_WEBHOOK_URL` must also be set, and the integration only *submits* contacts today (see `services/outreachEnrichment.ts` for the full explanation and sourcing). Apollo and Anymail Finder are true synchronous request/response APIs and need only their one key each.
+
+### Reply.io send + reply tracking (optional — Cicero Capital board only)
+
+Powers the "Send" action on the Outreach pipeline board (`GET /api/outreach/campaigns` to list Reply.io campaigns, `POST /api/outreach/contacts/:id/send` to enroll a contact) and inbound reply tracking (`POST /api/webhooks/reply-io/:secret`, mounted unauthenticated in `app.ts`/`app-lite.ts`). See `services/replyIoService.ts` for the researched API version and webhook-signing details (checked against docs.reply.io, including its full OpenAPI spec, Aug 2026).
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `REPLY_IO_API_KEY` | Reply.io v3 API key, sent as `Authorization: Bearer <key>` against `api.reply.io/v3` | Reply.io → Settings → API Key |
+| `REPLY_IO_WEBHOOK_SECRET` | A long random value **we** define (e.g. `openssl rand -hex 32`) — Reply.io issues nothing equivalent | Generate it yourself |
+
+`REPLY_IO_API_KEY` unset → `GET /campaigns` and `POST /contacts/:id/send` both return a "not configured" response (200) instead of erroring, same soft-fail pattern as the enrichment providers above.
+
+Reply.io does not sign or authenticate its outbound webhook calls in any way — no signature header, no HMAC, no shared-secret mechanism exists on their side (confirmed by searching their entire bundled OpenAPI spec for "signature"/"hmac"/"secret": zero matches). `REPLY_IO_WEBHOOK_SECRET` is therefore our own scheme: set it here, then give Reply.io the **exact same value** as a URL path segment when registering the webhook subscription on their side — `https://<your-api-domain>/api/webhooks/reply-io/<that value>` — either via their dashboard (Settings → Integrations → Webhooks → Add webhook, event = "Contact replied"/"Email replied") or via `POST /v3/webhooks` on their API (both are supported; the dashboard is not the only option). Leaving `REPLY_IO_WEBHOOK_SECRET` unset means the webhook route rejects every inbound request with 401 — fail closed, not silently-open.
 
 ### AI Usage Tracking (optional — pricing tuning)
 
@@ -76,6 +99,15 @@ SUPABASE_ANON_KEY="your-supabase-anon-key"
 # Server Configuration
 PORT=3001
 NODE_ENV=development
+
+# Anthropic Configuration (preferred tier-1 provider)
+# Get your API key from https://console.anthropic.com/settings/keys
+ANTHROPIC_API_KEY=sk-ant-your-anthropic-api-key
+# Alternative to ANTHROPIC_API_KEY — a Claude subscription OAuth access
+# token (sk-ant-oat01-...) minted via `claude setup-token`. Do not set
+# both; ANTHROPIC_API_KEY always wins when present. See "AI Services"
+# above for the expiry caveat.
+ANTHROPIC_OAUTH_TOKEN=
 
 # OpenAI Configuration (for AI features)
 # Get your API key from https://platform.openai.com/api-keys
@@ -167,4 +199,4 @@ The frontend checks `/api/ai/status` to determine whether to show AI features.
 
 ---
 
-**Last Updated:** February 13, 2026
+**Last Updated:** August 24, 2026

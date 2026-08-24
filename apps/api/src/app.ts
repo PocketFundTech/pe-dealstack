@@ -43,6 +43,7 @@ import legalDocumentsRouter from './routes/legal-documents.js';
 import ndaReviewRouter from './routes/nda-review.js';
 import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
+import outreachWebhooksRouter from './routes/outreach-webhooks.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import dealAccessTimelineRouter from './routes/deal-access-timeline.js';
 import dealsTrashRouter from './routes/deals-trash.js';
@@ -343,6 +344,12 @@ app.use('/api/integrations', integrationsPublicRouter);
 
 // Dropbox Sign eSignature webhook — public (HMAC-verified), mounted before auth.
 app.use('/api/webhooks', dropboxSignWebhookRouter);
+
+// Reply.io reply-event webhook — public, no auth header (Reply.io can't
+// carry a Supabase session). Authenticity = our own shared secret in the
+// URL path segment, verified inside the route — see routes/outreach-webhooks.ts
+// and services/replyIoService.ts (Reply.io has no native webhook signing).
+app.use('/api/webhooks/reply-io', outreachWebhooksRouter);
 
 // ========================================
 // Protected Routes (require authentication + org resolution)
