@@ -13,6 +13,8 @@ export function OutreachColumn({
   onAddContact,
   onOpenContact,
   onMoveContact,
+  onEnrichContact,
+  enrichingContactId,
 }: {
   stage: OutreachStage;
   contacts: OutreachContact[];
@@ -20,6 +22,9 @@ export function OutreachColumn({
   onAddContact: (stageId: string) => void;
   onOpenContact: (contact: OutreachContact) => void;
   onMoveContact: (contactId: string, stageId: string) => void;
+  onEnrichContact: (contactId: string) => void;
+  /** Contact id currently mid-enrichment, if any. */
+  enrichingContactId: string | null;
 }) {
   const otherStages = allStages.filter((s) => s.id !== stage.id);
 
@@ -55,6 +60,8 @@ export function OutreachColumn({
               otherStages={otherStages}
               onOpen={onOpenContact}
               onMove={onMoveContact}
+              onEnrich={onEnrichContact}
+              enriching={enrichingContactId === contact.id}
             />
           ))}
           {contacts.length === 0 && (

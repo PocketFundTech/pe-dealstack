@@ -2,11 +2,13 @@
 // (apps/web-next/src/app/(app)/outreach/page.tsx and this directory).
 //
 // Backend contract (built in parallel under apps/api/, mounted at /api/outreach):
-//   GET    /outreach/stages             -> OutreachStage[]
-//   GET    /outreach/contacts           -> OutreachContact[]
-//   POST   /outreach/contacts           -> OutreachContact
-//   PATCH  /outreach/contacts/:id       -> OutreachContact
-//   DELETE /outreach/contacts/:id       -> 204 No Content
+//   GET    /outreach/stages                -> OutreachStage[]
+//   GET    /outreach/contacts              -> OutreachContact[]
+//   POST   /outreach/contacts              -> OutreachContact
+//   PATCH  /outreach/contacts/:id          -> OutreachContact
+//   DELETE /outreach/contacts/:id          -> 204 No Content
+//   POST   /outreach/contacts/:id/enrich   -> OutreachContact | EnrichNotRunResult
+//     (no enrichment provider configured yet -> { enriched: false, reason })
 
 export interface OutreachStage {
   id: string;
@@ -29,6 +31,12 @@ export interface OutreachContact {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Enrichment fields — populated once a Clay/Apollo/Anymail provider is configured. */
+  title?: string | null;
+  linkedinUrl?: string | null;
+  enrichedAt?: string | null;
+  enrichmentSource?: string[];
+  enrichmentData?: Record<string, unknown> | null;
 }
 
 /** Editable fields for the create/edit form (all strings for controlled inputs). */
@@ -36,11 +44,24 @@ export interface OutreachContactFormValues {
   name: string;
   stageId: string;
   company: string;
+  title: string;
   email: string;
   phone: string;
+  linkedinUrl: string;
   channel: OutreachChannel;
   notes: string;
 }
+
+/** `POST /outreach/contacts/:id/enrich` when no provider is configured yet — the
+ *  expected/normal state right now, not an error. */
+export interface EnrichNotRunResult {
+  enriched: false;
+  reason: string;
+}
+
+/** The enrich endpoint returns either the updated contact directly (at least one
+ *  provider ran) or an `{ enriched: false, reason }` explainer. */
+export type EnrichContactResult = OutreachContact | EnrichNotRunResult;
 
 export const OUTREACH_CHANNELS: OutreachChannel[] = ["proprietary", "broker"];
 
@@ -57,7 +78,17 @@ export function sortStagesByPosition(stages: OutreachStage[]): OutreachStage[] {
 }
 
 export function emptyContactForm(stageId: string): OutreachContactFormValues {
-  return { name: "", stageId, company: "", email: "", phone: "", channel: "proprietary", notes: "" };
+  return {
+    name: "",
+    stageId,
+    company: "",
+    title: "",
+    email: "",
+    phone: "",
+    linkedinUrl: "",
+    channel: "proprietary",
+    notes: "",
+  };
 }
 
 export function contactToFormValues(contact: OutreachContact): OutreachContactFormValues {
@@ -65,8 +96,10 @@ export function contactToFormValues(contact: OutreachContact): OutreachContactFo
     name: contact.name,
     stageId: contact.stageId,
     company: contact.company || "",
+    title: contact.title || "",
     email: contact.email || "",
     phone: contact.phone || "",
+    linkedinUrl: contact.linkedinUrl || "",
     channel: contact.channel,
     notes: contact.notes || "",
   };

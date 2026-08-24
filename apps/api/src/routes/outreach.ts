@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { getOrgId, verifyOutreachStageAccess, verifyOutreachContactAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
+import { enrichContact, getConfiguredProviders } from '../services/outreachEnrichment.js';
 
 // Outreach: manual pipeline-tracking board. Org-gated to Cicero Capital only
 // — see requireCiceroCapital in middleware/orgScope.ts, applied at the
@@ -210,6 +211,93 @@ router.delete('/contacts/:id', async (req: Request, res) => {
   } catch (error) {
     log.error('Delete outreach contact error', error);
     res.status(500).json({ error: 'Failed to delete outreach contact' });
+  }
+});
+
+// ─── POST /contacts/:id/enrich — Enrich outreach contact via Apollo/Anymail Finder/Clay ────
+//
+// See services/outreachEnrichment.ts for the provider integrations and the
+// merge rule. No provider keys are configured yet (Clay/Apollo/Anymail
+// Finder are all "coming later" per the org's rollout plan) — that's an
+// expected, normal state right now, not an error, so it's a 200 with
+// enriched:false rather than a 4xx/5xx.
+
+router.post('/contacts/:id/enrich', async (req: Request, res) => {
+  try {
+    const { id } = req.params;
+    const orgId = getOrgId(req);
+
+    const existing = await verifyOutreachContactAccess(id, orgId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Outreach contact not found' });
+    }
+
+    const configuredProviders = getConfiguredProviders();
+    if (configuredProviders.length === 0) {
+      return res.status(200).json({ enriched: false, reason: 'No enrichment providers configured yet' });
+    }
+
+    // verifyOutreachContactAccess only selects id/organizationId/stageId
+    // (just enough to authorize) — fetch the full row now that we know the
+    // caller owns it, both as enrichContact's input and so the merge below
+    // can tell which fields are already human-filled.
+    const { data: contact, error: fetchError } = await supabase
+      .from('OutreachContact')
+      .select('*')
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .single();
+
+    if (fetchError || !contact) {
+      return res.status(404).json({ error: 'Outreach contact not found' });
+    }
+
+    const result = await enrichContact({
+      id: contact.id,
+      name: contact.name,
+      email: contact.email,
+      phone: contact.phone,
+      company: contact.company,
+      linkedinUrl: contact.linkedinUrl,
+    });
+
+    // enrichmentData/enrichmentSource/enrichedAt always update — they record
+    // the attempt itself, including a run that found nothing new. Every
+    // other field only fills in when currently null/empty, so enrichment
+    // never clobbers a human-edited name/notes/etc.
+    // enrichmentSource accumulates across runs (union, not overwrite) so a
+    // provider that contributed data on an earlier run isn't forgotten just
+    // because it's unconfigured or found nothing on this one.
+    const updates: Record<string, any> = {
+      updatedAt: new Date().toISOString(),
+      enrichedAt: new Date().toISOString(),
+      enrichmentData: { ...(contact.enrichmentData || {}), ...result.enrichmentData },
+      enrichmentSource: Array.from(new Set([...(contact.enrichmentSource || []), ...result.sourcesUsed])),
+    };
+
+    if (result.updates.email && !contact.email) updates.email = result.updates.email;
+    if (result.updates.phone && !contact.phone) updates.phone = result.updates.phone;
+    if (result.updates.title && !contact.title) updates.title = result.updates.title;
+    if (result.updates.linkedinUrl && !contact.linkedinUrl) updates.linkedinUrl = result.updates.linkedinUrl;
+    if (result.updates.company && !contact.company) updates.company = result.updates.company;
+
+    const { data: updated, error: updateError } = await supabase
+      .from('OutreachContact')
+      .update(updates)
+      .eq('id', id)
+      .eq('organizationId', orgId)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+    if (!updated) return res.status(404).json({ error: 'Outreach contact not found' });
+
+    log.info('Outreach contact enriched', { contactId: id, providersConfigured: configuredProviders, sourcesUsed: result.sourcesUsed });
+
+    res.json(updated);
+  } catch (error) {
+    log.error('Enrich outreach contact error', error);
+    res.status(500).json({ error: 'Failed to enrich outreach contact' });
   }
 });
 

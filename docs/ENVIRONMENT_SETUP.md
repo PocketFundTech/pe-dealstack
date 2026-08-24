@@ -31,6 +31,19 @@ The server will exit on startup if these are missing.
 
 AI features gracefully degrade when keys are missing — the app works without them, but AI chat and document analysis will be disabled.
 
+### Outreach contact enrichment (optional — Cicero Capital board only)
+
+Powers the "Enrich" action on the Outreach pipeline board (`POST /api/outreach/contacts/:id/enrich`, gated to the Cicero Capital org — see `requireCiceroCapital` in `middleware/orgScope.ts`). Each provider is independently optional; the route no-ops with a `200 { enriched: false, reason: 'No enrichment providers configured yet' }` when none are set, and activates automatically (no code changes) the moment a key is added.
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `APOLLO_API_KEY` | Apollo.io People Match/Enrich API key | [app.apollo.io/#/settings/integrations/api](https://app.apollo.io/#/settings/integrations/api) |
+| `ANYMAIL_FINDER_API_KEY` | Anymail Finder "find a person's email" API key | [anymailfinder.com/dashboard/api](https://anymailfinder.com/dashboard/api) |
+| `CLAY_API_KEY` | Clay workspace API key — sent as `Authorization: Bearer` on our webhook POST | Clay workspace settings |
+| `CLAY_WEBHOOK_URL` | Per-table webhook URL generated inside Clay's UI (Sources → Webhook) | Created per-workspace inside Clay, not a fixed host |
+
+Clay is architecturally different from the other two: it has no synchronous "enrich and get data back" REST API, only a per-table webhook you POST a contact to, which Clay enriches asynchronously (minutes, not milliseconds) via columns configured in its UI. `CLAY_API_KEY` alone does nothing — `CLAY_WEBHOOK_URL` must also be set, and the integration only *submits* contacts today (see `services/outreachEnrichment.ts` for the full explanation and sourcing). Apollo and Anymail Finder are true synchronous request/response APIs and need only their one key each.
+
 ### AI Usage Tracking (optional — pricing tuning)
 
 These four variables control the per-unit cost recorded for non-LLM AI providers. Defaults are hardcoded in source; set in Vercel project settings to override without a deploy.

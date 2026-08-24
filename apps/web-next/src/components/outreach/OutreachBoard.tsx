@@ -10,6 +10,7 @@ import {
   emptyContactForm,
   contactToFormValues,
   sortStagesByPosition,
+  type EnrichContactResult,
   type OutreachContact,
   type OutreachContactFormValues,
   type OutreachStage,
@@ -38,6 +39,10 @@ export function OutreachBoard() {
 
   const [deleteTarget, setDeleteTarget] = useState<OutreachContact | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Contact id currently mid-enrichment, if any — drives the loading state on
+  // the "Enrich" action wherever it's triggered from (card menu or modal).
+  const [enrichingId, setEnrichingId] = useState<string | null>(null);
 
   const orderedStages = sortStagesByPosition(stages);
 
@@ -108,8 +113,10 @@ export function OutreachBoard() {
         name: values.name,
         channel: values.channel,
         company: values.company.trim() || undefined,
+        title: values.title.trim() || undefined,
         email: values.email.trim() || undefined,
         phone: values.phone.trim() || undefined,
+        linkedinUrl: values.linkedinUrl.trim() || undefined,
         notes: values.notes.trim() || undefined,
       };
 
@@ -166,6 +173,33 @@ export function OutreachBoard() {
       showToast(message, "error");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  // ─── Enrich ─────────────────────────────────────────────────────────────
+  // Providers (Clay/Apollo/Anymail) may not be configured yet — that's the
+  // expected/normal state right now, surfaced as an info toast rather than
+  // an error. When a provider did run, the endpoint returns the updated
+  // contact directly, same shape as PATCH.
+
+  async function handleEnrich(contactId: string) {
+    if (enrichingId) return;
+    setEnrichingId(contactId);
+    try {
+      const result = await api.post<EnrichContactResult>(`/outreach/contacts/${contactId}/enrich`, {});
+      if ("enriched" in result && result.enriched === false) {
+        showToast(result.reason, "info");
+      } else {
+        const updated = result as OutreachContact;
+        setContacts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+        setEditingContact((prev) => (prev && prev.id === updated.id ? updated : prev));
+        showToast("Contact enriched", "success");
+      }
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to enrich contact";
+      showToast(message, "error");
+    } finally {
+      setEnrichingId(null);
     }
   }
 
@@ -246,6 +280,8 @@ export function OutreachBoard() {
               onAddContact={openCreate}
               onOpenContact={openEdit}
               onMoveContact={handleMove}
+              onEnrichContact={handleEnrich}
+              enrichingContactId={enrichingId}
             />
           ))}
         </div>
@@ -265,6 +301,10 @@ export function OutreachBoard() {
           onSave={handleSave}
           onDelete={formMode === "edit" ? requestDelete : undefined}
           onClose={closeForm}
+          enriching={formMode === "edit" && editingContact ? enrichingId === editingContact.id : false}
+          onEnrich={
+            formMode === "edit" && editingContact ? () => handleEnrich(editingContact.id) : undefined
+          }
         />
       )}
 
