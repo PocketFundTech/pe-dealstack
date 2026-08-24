@@ -5,6 +5,37 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 69 — August 24, 2026
+
+#### Timestamp: August 24, 2026 — 20:45-21:45 IST
+
+#### Goal: Option B domain cutover — flip APP_URL to app.avise.io without waiting on the Google/Azure console work — and make the marketing site's SIGN IN button land on /signup.
+
+#### 1. APP_URL flip (Option B, founder's call)
+
+`APP_URL` in Vercel production turned out to be **`https://pe-dealstack.vercel.app`** — not `lmmos.ai`, which was only ever a display alias. Consequences: Google/Azure OAuth callbacks are registered against the raw Vercel URL, and every doc-request/deal-share/invitation link ever emailed points there (Friday's 308 on that domain is therefore load-bearing — keep it forever; verified it preserves path+query, so `/upload/<token>` links in broker inboxes survive).
+
+Changes: `APP_URL` → `https://app.avise.io` (production+development; preview left alone), `NEXT_PUBLIC_APP_URL` → same (new var — it had never been set, so memo share links had been riding the hardcoded `lmmos.ai` fallback in `export.ts`), redeploy to bake the `NEXT_PUBLIC_` var into the client bundle.
+
+**Accepted breakage (Option B):** the CONNECT buttons for Gmail/Calendar/Outlook/M365 now fail with `redirect_uri_mismatch` until the console URIs are added. The 6 existing connections (2 gmail, 2+1 gcal, 1 outlook, 1 m365 — verified in prod DB) keep syncing: token refresh sends no redirect_uri.
+
+#### 2. SIGN IN → /signup (PR #128, merged + deployed)
+
+The dev's live avise.io hardcodes `href="https://pe-dealstack.vercel.app"` (bare origin). **The live site is NOT built from `dev-pf66/pe-os`** — that repo's `landing-page/index.html` is the old 28KB static page (anchor-link nav, zero `/blog`/`/about-us` references) while the live site is a 237KB Next.js app; push access to that repo is useless for this. Fixed entirely on our side instead:
+
+- New `isRootLanding()` in `routing.ts`; middleware now routes `/` by auth state — signed-in → `/dashboard`, visitors → `/signup`. `/` opts into the Supabase round-trip it previously skipped; all other public pages still skip it.
+- Chain verified live: `pe-dealstack.vercel.app` → 308 → `app.avise.io/` → 307 → `/signup` (200). Old root marketing page on the app subdomain is now unreachable — correct, avise.io is the marketing site.
+
+Regression sweep: `/login` 200, `/pricing` 200, `/portal/<token>` 200, `/upload/<token>` 200, `/dashboard` → `/login` 307 (auth gate intact), `avise.io` 200 untouched, `lmmos.ai/login` 200.
+
+#### Open
+
+1. `lmmos.ai` → 308 → `app.avise.io` — final flip; my API call is permission-blocked, needs founder approval or dashboard.
+2. Google Cloud + Azure console redirect URIs (unbreaks integration CONNECT buttons): gmail/google_calendar/outlook/microsoft365 callbacks under `https://app.avise.io/api/integrations/oauth/…` + JS origin `https://app.avise.io`. Keep existing `pe-dealstack.vercel.app` entries.
+3. **Rotate two tokens pasted into chat:** Supabase `sbp_…` and Vercel `vcp_…`.
+
+---
+
 ### Session 68 — August 22, 2026
 
 #### Timestamp: August 22, 2026 — 17:25-17:40 IST
