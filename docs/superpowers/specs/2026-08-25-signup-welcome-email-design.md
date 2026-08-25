@@ -21,9 +21,9 @@ New users who sign up get no acknowledgement email from the product — the only
 
 `apps/api/src/routes/onboarding.ts` is mounted with `authMiddleware` + `orgMiddleware` in both `app.ts` and `app-ai.ts`. That's fine for its existing endpoints (status, welcome-shown, etc.) because by the time the client calls them, the user is logged in with a session. But we want to fire the welcome email **immediately** after `signUp()` resolves — including the branch where Supabase requires email confirmation and returns no session at all. An authenticated route can't be called at that moment. So this needs its own unauthenticated endpoint, independently guarded.
 
-### New endpoint — `apps/api/src/routes/auth-welcome-email.ts`
+### New endpoint — `apps/api/src/routes/welcome-email.ts`
 
-`POST /api/auth/welcome-email` — no `authMiddleware`. Body: `{ userId: string }` (the Supabase Auth user id returned in `data.user.id` from `signUp()`).
+`POST /api/public/welcome-email` — no `authMiddleware`, mounted alongside the codebase's existing `/api/public/*` unauthenticated routes (`portalRouter`, `docRequestPortalRouter`, `invitationsAcceptRouter`), which already sit behind the shared general rate limiter. Body: `{ userId: string }` (the Supabase Auth user id returned in `data.user.id` from `signUp()`).
 
 Guardrails (never trust client-supplied email/name directly):
 1. Look up the user via the service-role Supabase client: `supabase.auth.admin.getUserById(userId)`.
@@ -61,15 +61,13 @@ Same shape as `docRequestEmail.ts`: null-safe `Resend` client off `RESEND_API_KE
 
 ### Client change — `signup/page.tsx`
 
-Right after `supabase.auth.signUp()` resolves without an `authError`, fire (don't await-block UI on it):
+Right after `supabase.auth.signUp()` resolves without an `authError`, fire (don't await-block UI on it). Per `apps/web-next/CLAUDE.md`, all API calls go through the shared `api.ts` helper — no raw `fetch()` in components:
 
 ```ts
 if (data.user) {
-  fetch('/api/auth/welcome-email', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId: data.user.id }),
-  }).catch(() => {}); // best-effort; never blocks signup UX
+  api.post('/public/welcome-email', { userId: data.user.id }).catch((err) => {
+    console.warn('[signup] welcome email trigger failed:', err);
+  });
 }
 ```
 
