@@ -15,10 +15,14 @@
 //      flaggedForReview: 0, reason } -- confirmed against the actual
 //      backend response, not the enrich endpoint's { enriched: false }
 //      shape this was originally guessed to match)
-//   POST   /outreach/import/private-circle -> PrivateCircleImportResult
-//     (multipart file upload — a CSV export from Private Circle — built in
-//      parallel under apps/api/; goes through authFetchRaw, not api.post,
-//      per the multipart convention in deal-intake/components.tsx)
+//   POST   /outreach/import/private-circle -> CsvImportResult
+//   POST   /outreach/import/clay-csv       -> CsvImportResult
+//     (multipart file upload — a CSV export from Private Circle or Clay,
+//      Clay's real-time webhook push being gated behind a paid plan
+//      upgrade — both share the same response shape, same shared engine
+//      server-side (services/outreachCsvImport.ts); goes through
+//      authFetchRaw, not api.post, per the multipart convention in
+//      deal-intake/components.tsx — see CsvImportButton.tsx)
 
 export interface OutreachStage {
   id: string;
@@ -141,8 +145,10 @@ export type SyncRepliesResult = SyncRepliesSummary | SyncRepliesNotRunResult;
  *  CSV; `created`/`updated` are how those rows were reconciled against
  *  existing contacts; `flaggedForReview` is how many tripped the
  *  duplicate-detection heuristic (`needsMatchReview`); `enriched` is how
- *  many got enrichment data attached during the same pass. */
-export interface PrivateCircleImportResult {
+ *  many got enrichment data attached during the same pass. Shared by both
+ *  the Private Circle and Clay CSV import endpoints — same shape either
+ *  way, per services/outreachCsvImport.ts's shared engine server-side. */
+export interface CsvImportResult {
   received: number;
   created: number;
   updated: number;

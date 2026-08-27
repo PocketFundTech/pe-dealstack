@@ -1,26 +1,30 @@
-// ─── POST /outreach/import/private-circle — Private Circle CSV import ────
+// ─── POST /outreach/import/private-circle, /outreach/import/clay-csv ─────
+// CSV imports — Private Circle (no API, ~100-200 row export cap) and Clay
+// (real-time webhook push is gated behind a paid plan upgrade, confirmed in
+// Clay's own UI — CSV export is the workaround, available on every plan).
 //
 // Mounted in the same requireCiceroCapital-gated router chain as
-// outreach.ts/outreach-replyio.ts (authenticated — a human uploads the file
-// they exported from Private Circle's own UI, unlike the Clay path which is
-// an unauthenticated webhook Clay calls directly). Multer pattern matches
-// routes/deal-import.ts exactly (memory storage, 5MB cap, CSV/Excel mime
-// filter — Private Circle only exports CSV today, but the filter is kept
-// permissive the same way deal-import.ts is, in case that changes).
+// outreach.ts/outreach-replyio.ts (authenticated — a human uploads a file
+// they exported themselves, unlike the Clay *webhook* path in
+// outreach-clay-import-webhook.ts, which is unauthenticated since Clay
+// calls it directly).  Multer pattern matches routes/deal-import.ts exactly
+// (memory storage, 5MB cap, CSV/Excel mime filter).
 //
-// Orchestration itself lives in services/outreachPrivateCircleImport.ts
-// (parse -> map columns -> Claude clean -> shared de-dupe engine); this
-// route's only job is the multipart handling, the post-import
-// auto-enrichment trigger for newly-created email-less contacts
-// (services/outreachEnrichment.ts's enrichAndPersistOutreachContact), and
-// shaping the final response.
+// Orchestration for each source lives in services/outreachPrivateCircleImport.ts
+// / services/outreachClayCsvImport.ts, both thin wrappers over the shared
+// services/outreachCsvImport.ts engine. This route's job is the multipart
+// handling, the shared post-import auto-enrichment trigger, and response
+// shaping — factored into runCsvImportRoute() below so the two endpoints
+// don't duplicate it.
 
 import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import { importPrivateCircleCsv } from '../services/outreachPrivateCircleImport.js';
+import { importClayCsv } from '../services/outreachClayCsvImport.js';
 import { enrichAndPersistOutreachContact } from '../services/outreachEnrichment.js';
+import type { CsvImportResult } from '../services/outreachCsvImport.js';
 
 const router = Router();
 
@@ -32,21 +36,32 @@ const upload = multer({
     if (allowed.includes(file.mimetype) || file.originalname.toLowerCase().endsWith('.csv')) {
       cb(null, true);
     } else {
-      cb(new Error('Only CSV files are supported for Private Circle import'));
+      cb(new Error('Only CSV files are supported for this import'));
     }
   },
 });
 
-router.post('/import/private-circle', upload.single('file'), async (req: Request, res: Response) => {
+/**
+ * Shared body for both CSV import endpoints: run the source-specific
+ * importer, auto-enrich clean creates missing an email, log, and shape the
+ * response. Only the importer function and log label differ per source.
+ */
+async function runCsvImportRoute(
+  req: Request,
+  res: Response,
+  sourceLabel: string,
+  runImport: (orgId: string, csvText: string) => Promise<CsvImportResult>,
+): Promise<void> {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded — attach a CSV as "file"' });
+      res.status(400).json({ error: 'No file uploaded — attach a CSV as "file"' });
+      return;
     }
 
     const orgId = getOrgId(req);
     const csvText = req.file.buffer.toString('utf-8');
 
-    const importResult = await importPrivateCircleCsv(orgId, csvText);
+    const importResult = await runImport(orgId, csvText);
 
     // Auto-enrichment pass — only clean creates (never updates, never
     // flagged-for-review rows a human still has to resolve first), and only
@@ -62,12 +77,13 @@ router.post('/import/private-circle', upload.single('file'), async (req: Request
       } catch (err) {
         log.warn('outreach-import: auto-enrichment failed for one contact, continuing batch', {
           contactId,
+          sourceLabel,
           error: err instanceof Error ? err.message : String(err),
         });
       }
     }
 
-    log.info('Private Circle CSV import complete', {
+    log.info(`${sourceLabel} CSV import complete`, {
       orgId,
       received: importResult.received,
       created: importResult.created,
@@ -85,10 +101,18 @@ router.post('/import/private-circle', upload.single('file'), async (req: Request
       enriched,
     });
   } catch (error) {
-    log.error('Private Circle CSV import error', error);
-    const message = error instanceof Error ? error.message : 'Failed to import Private Circle CSV';
+    log.error(`${sourceLabel} CSV import error`, error);
+    const message = error instanceof Error ? error.message : `Failed to import ${sourceLabel} CSV`;
     res.status(500).json({ error: message });
   }
-});
+}
+
+router.post('/import/private-circle', upload.single('file'), (req, res) =>
+  runCsvImportRoute(req, res, 'Private Circle', importPrivateCircleCsv),
+);
+
+router.post('/import/clay-csv', upload.single('file'), (req, res) =>
+  runCsvImportRoute(req, res, 'Clay', importClayCsv),
+);
 
 export default router;
