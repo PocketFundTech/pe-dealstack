@@ -45,6 +45,7 @@ import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
 import outreachWebhooksRouter from './routes/outreach-webhooks.js';
 import outreachClayImportWebhookRouter from './routes/outreach-clay-import-webhook.js';
+import outreachClayEnrichmentWebhookRouter from './routes/outreach-clay-enrichment-webhook.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 // (disabled — see banner below)
 // import legalDocWebhooksRouter from './routes/legal-doc-webhooks.js';
@@ -288,6 +289,13 @@ app.use('/api/webhooks/reply-io', outreachWebhooksRouter);
 // Reply.io webhook above — see routes/outreach-clay-import-webhook.ts and
 // services/outreachClayImport.ts.
 app.use('/api/webhooks/clay-import', outreachClayImportWebhookRouter);
+
+// Clay enrichment RESULT callback — completes the loop enrichViaClay's own
+// comment flagged as a deliberate follow-up: Clay calling us back once its
+// enrichment waterfall finishes on a contact submitted via CLAY_WEBHOOK_URL.
+// Separate secret (CLAY_ENRICHMENT_RESULT_SECRET) from the import webhook
+// above — different Clay table/flow, least privilege.
+app.use('/api/webhooks/clay-enrichment', outreachClayEnrichmentWebhookRouter);
 
 // ─── DISABLED UNTIL PROD (Drive push signature detection) ───────────────
 // files.watch push needs a GCP-domain-verified HTTPS callback; *.vercel.app
