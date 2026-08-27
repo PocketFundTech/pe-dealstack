@@ -70,6 +70,7 @@ import dealsModelRouter from './routes/deals-model.js';
 import docRequestPortalRouter from './routes/doc-request-portal.js';
 import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
+import welcomeEmailRouter from './routes/welcome-email.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
@@ -333,6 +334,9 @@ app.use('/api/public/portal', portalRouter);
 // Document-request upload page must be public — brokers/sellers have no
 // accounts; the DocRequest token is the credential (see routes/doc-request-portal.ts).
 app.use('/api/public/doc-requests', docRequestPortalRouter);
+// Signup welcome email must be public — it fires right after signUp()
+// resolves, before a session necessarily exists (see routes/welcome-email.ts).
+app.use('/api/public/welcome-email', welcomeEmailRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens
