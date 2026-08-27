@@ -397,19 +397,25 @@ export function OutreachBoard() {
           <p className="text-sm text-text-muted mt-1">Ask an admin to set up the outreach pipeline stages.</p>
         </div>
       ) : (
-        <div className="flex gap-4 overflow-x-auto pb-4">
-          {orderedStages.map((stage) => (
-            <OutreachColumn
-              key={stage.id}
-              stage={stage}
-              contacts={contacts.filter((c) => c.stageId === stage.id)}
-              allStages={orderedStages}
-              onAddContact={openCreate}
-              onOpenContact={openEdit}
-              onMoveContact={handleMove}
-              onEnrichContact={handleEnrich}
-              enrichingContactId={enrichingId}
-            />
+        <div className="flex items-stretch gap-1">
+          {orderedStages.map((stage, index) => (
+            <div key={stage.id} className="flex items-stretch flex-1 min-w-0">
+              <OutreachColumn
+                stage={stage}
+                contacts={contacts.filter((c) => c.stageId === stage.id)}
+                allStages={orderedStages}
+                onAddContact={openCreate}
+                onOpenContact={openEdit}
+                onMoveContact={handleMove}
+                onEnrichContact={handleEnrich}
+                enrichingContactId={enrichingId}
+              />
+              {index < orderedStages.length - 1 && (
+                <div className="flex items-center justify-center w-6 shrink-0 text-text-muted/60" aria-hidden="true">
+                  <span className="material-symbols-outlined text-[20px]">arrow_forward</span>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

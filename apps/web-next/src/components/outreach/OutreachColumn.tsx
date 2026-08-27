@@ -29,7 +29,7 @@ export function OutreachColumn({
   const otherStages = allStages.filter((s) => s.id !== stage.id);
 
   return (
-    <div className="min-w-[300px] w-[300px] shrink-0" data-stage-id={stage.id}>
+    <div className="flex-1 min-w-0" data-stage-id={stage.id}>
       <div className="bg-surface-card rounded-xl border border-border-subtle overflow-hidden h-full flex flex-col">
         <div className="px-4 py-3 border-b border-border-subtle bg-background-body">
           <div className="flex items-center justify-between gap-2">
