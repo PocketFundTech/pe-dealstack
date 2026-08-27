@@ -295,11 +295,21 @@ describe('computeDiffs', () => {
 
 describe('classifyFinancialsCrossVerified — env-flag fall-through', () => {
   // Save and restore the env so we don't leak state across tests in this
-  // file or to other files in the same vitest worker.
+  // file or to other files in the same vitest worker. Claude can now be
+  // enabled by EITHER credential (services/anthropic.ts's
+  // resolveAnthropicAuth) — a test asserting "Claude is unavailable" has to
+  // clear both, or a real ANTHROPIC_OAUTH_TOKEN in the developer's local
+  // .env silently keeps Claude "enabled" and this test attempts a real,
+  // live network call to Anthropic instead of short-circuiting, hanging
+  // until the suite's testTimeout. (Caught exactly this failure mode after
+  // adding OAuth-token support — see vitest.config.ts's global `env` block
+  // for the accompanying suite-wide hardening.)
   const originalKey = process.env.ANTHROPIC_API_KEY;
+  const originalOauthToken = process.env.ANTHROPIC_OAUTH_TOKEN;
 
   beforeEach(() => {
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_OAUTH_TOKEN;
   });
 
   afterAll(() => {
@@ -308,9 +318,14 @@ describe('classifyFinancialsCrossVerified — env-flag fall-through', () => {
     } else {
       process.env.ANTHROPIC_API_KEY = originalKey;
     }
+    if (originalOauthToken === undefined) {
+      delete process.env.ANTHROPIC_OAUTH_TOKEN;
+    } else {
+      process.env.ANTHROPIC_OAUTH_TOKEN = originalOauthToken;
+    }
   });
 
-  it('falls through to GPT-only when ANTHROPIC_API_KEY is unset', async () => {
+  it('falls through to GPT-only when neither ANTHROPIC_API_KEY nor ANTHROPIC_OAUTH_TOKEN is set', async () => {
     // The setup.ts mock already has openai disabled, so classifyFinancials
     // returns null for any input. We just verify that cross-verify doesn't
     // throw, doesn't try to reach the SDK, and returns whatever the GPT
