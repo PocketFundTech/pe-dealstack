@@ -2,7 +2,7 @@
 
 import { ErrorFallback } from "@/components/ErrorFallback";
 
-export default function AppError({
+export default function OnboardingError({
   error,
   reset,
 }: {
