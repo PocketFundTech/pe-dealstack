@@ -13,6 +13,7 @@ import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { createNotification, notifyDealTeam, resolveUserId } from './notifications.js';
 import { createDealSchema, updateDealSchema } from './deals-schemas.js';
+import { sendDealStageChangedEmail } from '../services/dealStageChangedEmail.js';
 
 const router = Router();
 
@@ -212,7 +213,8 @@ router.patch('/:id', async (req, res) => {
         *,
         company:Company(*),
         documents:Document(*),
-        activities:Activity(*)
+        activities:Activity(*),
+        assignedUser:User!assignedTo(id, name, email)
       `)
       .single();
 
@@ -240,6 +242,17 @@ router.patch('/:id', async (req, res) => {
           : `Deal "${deal.name}" was updated`;
         notifyDealTeam(deal.id, 'DEAL_UPDATE', title, undefined, internalId || undefined);
       }).catch(err => log.error('Notification error (deal update)', err));
+    }
+
+    // Email the deal owner on stage change (fire-and-forget, never blocks the response)
+    if (data.stage && data.stage !== existingDeal.stage && deal.assignedUser?.email) {
+      sendDealStageChangedEmail({
+        to: deal.assignedUser.email,
+        name: deal.assignedUser.name,
+        dealName: deal.name,
+        oldStage: existingDeal.stage,
+        newStage: data.stage,
+      }).catch(err => log.error('Deal stage-changed email error', err));
     }
 
     res.json(deal);

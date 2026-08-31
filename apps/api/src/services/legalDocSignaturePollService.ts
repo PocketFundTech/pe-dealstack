@@ -18,6 +18,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getProviderAccessToken } from '../integrations/_platform/tokenStore.js';
 import { getFileSignatureState } from '../integrations/googleDrive/watch.js';
+import { sendSignatureCompletedEmail } from './signatureCompletedEmail.js';
 
 // Don't re-poll the same Doc against Drive more than once per minute — a user
 // hammering the "check" button shouldn't fan out a Drive call per row each time.
@@ -26,8 +27,10 @@ const POLL_THROTTLE_MS = 60_000;
 interface SentDocRow {
   id: string;
   organizationId: string;
+  dealId: string | null;
   createdById: string;
   status: string;
+  title: string | null;
   googleDocId: string | null;
   metadata: unknown;
 }
@@ -60,7 +63,7 @@ export async function pollOrgSignatures(args: {
 
   const { data, error } = await supabase
     .from('LegalDocument')
-    .select('id, organizationId, createdById, status, googleDocId, metadata')
+    .select('id, organizationId, dealId, createdById, status, title, googleDocId, metadata')
     .eq('organizationId', organizationId)
     .eq('status', 'SENT');
 
@@ -157,6 +160,49 @@ export async function pollOrgSignatures(args: {
           documentId: row.id,
           googleDocId: row.googleDocId,
         });
+
+        // Notify the sender/owner that the NDA was signed. Non-fatal: the
+        // signature was already detected and persisted above, so an email
+        // failure here must never surface as a poll failure.
+        try {
+          const documentName = row.title?.trim();
+          if (!row.dealId || !documentName) {
+            log.warn('pollOrgSignatures: skipping signature email — missing deal or document name', {
+              documentId: row.id,
+              dealId: row.dealId,
+            });
+          } else {
+            const [{ data: dealRow }, { data: userRow }] = await Promise.all([
+              supabase.from('Deal').select('id, name').eq('id', row.dealId).maybeSingle(),
+              supabase.from('User').select('id, email, name').eq('id', row.createdById).maybeSingle(),
+            ]);
+
+            if (!dealRow?.name || !userRow?.email) {
+              log.warn('pollOrgSignatures: skipping signature email — unresolved deal or recipient', {
+                documentId: row.id,
+                dealId: row.dealId,
+                createdById: row.createdById,
+              });
+            } else {
+              const sent = await sendSignatureCompletedEmail({
+                to: userRow.email,
+                name: userRow.name,
+                dealName: dealRow.name,
+                documentName,
+              });
+              if (!sent) {
+                log.warn('pollOrgSignatures: signature completed email not sent', {
+                  documentId: row.id,
+                });
+              }
+            }
+          }
+        } catch (notifyErr) {
+          log.warn('pollOrgSignatures: signature completed email failed (non-fatal)', {
+            documentId: row.id,
+            message: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+          });
+        }
       } else {
         // Not signed — just persist the bumped poll timestamp.
         const { error: updateErr } = await supabase

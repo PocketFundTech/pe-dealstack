@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 /* ---------- Strength helpers (match legacy bars logic) ---------- */
@@ -97,6 +98,10 @@ export default function ResetPasswordPage() {
       setLoading(false);
       return;
     }
+
+    api.post("/account/security/password-changed", {}).catch((err) =>
+      console.warn("[security] password-changed email trigger failed:", err)
+    );
 
     setSuccess(true);
     setLoading(false);
