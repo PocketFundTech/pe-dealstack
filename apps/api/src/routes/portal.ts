@@ -12,6 +12,7 @@ import { Router } from 'express';
 import { supabase } from '../supabase.js';
 import { getSignedDownloadUrl } from '../utils/storage.js';
 import { log } from '../utils/logger.js';
+import { sendDocumentViewedEmail } from '../services/documentViewedEmail.js';
 
 const router = Router();
 
@@ -25,6 +26,7 @@ interface ShareRow {
   includeMemos: boolean;
   expiresAt: string | null;
   revokedAt: string | null;
+  createdBy: string | null;
 }
 
 /**
@@ -40,7 +42,7 @@ function extractCompanyName(company: unknown): string | null {
 async function resolveShare(token: string): Promise<{ share?: ShareRow; status?: number; error?: string }> {
   const { data: share } = await supabase
     .from('DealShare')
-    .select('id, dealId, organizationId, label, includeFinancials, includeDocuments, includeMemos, expiresAt, revokedAt')
+    .select('id, dealId, organizationId, label, includeFinancials, includeDocuments, includeMemos, expiresAt, revokedAt, createdBy')
     .eq('token', token)
     .single();
 
@@ -52,6 +54,62 @@ async function resolveShare(token: string): Promise<{ share?: ShareRow; status?:
   return { share };
 }
 
+/**
+ * Email the share's creator that their link was just viewed for the very
+ * first time. Only called once we already know this is view #1 (see
+ * recordViewAndNotify) — best-effort, every failure just logs.
+ */
+async function notifyShareCreatorOfFirstView(share: ShareRow): Promise<void> {
+  if (!share.createdBy) return;
+  try {
+    const [{ data: deal }, { data: creator }] = await Promise.all([
+      supabase.from('Deal').select('name').eq('id', share.dealId).single(),
+      supabase.from('User').select('email, name').eq('authId', share.createdBy).single(),
+    ]);
+    if (!deal?.name || !creator?.email) return;
+
+    await sendDocumentViewedEmail({
+      to: creator.email,
+      name: creator.name,
+      dealName: deal.name,
+      shareLabel: share.label,
+    });
+  } catch (error) {
+    log.warn('portal first-view email failed', { error });
+  }
+}
+
+/**
+ * Record a portal view and, only for a share's very first view, notify its
+ * creator by email. Entirely fire-and-forget from the route handler's
+ * perspective — the page response never awaits this, and every failure
+ * (count query, insert, or the email itself) just logs.
+ */
+async function recordViewAndNotify(share: ShareRow, userAgent: string | null): Promise<void> {
+  try {
+    const { count, error: countError } = await supabase
+      .from('DealShareView')
+      .select('id', { count: 'exact', head: true })
+      .eq('shareId', share.id);
+    if (countError) log.warn('portal view count failed', { error: countError });
+    const isFirstView = !countError && (count ?? 0) === 0;
+
+    const { error: insertError } = await supabase
+      .from('DealShareView')
+      .insert({ shareId: share.id, userAgent });
+    if (insertError) {
+      log.warn('portal view insert failed', { error: insertError });
+      return;
+    }
+
+    if (isFirstView) {
+      await notifyShareCreatorOfFirstView(share);
+    }
+  } catch (error) {
+    log.warn('portal view tracking failed', { error });
+  }
+}
+
 // GET /api/public/portal/:token — the shared deal payload
 router.get('/:token', async (req, res) => {
   try {
@@ -59,13 +117,10 @@ router.get('/:token', async (req, res) => {
     if (!resolved.share) return res.status(resolved.status!).json({ error: resolved.error });
     const share = resolved.share;
 
-    // Record the view (fire-and-forget — a failed insert never blocks the page)
-    void supabase
-      .from('DealShareView')
-      .insert({ shareId: share.id, userAgent: req.headers['user-agent'] ?? null })
-      .then(({ error }: { error: unknown }) => {
-        if (error) log.warn('portal view insert failed', { error });
-      });
+    // Record the view (fire-and-forget — a failed insert never blocks the page).
+    // First-ever view for this share also emails the share's creator — see
+    // recordViewAndNotify.
+    void recordViewAndNotify(share, (req.headers['user-agent'] as string | undefined) ?? null);
 
     const { data: deal } = await supabase
       .from('Deal')

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, KeyboardEvent, ClipboardEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -62,6 +63,10 @@ export default function LoginPage() {
       setLoading(false);
       return;
     }
+
+    api.post("/account/security/login-check", {}).catch((err) =>
+      console.warn("[security] login-check failed:", err)
+    );
 
     // After password auth, check if the user has a verified TOTP factor.
     const { data: factorsData } = await supabase.auth.mfa.listFactors();

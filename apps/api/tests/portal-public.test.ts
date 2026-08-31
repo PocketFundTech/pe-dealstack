@@ -33,7 +33,13 @@ function tableMock() {
       return { select: () => ({ eq: () => ({ single: async () => ({ data: shareRow, error: null }) }) }) };
     }
     if (table === 'DealShareView') {
-      return { insert: async (row: any) => { recordedViews.push(row); return { error: null }; } };
+      return {
+        // recordViewAndNotify() counts existing views for this share before
+        // inserting, to detect a first-ever view — mirror that with a live
+        // count off recordedViews so the mock stays correct as it grows.
+        select: () => ({ eq: async () => ({ count: recordedViews.length, error: null }) }),
+        insert: async (row: any) => { recordedViews.push(row); return { error: null }; },
+      };
     }
     if (table === 'Deal') {
       return {

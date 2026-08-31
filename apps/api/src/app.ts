@@ -71,6 +71,10 @@ import docRequestPortalRouter from './routes/doc-request-portal.js';
 import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import welcomeEmailRouter from './routes/welcome-email.js';
+import accountSecurityRouter from './routes/account-security.js';
+import cronWeeklyDigestRouter from './routes/cron-weekly-digest.js';
+import cronShareExpiryWarningsRouter from './routes/cron-share-expiry-warnings.js';
+import cronReengagementNudgeRouter from './routes/cron-reengagement-nudge.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
@@ -337,6 +341,15 @@ app.use('/api/public/doc-requests', docRequestPortalRouter);
 // Signup welcome email must be public — it fires right after signUp()
 // resolves, before a session necessarily exists (see routes/welcome-email.ts).
 app.use('/api/public/welcome-email', welcomeEmailRouter);
+// Account-security emails (password-changed, new-device login) — any
+// logged-in user must reach these even mid-MFA-lockout, so authMiddleware
+// only, no orgMiddleware/enforceOrgMfaMiddleware.
+app.use('/api/account/security', authMiddleware, accountSecurityRouter);
+// Cron-triggered email sweeps — CRON_SECRET-guarded inside each router,
+// same pattern as the other /api/cron/* routes.
+app.use('/api/cron/weekly-digest', cronWeeklyDigestRouter);
+app.use('/api/cron/share-expiry-warnings', cronShareExpiryWarningsRouter);
+app.use('/api/cron/reengagement-nudge', cronReengagementNudgeRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens

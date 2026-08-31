@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { createNotification } from './notifications.js';
+import { sendMentionEmail } from '../services/mentionEmail.js';
 
 const router = Router();
 
@@ -120,13 +121,15 @@ router.post('/deals/:dealId/activities', async (req, res) => {
       try {
         const { data: validUsers } = await supabase
           .from('User')
-          .select('id, email')
+          .select('id, email, name')
           .in('email', data.mentionedEmails)
           .eq('organizationId', orgId);
         const recipients = (validUsers || []).map((u) => ({
           id: u.id as string,
           email: u.email as string,
+          name: (u.name as string | null) ?? null,
         }));
+        const mentionedByName = req.user?.name?.trim() || req.user?.email || 'Someone';
         log.info('Mention scan: explicit emails', {
           dealId,
           sent: data.mentionedEmails.length,
@@ -137,19 +140,34 @@ router.post('/deals/:dealId/activities', async (req, res) => {
           const snippet = (data.description || '').slice(0, 200);
           const results = await Promise.all(
             recipients.map((r) =>
-              createNotification({
-                userId: r.id,
-                type: 'MENTION',
-                title: `You were mentioned in "${deal.name}"`,
-                message: snippet,
-                dealId,
-              }).catch((err) => {
-                log.error('Mention notification failed', err);
-                return null;
-              }),
+              Promise.all([
+                createNotification({
+                  userId: r.id,
+                  type: 'MENTION',
+                  title: `You were mentioned in "${deal.name}"`,
+                  message: snippet,
+                  dealId,
+                }).catch((err) => {
+                  log.error('Mention notification failed', err);
+                  return null;
+                }),
+                // Email alongside the in-app notification, same
+                // catch-and-log pattern — a Resend failure never
+                // removes the notification above or breaks the response.
+                sendMentionEmail({
+                  to: r.email,
+                  name: r.name,
+                  mentionedByName,
+                  dealName: deal.name,
+                  noteExcerpt: data.description || '',
+                }).catch((err) => {
+                  log.error('Mention email send failed', err);
+                  return null;
+                }),
+              ]),
             ),
           );
-          const created = results.filter((r) => r !== null).length;
+          const created = results.filter(([notif]) => notif !== null).length;
           log.info('Mention scan: notifications created', { dealId, attempted: recipients.length, created });
         }
       } catch (err) {
