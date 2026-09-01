@@ -79,7 +79,7 @@ describe('runDealChatAgentStreaming bounds', () => {
   });
 
   it('stops after the iteration cap and yields an error event', async () => {
-    nextRunnerIterations = Array.from({ length: 15 }, () => [
+    nextRunnerIterations = Array.from({ length: 30 }, () => [
       { type: 'content_block_delta', delta: { type: 'text_delta', text: 'x' } },
     ]);
     const { runDealChatAgentStreaming } = await import('../src/services/agents/dealChatAgent/index.js');
