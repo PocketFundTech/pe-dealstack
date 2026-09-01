@@ -345,8 +345,20 @@ app.use('/api/public/welcome-email', welcomeEmailRouter);
 // logged-in user must reach these even mid-MFA-lockout, so authMiddleware
 // only, no orgMiddleware/enforceOrgMfaMiddleware.
 app.use('/api/account/security', authMiddleware, accountSecurityRouter);
-// Cron-triggered email sweeps — CRON_SECRET-guarded inside each router,
-// same pattern as the other /api/cron/* routes.
+// ========================================
+// Cron Routes (CRON_SECRET bearer check inside the router — no user JWT,
+// so authMiddleware/orgMiddleware don't apply)
+// ========================================
+// ⚠️ THESE MUST STAY ABOVE THE PROTECTED-ROUTES BLOCK BELOW.
+// Several protected mounts use the bare '/api' prefix, so authMiddleware runs
+// for ANY /api/* path registered after them — including /api/cron/*. Vercel
+// calls crons with `Authorization: Bearer $CRON_SECRET`, which is not a
+// Supabase JWT, so authMiddleware 401s the request and the cron body never
+// runs. That silently killed signal-scan/doc-request-reminders/reactivation
+// in production until 2026-09-01; tests/cron-mount-order.test.ts pins this.
+app.use('/api/cron/signal-scan', cronSignalScanRouter);
+app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
+app.use('/api/cron/reactivation', cronReactivationRouter);
 app.use('/api/cron/weekly-digest', cronWeeklyDigestRouter);
 app.use('/api/cron/share-expiry-warnings', cronShareExpiryWarningsRouter);
 app.use('/api/cron/reengagement-nudge', cronReengagementNudgeRouter);
@@ -448,13 +460,8 @@ app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 // ========================================
 app.use('/api/internal', authMiddleware, internalRouter);
 
-// ========================================
-// Cron Routes (CRON_SECRET bearer check inside the router — no user JWT,
-// so authMiddleware/orgMiddleware don't apply)
-// ========================================
-app.use('/api/cron/signal-scan', cronSignalScanRouter);
-app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
-app.use('/api/cron/reactivation', cronReactivationRouter);
+// (Cron routes are mounted earlier in this file, ABOVE the protected routes —
+// see the "Cron Routes" block for why that ordering is load-bearing.)
 
 // ========================================
 // AI Routes (mixed - some protected, some public)

@@ -18,6 +18,9 @@ import cronSignalScanRouter from './routes/cron-signal-scan.js';
 import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
+import cronWeeklyDigestRouter from './routes/cron-weekly-digest.js';
+import cronShareExpiryWarningsRouter from './routes/cron-share-expiry-warnings.js';
+import cronReengagementNudgeRouter from './routes/cron-reengagement-nudge.js';
 import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
 import ndaReviewRouter from './routes/nda-review.js';
@@ -183,6 +186,27 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(requestIdMiddleware);
 
 // ========================================
+// Cron Routes (no user auth — CRON_SECRET is verified inside each router)
+// ========================================
+// ⚠️ THESE MUST STAY ABOVE THE PROTECTED-ROUTES BLOCK BELOW.
+// Several protected mounts use the bare '/api' prefix, so authMiddleware runs
+// for ANY /api/* path registered after them — including /api/cron/*. Vercel
+// calls crons with `Authorization: Bearer $CRON_SECRET`, which is not a
+// Supabase JWT, so authMiddleware 401s the request and the cron body never
+// runs. That silently killed every cron in this bundle until 2026-09-01;
+// tests/cron-mount-order.test.ts now pins the ordering.
+//
+// pickBundle (apps/web-next/src/lib/api-routing.ts) routes ALL /api/cron/*
+// to THIS bundle, so every cron must be mounted here — mounting one only in
+// app-lite.ts makes it 404/401 in production while working locally.
+app.use('/api/cron/signal-scan', cronSignalScanRouter);
+app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
+app.use('/api/cron/reactivation', cronReactivationRouter);
+app.use('/api/cron/weekly-digest', cronWeeklyDigestRouter);
+app.use('/api/cron/share-expiry-warnings', cronShareExpiryWarningsRouter);
+app.use('/api/cron/reengagement-nudge', cronReengagementNudgeRouter);
+
+// ========================================
 // Protected Routes (require authentication + org resolution)
 // ========================================
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
@@ -225,14 +249,8 @@ app.use('/api/auth', authMiddleware, authWorkspaceEmailRouter);
 // AI deal chat and analysis endpoints (require auth + org)
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, aiRouter);
 
-// Vercel nightly cron — no user auth; CRON_SECRET is verified inside the
-// router (see routes/cron-signal-scan.ts and vercel.json crons).
-app.use('/api/cron/signal-scan', cronSignalScanRouter);
-// Reminder sweep for outstanding document requests. Lands in the AI bundle
-// only because pickBundle routes ALL /api/cron/* here — it makes no LLM call.
-app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
-// Nightly dormant-deal sweep — re-scores via the scorecard engine.
-app.use('/api/cron/reactivation', cronReactivationRouter);
+// (Cron routes are mounted near the top of this file, ABOVE the protected
+// routes — see the "Cron Routes" block for why that ordering is load-bearing.)
 
 // AI status endpoint (public - no auth required)
 app.get('/api/ai/status', (_req, res) => {
