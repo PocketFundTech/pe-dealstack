@@ -3,9 +3,10 @@ import { MarketingPageShell } from "@/components/layout/MarketingPageShell";
 import { PricingTable } from "./PricingTable";
 
 export const metadata: Metadata = {
-  title: "Institutional Pricing Plans - Avise",
+  title: "Pricing - Deal Flow Software for PE Firms - Avise",
   description:
     "Flexible pricing plans for Avise. From emerging managers to global institutions, find the right plan for your private equity firm's needs.",
+  alternates: { canonical: "/pricing" },
 };
 
 type Cell = { type: "text"; value: string } | { type: "check" } | { type: "cross" };

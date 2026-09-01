@@ -10,7 +10,8 @@ import {
 export const metadata: Metadata = {
   title: "Security & Trust",
   description:
-    "How Pocket Fund protects PE deal data: encryption, tenant isolation, sub-processors, compliance roadmap.",
+    "How Avise protects PE deal data: encryption, tenant isolation, sub-processors, compliance roadmap.",
+  alternates: { canonical: "/security" },
 };
 
 const SUB_PROCESSORS: Array<{

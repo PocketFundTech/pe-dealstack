@@ -1,6 +1,14 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Logo } from "@/components/layout/Logo";
 import { LandingNavbar } from "@/components/layout/LandingNavbar";
+
+export const metadata: Metadata = {
+  title: "Deal Flow Software for Search Funds & PE Deal Teams | Avise",
+  description:
+    "AI-powered deal flow software, institutional CRM, and deal analysis for search funds, independent sponsors, and emerging PE managers. Automate CIM extraction and diligence.",
+  alternates: { canonical: "/" },
+};
 
 export default function LandingPage() {
   // The root body has overflow-hidden for the (app) shell — wrap in a

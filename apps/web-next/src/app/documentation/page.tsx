@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: "Documentation - Avise",
   description:
     "Comprehensive guides and documentation to help you set up and configure Avise for your private equity firm.",
+  alternates: { canonical: "/documentation" },
 };
 
 type FeatureGuide = {

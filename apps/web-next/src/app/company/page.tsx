@@ -6,6 +6,9 @@ export const metadata: Metadata = {
   title: "Company - Avise",
   description:
     "About Avise. Our company page is coming soon — meet the team behind the AI-powered operating system for private equity.",
+  // Same reasoning as solutions/page.tsx — placeholder copy, keep out of
+  // the index until the real page ships.
+  robots: { index: false, follow: true },
 };
 
 export default function CompanyPage() {
