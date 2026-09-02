@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type DragEvent } from "react";
 import { api, ApiError, NotFoundError } from "@/lib/api";
 import { useToast } from "@/providers/ToastProvider";
-import { cn } from "@/lib/cn";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { OutreachColumn } from "./OutreachColumn";
 import { ContactFormModal } from "./ContactFormModal";
-import { CsvImportButton } from "./CsvImportButton";
+import { OutreachToolbar } from "./OutreachToolbar";
+import { BulkActionsBar } from "./BulkActionsBar";
+import { useOutreachSelection } from "./useOutreachSelection";
 import {
   emptyContactForm,
   contactToFormValues,
@@ -61,7 +62,14 @@ export function OutreachBoard() {
   // bulk-import duplicate-detection concern, not reply-intent review.
   const [confirmingMatchReviewId, setConfirmingMatchReviewId] = useState<string | null>(null);
 
+  // Stage id currently being dragged over, if any — drives the dashed-border
+  // highlight on OutreachColumn. Same pattern as deals-page-kanban-view.tsx.
+  const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
+
   const orderedStages = sortStagesByPosition(stages);
+
+  const { selectedIds, bulkMoving, toggleSelect, toggleSelectAllInStage, clearSelection, bulkMove } =
+    useOutreachSelection(contacts, setContacts);
 
   // ─── Load ───────────────────────────────────────────────────────────────
 
@@ -168,6 +176,18 @@ export function OutreachBoard() {
       const message = err instanceof ApiError ? err.message : "Failed to move contact";
       showToast(message, "error");
     }
+  }
+
+  // Drag-and-drop is just a gesture for triggering the same move — no
+  // separate mutation logic, reuses handleMove's optimistic update/rollback.
+  function handleDrop(e: DragEvent<HTMLDivElement>, stageId: string) {
+    e.preventDefault();
+    setDragOverStageId(null);
+    const contactId = e.dataTransfer.getData("text/plain");
+    if (!contactId) return;
+    const contact = contacts.find((c) => c.id === contactId);
+    if (!contact || contact.stageId === stageId) return;
+    handleMove(contactId, stageId);
   }
 
   // ─── Delete ─────────────────────────────────────────────────────────────
@@ -352,43 +372,23 @@ export function OutreachBoard() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-text-muted">
-          {contacts.length} contact{contacts.length !== 1 ? "s" : ""} across {orderedStages.length} stage
-          {orderedStages.length !== 1 ? "s" : ""}
-        </p>
-        <div className="flex items-center gap-2">
-          <CsvImportButton
-            label="Import from Private Circle"
-            endpoint="/outreach/import/private-circle"
-            onImported={loadBoard}
-          />
-          <CsvImportButton label="Import from Clay CSV" endpoint="/outreach/import/clay-csv" onImported={loadBoard} />
-          <button
-            type="button"
-            onClick={handleSyncReplies}
-            disabled={syncingReplies}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border-subtle bg-surface-card text-text-secondary shadow-sm hover:bg-primary-light hover:text-[#003366] hover:border-primary/30 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span
-              className={cn("material-symbols-outlined text-[18px]", syncingReplies && "animate-spin")}
-            >
-              {syncingReplies ? "progress_activity" : "sync"}
-            </span>
-            {syncingReplies ? "Syncing..." : "Sync Replies"}
-          </button>
-          <button
-            type="button"
-            disabled={orderedStages.length === 0}
-            onClick={() => openCreate(orderedStages[0]?.id ?? "")}
-            className="flex items-center gap-2 px-4 py-2 text-white rounded-lg shadow-sm hover:bg-[#002855] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ backgroundColor: "#003366" }}
-          >
-            <span className="material-symbols-outlined text-[18px]">person_add</span>
-            Add Contact
-          </button>
-        </div>
-      </div>
+      <OutreachToolbar
+        contactCount={contacts.length}
+        stageCount={orderedStages.length}
+        onImported={loadBoard}
+        syncingReplies={syncingReplies}
+        onSyncReplies={handleSyncReplies}
+        canAddContact={orderedStages.length > 0}
+        onAddContact={() => openCreate(orderedStages[0]?.id ?? "")}
+      />
+
+      <BulkActionsBar
+        count={selectedIds.size}
+        stages={orderedStages}
+        moving={bulkMoving}
+        onMove={bulkMove}
+        onClear={clearSelection}
+      />
 
       {orderedStages.length === 0 ? (
         <div className="rounded-lg border border-border-subtle bg-surface-card p-8 text-center">
@@ -409,6 +409,13 @@ export function OutreachBoard() {
                 onMoveContact={handleMove}
                 onEnrichContact={handleEnrich}
                 enrichingContactId={enrichingId}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+                onToggleSelectAll={toggleSelectAllInStage}
+                dragOverStageId={dragOverStageId}
+                onDragOverStage={setDragOverStageId}
+                onDragLeaveStage={() => setDragOverStageId(null)}
+                onDropOnStage={handleDrop}
               />
               {index < orderedStages.length - 1 && (
                 <div className="flex items-center justify-center w-6 shrink-0 text-text-muted/60" aria-hidden="true">

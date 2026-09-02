@@ -12,9 +12,16 @@ import {
 } from "./types";
 
 // ---------------------------------------------------------------------------
-// Outreach Kanban Card — click opens the detail/edit modal; the overflow
-// menu offers a reliable "Move to..." action instead of drag-and-drop, plus
-// a one-click "Enrich" quick action so it doesn't require opening the modal.
+// Outreach Kanban Card — click opens the detail/edit modal. Three ways to
+// move a contact to another stage, each suited to a different scale:
+//   - Drag-and-drop (this card, same pattern as the Deals kanban) — one
+//     contact, the familiar Kanban gesture.
+//   - The overflow menu's "Move to..." — one contact, no drag required
+//     (keyboard/trackpad-friendly fallback).
+//   - Bulk select + BulkActionsBar (OutreachBoard.tsx) — tens/hundreds of
+//     contacts at once, e.g. an entire fresh CSV import sitting in Source.
+// Also has a one-click "Enrich" quick action so it doesn't require opening
+// the modal.
 // ---------------------------------------------------------------------------
 export function OutreachCard({
   contact,
@@ -23,6 +30,8 @@ export function OutreachCard({
   onMove,
   onEnrich,
   enriching,
+  selected,
+  onToggleSelect,
 }: {
   contact: OutreachContact;
   /** Every stage except this card's current one, ordered by position. */
@@ -32,6 +41,9 @@ export function OutreachCard({
   onEnrich: (contactId: string) => void;
   /** True while this contact's enrichment call is in flight. */
   enriching: boolean;
+  /** For bulk "Move to stage" — see useOutreachSelection.ts. */
+  selected: boolean;
+  onToggleSelect: (contactId: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -49,13 +61,33 @@ export function OutreachCard({
 
   return (
     <div
-      className="group relative bg-surface-card rounded-lg border border-border-subtle p-3 shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer"
+      className={cn(
+        "group relative bg-surface-card rounded-lg border p-3 shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-grab active:cursor-grabbing",
+        selected ? "border-primary ring-1 ring-primary/40 bg-primary-light/40" : "border-border-subtle",
+      )}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", contact.id);
+        e.currentTarget.style.opacity = "0.5";
+      }}
+      onDragEnd={(e) => {
+        e.currentTarget.style.opacity = "1";
+      }}
       onClick={() => onOpen(contact)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === "Enter") onOpen(contact); }}
     >
       <div className="flex items-start gap-2 mb-2">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(contact.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-1.5 size-3.5 shrink-0 rounded border-border-subtle accent-[#003366] cursor-pointer"
+          aria-label={`Select ${contact.name}`}
+        />
         <div className="size-8 rounded-md bg-primary-light border border-primary/10 flex items-center justify-center text-[#003366] shrink-0 text-[11px] font-bold">
           {getInitials(contact.name)}
         </div>
@@ -63,7 +95,9 @@ export function OutreachCard({
           <h4 className="text-sm font-semibold text-text-main truncate" title={contact.name}>
             {contact.name}
           </h4>
-          <p className="text-[11px] text-text-muted truncate">{contact.company || "—"}</p>
+          <p className="text-[11px] text-text-muted truncate" title={contact.company || undefined}>
+            {contact.company || "—"}
+          </p>
         </div>
         <div className="relative shrink-0" ref={menuRef}>
           <button
