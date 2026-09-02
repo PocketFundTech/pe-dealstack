@@ -337,6 +337,31 @@ body {
   100% { background-position: 400px 0; }
 }
 
+/* Indeterminate progress bar — for actions with no known duration/percent
+   (e.g. CsvImportButton's bulk import: one request/response, no per-row
+   progress signal to poll). A sliding segment rather than a fill-to-100%
+   bar, since we can't say how far along it is, only that it's running. */
+@keyframes importBarIndeterminate {
+  0%   { left: -35%; width: 35%; }
+  60%  { left: 100%; width: 45%; }
+  100% { left: 100%; width: 45%; }
+}
+.import-progress-track {
+  position: relative;
+  height: 3px;
+  border-radius: 999px;
+  background: #E5E7EB;
+  overflow: hidden;
+}
+.import-progress-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: #003366;
+  animation: importBarIndeterminate 1.1s ease-in-out infinite;
+}
+
 /* Base skeleton element — apply to any div/span */
 .skeleton {
   background: linear-gradient(

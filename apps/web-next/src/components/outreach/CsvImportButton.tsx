@@ -105,7 +105,7 @@ export function CsvImportButton({ label, endpoint, onImported }: CsvImportButton
   }
 
   return (
-    <>
+    <div className="flex flex-col gap-1">
       <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" hidden onChange={handleFileChange} />
       <button
         type="button"
@@ -118,6 +118,13 @@ export function CsvImportButton({ label, endpoint, onImported }: CsvImportButton
         </span>
         {importing ? `Importing... ${elapsedSeconds}s` : label}
       </button>
-    </>
+      {/* Indeterminate — no per-row progress signal exists to compute a real
+          percentage from, just a visible "this is still running" cue. */}
+      {importing && (
+        <div className="import-progress-track" aria-hidden="true">
+          <div className="import-progress-fill" />
+        </div>
+      )}
+    </div>
   );
 }
