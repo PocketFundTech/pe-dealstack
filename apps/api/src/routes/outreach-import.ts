@@ -113,12 +113,41 @@ async function runFileImportRoute(
 
     // Auto-enrichment pass — only clean creates (never updates, never
     // flagged-for-review rows a human still has to resolve first), and only
-    // when the imported row had no email. Awaited (not fire-and-forget):
-    // there's no job-status UI to check back on later, and
-    // enrichAndPersistOutreachContact already has its own internal
-    // per-provider timeouts, so this can't hang indefinitely.
+    // when the imported row had no email.
+    //
+    // Capped at MAX_AUTO_ENRICH_PER_IMPORT and awaited in-request (not
+    // fire-and-forget — there's no job-status UI to check back on later).
+    // The original version of this loop ran uncapped, awaiting every
+    // email-less create one at a time; each contact makes up to 3 sequential
+    // provider calls (Apollo/Anymail/Clay, 10-20s timeout each), so a real
+    // Private Circle/Clay export — hundreds of rows, ALL missing email,
+    // since neither source exports contact-level data — turned into
+    // minutes of sequential provider calls and blew a real 504 on Vercel
+    // (confirmed against actual deployment logs, not theoretical: 228-row
+    // Private Circle import, batch itself completed in ~15s, then hung on
+    // this loop until the function timed out). A per-provider timeout only
+    // bounds ONE contact's worst case, not the cumulative loop.
+    //
+    // Small manual CSVs (the case this was originally built for — a human
+    // pasting a short curated list) still get the nice auto-enrich UX under
+    // the cap. Anything past it is left un-enriched but not un-created —
+    // every contact still has the one-click "Enrich" button on its card
+    // (OutreachCard.tsx), so nothing is lost, just no longer automatic for
+    // bulk imports at real-world scale.
+    const MAX_AUTO_ENRICH_PER_IMPORT = 10;
+    const toEnrich = importResult.createdContactIdsMissingEmail.slice(0, MAX_AUTO_ENRICH_PER_IMPORT);
+    const skippedCount = importResult.createdContactIdsMissingEmail.length - toEnrich.length;
+    if (skippedCount > 0) {
+      log.warn(`${sourceLabel} import: auto-enrichment capped, rest left for manual Enrich`, {
+        orgId,
+        eligible: importResult.createdContactIdsMissingEmail.length,
+        autoEnriched: toEnrich.length,
+        skipped: skippedCount,
+      });
+    }
+
     let enriched = 0;
-    for (const contactId of importResult.createdContactIdsMissingEmail) {
+    for (const contactId of toEnrich) {
       try {
         const result = await enrichAndPersistOutreachContact(orgId, contactId);
         if (result.attempted && result.emailFilled) enriched++;

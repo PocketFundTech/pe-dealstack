@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { useToast } from "@/providers/ToastProvider";
 import { cn } from "@/lib/cn";
@@ -55,7 +55,21 @@ function buildImportSummary(result: CsvImportResult): { message: string; isWarni
 export function CsvImportButton({ label, endpoint, onImported }: CsvImportButtonProps) {
   const { showToast } = useToast();
   const [importing, setImporting] = useState(false);
+  // Real Private Circle/Clay exports run a couple hundred rows through a
+  // Claude cleaning pass plus a DB write per row — tens of seconds, not
+  // instant. The spinner alone gave no sense of whether it was still
+  // working or stuck, so this counts up while a request is in flight.
+  // Not a real progress bar (there's no per-row progress signal to poll —
+  // it's one request/response, no job-status endpoint) — just proof of life.
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!importing) return;
+    setElapsedSeconds(0);
+    const interval = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
+    return () => clearInterval(interval);
+  }, [importing]);
 
   function handleClick() {
     if (!importing) inputRef.current?.click();
@@ -102,7 +116,7 @@ export function CsvImportButton({ label, endpoint, onImported }: CsvImportButton
         <span className={cn("material-symbols-outlined text-[18px]", importing && "animate-spin")}>
           {importing ? "progress_activity" : "upload_file"}
         </span>
-        {importing ? "Importing..." : label}
+        {importing ? `Importing... ${elapsedSeconds}s` : label}
       </button>
     </>
   );
