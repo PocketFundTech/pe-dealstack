@@ -11,7 +11,6 @@
 // column-header map and sourceProvider/touchChannel — same pattern used to
 // generalize outreachClayImport.ts into outreachContactImport.ts.
 
-import { parseCSV } from './dealImportMapper.js';
 import { log } from '../utils/logger.js';
 import { isImportCleanerEnabled, cleanImportRows, type RawImportNameFields } from './outreachImportCleaner.js';
 import { processContactImportBatch, type ContactImportResult, type ContactImportRow } from './outreachContactImport.js';
@@ -83,15 +82,23 @@ export function mapCsvRow(raw: Record<string, string>, headerLookup: Map<string,
 }
 
 /**
- * Full pipeline for one uploaded CSV: parse -> map columns -> clean via
- * Claude (soft-fails to deterministic-only if Claude isn't configured) ->
- * run through the shared de-dupe/import engine. Never throws — CSV parse
- * failures are the one exception, since an unparsable file has nothing safe
- * to fall back to; the caller's route handles that.
+ * Full pipeline for one uploaded file's already-parsed rows: map columns ->
+ * clean via Claude (soft-fails to deterministic-only if Claude isn't
+ * configured) -> run through the shared de-dupe/import engine.
+ *
+ * Takes pre-parsed rows rather than raw file bytes/text on purpose — CSV and
+ * Excel need different parsers (parseCSV vs. parseExcel, from
+ * dealImportMapper.ts) but converge on the same Record<string,string>[] row
+ * shape, so the caller (routes/outreach-import.ts) picks the right parser
+ * based on the uploaded file's type and this module stays format-agnostic.
+ * Never throws.
  */
-export async function importContactsCsv(orgId: string, csvText: string, options: CsvImportOptions): Promise<CsvImportResult> {
+export async function importContactsCsv(
+  orgId: string,
+  parsedRows: Record<string, string>[],
+  options: CsvImportOptions,
+): Promise<CsvImportResult> {
   const headerLookup = buildHeaderLookup(options.columnMap);
-  const parsedRows = parseCSV(csvText);
 
   const mappedRows: Record<string, string>[] = [];
   let unmappable = 0;

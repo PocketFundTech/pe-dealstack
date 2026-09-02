@@ -1,26 +1,33 @@
 // ─── POST /outreach/import/private-circle, /outreach/import/clay-csv ─────
-// CSV imports — Private Circle (no API, ~100-200 row export cap) and Clay
+// File imports — Private Circle (no API, ~100-200 row export cap) and Clay
 // (real-time webhook push is gated behind a paid plan upgrade, confirmed in
-// Clay's own UI — CSV export is the workaround, available on every plan).
+// Clay's own UI — export is the workaround, available on every plan).
+// Accepts CSV or Excel (.xlsx/.xls) — real exports from both tools have
+// turned out to be Excel files in practice, not CSV, so both are supported
+// via dealImportMapper.ts's parseCSV/parseExcel (same parsers deal-import.ts
+// already uses), converging on the same Record<string,string>[] row shape
+// before either hits the shared engine.
 //
 // Mounted in the same requireCiceroCapital-gated router chain as
 // outreach.ts/outreach-replyio.ts (authenticated — a human uploads a file
 // they exported themselves, unlike the Clay *webhook* path in
 // outreach-clay-import-webhook.ts, which is unauthenticated since Clay
-// calls it directly).  Multer pattern matches routes/deal-import.ts exactly
-// (memory storage, 5MB cap, CSV/Excel mime filter).
+// calls it directly). Multer pattern matches routes/deal-import.ts exactly
+// (memory storage, 5MB cap).
 //
 // Orchestration for each source lives in services/outreachPrivateCircleImport.ts
 // / services/outreachClayCsvImport.ts, both thin wrappers over the shared
 // services/outreachCsvImport.ts engine. This route's job is the multipart
-// handling, the shared post-import auto-enrichment trigger, and response
-// shaping — factored into runCsvImportRoute() below so the two endpoints
-// don't duplicate it.
+// handling, picking the right parser for the uploaded file's type, the
+// shared post-import auto-enrichment trigger, and response shaping —
+// factored into runFileImportRoute() below so the two endpoints don't
+// duplicate it.
 
 import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
+import { parseCSV, parseExcel } from '../services/dealImportMapper.js';
 import { importPrivateCircleCsv } from '../services/outreachPrivateCircleImport.js';
 import { importClayCsv } from '../services/outreachClayCsvImport.js';
 import { enrichAndPersistOutreachContact } from '../services/outreachEnrichment.js';
@@ -28,40 +35,70 @@ import type { CsvImportResult } from '../services/outreachCsvImport.js';
 
 const router = Router();
 
+const EXCEL_MIMETYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.ms-excel', // legacy .xls
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['text/csv', 'application/vnd.ms-excel'];
-    if (allowed.includes(file.mimetype) || file.originalname.toLowerCase().endsWith('.csv')) {
+    const name = file.originalname.toLowerCase();
+    const isCsv = file.mimetype === 'text/csv' || name.endsWith('.csv');
+    const isExcel = EXCEL_MIMETYPES.has(file.mimetype) || name.endsWith('.xlsx') || name.endsWith('.xls');
+    if (isCsv || isExcel) {
       cb(null, true);
     } else {
-      cb(new Error('Only CSV files are supported for this import'));
+      cb(new Error('Only CSV or Excel (.xlsx/.xls) files are supported for this import'));
     }
   },
 });
 
+/** Parses an uploaded file's buffer into rows, picking CSV or Excel based on filename/mimetype. */
+function parseUploadedFile(file: Express.Multer.File): { rows: Record<string, string>[]; warnings: string[] } {
+  const name = file.originalname.toLowerCase();
+  const isExcel = EXCEL_MIMETYPES.has(file.mimetype) || name.endsWith('.xlsx') || name.endsWith('.xls');
+  if (isExcel) {
+    return parseExcel(file.buffer);
+  }
+  return { rows: parseCSV(file.buffer.toString('utf-8')), warnings: [] };
+}
+
 /**
- * Shared body for both CSV import endpoints: run the source-specific
- * importer, auto-enrich clean creates missing an email, log, and shape the
- * response. Only the importer function and log label differ per source.
+ * Shared body for both file import endpoints: parse (CSV or Excel), run the
+ * source-specific importer, auto-enrich clean creates missing an email, log,
+ * and shape the response. Only the importer function and log label differ
+ * per source.
  */
-async function runCsvImportRoute(
+async function runFileImportRoute(
   req: Request,
   res: Response,
   sourceLabel: string,
-  runImport: (orgId: string, csvText: string) => Promise<CsvImportResult>,
+  runImport: (orgId: string, rows: Record<string, string>[]) => Promise<CsvImportResult>,
 ): Promise<void> {
   try {
     if (!req.file) {
-      res.status(400).json({ error: 'No file uploaded — attach a CSV as "file"' });
+      res.status(400).json({ error: 'No file uploaded — attach a CSV or Excel file as "file"' });
       return;
     }
 
     const orgId = getOrgId(req);
-    const csvText = req.file.buffer.toString('utf-8');
 
-    const importResult = await runImport(orgId, csvText);
+    let rows: Record<string, string>[];
+    try {
+      const parsed = parseUploadedFile(req.file);
+      rows = parsed.rows;
+      if (parsed.warnings.length > 0) {
+        log.warn(`${sourceLabel} import: parser warnings`, { warnings: parsed.warnings });
+      }
+    } catch (parseErr) {
+      log.error(`${sourceLabel} import: failed to parse uploaded file`, parseErr);
+      res.status(400).json({ error: parseErr instanceof Error ? parseErr.message : 'Could not read that file' });
+      return;
+    }
+
+    const importResult = await runImport(orgId, rows);
 
     // Auto-enrichment pass — only clean creates (never updates, never
     // flagged-for-review rows a human still has to resolve first), and only
@@ -83,7 +120,7 @@ async function runCsvImportRoute(
       }
     }
 
-    log.info(`${sourceLabel} CSV import complete`, {
+    log.info(`${sourceLabel} import complete`, {
       orgId,
       received: importResult.received,
       created: importResult.created,
@@ -101,18 +138,18 @@ async function runCsvImportRoute(
       enriched,
     });
   } catch (error) {
-    log.error(`${sourceLabel} CSV import error`, error);
-    const message = error instanceof Error ? error.message : `Failed to import ${sourceLabel} CSV`;
+    log.error(`${sourceLabel} import error`, error);
+    const message = error instanceof Error ? error.message : `Failed to import ${sourceLabel} file`;
     res.status(500).json({ error: message });
   }
 }
 
 router.post('/import/private-circle', upload.single('file'), (req, res) =>
-  runCsvImportRoute(req, res, 'Private Circle', importPrivateCircleCsv),
+  runFileImportRoute(req, res, 'Private Circle', importPrivateCircleCsv),
 );
 
 router.post('/import/clay-csv', upload.single('file'), (req, res) =>
-  runCsvImportRoute(req, res, 'Clay', importClayCsv),
+  runFileImportRoute(req, res, 'Clay', importClayCsv),
 );
 
 export default router;

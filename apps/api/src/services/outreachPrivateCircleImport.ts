@@ -62,8 +62,8 @@ const PRIVATE_CIRCLE_COLUMN_MAP: CsvColumnMap = {
   sourceUrl: ['Profile URL', 'Source URL', 'Private Circle URL', 'Record URL'],
 };
 
-export async function importPrivateCircleCsv(orgId: string, csvText: string): Promise<CsvImportResult> {
-  return importContactsCsv(orgId, csvText, {
+export async function importPrivateCircleCsv(orgId: string, rows: Record<string, string>[]): Promise<CsvImportResult> {
+  return importContactsCsv(orgId, rows, {
     sourceProvider: 'private_circle',
     touchChannel: 'private_circle_import',
     columnMap: PRIVATE_CIRCLE_COLUMN_MAP,

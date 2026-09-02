@@ -55,8 +55,8 @@ const CLAY_CSV_COLUMN_MAP: CsvColumnMap = {
   sourceUrl: ['Source', 'Source URL', 'Record URL', 'Clay Row URL'],
 };
 
-export async function importClayCsv(orgId: string, csvText: string): Promise<CsvImportResult> {
-  return importContactsCsv(orgId, csvText, {
+export async function importClayCsv(orgId: string, rows: Record<string, string>[]): Promise<CsvImportResult> {
+  return importContactsCsv(orgId, rows, {
     sourceProvider: 'clay',
     touchChannel: 'clay_import',
     columnMap: CLAY_CSV_COLUMN_MAP,

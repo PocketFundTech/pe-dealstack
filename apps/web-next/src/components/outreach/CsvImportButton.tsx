@@ -77,7 +77,7 @@ export function CsvImportButton({ label, endpoint, onImported }: CsvImportButton
 
   return (
     <>
-      <input ref={inputRef} type="file" accept=".csv" hidden onChange={handleFileChange} />
+      <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" hidden onChange={handleFileChange} />
       <button
         type="button"
         onClick={handleClick}
