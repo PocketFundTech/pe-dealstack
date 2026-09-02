@@ -134,20 +134,25 @@ async function runFileImportRoute(
     // every contact still has the one-click "Enrich" button on its card
     // (OutreachCard.tsx), so nothing is lost, just no longer automatic for
     // bulk imports at real-world scale.
+    //
+    // A fixed count cap alone still isn't a safe bound: worst case is count
+    // x ~20s (Anymail Finder's own timeout), and even 10 contacts gets
+    // uncomfortably close to the function's time budget once you add the
+    // Claude cleaning pass + per-row writes ahead of it. A wall-clock
+    // budget is the actual safety mechanism — it guarantees this phase
+    // can't dominate the request regardless of file size or how slow the
+    // providers are that day; the count cap just keeps small imports from
+    // firing needless waves of provider calls when a handful is plenty.
     const MAX_AUTO_ENRICH_PER_IMPORT = 10;
-    const toEnrich = importResult.createdContactIdsMissingEmail.slice(0, MAX_AUTO_ENRICH_PER_IMPORT);
-    const skippedCount = importResult.createdContactIdsMissingEmail.length - toEnrich.length;
-    if (skippedCount > 0) {
-      log.warn(`${sourceLabel} import: auto-enrichment capped, rest left for manual Enrich`, {
-        orgId,
-        eligible: importResult.createdContactIdsMissingEmail.length,
-        autoEnriched: toEnrich.length,
-        skipped: skippedCount,
-      });
-    }
+    const AUTO_ENRICH_TIME_BUDGET_MS = 45_000;
+    const enrichStartedAt = Date.now();
 
     let enriched = 0;
-    for (const contactId of toEnrich) {
+    let attempted = 0;
+    for (const contactId of importResult.createdContactIdsMissingEmail) {
+      if (attempted >= MAX_AUTO_ENRICH_PER_IMPORT) break;
+      if (Date.now() - enrichStartedAt > AUTO_ENRICH_TIME_BUDGET_MS) break;
+      attempted++;
       try {
         const result = await enrichAndPersistOutreachContact(orgId, contactId);
         if (result.attempted && result.emailFilled) enriched++;
@@ -158,6 +163,17 @@ async function runFileImportRoute(
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+
+    const skippedCount = importResult.createdContactIdsMissingEmail.length - attempted;
+    if (skippedCount > 0) {
+      log.warn(`${sourceLabel} import: auto-enrichment stopped early, rest left for manual Enrich`, {
+        orgId,
+        eligible: importResult.createdContactIdsMissingEmail.length,
+        autoEnriched: attempted,
+        skipped: skippedCount,
+        elapsedMs: Date.now() - enrichStartedAt,
+      });
     }
 
     log.info(`${sourceLabel} import complete`, {
