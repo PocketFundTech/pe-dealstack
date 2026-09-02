@@ -142,9 +142,12 @@ export type SyncRepliesResult = SyncRepliesSummary | SyncRepliesNotRunResult;
 
 /** `POST /outreach/import/private-circle` response — a bulk CSV import, not
  *  a single-contact mutation. `received` is the row count parsed from the
- *  CSV; `created`/`updated` are how those rows were reconciled against
+ *  file; `created`/`updated` are how those rows were reconciled against
  *  existing contacts; `flaggedForReview` is how many tripped the
- *  duplicate-detection heuristic (`needsMatchReview`); `enriched` is how
+ *  duplicate-detection heuristic (`needsMatchReview`); `unmappable` is how
+ *  many rows had no resolvable company-name column at all (dropped before
+ *  de-dupe — a nonzero value here almost always means the column-header
+ *  mapping doesn't match this export's actual headers); `enriched` is how
  *  many got enrichment data attached during the same pass. Shared by both
  *  the Private Circle and Clay CSV import endpoints — same shape either
  *  way, per services/outreachCsvImport.ts's shared engine server-side. */
@@ -153,6 +156,7 @@ export interface CsvImportResult {
   created: number;
   updated: number;
   flaggedForReview: number;
+  unmappable: number;
   enriched: number;
 }
 

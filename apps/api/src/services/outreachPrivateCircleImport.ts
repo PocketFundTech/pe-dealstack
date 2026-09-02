@@ -48,8 +48,16 @@ import { importContactsCsv, type CsvColumnMap, type CsvImportResult } from './ou
 
 export type { CsvImportResult as PrivateCircleImportResult } from './outreachCsvImport.js';
 
-const PRIVATE_CIRCLE_COLUMN_MAP: CsvColumnMap = {
-  companyName: ['Company Name', 'Company', 'Organisation Name', 'Organization Name'],
+// Verified against a real Private Circle export (Sep 2026): headers are
+// `Name, CIN, Trade Name, Website, Location, State, Incorporation Date,
+// Industry, Sector, Sub Sector, Keywords, Listing Status, Source of
+// Financials, Filing Type, FY, Revenue (₹ mn), EBITDA (₹ mn), PAT (₹ mn)` —
+// notably NO contact-level columns at all (no name/email/phone/title) —
+// Private Circle exports company data only, matching the source deck: Anymail/
+// Apollo fill in decision-maker contacts downstream, not Private Circle
+// itself. 'Name' (bare) is the real company-name column, not "Company Name".
+export const PRIVATE_CIRCLE_COLUMN_MAP: CsvColumnMap = {
+  companyName: ['Name', 'Company Name', 'Company', 'Organisation Name', 'Organization Name'],
   cin: ['CIN', 'Corporate Identification Number'],
   contactName: ['Decision Maker', 'Decision Maker Name', 'Contact Name', 'Contact Person', 'Key Contact', 'Point Of Contact'],
   title: ['Designation', 'Title', 'Role', 'Job Title'],
@@ -59,7 +67,7 @@ const PRIVATE_CIRCLE_COLUMN_MAP: CsvColumnMap = {
   location: ['Location', 'City', 'Address', 'HQ Location'],
   employeeSize: ['Employee Count', 'Company Size', 'Employees', 'Headcount'],
   industry: ['Industry', 'Sector'],
-  sourceUrl: ['Profile URL', 'Source URL', 'Private Circle URL', 'Record URL'],
+  sourceUrl: ['Website', 'Profile URL', 'Source URL', 'Private Circle URL', 'Record URL'],
 };
 
 export async function importPrivateCircleCsv(orgId: string, rows: Record<string, string>[]): Promise<CsvImportResult> {

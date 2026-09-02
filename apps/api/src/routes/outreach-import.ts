@@ -3,10 +3,17 @@
 // (real-time webhook push is gated behind a paid plan upgrade, confirmed in
 // Clay's own UI — export is the workaround, available on every plan).
 // Accepts CSV or Excel (.xlsx/.xls) — real exports from both tools have
-// turned out to be Excel files in practice, not CSV, so both are supported
-// via dealImportMapper.ts's parseCSV/parseExcel (same parsers deal-import.ts
-// already uses), converging on the same Record<string,string>[] row shape
-// before either hits the shared engine.
+// turned out to be Excel files in practice, not CSV.
+//
+// Excel parsing uses outreachCsvImport.ts's parseExcelWithHeaderDetection,
+// NOT dealImportMapper.ts's parseExcel — confirmed against a real Private
+// Circle export that opens with a title row and a blank spacer row before
+// the real headers on row 4, which a fixed "row 1 is headers" assumption
+// (parseExcel's behavior, fine for its other callers) silently turns into
+// "zero rows have a resolvable company name." Detection needs the target
+// columnMap to know what a real header looks like, so it's passed in per
+// source. CSV still goes through the plain parseCSV — real exports seen so
+// far are all Excel, so this hasn't needed the same treatment.
 //
 // Mounted in the same requireCiceroCapital-gated router chain as
 // outreach.ts/outreach-replyio.ts (authenticated — a human uploads a file
@@ -18,8 +25,8 @@
 // Orchestration for each source lives in services/outreachPrivateCircleImport.ts
 // / services/outreachClayCsvImport.ts, both thin wrappers over the shared
 // services/outreachCsvImport.ts engine. This route's job is the multipart
-// handling, picking the right parser for the uploaded file's type, the
-// shared post-import auto-enrichment trigger, and response shaping —
+// handling, picking + running the right parser for the uploaded file's type,
+// the shared post-import auto-enrichment trigger, and response shaping —
 // factored into runFileImportRoute() below so the two endpoints don't
 // duplicate it.
 
@@ -27,11 +34,11 @@ import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
-import { parseCSV, parseExcel } from '../services/dealImportMapper.js';
-import { importPrivateCircleCsv } from '../services/outreachPrivateCircleImport.js';
-import { importClayCsv } from '../services/outreachClayCsvImport.js';
+import { parseCSV } from '../services/dealImportMapper.js';
+import { importPrivateCircleCsv, PRIVATE_CIRCLE_COLUMN_MAP } from '../services/outreachPrivateCircleImport.js';
+import { importClayCsv, CLAY_CSV_COLUMN_MAP } from '../services/outreachClayCsvImport.js';
 import { enrichAndPersistOutreachContact } from '../services/outreachEnrichment.js';
-import type { CsvImportResult } from '../services/outreachCsvImport.js';
+import { parseExcelWithHeaderDetection, type CsvColumnMap, type CsvImportResult } from '../services/outreachCsvImport.js';
 
 const router = Router();
 
@@ -55,12 +62,15 @@ const upload = multer({
   },
 });
 
-/** Parses an uploaded file's buffer into rows, picking CSV or Excel based on filename/mimetype. */
-function parseUploadedFile(file: Express.Multer.File): { rows: Record<string, string>[]; warnings: string[] } {
+/** Parses an uploaded file's buffer into rows, picking CSV or (header-detecting) Excel based on filename/mimetype. */
+function parseUploadedFile(
+  file: Express.Multer.File,
+  columnMap: CsvColumnMap,
+): { rows: Record<string, string>[]; warnings: string[] } {
   const name = file.originalname.toLowerCase();
   const isExcel = EXCEL_MIMETYPES.has(file.mimetype) || name.endsWith('.xlsx') || name.endsWith('.xls');
   if (isExcel) {
-    return parseExcel(file.buffer);
+    return parseExcelWithHeaderDetection(file.buffer, columnMap);
   }
   return { rows: parseCSV(file.buffer.toString('utf-8')), warnings: [] };
 }
@@ -68,13 +78,14 @@ function parseUploadedFile(file: Express.Multer.File): { rows: Record<string, st
 /**
  * Shared body for both file import endpoints: parse (CSV or Excel), run the
  * source-specific importer, auto-enrich clean creates missing an email, log,
- * and shape the response. Only the importer function and log label differ
- * per source.
+ * and shape the response. Only the importer function, column map, and log
+ * label differ per source.
  */
 async function runFileImportRoute(
   req: Request,
   res: Response,
   sourceLabel: string,
+  columnMap: CsvColumnMap,
   runImport: (orgId: string, rows: Record<string, string>[]) => Promise<CsvImportResult>,
 ): Promise<void> {
   try {
@@ -87,7 +98,7 @@ async function runFileImportRoute(
 
     let rows: Record<string, string>[];
     try {
-      const parsed = parseUploadedFile(req.file);
+      const parsed = parseUploadedFile(req.file, columnMap);
       rows = parsed.rows;
       if (parsed.warnings.length > 0) {
         log.warn(`${sourceLabel} import: parser warnings`, { warnings: parsed.warnings });
@@ -135,6 +146,7 @@ async function runFileImportRoute(
       created: importResult.created,
       updated: importResult.updated,
       flaggedForReview: importResult.flaggedForReview,
+      unmappable: importResult.unmappable,
       enriched,
     });
   } catch (error) {
@@ -145,11 +157,11 @@ async function runFileImportRoute(
 }
 
 router.post('/import/private-circle', upload.single('file'), (req, res) =>
-  runFileImportRoute(req, res, 'Private Circle', importPrivateCircleCsv),
+  runFileImportRoute(req, res, 'Private Circle', PRIVATE_CIRCLE_COLUMN_MAP, importPrivateCircleCsv),
 );
 
 router.post('/import/clay-csv', upload.single('file'), (req, res) =>
-  runFileImportRoute(req, res, 'Clay', importClayCsv),
+  runFileImportRoute(req, res, 'Clay', CLAY_CSV_COLUMN_MAP, importClayCsv),
 );
 
 export default router;

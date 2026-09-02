@@ -25,17 +25,31 @@ interface CsvImportButtonProps {
   onImported: () => void | Promise<void>;
 }
 
-function buildImportSummary(result: CsvImportResult): string {
-  const { received, created, updated, flaggedForReview, enriched } = result;
+/** Returns the toast text plus whether it should read as a warning rather
+ *  than a success — specifically when every row failed to map to a company
+ *  name, which almost always means the file's column headers don't match
+ *  what this import expects (wrong export, or a header naming variant we
+ *  don't recognize yet), not "nothing to import." */
+function buildImportSummary(result: CsvImportResult): { message: string; isWarning: boolean } {
+  const { received, created, updated, flaggedForReview, unmappable, enriched } = result;
   const rowWord = `row${received !== 1 ? "s" : ""}`;
-  if (received === 0) return "No rows found in that file";
+  if (received === 0) return { message: "No rows found in that file", isWarning: true };
+
+  if (unmappable === received) {
+    return {
+      message: `Couldn't read any of the ${received} ${rowWord} — no company-name column matched. Check that this is the right file, or that its headers match what's expected.`,
+      isWarning: true,
+    };
+  }
+
   const parts: string[] = [];
   if (created > 0) parts.push(`${created} new`);
   if (updated > 0) parts.push(`${updated} updated`);
   if (flaggedForReview > 0) parts.push(`${flaggedForReview} flagged for review`);
+  if (unmappable > 0) parts.push(`${unmappable} unreadable`);
   if (enriched > 0) parts.push(`${enriched} enriched`);
-  if (parts.length === 0) return `Imported ${received} ${rowWord} — no changes`;
-  return `Imported ${received} ${rowWord} — ${parts.join(", ")}`;
+  if (parts.length === 0) return { message: `Imported ${received} ${rowWord} — no changes`, isWarning: false };
+  return { message: `Imported ${received} ${rowWord} — ${parts.join(", ")}`, isWarning: unmappable > 0 };
 }
 
 export function CsvImportButton({ label, endpoint, onImported }: CsvImportButtonProps) {
@@ -66,7 +80,8 @@ export function CsvImportButton({ label, endpoint, onImported }: CsvImportButton
       }
       const result: CsvImportResult = await res.json();
       await onImported();
-      showToast(buildImportSummary(result), "success");
+      const { message, isWarning } = buildImportSummary(result);
+      showToast(message, isWarning ? "warning" : "success");
     } catch (err) {
       const message = err instanceof Error ? err.message : `Failed to import ${label}`;
       showToast(message, "error");

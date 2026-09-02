@@ -41,7 +41,11 @@ import { importContactsCsv, type CsvColumnMap, type CsvImportResult } from './ou
 
 export type { CsvImportResult as ClayCsvImportResult } from './outreachCsvImport.js';
 
-const CLAY_CSV_COLUMN_MAP: CsvColumnMap = {
+// Verified against a real Clay export (Sep 2026): headers are `Company,
+// Domain, Industry, Employees, Type, City, State, Country, LinkedIn` — also
+// company-data-only, no per-contact columns, same as Private Circle's export.
+// 'Employees' (bare) is the real header, not "Employee Count".
+export const CLAY_CSV_COLUMN_MAP: CsvColumnMap = {
   companyName: ['Company Name', 'Company', 'Company / Organization', 'Business Name'],
   cin: ['CIN', 'Corporate Identification Number'],
   contactName: ['Full Name', 'Contact Name', 'Name', 'Person Name', 'Decision Maker'],
@@ -50,9 +54,9 @@ const CLAY_CSV_COLUMN_MAP: CsvColumnMap = {
   phone: ['Phone', 'Phone Number', 'Mobile Phone', 'Mobile'],
   linkedinUrl: ['LinkedIn', 'LinkedIn URL', 'Person LinkedIn URL', 'LinkedIn Profile'],
   location: ['Location', 'City', 'HQ Location', 'Company Location'],
-  employeeSize: ['Employee Count', 'Company Size', '# Employees', 'Headcount'],
+  employeeSize: ['Employees', 'Employee Count', 'Company Size', '# Employees', 'Headcount'],
   industry: ['Industry', 'Company Industry', 'Sector'],
-  sourceUrl: ['Source', 'Source URL', 'Record URL', 'Clay Row URL'],
+  sourceUrl: ['Domain', 'Source', 'Source URL', 'Record URL', 'Clay Row URL'],
 };
 
 export async function importClayCsv(orgId: string, rows: Record<string, string>[]): Promise<CsvImportResult> {
