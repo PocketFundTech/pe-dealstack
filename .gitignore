@@ -67,3 +67,5 @@ scripts/
 
 # Git worktrees
 .worktrees/
+.vercel
+.env*
