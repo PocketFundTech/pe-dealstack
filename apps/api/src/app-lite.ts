@@ -67,6 +67,8 @@ import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import outreachRouter from './routes/outreach.js';
 import outreachReplyIoRouter from './routes/outreach-replyio.js';
 import outreachImportRouter from './routes/outreach-import.js';
+import welcomeEmailRouter from './routes/welcome-email.js';
+import accountSecurityRouter from './routes/account-security.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { orgMiddleware, requireCiceroCapital } from './middleware/orgScope.js';
@@ -142,6 +144,7 @@ app.use(helmet({
 // CORS - whitelist allowed origins (configurable via ALLOWED_ORIGINS env var)
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = [
+  'https://app.avise.io',
   'https://lmmos.ai',
   'https://www.lmmos.ai',
   'https://pe-dealstack.vercel.app',
@@ -264,6 +267,16 @@ app.use('/api/public/portal', portalRouter);
 // Document-request upload page must be public — brokers/sellers have no
 // accounts; the DocRequest token is the credential (see routes/doc-request-portal.ts).
 app.use('/api/public/doc-requests', docRequestPortalRouter);
+// Signup welcome email must be public — it fires right after signUp()
+// resolves, before a session necessarily exists (see routes/welcome-email.ts).
+app.use('/api/public/welcome-email', welcomeEmailRouter);
+// Account-security emails (password-changed, new-device login) — any
+// logged-in user must reach these even mid-MFA-lockout, so authMiddleware
+// only, no orgMiddleware/enforceOrgMfaMiddleware.
+app.use('/api/account/security', authMiddleware, accountSecurityRouter);
+// NOTE: /api/cron/* routers are deliberately NOT mounted in this bundle.
+// pickBundle (apps/web-next/src/lib/api-routing.ts) sends every /api/cron/*
+// path to the AI bundle, so they live in app-ai.ts only.
 
 // Integration webhooks + OAuth callbacks + cron must be public — providers
 // POST/GET here without an auth header. Auth is enforced via signed state

@@ -5,6 +5,131 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 69 — August 24, 2026
+
+#### Timestamp: August 24, 2026 — 20:45-21:45 IST
+
+#### Goal: Option B domain cutover — flip APP_URL to app.avise.io without waiting on the Google/Azure console work — and make the marketing site's SIGN IN button land on /signup.
+
+#### 1. APP_URL flip (Option B, founder's call)
+
+`APP_URL` in Vercel production turned out to be **`https://pe-dealstack.vercel.app`** — not `lmmos.ai`, which was only ever a display alias. Consequences: Google/Azure OAuth callbacks are registered against the raw Vercel URL, and every doc-request/deal-share/invitation link ever emailed points there (Friday's 308 on that domain is therefore load-bearing — keep it forever; verified it preserves path+query, so `/upload/<token>` links in broker inboxes survive).
+
+Changes: `APP_URL` → `https://app.avise.io` (production+development; preview left alone), `NEXT_PUBLIC_APP_URL` → same (new var — it had never been set, so memo share links had been riding the hardcoded `lmmos.ai` fallback in `export.ts`), redeploy to bake the `NEXT_PUBLIC_` var into the client bundle.
+
+**Accepted breakage (Option B):** the CONNECT buttons for Gmail/Calendar/Outlook/M365 now fail with `redirect_uri_mismatch` until the console URIs are added. The 6 existing connections (2 gmail, 2+1 gcal, 1 outlook, 1 m365 — verified in prod DB) keep syncing: token refresh sends no redirect_uri.
+
+#### 2. SIGN IN → /signup (PR #128, merged + deployed)
+
+The dev's live avise.io hardcodes `href="https://pe-dealstack.vercel.app"` (bare origin). **The live site is NOT built from `dev-pf66/pe-os`** — that repo's `landing-page/index.html` is the old 28KB static page (anchor-link nav, zero `/blog`/`/about-us` references) while the live site is a 237KB Next.js app; push access to that repo is useless for this. Fixed entirely on our side instead:
+
+- New `isRootLanding()` in `routing.ts`; middleware now routes `/` by auth state — signed-in → `/dashboard`, visitors → `/signup`. `/` opts into the Supabase round-trip it previously skipped; all other public pages still skip it.
+- Chain verified live: `pe-dealstack.vercel.app` → 308 → `app.avise.io/` → 307 → `/signup` (200). Old root marketing page on the app subdomain is now unreachable — correct, avise.io is the marketing site.
+
+Regression sweep: `/login` 200, `/pricing` 200, `/portal/<token>` 200, `/upload/<token>` 200, `/dashboard` → `/login` 307 (auth gate intact), `avise.io` 200 untouched, `lmmos.ai/login` 200.
+
+#### Open
+
+1. `lmmos.ai` → 308 → `app.avise.io` — final flip; my API call is permission-blocked, needs founder approval or dashboard.
+2. Google Cloud + Azure console redirect URIs (unbreaks integration CONNECT buttons): gmail/google_calendar/outlook/microsoft365 callbacks under `https://app.avise.io/api/integrations/oauth/…` + JS origin `https://app.avise.io`. Keep existing `pe-dealstack.vercel.app` entries.
+3. **Rotate two tokens pasted into chat:** Supabase `sbp_…` and Vercel `vcp_…`.
+
+---
+
+### Session 68 — August 22, 2026
+
+#### Timestamp: August 22, 2026 — 17:25-17:40 IST
+
+#### Goal: Add `app.avise.io` to the Supabase Auth allowlist and stop the dev's SIGN IN button dumping users on the raw Vercel URL.
+
+#### 1. Supabase Auth was misconfigured well beyond the thing we set out to fix
+
+**Found on reading the live config** (`GET /v1/projects/<ref>/config/auth` via the Management API):
+
+- `site_url` was **`https://pe-dealstack.vercel.app`** — the raw Vercel URL, not a branded domain.
+- `uri_allow_list` contained only four entries, all pointing at `.html` paths from the **legacy** vanilla-JS frontend: `localhost:3000/dashboard.html`, `localhost:3000/crm.html`, and the same two on `pe-dealstack.vercel.app`.
+
+**`lmmos.ai` was not in the allowlist at all.** That is a live bug, not a cosmetic one: when a `redirectTo` is not allowlisted, Supabase does not error — it silently falls back to `site_url`. So every password reset requested from `lmmos.ai` has been landing users on `pe-dealstack.vercel.app`. `forgot-password` builds its link from `window.location.origin`, so the origin was always the un-allowlisted one.
+
+**Fixed (additive — no existing entry removed):** added `https://app.avise.io/**`, `https://lmmos.ai/**`, `https://www.lmmos.ai/**`, and `http://localhost:3002/**` (the web-next dev server, so local password reset works). The `/**` wildcard matters — it covers `/reset-password`, `/verify-email`, and every other callback path, where the old bare-`.html` entries did not.
+
+**`site_url` → `https://app.avise.io`** on founder's call, choosing the forward-looking domain over today's canonical `lmmos.ai`. Note this only governs Supabase auth emails; the Google/Azure OAuth callbacks are a separate system still registered against `APP_URL`, so this does not start the wider cutover.
+
+#### 2. `pe-dealstack.vercel.app` → 308 → `app.avise.io`
+
+**Problem:** the dev's marketing site hardcodes `href="https://pe-dealstack.vercel.app"` for SIGN IN on both `avise.io` and `avise.io/company`, so anyone signing in landed on the unbranded raw Vercel URL. The link lives in their repo on their Vercel account — not editable from here.
+
+**Fixed from our side** by setting a 308 redirect on the project's `.vercel.app` domain, which works regardless of what their link says. Verified: `pe-dealstack.vercel.app` returns `308 → https://app.avise.io/`, and following it lands on `https://app.avise.io/` with a 200. The dev should still fix the href; this makes it not matter.
+
+**Ordering dependency worth remembering:** this redirect could not be set safely while `site_url` still pointed at `pe-dealstack.vercel.app`. Supabase returns auth tokens in the URL fragment or a `?code=` param, and bouncing those through a redirect breaks sign-in intermittently. Site URL had to move first.
+
+#### Verified after both changes
+
+`app.avise.io/login` 200 · `lmmos.ai/login` 200 · `avise.io` 200 (dev's site untouched) · `pe-dealstack.vercel.app` 308 → `app.avise.io`.
+
+#### Security note
+
+The Supabase personal access token was pasted into the chat transcript rather than a gitignored file. **It must be rotated** at supabase.com/dashboard/account/tokens. A Supabase PAT cannot be scoped — it grants full access to every project and org on the account.
+
+#### Cutover status — still not done
+
+Steps remaining before `lmmos.ai` can be retired: Google Cloud OAuth redirect URIs (Gmail, Calendar), Azure OAuth redirect URIs (Outlook, M365), Google Drive domain re-verification, `APP_URL` + `NEXT_PUBLIC_APP_URL` in Vercel, then the `lmmos.ai` → 308 flip. Supabase (step 1) is now complete.
+
+---
+
+### Session 67 — August 20, 2026
+
+#### Timestamp: August 20, 2026 — 16:45-17:20 IST
+
+#### Goal: Give the app an Avise-branded domain and clear the last old-brand strings, without breaking the dev's marketing site on the apex.
+
+#### 1. `app.avise.io` — the app gets an Avise address
+
+**Problem:** after the PE OS → Avise rename shipped (Session 66), the product was called Avise but the address bar still read `lmmos.ai`. A rename changes labels; it cannot change DNS.
+
+**Why not just take `avise.io`:** the apex is verified inside a Vercel account outside this team and serves the dev's finished AVISE marketing site. Claiming it would have replaced that site. Used the conventional split instead — marketing on the apex, product on `app.`.
+
+**Built:** added `app.avise.io` to the `pe-dealstack` project. Because the apex is claimed elsewhere, Vercel required a `_vercel` TXT ownership proof on top of the CNAME, so this needed two Namecheap records rather than one:
+- `TXT` `_vercel` → `vc-domain-verify=app.avise.io,93e11c46a064deea9de0`
+- `CNAME` `app` → `013772fbabbc47c2.vercel-dns-017.com`
+
+**Root cause of a 20-minute stall:** DNS was correct and propagating at both the authoritative nameserver and every public resolver, but the domain sat at `verified: false` and no certificate issued. Vercel's background verification poller simply never picked the TXT up. An explicit `POST /v9/projects/<project>/domains/<domain>/verify` flipped it to `verified: true` immediately and the cert issued seconds later. **If DNS is provably correct and Vercel still shows pending, trigger verify explicitly rather than waiting.**
+
+**Live:** `https://app.avise.io/login` serves `<title>Sign In | Avise</title>`. `lmmos.ai` and the dev's `avise.io` both unaffected throughout.
+
+#### 2. Last old-brand strings (PR #126, merged + deployed)
+
+- **CORS:** added `https://app.avise.io` to the allowlist in all three server bundles (`app.ts`, `app-lite.ts`, `app-ai.ts`). Additive — `lmmos.ai` and the Vercel alias stay allowed.
+- **API reference base URL:** was `https://pe-os.onrender.com/api` — a legacy Render host displayed to users as the live endpoint, so wrong independent of branding. Now `https://app.avise.io/api`.
+- **Footer contact:** `contact@pe-os.com` → `hello@pocket-fund.com`.
+- **Security contacts:** `security@peos.app` / `incidents@peos.app` → `hello@pocket-fund.com`. Those mailboxes are not ours; a security contact that bounces is worse than a generic one that is monitored. Swap to a dedicated address when one exists.
+
+**Verified live:** `app.avise.io/api-reference` renders `https://app.avise.io/api`, footer renders `mailto:hello@pocket-fund.com`, zero legacy brand strings in the served HTML. Both app domains serve the identical build. tsc clean on shared/api/web-next; api suite 169 files / 1766 passed / 0 failed.
+
+#### Rename status, measured
+
+`PE OS` in `apps/` and `packages/`: **0 occurrences.** Remaining 159 occurrences across 36 files are all — verified programmatically — the deliberately excluded historical records (`PROGRESS.md`, `compact.md`, `docs/archive`, `docs/plans`, `docs/superpowers`, `docs/testing`, dated QA checklists). No current-facing file was missed.
+
+#### Open — the cutover is NOT done
+
+`app.avise.io` is an addition, not a move. `lmmos.ai` is still canonical: it is what `APP_URL` points at, what OAuth callbacks are registered against, and where every existing bookmark and email link goes. Nothing redirects. Flipping it requires, in order:
+
+1. Add `app.avise.io` to **Supabase Auth** Site URL + redirect allowlist. **Do this regardless of the cutover** — `forgot-password` builds its link from `window.location.origin`, so a reset requested from `app.avise.io` already sends Supabase a redirect that may not be allowlisted.
+2. Update **Google Cloud** OAuth redirect URIs (Gmail, Calendar).
+3. Update **Azure** OAuth redirect URIs (Outlook, M365).
+4. Re-verify the **Google Drive** domain.
+5. Change `APP_URL` + `NEXT_PUBLIC_APP_URL` in Vercel env.
+6. Flip `lmmos.ai` → 308 → `app.avise.io`.
+
+Steps 1-4 are console-only. Doing 5-6 before them would break OAuth mid-flight.
+
+#### Two loose ends not in our control
+
+- **The dev's SIGN IN button** hardcodes `href="https://pe-dealstack.vercel.app"` on `avise.io` and `avise.io/company`, so users land on the raw unbranded Vercel URL. Fix is either the dev updating the link to `https://app.avise.io`, or a 308 on `pe-dealstack.vercel.app` → `app.avise.io` from our side (attempted; blocked by a permission guard).
+- **`www.avise.io` is broken** — returns a TLS verification failure (`HTTP 000`, `ssl_verify_result=1`). The `www` CNAME points at the dev's project, whose certificate has not issued. Apex `avise.io` is fine. Their side to fix.
+
+---
+
 ### Session 66 — August 19, 2026
 
 #### Timestamp: August 19, 2026 — 14:10-15:50 IST

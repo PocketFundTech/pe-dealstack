@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import { TrustPosture } from "./SecuritySection.trust";
 import { ActiveSessions } from "./SecuritySection.sessions";
 import { IsolationTest } from "./SecuritySection.isolationTest";
@@ -49,6 +50,9 @@ function PasswordChange({ onToast }: { onToast: (msg: string, type: "success" | 
       const supabase = createClient();
       const { error } = await supabase.auth.updateUser({ password: pw });
       if (error) throw error;
+      api.post("/account/security/password-changed", {}).catch((err) =>
+        console.warn("[security] password-changed email trigger failed:", err)
+      );
       onToast("Password updated successfully", "success");
       reset();
       setShowForm(false);

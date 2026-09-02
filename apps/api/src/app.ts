@@ -73,6 +73,11 @@ import dealsModelRouter from './routes/deals-model.js';
 import docRequestPortalRouter from './routes/doc-request-portal.js';
 import cronDocRequestRemindersRouter from './routes/cron-doc-request-reminders.js';
 import dealsReactivationsRouter from './routes/deals-reactivations.js';
+import welcomeEmailRouter from './routes/welcome-email.js';
+import accountSecurityRouter from './routes/account-security.js';
+import cronWeeklyDigestRouter from './routes/cron-weekly-digest.js';
+import cronShareExpiryWarningsRouter from './routes/cron-share-expiry-warnings.js';
+import cronReengagementNudgeRouter from './routes/cron-reengagement-nudge.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
 import outreachRouter from './routes/outreach.js';
 import outreachReplyIoRouter from './routes/outreach-replyio.js';
@@ -157,6 +162,7 @@ app.set('trust proxy', 1);
 // CORS - whitelist allowed origins (configurable via ALLOWED_ORIGINS env var)
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = [
+  'https://app.avise.io',
   'https://lmmos.ai',
   'https://www.lmmos.ai',
   'https://pe-dealstack.vercel.app',
@@ -338,6 +344,30 @@ app.use('/api/public/portal', portalRouter);
 // Document-request upload page must be public — brokers/sellers have no
 // accounts; the DocRequest token is the credential (see routes/doc-request-portal.ts).
 app.use('/api/public/doc-requests', docRequestPortalRouter);
+// Signup welcome email must be public — it fires right after signUp()
+// resolves, before a session necessarily exists (see routes/welcome-email.ts).
+app.use('/api/public/welcome-email', welcomeEmailRouter);
+// Account-security emails (password-changed, new-device login) — any
+// logged-in user must reach these even mid-MFA-lockout, so authMiddleware
+// only, no orgMiddleware/enforceOrgMfaMiddleware.
+app.use('/api/account/security', authMiddleware, accountSecurityRouter);
+// ========================================
+// Cron Routes (CRON_SECRET bearer check inside the router — no user JWT,
+// so authMiddleware/orgMiddleware don't apply)
+// ========================================
+// ⚠️ THESE MUST STAY ABOVE THE PROTECTED-ROUTES BLOCK BELOW.
+// Several protected mounts use the bare '/api' prefix, so authMiddleware runs
+// for ANY /api/* path registered after them — including /api/cron/*. Vercel
+// calls crons with `Authorization: Bearer $CRON_SECRET`, which is not a
+// Supabase JWT, so authMiddleware 401s the request and the cron body never
+// runs. That silently killed signal-scan/doc-request-reminders/reactivation
+// in production until 2026-09-01; tests/cron-mount-order.test.ts pins this.
+app.use('/api/cron/signal-scan', cronSignalScanRouter);
+app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
+app.use('/api/cron/reactivation', cronReactivationRouter);
+app.use('/api/cron/weekly-digest', cronWeeklyDigestRouter);
+app.use('/api/cron/share-expiry-warnings', cronShareExpiryWarningsRouter);
+app.use('/api/cron/reengagement-nudge', cronReengagementNudgeRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens
@@ -466,13 +496,8 @@ app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware,
 // ========================================
 app.use('/api/internal', authMiddleware, internalRouter);
 
-// ========================================
-// Cron Routes (CRON_SECRET bearer check inside the router — no user JWT,
-// so authMiddleware/orgMiddleware don't apply)
-// ========================================
-app.use('/api/cron/signal-scan', cronSignalScanRouter);
-app.use('/api/cron/doc-request-reminders', cronDocRequestRemindersRouter);
-app.use('/api/cron/reactivation', cronReactivationRouter);
+// (Cron routes are mounted earlier in this file, ABOVE the protected routes —
+// see the "Cron Routes" block for why that ordering is load-bearing.)
 
 // ========================================
 // AI Routes (mixed - some protected, some public)

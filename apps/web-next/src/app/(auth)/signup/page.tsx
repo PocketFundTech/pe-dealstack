@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { api } from "@/lib/api";
 
 const STRENGTH_COLORS = ["bg-red-500", "bg-orange-500", "bg-yellow-500", "bg-green-500"];
 const STRENGTH_LABELS = ["Weak", "Fair", "Good", "Strong"];
@@ -84,6 +85,15 @@ export default function SignupPage() {
       setError(msg);
       setLoading(false);
       return;
+    }
+
+    if (data.user) {
+      // Best-effort, non-blocking — never delays or fails the signup flow.
+      // Fires here (not from an authenticated onboarding endpoint) because
+      // email-confirmation-required signups have no session yet at this point.
+      api.post("/public/welcome-email", { userId: data.user.id }).catch((err) => {
+        console.warn("[signup] welcome email trigger failed:", err);
+      });
     }
 
     if (data.session) {

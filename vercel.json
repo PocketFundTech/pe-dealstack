@@ -25,6 +25,18 @@
     {
       "path": "/api/cron/reactivation",
       "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/weekly-digest",
+      "schedule": "0 8 * * 1"
+    },
+    {
+      "path": "/api/cron/share-expiry-warnings",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/reengagement-nudge",
+      "schedule": "0 10 * * 1"
     }
   ]
 }
