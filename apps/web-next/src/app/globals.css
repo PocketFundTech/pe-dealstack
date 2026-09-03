@@ -362,6 +362,24 @@ body {
   animation: importBarIndeterminate 1.1s ease-in-out infinite;
 }
 
+/* Determinate progress bar — a real, computed percentage (e.g. "N of M
+   contact fields filled in"). Distinct from the indeterminate track/fill
+   pair above: this one's width is set inline per-use via style={width},
+   not animated, because it represents an actual known quantity. */
+.determinate-progress-track {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: #E5E7EB;
+  overflow: hidden;
+}
+.determinate-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #003366;
+  transition: width 0.3s ease-out;
+}
+
 /* Base skeleton element — apply to any div/span */
 .skeleton {
   background: linear-gradient(

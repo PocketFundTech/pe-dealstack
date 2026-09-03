@@ -210,6 +210,80 @@ export const SOURCE_PROVIDER_CONFIG: Partial<Record<NonNullable<OutreachContact[
   private_circle: { label: "via Private Circle", icon: "table_view" },
 };
 
+/** One enrichment provider's attempt on this contact, as recorded in
+ *  `OutreachContact.enrichmentData[providerKey]` — written by
+ *  apps/api/src/services/outreachEnrichment.ts's `enrichContact()`.
+ *  `enrichmentData` itself is typed as loosely as the API returns it
+ *  (`Record<string, unknown> | null`); this describes the shape of one
+ *  entry once a caller has checked it looks like one. */
+export interface EnrichmentProviderRecord {
+  status: "ok" | "no_match" | "submitted" | "error" | "skipped" | "no_person";
+  fetchedAt: string;
+  normalized?: Record<string, unknown>;
+  error?: string;
+}
+
+export type EnrichmentProviderKey = "apollo" | "anymailFinder" | "clay";
+
+/** Humanized label + one-line explanation per enrichment provider status —
+ *  used by the contact detail popup's enrichment log, so "no_person" (this
+ *  contact has no real decision-maker name, e.g. a company-only Private
+ *  Circle/Clay import row — see looksLikeCompanyNameOnly in
+ *  outreachEnrichment.ts) reads as an explained skip, not a silent gap. */
+export const ENRICHMENT_STATUS_CONFIG: Record<
+  EnrichmentProviderRecord["status"],
+  { label: string; description: string; bg: string; text: string; border: string }
+> = {
+  ok: {
+    label: "Matched",
+    description: "Found and filled in new data.",
+    bg: "bg-emerald-50",
+    text: "text-emerald-700",
+    border: "border-emerald-200",
+  },
+  no_match: {
+    label: "No match",
+    description: "Ran, but didn't find a match for this contact.",
+    bg: "bg-gray-100",
+    text: "text-gray-600",
+    border: "border-gray-200",
+  },
+  no_person: {
+    label: "Skipped",
+    description: "No real decision-maker name to search for (company-only import row).",
+    bg: "bg-gray-100",
+    text: "text-gray-600",
+    border: "border-gray-200",
+  },
+  submitted: {
+    label: "Submitted",
+    description: "Sent to Clay's async enrichment queue — results arrive on Clay's own schedule.",
+    bg: "bg-blue-50",
+    text: "text-blue-700",
+    border: "border-blue-200",
+  },
+  error: {
+    label: "Error",
+    description: "The provider call failed.",
+    bg: "bg-red-50",
+    text: "text-red-600",
+    border: "border-red-200",
+  },
+  skipped: {
+    label: "Not configured",
+    description: "This provider's API key isn't set up yet.",
+    bg: "bg-gray-100",
+    text: "text-gray-500",
+    border: "border-gray-200",
+  },
+};
+
+export const ENRICHMENT_PROVIDER_LABELS: Record<EnrichmentProviderKey, string> = {
+  apollo: "Apollo",
+  anymailFinder: "Anymail Finder",
+  clay: "Clay",
+};
+
 export function sortStagesByPosition(stages: OutreachStage[]): OutreachStage[] {
   return [...stages].sort((a, b) => a.position - b.position);
 }

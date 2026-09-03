@@ -95,7 +95,13 @@ export interface NormalizedEnrichment {
 }
 
 type ProviderName = 'apollo' | 'anymailFinder' | 'clay';
-type ProviderStatus = 'ok' | 'no_match' | 'submitted' | 'error' | 'skipped';
+// 'no_person' is distinct from 'skipped': 'skipped' means the provider
+// isn't configured (nothing to say). 'no_person' means it WAS configured
+// but wasn't called, because this contact has no real decision-maker name
+// to search for — see looksLikeCompanyNameOnly below. Recorded into
+// enrichmentData (unlike 'skipped') so the reason is visible, not silently
+// dropped.
+type ProviderStatus = 'ok' | 'no_match' | 'submitted' | 'error' | 'skipped' | 'no_person';
 
 interface ProviderResult {
   provider: ProviderName;
@@ -124,6 +130,20 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Private Circle's and Clay's real CSV exports are company-data-only — no
+// decision-maker name at all (see outreachContactImport.ts's createNewContact
+// header comment). When a row like that gets created, `name` falls back to
+// the company name itself, so `name === company`. Apollo and Anymail Finder
+// both search for a PERSON (splitting `name` into first/last), so sending
+// them a company name masquerading as a person's name is a guaranteed
+// `no_match` — worse, it burns a real API call/credit on a call that can
+// never succeed. Detected cheaply here rather than threading an extra
+// "hadRealContactName" flag through the whole import pipeline.
+function looksLikeCompanyNameOnly(contact: EnrichmentContact): boolean {
+  if (!contact.name || !contact.company) return false;
+  return contact.name.trim().toLowerCase() === contact.company.trim().toLowerCase();
 }
 
 function splitName(name: string): { firstName: string; lastName: string } {
@@ -350,9 +370,18 @@ export function getConfiguredProviders(): ProviderName[] {
  * never blocks another provider's fields from being used.
  */
 export async function enrichContact(contact: EnrichmentContact): Promise<EnrichContactResult> {
+  // Apollo/Anymail search for a person; Clay's own 150+ provider waterfall
+  // is a genuinely different, more capable service that may still resolve
+  // a company's decision-maker from just a company name — so only the two
+  // person-search providers get short-circuited here, not Clay.
+  const skipPersonSearch = looksLikeCompanyNameOnly(contact);
   const results = await Promise.all([
-    enrichViaApollo(contact),
-    enrichViaAnymailFinder(contact),
+    skipPersonSearch
+      ? Promise.resolve<ProviderResult>({ provider: 'apollo', status: 'no_person' })
+      : enrichViaApollo(contact),
+    skipPersonSearch
+      ? Promise.resolve<ProviderResult>({ provider: 'anymailFinder', status: 'no_person' })
+      : enrichViaAnymailFinder(contact),
     enrichViaClay(contact),
   ]);
 
@@ -388,6 +417,41 @@ export async function enrichContact(contact: EnrichmentContact): Promise<EnrichC
   }
 
   return { updates, enrichmentData, sourcesUsed };
+}
+
+// ─── Auto-advance stage ──────────────────────────────────────────────
+//
+// Shared by both enrichment call sites (the manual "Enrich" button in
+// routes/outreach.ts and enrichAndPersistOutreachContact below) so a
+// contact that gets genuinely enriched doesn't just sit in Source forever
+// waiting for a human to notice and drag it — the pipeline stage names
+// (Source -> Enrich -> Send -> ...) already describe this transition, so
+// leaving it manual once the data backing it exists is just friction.
+//
+// Deliberately narrow: only advances FROM the org's first (lowest-position)
+// stage, and only when this run actually filled something in
+// (sourcesUsed.length > 0) — never regresses a contact already further
+// along (Send/Handle Reply/Escalate/etc.) just because someone re-ran
+// Enrich on it, and never advances a run that found nothing (which, for
+// company-only bulk imports, is most of them until they have a real
+// decision-maker name — see looksLikeCompanyNameOnly above). This does NOT
+// attempt full stage-derivation from touches in general — that still needs
+// the human workshop the source planning doc calls for; this is one
+// narrow, obviously-correct case.
+export async function resolveAutoAdvanceStage(
+  orgId: string,
+  currentStageId: string,
+  sourcesUsed: string[],
+): Promise<string | null> {
+  if (sourcesUsed.length === 0) return null;
+  const { data: stages, error } = await supabase
+    .from('OutreachStage')
+    .select('id, position')
+    .eq('organizationId', orgId)
+    .order('position', { ascending: true });
+  if (error || !stages || stages.length < 2) return null;
+  if (stages[0].id !== currentStageId) return null;
+  return stages[1].id;
 }
 
 // ─── Persist helper ──────────────────────────────────────────────────
@@ -453,6 +517,9 @@ export async function enrichAndPersistOutreachContact(orgId: string, contactId: 
   if (result.updates.linkedinUrl && !contact.linkedinUrl) updates.linkedinUrl = result.updates.linkedinUrl;
   if (result.updates.company && !contact.company) updates.company = result.updates.company;
 
+  const autoAdvanceStageId = await resolveAutoAdvanceStage(orgId, contact.stageId, result.sourcesUsed);
+  if (autoAdvanceStageId) updates.stageId = autoAdvanceStageId;
+
   const { error: updateError } = await supabase
     .from('OutreachContact')
     .update(updates)
@@ -470,7 +537,12 @@ export async function enrichAndPersistOutreachContact(orgId: string, contactId: 
     channel: 'enrichment',
     type: 'enriched',
     direction: 'outbound',
-    metadata: { providersConfigured: configuredProviders, sourcesUsed: result.sourcesUsed, trigger: 'private_circle_import' },
+    metadata: {
+      providersConfigured: configuredProviders,
+      sourcesUsed: result.sourcesUsed,
+      trigger: 'private_circle_import',
+      autoAdvancedToStageId: autoAdvanceStageId,
+    },
   });
 
   return { attempted: true, emailFilled, sourcesUsed: result.sourcesUsed };

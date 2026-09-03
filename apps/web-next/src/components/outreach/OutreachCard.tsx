@@ -62,8 +62,16 @@ export function OutreachCard({
   return (
     <div
       className={cn(
-        "group relative bg-surface-card rounded-lg border p-3 shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-grab active:cursor-grabbing",
+        // border-t-4 + the channel-keyed border-t-{color} below give each card a
+        // colored top accent (blue = proprietary, amber = broker) so a column full
+        // of cards reads as distinct cards at a glance, not a plain list. Order
+        // matters for tailwind-merge: the channel accent must come after the
+        // selected/unselected border-color so it isn't stripped as a duplicate
+        // (verified — border-t-{color} utilities compile after border-{color} ones,
+        // so this also renders correctly independent of merge order).
+        "group relative bg-surface-card rounded-lg border border-t-4 p-3.5 shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-grab active:cursor-grabbing",
         selected ? "border-primary ring-1 ring-primary/40 bg-primary-light/40" : "border-border-subtle",
+        contact.channel === "proprietary" ? "border-t-blue-400" : "border-t-amber-400",
       )}
       draggable
       onDragStart={(e) => {
@@ -79,7 +87,7 @@ export function OutreachCard({
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === "Enter") onOpen(contact); }}
     >
-      <div className="flex items-start gap-2 mb-2">
+      <div className="flex items-start gap-2 mb-2.5">
         <input
           type="checkbox"
           checked={selected}
@@ -156,7 +164,7 @@ export function OutreachCard({
         </div>
       </div>
 
-      <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap">
         <span
           className={cn(
             "px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider",
@@ -204,7 +212,11 @@ export function OutreachCard({
             {contact.assignedTo}
           </span>
         )}
-        {contact.enrichedAt && (
+        {/* enrichmentSource only ever holds providers that returned 'ok' or
+            'submitted' (see enrichContact() in outreachEnrichment.ts) — enrichedAt
+            alone just means a provider ran, not that it found anything. Require
+            both so this badge means "we actually got new data", not "we tried". */}
+        {contact.enrichedAt && contact.enrichmentSource && contact.enrichmentSource.length > 0 && (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-medium border border-emerald-200"
             title={`Enriched ${formatRelativeTime(contact.enrichedAt)}`}
@@ -216,12 +228,21 @@ export function OutreachCard({
       </div>
 
       {contact.sourceProvider && SOURCE_PROVIDER_CONFIG[contact.sourceProvider] && (
-        <p className="mt-1.5 flex items-center gap-1 text-[10px] text-text-muted">
+        <p className="mt-2 flex items-center gap-1 text-[10px] text-text-muted">
           <span className="material-symbols-outlined text-[11px]">
             {SOURCE_PROVIDER_CONFIG[contact.sourceProvider]!.icon}
           </span>
           {SOURCE_PROVIDER_CONFIG[contact.sourceProvider]!.label}
         </p>
+      )}
+
+      {/* Indeterminate progress bar — visible feedback for the per-card "Enrich"
+          quick action beyond the small spinning icon inside the overflow menu.
+          Reuses the shared .import-progress-track/-fill pair from globals.css. */}
+      {enriching && (
+        <div className="import-progress-track mt-2">
+          <div className="import-progress-fill" />
+        </div>
       )}
     </div>
   );

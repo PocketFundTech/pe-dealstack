@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/formatters";
+import { ContactEnrichmentPanel } from "./ContactEnrichmentPanel";
 import {
   OUTREACH_CHANNELS,
   CHANNEL_CONFIG,
@@ -93,7 +94,14 @@ export function ContactFormModal({
       onClick={onClose}
     >
       <div
-        className="bg-surface-card rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        className={cn(
+          "bg-surface-card rounded-xl shadow-2xl w-full max-h-[90vh] overflow-y-auto",
+          // Edit mode gets a wider, two-column layout so the enrichment
+          // panel has room next to the form; create mode (a brand-new
+          // contact has no enrichment history yet) stays the original
+          // narrow single-column modal.
+          mode === "edit" && contact ? "max-w-4xl" : "max-w-lg",
+        )}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle sticky top-0 bg-surface-card z-10">
@@ -121,232 +129,246 @@ export function ContactFormModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-4">
-          {mode === "edit" && contact?.needsMatchReview && (
-            <div className="rounded-lg border border-violet-300 bg-violet-50 p-3 flex flex-col gap-2">
-              <div className="flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[14px] text-violet-700">content_copy</span>
-                <span className="text-xs font-bold uppercase tracking-wider text-violet-700">
-                  Possible Duplicate
-                </span>
-              </div>
-              {contact.matchReviewReason ? (
-                <p className="text-sm text-violet-900 whitespace-pre-wrap">{contact.matchReviewReason}</p>
-              ) : (
-                <p className="text-sm text-violet-700 italic">
-                  Flagged as a possible duplicate during the Private Circle import.
-                </p>
-              )}
-              {onConfirmMatchReview && (
-                <button
-                  type="button"
-                  onClick={onConfirmMatchReview}
-                  disabled={confirmingMatchReview}
-                  className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-violet-300 text-violet-700 text-xs font-medium hover:bg-violet-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <span
-                    className={cn(
-                      "material-symbols-outlined text-[14px]",
-                      confirmingMatchReview && "animate-spin",
-                    )}
-                  >
-                    {confirmingMatchReview ? "progress_activity" : "check_circle"}
-                  </span>
-                  {confirmingMatchReview ? "Confirming..." : "Confirm as new contact"}
-                </button>
-              )}
-            </div>
-          )}
-
-          <div>
-            <label className="block text-sm font-medium text-text-main mb-1.5">
-              Name <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              className={inputCls}
-              placeholder="Jane Smith"
-              autoFocus
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-text-main mb-1.5">
-                Stage <span className="text-red-500">*</span>
-              </label>
-              <select
-                required
-                value={form.stageId}
-                onChange={(e) => setForm((f) => ({ ...f, stageId: e.target.value }))}
-                className={inputCls}
-              >
-                {orderedStages.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-main mb-1.5">Channel</label>
-              <select
-                value={form.channel}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, channel: e.target.value as OutreachContactFormValues["channel"] }))
-                }
-                className={inputCls}
-              >
-                {OUTREACH_CHANNELS.map((c) => (
-                  <option key={c} value={c}>
-                    {CHANNEL_CONFIG[c].label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-text-main mb-1.5">Company</label>
-              <input
-                type="text"
-                value={form.company}
-                onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
-                className={inputCls}
-                placeholder="Acme Holdings"
-              />
-              {mode === "edit" && contact?.cin && (
-                <p className="mt-1 text-[11px] text-text-muted">
-                  CIN: <span className="font-mono">{contact.cin}</span>
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-main mb-1.5">Title</label>
-              <input
-                type="text"
-                value={form.title}
-                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                className={inputCls}
-                placeholder="VP of Corporate Development"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-text-main mb-1.5">Email</label>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-                className={inputCls}
-                placeholder="jane@acme.com"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-main mb-1.5">Phone</label>
-              <input
-                type="tel"
-                value={form.phone}
-                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                className={inputCls}
-                placeholder="+1 (555) 123-4567"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-text-main mb-1.5">LinkedIn URL</label>
-            <input
-              type="url"
-              value={form.linkedinUrl}
-              onChange={(e) => setForm((f) => ({ ...f, linkedinUrl: e.target.value }))}
-              className={inputCls}
-              placeholder="https://linkedin.com/in/janesmith"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-text-main mb-1.5">Notes</label>
-            <textarea
-              value={form.notes}
-              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-              rows={3}
-              className={cn(inputCls, "resize-none")}
-              placeholder="Any additional context about this contact..."
-            />
-          </div>
-
-          {mode === "edit" && contact && (contact.lastReplyText || contact.replyIntent || contact.needsReview) && (
-            <div className="rounded-lg border border-border-subtle bg-background-body p-3 flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">
-                  Latest Reply
-                </span>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {contact.needsReview && (
-                    <span
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-300"
-                      title="Needs review — reply intent unclear"
-                    >
-                      <span className="material-symbols-outlined text-[12px]">warning</span>
-                      Needs review
+          <div
+            className={cn(
+              mode === "edit" && contact ? "grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6" : undefined,
+            )}
+          >
+            <div className="flex flex-col gap-4">
+              {mode === "edit" && contact?.needsMatchReview && (
+                <div className="rounded-lg border border-violet-300 bg-violet-50 p-3 flex flex-col gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[14px] text-violet-700">content_copy</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-violet-700">
+                      Possible Duplicate
                     </span>
+                  </div>
+                  {contact.matchReviewReason ? (
+                    <p className="text-sm text-violet-900 whitespace-pre-wrap">{contact.matchReviewReason}</p>
+                  ) : (
+                    <p className="text-sm text-violet-700 italic">
+                      Flagged as a possible duplicate during the Private Circle import.
+                    </p>
                   )}
-                  {contact.replyIntent && (
-                    <span
-                      className={cn(
-                        "px-2 py-0.5 rounded-full border text-[10px] font-medium",
-                        REPLY_INTENT_CONFIG[contact.replyIntent].bg,
-                        REPLY_INTENT_CONFIG[contact.replyIntent].border,
-                        REPLY_INTENT_CONFIG[contact.replyIntent].text,
-                      )}
+                  {onConfirmMatchReview && (
+                    <button
+                      type="button"
+                      onClick={onConfirmMatchReview}
+                      disabled={confirmingMatchReview}
+                      className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-violet-300 text-violet-700 text-xs font-medium hover:bg-violet-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {REPLY_INTENT_CONFIG[contact.replyIntent].label}
-                    </span>
+                      <span
+                        className={cn(
+                          "material-symbols-outlined text-[14px]",
+                          confirmingMatchReview && "animate-spin",
+                        )}
+                      >
+                        {confirmingMatchReview ? "progress_activity" : "check_circle"}
+                      </span>
+                      {confirmingMatchReview ? "Confirming..." : "Confirm as new contact"}
+                    </button>
                   )}
                 </div>
-              </div>
-              {contact.lastReplyText ? (
-                <p className="text-sm text-text-main whitespace-pre-wrap">{contact.lastReplyText}</p>
-              ) : (
-                <p className="text-sm text-text-muted italic">No reply text available.</p>
               )}
-              {contact.needsReview && onMarkReviewed && (
-                <button
-                  type="button"
-                  onClick={onMarkReviewed}
-                  disabled={markingReviewed}
-                  className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 text-xs font-medium hover:bg-amber-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <span
-                    className={cn(
-                      "material-symbols-outlined text-[14px]",
-                      markingReviewed && "animate-spin",
-                    )}
+
+              <div>
+                <label className="block text-sm font-medium text-text-main mb-1.5">
+                  Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputCls}
+                  placeholder="Jane Smith"
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-text-main mb-1.5">
+                    Stage <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    required
+                    value={form.stageId}
+                    onChange={(e) => setForm((f) => ({ ...f, stageId: e.target.value }))}
+                    className={inputCls}
                   >
-                    {markingReviewed ? "progress_activity" : "check_circle"}
-                  </span>
-                  {markingReviewed ? "Marking..." : "Mark reviewed"}
-                </button>
+                    {orderedStages.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-text-main mb-1.5">Channel</label>
+                  <select
+                    value={form.channel}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, channel: e.target.value as OutreachContactFormValues["channel"] }))
+                    }
+                    className={inputCls}
+                  >
+                    {OUTREACH_CHANNELS.map((c) => (
+                      <option key={c} value={c}>
+                        {CHANNEL_CONFIG[c].label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-text-main mb-1.5">Company</label>
+                  <input
+                    type="text"
+                    value={form.company}
+                    onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
+                    className={inputCls}
+                    placeholder="Acme Holdings"
+                  />
+                  {mode === "edit" && contact?.cin && (
+                    <p className="mt-1 text-[11px] text-text-muted">
+                      CIN: <span className="font-mono">{contact.cin}</span>
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-text-main mb-1.5">Title</label>
+                  <input
+                    type="text"
+                    value={form.title}
+                    onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                    className={inputCls}
+                    placeholder="VP of Corporate Development"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-text-main mb-1.5">Email</label>
+                  <input
+                    type="email"
+                    value={form.email}
+                    onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                    className={inputCls}
+                    placeholder="jane@acme.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-text-main mb-1.5">Phone</label>
+                  <input
+                    type="tel"
+                    value={form.phone}
+                    onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                    className={inputCls}
+                    placeholder="+1 (555) 123-4567"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-text-main mb-1.5">LinkedIn URL</label>
+                <input
+                  type="url"
+                  value={form.linkedinUrl}
+                  onChange={(e) => setForm((f) => ({ ...f, linkedinUrl: e.target.value }))}
+                  className={inputCls}
+                  placeholder="https://linkedin.com/in/janesmith"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-text-main mb-1.5">Notes</label>
+                <textarea
+                  value={form.notes}
+                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                  rows={3}
+                  className={cn(inputCls, "resize-none")}
+                  placeholder="Any additional context about this contact..."
+                />
+              </div>
+
+              {mode === "edit" && contact && (contact.lastReplyText || contact.replyIntent || contact.needsReview) && (
+                <div className="rounded-lg border border-border-subtle bg-background-body p-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">
+                      Latest Reply
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {contact.needsReview && (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-300"
+                          title="Needs review — reply intent unclear"
+                        >
+                          <span className="material-symbols-outlined text-[12px]">warning</span>
+                          Needs review
+                        </span>
+                      )}
+                      {contact.replyIntent && (
+                        <span
+                          className={cn(
+                            "px-2 py-0.5 rounded-full border text-[10px] font-medium",
+                            REPLY_INTENT_CONFIG[contact.replyIntent].bg,
+                            REPLY_INTENT_CONFIG[contact.replyIntent].border,
+                            REPLY_INTENT_CONFIG[contact.replyIntent].text,
+                          )}
+                        >
+                          {REPLY_INTENT_CONFIG[contact.replyIntent].label}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {contact.lastReplyText ? (
+                    <p className="text-sm text-text-main whitespace-pre-wrap">{contact.lastReplyText}</p>
+                  ) : (
+                    <p className="text-sm text-text-muted italic">No reply text available.</p>
+                  )}
+                  {contact.needsReview && onMarkReviewed && (
+                    <button
+                      type="button"
+                      onClick={onMarkReviewed}
+                      disabled={markingReviewed}
+                      className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 text-xs font-medium hover:bg-amber-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span
+                        className={cn(
+                          "material-symbols-outlined text-[14px]",
+                          markingReviewed && "animate-spin",
+                        )}
+                      >
+                        {markingReviewed ? "progress_activity" : "check_circle"}
+                      </span>
+                      {markingReviewed ? "Marking..." : "Mark reviewed"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {mode === "edit" && contact && (
+                <p className="text-[11px] text-text-muted border-t border-border-subtle pt-3">
+                  Added {formatRelativeTime(contact.createdAt)}
+                  {contact.updatedAt !== contact.createdAt && ` · Updated ${formatRelativeTime(contact.updatedAt)}`}
+                  {contact.enrichedAt && ` · Enriched ${formatRelativeTime(contact.enrichedAt)}`}
+                  {contact.enrichedAt && contact.enrichmentSource?.length
+                    ? ` (via ${contact.enrichmentSource.join(", ")})`
+                    : ""}
+                </p>
               )}
             </div>
-          )}
 
-          {mode === "edit" && contact && (
-            <p className="text-[11px] text-text-muted border-t border-border-subtle pt-3">
-              Added {formatRelativeTime(contact.createdAt)}
-              {contact.updatedAt !== contact.createdAt && ` · Updated ${formatRelativeTime(contact.updatedAt)}`}
-              {contact.enrichedAt && ` · Enriched ${formatRelativeTime(contact.enrichedAt)}`}
-              {contact.enrichedAt && contact.enrichmentSource?.length
-                ? ` (via ${contact.enrichmentSource.join(", ")})`
-                : ""}
-            </p>
-          )}
+            {mode === "edit" && contact && (
+              <div>
+                <ContactEnrichmentPanel contact={contact} />
+              </div>
+            )}
+          </div>
 
           <div className="flex items-center justify-between gap-3 pt-2">
             {mode === "edit" ? (

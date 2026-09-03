@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { getOrgId, verifyOutreachStageAccess, verifyOutreachContactAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
-import { enrichContact, getConfiguredProviders } from '../services/outreachEnrichment.js';
+import { enrichContact, getConfiguredProviders, resolveAutoAdvanceStage } from '../services/outreachEnrichment.js';
 import { recordTouch } from '../services/outreachTouchLog.js';
 
 // Outreach: manual pipeline-tracking board. Org-gated to Cicero Capital only
@@ -287,6 +287,12 @@ router.post('/contacts/:id/enrich', async (req: Request, res) => {
     if (result.updates.linkedinUrl && !contact.linkedinUrl) updates.linkedinUrl = result.updates.linkedinUrl;
     if (result.updates.company && !contact.company) updates.company = result.updates.company;
 
+    // See resolveAutoAdvanceStage's own comment (outreachEnrichment.ts) —
+    // only advances a contact off the org's first stage, only when this run
+    // actually found something.
+    const autoAdvanceStageId = await resolveAutoAdvanceStage(orgId, contact.stageId, result.sourcesUsed);
+    if (autoAdvanceStageId) updates.stageId = autoAdvanceStageId;
+
     const { data: updated, error: updateError } = await supabase
       .from('OutreachContact')
       .update(updates)
@@ -306,7 +312,11 @@ router.post('/contacts/:id/enrich', async (req: Request, res) => {
       channel: 'enrichment',
       type: 'enriched',
       direction: 'outbound',
-      metadata: { providersConfigured: configuredProviders, sourcesUsed: result.sourcesUsed },
+      metadata: {
+        providersConfigured: configuredProviders,
+        sourcesUsed: result.sourcesUsed,
+        autoAdvancedToStageId: autoAdvanceStageId,
+      },
     });
 
     res.json(updated);
