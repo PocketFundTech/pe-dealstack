@@ -68,8 +68,16 @@ export function OutreachBoard() {
 
   const orderedStages = sortStagesByPosition(stages);
 
-  const { selectedIds, bulkMoving, toggleSelect, toggleSelectAllInStage, clearSelection, bulkMove } =
-    useOutreachSelection(contacts, setContacts);
+  const {
+    selectedIds,
+    bulkMoving,
+    bulkEnriching,
+    toggleSelect,
+    toggleSelectAllInStage,
+    clearSelection,
+    bulkMove,
+    bulkEnrich,
+  } = useOutreachSelection(contacts, setContacts);
 
   // ─── Load ───────────────────────────────────────────────────────────────
 
@@ -386,7 +394,9 @@ export function OutreachBoard() {
         count={selectedIds.size}
         stages={orderedStages}
         moving={bulkMoving}
+        enriching={bulkEnriching}
         onMove={bulkMove}
+        onEnrich={bulkEnrich}
         onClear={clearSelection}
       />
 
