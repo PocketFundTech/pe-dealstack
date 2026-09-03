@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState, type DragEvent } from "react";
 import { api, ApiError, NotFoundError } from "@/lib/api";
 import { useToast } from "@/providers/ToastProvider";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { OutreachColumn } from "./OutreachColumn";
+import { StageSummaryCard } from "./StageSummaryCard";
+import { StageDetailModal } from "./StageDetailModal";
 import { ContactFormModal } from "./ContactFormModal";
 import { OutreachToolbar } from "./OutreachToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
@@ -65,6 +66,11 @@ export function OutreachBoard() {
   // Stage id currently being dragged over, if any — drives the dashed-border
   // highlight on OutreachColumn. Same pattern as deals-page-kanban-view.tsx.
   const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
+
+  // Stage id whose full contact list is open, if any — the board's default
+  // view is StageSummaryCard tiles only (see that file's header comment for
+  // why); clicking one opens StageDetailModal for that single stage.
+  const [openStageId, setOpenStageId] = useState<string | null>(null);
 
   const orderedStages = sortStagesByPosition(stages);
 
@@ -407,35 +413,43 @@ export function OutreachBoard() {
           <p className="text-sm text-text-muted mt-1">Ask an admin to set up the outreach pipeline stages.</p>
         </div>
       ) : (
-        <div className="flex items-stretch gap-1">
-          {orderedStages.map((stage, index) => (
-            <div key={stage.id} className="flex items-stretch flex-1 min-w-0">
-              <OutreachColumn
-                stage={stage}
-                contacts={contacts.filter((c) => c.stageId === stage.id)}
-                allStages={orderedStages}
-                onAddContact={openCreate}
-                onOpenContact={openEdit}
-                onMoveContact={handleMove}
-                onEnrichContact={handleEnrich}
-                enrichingContactId={enrichingId}
-                selectedIds={selectedIds}
-                onToggleSelect={toggleSelect}
-                onToggleSelectAll={toggleSelectAllInStage}
-                dragOverStageId={dragOverStageId}
-                onDragOverStage={setDragOverStageId}
-                onDragLeaveStage={() => setDragOverStageId(null)}
-                onDropOnStage={handleDrop}
-              />
-              {index < orderedStages.length - 1 && (
-                <div className="flex items-center justify-center w-6 shrink-0 text-text-muted/60" aria-hidden="true">
-                  <span className="material-symbols-outlined text-[20px]">arrow_forward</span>
-                </div>
-              )}
-            </div>
+        <div className="flex flex-wrap gap-3">
+          {orderedStages.map((stage) => (
+            <StageSummaryCard
+              key={stage.id}
+              stage={stage}
+              contacts={contacts.filter((c) => c.stageId === stage.id)}
+              onOpen={setOpenStageId}
+            />
           ))}
         </div>
       )}
+
+      {openStageId &&
+        (() => {
+          const openStage = orderedStages.find((s) => s.id === openStageId);
+          if (!openStage) return null;
+          return (
+            <StageDetailModal
+              stage={openStage}
+              contacts={contacts.filter((c) => c.stageId === openStage.id)}
+              allStages={orderedStages}
+              onClose={() => setOpenStageId(null)}
+              onAddContact={openCreate}
+              onOpenContact={openEdit}
+              onMoveContact={handleMove}
+              onEnrichContact={handleEnrich}
+              enrichingContactId={enrichingId}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onToggleSelectAll={toggleSelectAllInStage}
+              dragOverStageId={dragOverStageId}
+              onDragOverStage={setDragOverStageId}
+              onDragLeaveStage={() => setDragOverStageId(null)}
+              onDropOnStage={handleDrop}
+            />
+          );
+        })()}
 
       {formOpen && (
         <ContactFormModal
