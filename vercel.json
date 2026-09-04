@@ -2,7 +2,6 @@
   "version": 2,
   "installCommand": "rm -f package-lock.json && npm install --include=dev",
   "buildCommand": "npm run build:api && npm run build --workspace=@ai-crm/web-next",
-  "outputDirectory": "apps/web-next/.next",
   "functions": {
     "apps/web-next/src/app/api/[...slug]/route.ts": {
       "memory": 1769,

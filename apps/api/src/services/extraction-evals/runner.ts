@@ -73,6 +73,7 @@ async function main(): Promise<void> {
   const aiEnabled = !!(
     process.env.OPENAI_API_KEY ||
     process.env.ANTHROPIC_API_KEY ||
+    process.env.ANTHROPIC_OAUTH_TOKEN ||
     process.env.OPENROUTER_API_KEY
   );
   console.log(`\nExtraction eval — ${CASES.length} case(s), AI ${aiEnabled ? 'enabled' : 'DISABLED'}\n`);
