@@ -229,8 +229,13 @@ export function requireOrgSlug(slugOrSlugs: string | string[]) {
   };
 }
 
-/** Gates a router to the Cicero Capital org (Organization.slug === 'cicero-capital'). */
-export const requireCiceroCapital = requireOrgSlug('cicero-capital');
+/** Gates a router to the Cicero Capital org, plus 'pocket-fund' — a wholly
+ *  separate, isolated Organization (own signup, own founding user
+ *  pushkarrathod12@gmail.com, zero real data) created specifically for
+ *  safe Outreach testing (Enrich/Send) without touching the real org's
+ *  700+ imported companies or its live Reply.io account. See
+ *  cicero-test-org-outreach-stages.sql for how its stages were seeded. */
+export const requireCiceroCapital = requireOrgSlug(['cicero-capital', 'pocket-fund']);
 
 /**
  * Verify a deal belongs to the user's organization.
