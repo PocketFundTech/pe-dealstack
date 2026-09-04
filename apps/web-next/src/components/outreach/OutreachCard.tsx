@@ -32,6 +32,7 @@ export function OutreachCard({
   enriching,
   selected,
   onToggleSelect,
+  onSend,
 }: {
   contact: OutreachContact;
   /** Every stage except this card's current one, ordered by position. */
@@ -44,6 +45,10 @@ export function OutreachCard({
   /** For bulk "Move to stage" — see useOutreachSelection.ts. */
   selected: boolean;
   onToggleSelect: (contactId: string) => void;
+  /** Opens SendConfirmModal for just this contact — see that file for why
+   *  Send never fires directly from a menu click (a real, live Reply.io
+   *  account is connected on this deployment). */
+  onSend: (contactId: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -136,6 +141,18 @@ export function OutreachCard({
                   {enriching ? "progress_activity" : "auto_awesome"}
                 </span>
                 {enriching ? "Enriching..." : "Enrich"}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  onSend(contact.id);
+                }}
+                className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-text-secondary hover:bg-primary-light hover:text-[#003366] transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">send</span>
+                Send
               </button>
               <div className="my-1 border-t border-border-subtle" />
               <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider">

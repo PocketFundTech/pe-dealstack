@@ -23,6 +23,17 @@
 //      server-side (services/outreachCsvImport.ts); goes through
 //      authFetchRaw, not api.post, per the multipart convention in
 //      deal-intake/components.tsx — see CsvImportButton.tsx)
+//   GET    /outreach/campaigns             -> ListCampaignsResult
+//     (no Reply.io provider configured yet -> { configured: false,
+//      campaigns: [], reason } — same "not run yet" idiom as enrich/
+//      sync-replies, not an error)
+//   POST   /outreach/contacts/:id/send     -> OutreachContact | SendNotRunResult
+//     (body: { campaignId }. Enrolls the contact in a live Reply.io
+//      sequence — this is a REAL, outward-facing action once Reply.io is
+//      configured, not a dry run. Requires the contact to have an email;
+//      SendConfirmModal filters ineligible contacts out client-side before
+//      ever calling this, and shows the split so nothing is silently
+//      dropped.)
 
 export interface OutreachStage {
   id: string;
@@ -139,6 +150,45 @@ export interface SyncRepliesNotRunResult {
 }
 
 export type SyncRepliesResult = SyncRepliesSummary | SyncRepliesNotRunResult;
+
+/** One Reply.io sequence/campaign, as listed by `GET /outreach/campaigns`
+ *  (apps/api/src/services/replyIoService.ts's ReplyIoCampaign). `id` is
+ *  numeric on Reply.io's side but travels as a string once it's a
+ *  campaignId elsewhere (the send endpoint's zod schema, the <select>
+ *  value) — kept numeric here to match the list response exactly. */
+export interface ReplyIoCampaign {
+  id: number;
+  name: string;
+  status: string;
+}
+
+/** `GET /outreach/campaigns` response shape. `configured: false` is the
+ *  expected/normal state until REPLY_IO_API_KEY is set — same idiom as
+ *  EnrichNotRunResult/SyncRepliesNotRunResult above. `error` (configured
+ *  true, live call failed) is distinct from that and worth surfacing
+ *  differently — a real upstream problem, not "not set up yet". */
+export interface ListCampaignsResult {
+  configured: boolean;
+  campaigns: ReplyIoCampaign[];
+  reason?: string;
+  error?: string;
+}
+
+/** `POST /outreach/contacts/:id/send` when Reply.io isn't configured yet —
+ *  same "not run" idiom as EnrichNotRunResult. A contact missing an email
+ *  (the common case for Private Circle/Clay-imported rows) is filtered out
+ *  client-side by SendConfirmModal before this endpoint is ever called, so
+ *  that specific failure reason shouldn't normally reach this type — kept
+ *  here anyway since the backend can still return it (e.g. a race where the
+ *  email was cleared between load and send). */
+export interface SendNotRunResult {
+  sent: false;
+  reason: string;
+}
+
+/** The send endpoint returns either the updated contact (enrolled in the
+ *  campaign for real) or a `{ sent: false, reason }` explainer. */
+export type SendContactResult = OutreachContact | SendNotRunResult;
 
 /** `POST /outreach/import/private-circle` response — a bulk CSV import, not
  *  a single-contact mutation. `received` is the row count parsed from the

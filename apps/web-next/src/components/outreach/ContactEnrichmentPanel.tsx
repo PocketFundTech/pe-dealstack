@@ -39,18 +39,33 @@ interface EnrichmentLogEntry {
 }
 
 /** Pull recognizable `{ status, fetchedAt }` entries out of the loosely-typed
- *  enrichmentData bag. An entry whose value isn't even an object is dropped
- *  entirely (nothing safe to render); a recognized entry with an
- *  unrecognized `status` string is still kept — it renders as an "Unknown"
- *  pill rather than being silently discarded. */
+ *  enrichmentData bag. An entry is only included when `value.status` is
+ *  actually a string — that's what every real provider attempt writes (see
+ *  the `ProviderResult`/`EnrichmentProviderRecord` shape in
+ *  outreachEnrichment.ts / types.ts), so a recognized entry with an
+ *  unrecognized `status` *value* is still kept (it renders as an "Unknown"
+ *  pill rather than being silently discarded).
+ *
+ *  This also happens to be exactly the check that excludes the `import` key
+ *  written by outreachContactImport.ts's `createNewContact()` when a
+ *  contact is first created from a CSV/webhook import
+ *  (`enrichmentData: { import: { provider, importedAt, raw } }`). That's
+ *  import metadata, not an enrichment attempt, and has no `status` field at
+ *  all, so it's dropped here rather than rendered as a confusing "Unknown"
+ *  enrichment log entry. Checking for a string `status` is a more precise
+ *  signal than checking the key name against a known-provider list: it
+ *  excludes today's one known non-provider blob and will still correctly
+ *  include any future real provider without this function needing an
+ *  update. */
 function parseEnrichmentEntries(data: OutreachContact["enrichmentData"]): EnrichmentLogEntry[] {
   if (!isRecord(data)) return [];
   const entries: EnrichmentLogEntry[] = [];
   for (const [key, value] of Object.entries(data)) {
     if (!isRecord(value)) continue;
+    if (typeof value.status !== "string") continue;
     entries.push({
       providerKey: key,
-      status: typeof value.status === "string" ? value.status : null,
+      status: value.status,
       fetchedAt: typeof value.fetchedAt === "string" ? value.fetchedAt : null,
     });
   }

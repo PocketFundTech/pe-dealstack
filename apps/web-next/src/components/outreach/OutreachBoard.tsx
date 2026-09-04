@@ -9,7 +9,10 @@ import { StageDetailModal } from "./StageDetailModal";
 import { ContactFormModal } from "./ContactFormModal";
 import { OutreachToolbar } from "./OutreachToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
+import { SendConfirmModal } from "./SendConfirmModal";
 import { useOutreachSelection } from "./useOutreachSelection";
+import { useOutreachSend } from "./useOutreachSend";
+import { useOutreachReviewFlags } from "./useOutreachReviewFlags";
 import {
   emptyContactForm,
   contactToFormValues,
@@ -49,19 +52,9 @@ export function OutreachBoard() {
   // the "Enrich" action wherever it's triggered from (card menu or modal).
   const [enrichingId, setEnrichingId] = useState<string | null>(null);
 
-  // Contact id currently having its "needs review" flag cleared, if any —
-  // drives the loading state on the modal's "Mark reviewed" action.
-  const [markingReviewedId, setMarkingReviewedId] = useState<string | null>(null);
-
   // True while a board-wide POST /outreach/sync-replies call is in flight —
   // drives the loading state on the "Sync Replies" header button.
   const [syncingReplies, setSyncingReplies] = useState(false);
-
-  // Contact id currently having its "needs match review" flag cleared, if
-  // any — drives the loading state on the modal's "Confirm as new contact"
-  // action. Separate from markingReviewedId above: needsMatchReview is a
-  // bulk-import duplicate-detection concern, not reply-intent review.
-  const [confirmingMatchReviewId, setConfirmingMatchReviewId] = useState<string | null>(null);
 
   // Stage id currently being dragged over, if any — drives the dashed-border
   // highlight on OutreachColumn. Same pattern as deals-page-kanban-view.tsx.
@@ -84,6 +77,13 @@ export function OutreachBoard() {
     bulkMove,
     bulkEnrich,
   } = useOutreachSelection(contacts, setContacts);
+
+  const { sendModalContacts, sending, openSendModal, closeSendModal, confirmSend } = useOutreachSend(setContacts);
+
+  const { markingReviewedId, confirmingMatchReviewId, markReviewed, confirmMatchReview } = useOutreachReviewFlags(
+    setContacts,
+    setEditingContact,
+  );
 
   // ─── Load ───────────────────────────────────────────────────────────────
 
@@ -254,55 +254,6 @@ export function OutreachBoard() {
     }
   }
 
-  // ─── Mark reviewed ──────────────────────────────────────────────────────
-  // Clears a flagged contact's needsReview flag once a human has read the
-  // reply and made a judgment call. A plain partial PATCH, same pattern as
-  // handleMove above.
-
-  async function handleMarkReviewed(contactId: string) {
-    if (markingReviewedId) return;
-    setMarkingReviewedId(contactId);
-    try {
-      const updated = await api.patch<OutreachContact>(`/outreach/contacts/${contactId}`, {
-        needsReview: false,
-      });
-      setContacts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-      setEditingContact((prev) => (prev && prev.id === updated.id ? updated : prev));
-      showToast("Marked as reviewed", "success");
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Failed to update contact";
-      showToast(message, "error");
-    } finally {
-      setMarkingReviewedId(null);
-    }
-  }
-
-  // ─── Confirm as new contact (clears needsMatchReview) ──────────────────
-  // Clears a bulk-import duplicate-detection flag once a human has checked
-  // the contact isn't actually a duplicate. Same plain-PATCH shape as
-  // handleMarkReviewed above, but a distinct field — needsMatchReview is a
-  // Private Circle import concern, unrelated to reply-intent review. No
-  // merge UI here by design; combining duplicate records stays a manual,
-  // out-of-band step.
-
-  async function handleConfirmMatchReview(contactId: string) {
-    if (confirmingMatchReviewId) return;
-    setConfirmingMatchReviewId(contactId);
-    try {
-      const updated = await api.patch<OutreachContact>(`/outreach/contacts/${contactId}`, {
-        needsMatchReview: false,
-      });
-      setContacts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-      setEditingContact((prev) => (prev && prev.id === updated.id ? updated : prev));
-      showToast("Confirmed as new contact", "success");
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Failed to update contact";
-      showToast(message, "error");
-    } finally {
-      setConfirmingMatchReviewId(null);
-    }
-  }
-
   // ─── Sync replies ───────────────────────────────────────────────────────
   // Board-level "check for new replies" action — pulls from Reply.io and
   // runs Claude intent-classification server-side. Reply.io may not be
@@ -401,8 +352,10 @@ export function OutreachBoard() {
         stages={orderedStages}
         moving={bulkMoving}
         enriching={bulkEnriching}
+        sending={sending}
         onMove={bulkMove}
         onEnrich={bulkEnrich}
+        onSend={() => openSendModal(contacts.filter((c) => selectedIds.has(c.id)))}
         onClear={clearSelection}
       />
 
@@ -447,6 +400,10 @@ export function OutreachBoard() {
               onDragOverStage={setDragOverStageId}
               onDragLeaveStage={() => setDragOverStageId(null)}
               onDropOnStage={handleDrop}
+              onSendContact={(contactId) => {
+                const target = contacts.find((c) => c.id === contactId);
+                if (target) openSendModal([target]);
+              }}
             />
           );
         })()}
@@ -473,16 +430,28 @@ export function OutreachBoard() {
             formMode === "edit" && editingContact ? markingReviewedId === editingContact.id : false
           }
           onMarkReviewed={
-            formMode === "edit" && editingContact ? () => handleMarkReviewed(editingContact.id) : undefined
+            formMode === "edit" && editingContact ? () => markReviewed(editingContact.id) : undefined
           }
           confirmingMatchReview={
             formMode === "edit" && editingContact ? confirmingMatchReviewId === editingContact.id : false
           }
           onConfirmMatchReview={
             formMode === "edit" && editingContact
-              ? () => handleConfirmMatchReview(editingContact.id)
+              ? () => confirmMatchReview(editingContact.id)
               : undefined
           }
+          onSend={
+            formMode === "edit" && editingContact ? () => openSendModal([editingContact]) : undefined
+          }
+        />
+      )}
+
+      {sendModalContacts && (
+        <SendConfirmModal
+          contacts={sendModalContacts}
+          sending={sending}
+          onConfirm={confirmSend}
+          onClose={closeSendModal}
         />
       )}
 

@@ -1,18 +1,24 @@
 "use client";
 
-import { type DragEvent } from "react";
+import { useState, type DragEvent } from "react";
 import { cn } from "@/lib/cn";
 import { OutreachCard } from "./OutreachCard";
 import type { OutreachContact, OutreachStage } from "./types";
 
 // ---------------------------------------------------------------------------
 // One pipeline stage's full contact list: header (name + count + select-all
-// + add button [+ close, when hosted in a modal]) and its cards. Used
-// exclusively inside StageDetailModal (the main board shows StageSummaryCard
-// tiles instead — clicking one opens this) — sized to fill whatever
-// container it's placed in (flex-1 + overflow-y-auto), not a fixed
-// viewport-relative height, since it's no longer an inline sibling in a row
-// of columns.
+// + add button [+ close, when hosted in a modal] + a name/company search
+// row) and its cards. Used exclusively inside StageDetailModal (the main
+// board shows StageSummaryCard tiles instead — clicking one opens this) —
+// sized to fill whatever container it's placed in (flex-1 +
+// overflow-y-auto), not a fixed viewport-relative height, since it's no
+// longer an inline sibling in a row of columns. Real stages can hold 700+
+// contacts, so the search box is what makes finding one tractable.
+//
+// The search box filters only what's rendered (`filteredContacts`) — the
+// "select all" checkbox intentionally keeps operating on the full,
+// unfiltered `contacts` list via `onToggleSelectAll` (bulk-move semantics
+// are out of scope here; don't wire selection to the filtered list).
 // ---------------------------------------------------------------------------
 export function OutreachColumn({
   stage,
@@ -31,6 +37,7 @@ export function OutreachColumn({
   onDragLeaveStage,
   onDropOnStage,
   onClose,
+  onSendContact,
 }: {
   stage: OutreachStage;
   contacts: OutreachContact[];
@@ -52,13 +59,26 @@ export function OutreachColumn({
   onDropOnStage: (e: DragEvent<HTMLDivElement>, stageId: string) => void;
   /** Present when hosted inside StageDetailModal — renders a close button in the header. */
   onClose?: () => void;
+  /** Opens SendConfirmModal for one contact — see OutreachCard.tsx. */
+  onSendContact: (contactId: string) => void;
 }) {
+  const [search, setSearch] = useState("");
+
   const otherStages = allStages.filter((s) => s.id !== stage.id);
   const allSelectedInStage = contacts.length > 0 && contacts.every((c) => selectedIds.has(c.id));
 
+  // Case-insensitive substring match against name OR company. Left
+  // deliberately independent of the "select all" checkbox above, which
+  // still operates on the full unfiltered `contacts` — see onToggleSelectAll.
+  const q = search.trim().toLowerCase();
+  const isSearching = q.length > 0;
+  const filteredContacts = contacts.filter(
+    (c) => c.name.toLowerCase().includes(q) || (c.company ?? "").toLowerCase().includes(q),
+  );
+
   return (
     <div className="h-full flex flex-col min-h-0" data-stage-id={stage.id}>
-      <div className="px-4 py-3 border-b border-border-subtle bg-background-body shrink-0">
+      <div className="px-4 py-3 border-b border-border-subtle bg-background-body shrink-0 flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <input
@@ -76,7 +96,7 @@ export function OutreachColumn({
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <span className="text-xs font-bold bg-white/70 border border-border-subtle px-2 py-0.5 rounded-full text-text-muted">
-              {contacts.length}
+              {isSearching ? `${filteredContacts.length} of ${contacts.length}` : contacts.length}
             </span>
             <button
               type="button"
@@ -99,6 +119,30 @@ export function OutreachColumn({
             )}
           </div>
         </div>
+        <div className="relative">
+          <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted text-[16px] pointer-events-none">
+            search
+          </span>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name or company..."
+            aria-label={`Search contacts in ${stage.name}`}
+            className="w-full rounded-lg border border-border-subtle bg-white pl-8 pr-8 py-1.5 text-sm text-text-main placeholder-text-muted focus:border-primary focus:ring-1 focus:ring-primary/30 transition-colors"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center size-5 rounded-md text-text-muted hover:bg-gray-100 hover:text-text-main transition-colors"
+              aria-label="Clear search"
+              title="Clear search"
+            >
+              <span className="material-symbols-outlined text-[14px]">close</span>
+            </button>
+          )}
+        </div>
       </div>
       <div
         className={cn(
@@ -115,7 +159,7 @@ export function OutreachColumn({
         }}
         onDrop={(e) => onDropOnStage(e, stage.id)}
       >
-        {contacts.map((contact) => (
+        {filteredContacts.map((contact) => (
           <OutreachCard
             key={contact.id}
             contact={contact}
@@ -126,12 +170,19 @@ export function OutreachColumn({
             enriching={enrichingContactId === contact.id}
             selected={selectedIds.has(contact.id)}
             onToggleSelect={onToggleSelect}
+            onSend={onSendContact}
           />
         ))}
         {contacts.length === 0 && (
           <div className="text-center py-8 text-text-muted text-sm">
             <span className="material-symbols-outlined text-2xl mb-2 block opacity-40">inbox</span>
             No contacts yet
+          </div>
+        )}
+        {contacts.length > 0 && isSearching && filteredContacts.length === 0 && (
+          <div className="text-center py-8 text-text-muted text-sm">
+            <span className="material-symbols-outlined text-2xl mb-2 block opacity-40">search_off</span>
+            No contacts match &quot;{search.trim()}&quot;
           </div>
         )}
       </div>

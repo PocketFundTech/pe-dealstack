@@ -28,6 +28,7 @@ export function StageDetailModal({
   onDragOverStage,
   onDragLeaveStage,
   onDropOnStage,
+  onSendContact,
 }: {
   stage: OutreachStage;
   contacts: OutreachContact[];
@@ -45,6 +46,7 @@ export function StageDetailModal({
   onDragOverStage: (stageId: string) => void;
   onDragLeaveStage: () => void;
   onDropOnStage: (e: DragEvent<HTMLDivElement>, stageId: string) => void;
+  onSendContact: (contactId: string) => void;
 }) {
   return (
     <div
@@ -72,6 +74,7 @@ export function StageDetailModal({
           onDragLeaveStage={onDragLeaveStage}
           onDropOnStage={onDropOnStage}
           onClose={onClose}
+          onSendContact={onSendContact}
         />
       </div>
     </div>

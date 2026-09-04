@@ -38,6 +38,7 @@ export function ContactFormModal({
   onMarkReviewed,
   confirmingMatchReview,
   onConfirmMatchReview,
+  onSend,
 }: {
   mode: "create" | "edit";
   /** Present only in edit mode — used for the read-only metadata footer. */
@@ -64,6 +65,11 @@ export function ContactFormModal({
    *  review. No merge action here by design — combining duplicate records
    *  stays a manual, out-of-band step. */
   onConfirmMatchReview?: () => void;
+  /** Present only in edit mode — opens SendConfirmModal for this one
+   *  contact (see that file: a real, live Reply.io account is connected on
+   *  this deployment, so Send always goes through its double-confirmation
+   *  flow, never fires directly from this button). */
+  onSend?: () => void;
 }) {
   const [form, setForm] = useState<OutreachContactFormValues>(initialValues);
   const orderedStages = sortStagesByPosition(stages);
@@ -389,6 +395,16 @@ export function ContactFormModal({
                       {enriching ? "progress_activity" : "auto_awesome"}
                     </span>
                     {enriching ? "Enriching..." : "Enrich"}
+                  </button>
+                )}
+                {onSend && (
+                  <button
+                    type="button"
+                    onClick={onSend}
+                    className="px-4 py-2 rounded-lg border border-border-subtle text-text-secondary text-sm font-medium hover:bg-primary-light hover:text-[#003366] hover:border-primary/30 transition-colors flex items-center gap-1.5"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">send</span>
+                    Send
                   </button>
                 )}
                 {onDelete && (

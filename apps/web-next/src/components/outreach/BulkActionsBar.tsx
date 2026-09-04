@@ -11,37 +11,36 @@ import type { OutreachStage } from "./types";
 // action. "Enrich" is a single button (no picker needed — it always runs
 // every configured provider, same as the per-card action).
 //
-// Deliberately NOT here: a bulk "Send" action. The backend endpoint for
-// sending via Reply.io (POST /contacts/:id/send) exists but has never been
-// wired to any UI, bulk or single. It requires a real email per contact
-// (Reply.io has no phone/LinkedIn-only path today), which the two real
-// import sources never provide, and REPLY_IO_API_KEY is genuinely
-// configured on this deployment — so a Send button here would either 400
-// for almost every contact or, worse, actually email the rare one that
-// does have an address. Building that needs an explicit answer on whether
-// this Reply.io account is live or a test workspace, and the
-// double-confirmation flow that was asked for — not a quiet addition
-// alongside Move/Enrich.
+// "Send" opens SendConfirmModal rather than firing directly — clicking it
+// here doesn't send anything by itself, `sending` only reflects a send
+// already confirmed and in flight inside that modal. See SendConfirmModal.tsx
+// for why this needed a dedicated confirm step (a real, live Reply.io
+// account is connected on this deployment — not a test workspace).
 // ---------------------------------------------------------------------------
 export function BulkActionsBar({
   count,
   stages,
   moving,
   enriching,
+  sending,
   onMove,
   onEnrich,
+  onSend,
   onClear,
 }: {
   count: number;
   stages: OutreachStage[];
   moving: boolean;
   enriching: boolean;
+  /** True while a send confirmed in SendConfirmModal is actually in flight. */
+  sending: boolean;
   onMove: (stageId: string) => void;
   onEnrich: () => void;
+  onSend: () => void;
   onClear: () => void;
 }) {
   if (count === 0) return null;
-  const busy = moving || enriching;
+  const busy = moving || enriching || sending;
 
   return (
     <div className="sticky top-0 z-30 rounded-lg border border-primary/30 bg-primary-light shadow-sm overflow-hidden">
@@ -60,6 +59,17 @@ export function BulkActionsBar({
               {enriching ? "progress_activity" : "auto_awesome"}
             </span>
             {enriching ? "Enriching..." : "Enrich"}
+          </button>
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={busy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-primary/30 bg-white text-sm font-medium text-[#003366] hover:bg-primary-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span className={cn("material-symbols-outlined text-[16px]", sending && "animate-spin")}>
+              {sending ? "progress_activity" : "send"}
+            </span>
+            {sending ? "Sending..." : "Send"}
           </button>
           <select
             disabled={busy}
