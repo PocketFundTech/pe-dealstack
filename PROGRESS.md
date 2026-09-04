@@ -5,6 +5,57 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 70 — August 25 – September 4, 2026
+
+#### Timestamp: September 4, 2026 — 12:59 IST
+
+#### Goal: Build out the product's transactional email system end-to-end (Resend), then get it actually deployed.
+
+#### 1. Ten transactional emails shipped (PRs #129, #130)
+
+Audited what the product sends today vs. what a PE-CRM/VDR/e-sign product is expected to send, then built the gap. All follow one pattern (`welcomeEmail.ts` as reference): module-level null-safe Resend client, `escapeHtml` on every interpolated value, Banker Blue inline HTML, `Promise<boolean>` return, never throws into the caller. Every call site is fire-and-forget and cannot break its host request.
+
+Shipped: **welcome** (signup) · **password-changed** · **new-device login alert** · **NDA signature-completed** · **deal stage-changed** · **weekly activity digest** · **first-view document alert** · **share-link expiry warning** · **@mention email** · **re-engagement nudge**.
+
+PR #130's nine were built by 8 parallel agents against a pre-scaffolded set of routers/mounts, so no two agents touched the same file. ~100 new tests.
+
+**Deliberately not built:** billing/dunning (no payment infrastructure exists to hook into) and true inactivity-based stale-deal nudges (`cron-reactivation.ts` is a PASSED-deal rescoring sweep, not a staleness detector — needs its own criteria design). What shipped is "deal stage changed" only.
+
+**Migrations (both run + confirmed 2026-09-01):** `login-device-migration.sql` (`KnownLoginDevice`), `deal-share-expiry-warning-migration.sql` (`DealShare.expiryWarningSentAt`).
+
+#### 2. All six crons were dead in production (PR #131)
+
+**Problem:** every `/api/cron/*` route 401'd before its body ran — including `signal-scan`, `doc-request-reminders` and `reactivation`, which had been silent no-ops for months.
+
+**Root cause, two defects stacked:**
+1. **Ordering.** `app.ts`/`app-ai.ts` mount protected routers with a bare `/api` prefix, so `authMiddleware` runs for *any* `/api/*` path registered after them. The cron mounts sat at the bottom of both files. Vercel calls crons with `Authorization: Bearer $CRON_SECRET`, which is not a Supabase JWT → 401 before the CRON_SECRET check.
+2. **Bundle placement.** `pickBundle` routes all `/api/cron/*` to the **ai** bundle, but #130's three new crons were mounted only in `app-lite.ts`. `bundle-route-parity.test.ts` passed because it only asserts "in app.ts ⇒ in lite **or** ai".
+
+**Fix:** all six cron routers mount in `app-ai.ts` above the protected block; removed from `app-lite.ts`; `app.ts` ordering matched. `tests/cron-mount-order.test.ts` pins all three invariants and was verified to **fail against the pre-fix source** before being confirmed green.
+
+Proven on the real compiled bundle: `/api/cron/reactivation` with the correct secret went from 401 to `200 {"orgs":65,...}`.
+
+#### 3. Auto-deploy had been broken since the repo transfer
+
+**Problem:** #129 merged Aug 29 and never went live. Production served a bundle predating it; every commit since had **zero Vercel statuses** — Vercel wasn't failing builds, it never saw the commits.
+
+**Root cause:** the repo moved `ganeshjagtap7/pe-dealstack` → `PocketFundTech/pe-dealstack`. The Vercel GitHub App was authorized against the personal account, and the project's stored git link still read `ganeshjagtap7` (the dashboard *displayed* the new name because GitHub redirects by repo ID, which masked it). Last Vercel commit status: Aug 24 (#128, merged from `ganeshjagtap7`).
+
+Ruled out along the way: billing (an `Overdue` badge was a red herring — CLI deploys kept succeeding throughout), paused project, ignored-build-step, wrong production branch (`main` was correct all along).
+
+**Fix:** installed the Vercel GitHub App on the PocketFundTech org, then disconnected/reconnected the project's git repo. Link now reads `PocketFundTech / pe-dealstack`.
+
+#### Incident
+
+While verifying the cron fix against the real compiled bundle, the test worktree still had a `.env` carrying live production credentials — the weekly-digest cron executed against the production database and live Resend key, sending **9 real digest emails** to Pocket Fund admins at 17:51 on 2026-09-01. Content was accurate (a genuine digest of real activity for the week of Aug 25); the timing was unintended. Credentials removed from the worktree. Lesson: stub the mail service or use a throwaway key before booting a real bundle.
+
+#### Still pending
+
+- Live smoke test of the 9 emails that have never sent to a real inbox (only the welcome email is delivery-verified).
+- Two test signup accounts (`ganeshjagtap006+welcometest@`, `+welcometest2@`) remain in the Supabase Auth pool.
+
+---
+
 ### Session 69 — August 24, 2026
 
 #### Timestamp: August 24, 2026 — 20:45-21:45 IST
