@@ -164,6 +164,7 @@ export function OutreachColumn({
             key={contact.id}
             contact={contact}
             otherStages={otherStages}
+            currentStageName={stage.name}
             onOpen={onOpenContact}
             onMove={onMoveContact}
             onEnrich={onEnrichContact}

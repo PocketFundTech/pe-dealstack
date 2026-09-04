@@ -118,8 +118,13 @@ export function useOutreachSelection(
   // Anymail short-circuit to 'no_person' (see looksLikeCompanyNameOnly) —
   // that's expected, not a bug, and the toast says so rather than reading
   // as a silent failure.
-  async function bulkEnrich() {
-    const ids = Array.from(selectedIds);
+  //
+  // Shared by both entry points below: `bulkEnrich()` (whatever's currently
+  // in `selectedIds`) and `enrichAllInStage()` (a caller-supplied id list,
+  // used by the Source stage tile's "Enrich all" quick action) — same
+  // batching/toast reporting either way, only how `ids` gets sourced
+  // differs, so the fan-out loop itself isn't duplicated between them.
+  async function enrichContactIds(ids: string[]) {
     if (ids.length === 0 || bulkEnriching) return;
     setBulkEnriching(true);
 
@@ -172,6 +177,21 @@ export function useOutreachSelection(
     showToast(parts.join(", ") || "No changes", enriched > 0 ? "success" : "warning");
   }
 
+  async function bulkEnrich() {
+    await enrichContactIds(Array.from(selectedIds));
+  }
+
+  // One-shot "select exactly these, then enrich" — deliberately NOT built
+  // on toggleSelectAllInStage (that one TOGGLES, so calling it when some
+  // but not all of the stage is already selected could deselect instead of
+  // select-all). Replaces the selection outright so the result is always
+  // "exactly this stage's contacts", then reuses the same fan-out as
+  // bulkEnrich above.
+  async function enrichAllInStage(contactIds: string[]) {
+    setSelectedIds(new Set(contactIds));
+    await enrichContactIds(contactIds);
+  }
+
   return {
     selectedIds,
     bulkMoving,
@@ -181,5 +201,6 @@ export function useOutreachSelection(
     clearSelection,
     bulkMove,
     bulkEnrich,
+    enrichAllInStage,
   };
 }

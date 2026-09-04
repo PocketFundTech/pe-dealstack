@@ -338,6 +338,56 @@ export function sortStagesByPosition(stages: OutreachStage[]): OutreachStage[] {
   return [...stages].sort((a, b) => a.position - b.position);
 }
 
+/** Case-insensitive substring match against a stage's free-text name — same
+ *  keyword-match style as StageSummaryCard's `iconForStage`, since stage
+ *  names are admin-configurable (not a fixed enum), so nothing can hardcode
+ *  stage ids. */
+function stageNameMatches(name: string, keyword: string): boolean {
+  return name.toLowerCase().includes(keyword);
+}
+
+/** A non-binding "Claude suggests moving this contact" read — the target
+ *  stage to move to, if the suggestion rule below applies. `null` means "no
+ *  suggestion", which callers should render as nothing (never a guess). */
+export interface StageMoveSuggestion {
+  stageId: string;
+  stageName: string;
+}
+
+/** Shared by OutreachCard (compact banner) and ContactFormModal (fuller
+ *  banner) so the rule lives in exactly one place.
+ *
+ *  Rule:
+ *   - Only applies when the contact has a confident, actionable reply read
+ *     (`needsReview` false and `replyIntent` set).
+ *   - Only applies while the contact's CURRENT stage looks like a
+ *     "Handle Reply" stage (name contains "reply" or "handle").
+ *   - `meeting_request` -> suggest whichever OTHER stage's name contains
+ *     "meeting"; `interested` -> suggest whichever contains "escalat".
+ *     `not_interested` / `out_of_office` / `unclear` -> no suggestion.
+ *   - If no stage matching the target keyword exists in `otherStages`
+ *     (renamed/removed by an admin), suggest nothing.
+ */
+export function suggestStageMove(
+  contact: OutreachContact,
+  currentStageName: string,
+  otherStages: OutreachStage[],
+): StageMoveSuggestion | null {
+  if (contact.needsReview || !contact.replyIntent) return null;
+
+  const looksLikeHandleReply =
+    stageNameMatches(currentStageName, "reply") || stageNameMatches(currentStageName, "handle");
+  if (!looksLikeHandleReply) return null;
+
+  let targetKeyword: string;
+  if (contact.replyIntent === "meeting_request") targetKeyword = "meeting";
+  else if (contact.replyIntent === "interested") targetKeyword = "escalat";
+  else return null; // not_interested | out_of_office | unclear
+
+  const target = otherStages.find((s) => stageNameMatches(s.name, targetKeyword));
+  return target ? { stageId: target.id, stageName: target.name } : null;
+}
+
 export function emptyContactForm(stageId: string): OutreachContactFormValues {
   return {
     name: "",

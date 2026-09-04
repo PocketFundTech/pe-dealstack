@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { getInitials, formatRelativeTime } from "@/lib/formatters";
+import { StageSuggestionBanner } from "./StageSuggestionBanner";
 import {
   CHANNEL_CONFIG,
   REPLY_INTENT_CONFIG,
   SOURCE_PROVIDER_CONFIG,
+  suggestStageMove,
   type OutreachContact,
   type OutreachStage,
 } from "./types";
@@ -26,6 +28,7 @@ import {
 export function OutreachCard({
   contact,
   otherStages,
+  currentStageName,
   onOpen,
   onMove,
   onEnrich,
@@ -37,6 +40,9 @@ export function OutreachCard({
   contact: OutreachContact;
   /** Every stage except this card's current one, ordered by position. */
   otherStages: OutreachStage[];
+  /** This card's current stage's name — needed only to check whether the
+   *  "Claude suggests..." banner below applies (see suggestStageMove). */
+  currentStageName: string;
   onOpen: (contact: OutreachContact) => void;
   onMove: (contactId: string, stageId: string) => void;
   onEnrich: (contactId: string) => void;
@@ -52,6 +58,9 @@ export function OutreachCard({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Ephemeral, client-only — resets on reload by design, no persistence.
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  const suggestion = suggestStageMove(contact, currentStageName, otherStages);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -251,6 +260,19 @@ export function OutreachCard({
           </span>
           {SOURCE_PROVIDER_CONFIG[contact.sourceProvider]!.label}
         </p>
+      )}
+
+      {/* Low-key, non-binding suggestion — deliberately a subtle indigo, not
+          the amber needsReview / violet needsMatchReview badges above, so it
+          reads as "FYI" rather than a warning. Dismiss is local state only
+          (no persistence) — resets on reload by design. */}
+      {suggestion && !suggestionDismissed && (
+        <StageSuggestionBanner
+          suggestion={suggestion}
+          variant="compact"
+          onAccept={() => onMove(contact.id, suggestion.stageId)}
+          onDismiss={() => setSuggestionDismissed(true)}
+        />
       )}
 
       {/* Indeterminate progress bar — visible feedback for the per-card "Enrich"

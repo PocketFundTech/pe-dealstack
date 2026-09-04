@@ -6,6 +6,7 @@ import { useToast } from "@/providers/ToastProvider";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { StageSummaryCard } from "./StageSummaryCard";
 import { StageDetailModal } from "./StageDetailModal";
+import { StaleContactsModal, STALE_STAGE_ID, STALE_VIEW_STAGE } from "./StaleContactsModal";
 import { ContactFormModal } from "./ContactFormModal";
 import { OutreachToolbar } from "./OutreachToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
@@ -13,6 +14,8 @@ import { SendConfirmModal } from "./SendConfirmModal";
 import { useOutreachSelection } from "./useOutreachSelection";
 import { useOutreachSend } from "./useOutreachSend";
 import { useOutreachReviewFlags } from "./useOutreachReviewFlags";
+import { useOutreachStaleness } from "./useOutreachStaleness";
+import { useOutreachSyncReplies } from "./useOutreachSyncReplies";
 import {
   emptyContactForm,
   contactToFormValues,
@@ -21,7 +24,6 @@ import {
   type OutreachContact,
   type OutreachContactFormValues,
   type OutreachStage,
-  type SyncRepliesResult,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -52,10 +54,6 @@ export function OutreachBoard() {
   // the "Enrich" action wherever it's triggered from (card menu or modal).
   const [enrichingId, setEnrichingId] = useState<string | null>(null);
 
-  // True while a board-wide POST /outreach/sync-replies call is in flight —
-  // drives the loading state on the "Sync Replies" header button.
-  const [syncingReplies, setSyncingReplies] = useState(false);
-
   // Stage id currently being dragged over, if any — drives the dashed-border
   // highlight on OutreachColumn. Same pattern as deals-page-kanban-view.tsx.
   const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
@@ -66,6 +64,12 @@ export function OutreachBoard() {
   const [openStageId, setOpenStageId] = useState<string | null>(null);
 
   const orderedStages = sortStagesByPosition(stages);
+  // Lowest-position ("Source") stage — see resolveAutoAdvanceStage in
+  // outreachEnrichment.ts. Reused for "Enrich all" + as the fallback add-stage.
+  const sourceStageId = orderedStages[0]?.id;
+  // Real (non-synthetic) stage whose contact list is open, if any.
+  const openStage =
+    openStageId && openStageId !== STALE_STAGE_ID ? (orderedStages.find((s) => s.id === openStageId) ?? null) : null;
 
   const {
     selectedIds,
@@ -76,7 +80,11 @@ export function OutreachBoard() {
     clearSelection,
     bulkMove,
     bulkEnrich,
+    enrichAllInStage,
   } = useOutreachSelection(contacts, setContacts);
+
+  // Computed cross-cutting filter over `contacts`, not a real stage — see useOutreachStaleness.ts.
+  const { staleContacts } = useOutreachStaleness(contacts);
 
   const { sendModalContacts, sending, openSendModal, closeSendModal, confirmSend } = useOutreachSend(setContacts);
 
@@ -121,6 +129,8 @@ export function OutreachBoard() {
   useEffect(() => {
     loadBoard();
   }, [loadBoard]);
+
+  const { syncingReplies, handleSyncReplies } = useOutreachSyncReplies(loadBoard);
 
   // ─── Form open/close ────────────────────────────────────────────────────
 
@@ -254,44 +264,10 @@ export function OutreachBoard() {
     }
   }
 
-  // ─── Sync replies ───────────────────────────────────────────────────────
-  // Board-level "check for new replies" action — pulls from Reply.io and
-  // runs Claude intent-classification server-side. Reply.io may not be
-  // configured yet, same "not run" idiom as handleEnrich above. On success,
-  // refetch the whole board so any newly-updated lastReplyText/replyIntent/
-  // needsReview show up across every card.
-
-  async function handleSyncReplies() {
-    if (syncingReplies) return;
-    setSyncingReplies(true);
-    try {
-      const result = await api.post<SyncRepliesResult>("/outreach/sync-replies", {});
-      if ("reason" in result) {
-        showToast(result.reason, "info");
-      } else {
-        const { checked, newReplies, flaggedForReview } = result;
-        await loadBoard();
-        const contactWord = `contact${checked !== 1 ? "s" : ""}`;
-        if (newReplies === 0) {
-          showToast(`Checked ${checked} ${contactWord} — no new replies`, "success");
-        } else {
-          const replyWord = newReplies === 1 ? "reply" : "replies";
-          const reviewPart =
-            flaggedForReview > 0
-              ? `, ${flaggedForReview} need${flaggedForReview === 1 ? "s" : ""} review`
-              : "";
-          showToast(
-            `Checked ${checked} ${contactWord} — ${newReplies} new ${replyWord}${reviewPart}`,
-            "success",
-          );
-        }
-      }
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Failed to sync replies";
-      showToast(message, "error");
-    } finally {
-      setSyncingReplies(false);
-    }
+  // Shared by StageDetailModal + the Stale view — opens SendConfirmModal for one contact.
+  function handleSendContact(contactId: string) {
+    const target = contacts.find((c) => c.id === contactId);
+    if (target) openSendModal([target]);
   }
 
   // ─── Render ─────────────────────────────────────────────────────────────
@@ -344,7 +320,7 @@ export function OutreachBoard() {
         syncingReplies={syncingReplies}
         onSyncReplies={handleSyncReplies}
         canAddContact={orderedStages.length > 0}
-        onAddContact={() => openCreate(orderedStages[0]?.id ?? "")}
+        onAddContact={() => openCreate(sourceStageId ?? "")}
       />
 
       <BulkActionsBar
@@ -373,40 +349,62 @@ export function OutreachBoard() {
               stage={stage}
               contacts={contacts.filter((c) => c.stageId === stage.id)}
               onOpen={setOpenStageId}
+              // Only the Source stage gets "Enrich all" — see enrichAllInStage.
+              onEnrichAll={
+                stage.id === sourceStageId
+                  ? () => enrichAllInStage(contacts.filter((c) => c.stageId === sourceStageId).map((c) => c.id))
+                  : undefined
+              }
+              enriching={stage.id === sourceStageId ? bulkEnriching : undefined}
             />
           ))}
+          <StageSummaryCard
+            stage={STALE_VIEW_STAGE}
+            contacts={staleContacts}
+            onOpen={setOpenStageId}
+            icon="schedule"
+          />
         </div>
       )}
 
-      {openStageId &&
-        (() => {
-          const openStage = orderedStages.find((s) => s.id === openStageId);
-          if (!openStage) return null;
-          return (
-            <StageDetailModal
-              stage={openStage}
-              contacts={contacts.filter((c) => c.stageId === openStage.id)}
-              allStages={orderedStages}
-              onClose={() => setOpenStageId(null)}
-              onAddContact={openCreate}
-              onOpenContact={openEdit}
-              onMoveContact={handleMove}
-              onEnrichContact={handleEnrich}
-              enrichingContactId={enrichingId}
-              selectedIds={selectedIds}
-              onToggleSelect={toggleSelect}
-              onToggleSelectAll={toggleSelectAllInStage}
-              dragOverStageId={dragOverStageId}
-              onDragOverStage={setDragOverStageId}
-              onDragLeaveStage={() => setDragOverStageId(null)}
-              onDropOnStage={handleDrop}
-              onSendContact={(contactId) => {
-                const target = contacts.find((c) => c.id === contactId);
-                if (target) openSendModal([target]);
-              }}
-            />
-          );
-        })()}
+      {openStageId === STALE_STAGE_ID && (
+        <StaleContactsModal
+          contacts={staleContacts}
+          allStages={orderedStages}
+          defaultAddStageId={sourceStageId ?? ""}
+          onClose={() => setOpenStageId(null)}
+          onAddContact={openCreate}
+          onOpenContact={openEdit}
+          onMoveContact={handleMove}
+          onEnrichContact={handleEnrich}
+          enrichingContactId={enrichingId}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          onSendContact={handleSendContact}
+        />
+      )}
+
+      {openStage && (
+        <StageDetailModal
+          stage={openStage}
+          contacts={contacts.filter((c) => c.stageId === openStage.id)}
+          allStages={orderedStages}
+          onClose={() => setOpenStageId(null)}
+          onAddContact={openCreate}
+          onOpenContact={openEdit}
+          onMoveContact={handleMove}
+          onEnrichContact={handleEnrich}
+          enrichingContactId={enrichingId}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          onToggleSelectAll={toggleSelectAllInStage}
+          dragOverStageId={dragOverStageId}
+          onDragOverStage={setDragOverStageId}
+          onDragLeaveStage={() => setDragOverStageId(null)}
+          onDropOnStage={handleDrop}
+          onSendContact={handleSendContact}
+        />
+      )}
 
       {formOpen && (
         <ContactFormModal
@@ -416,7 +414,7 @@ export function OutreachBoard() {
           initialValues={
             formMode === "edit" && editingContact
               ? contactToFormValues(editingContact)
-              : emptyContactForm(formStageId || orderedStages[0]?.id || "")
+              : emptyContactForm(formStageId || sourceStageId || "")
           }
           saving={saving}
           onSave={handleSave}

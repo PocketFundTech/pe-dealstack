@@ -4,12 +4,14 @@ import { useEffect, useState, type FormEvent } from "react";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/formatters";
 import { ContactEnrichmentPanel } from "./ContactEnrichmentPanel";
+import { StageSuggestionBanner } from "./StageSuggestionBanner";
 import {
   OUTREACH_CHANNELS,
   CHANNEL_CONFIG,
   REPLY_INTENT_CONFIG,
   SOURCE_PROVIDER_CONFIG,
   sortStagesByPosition,
+  suggestStageMove,
   type OutreachContact,
   type OutreachContactFormValues,
   type OutreachStage,
@@ -73,6 +75,34 @@ export function ContactFormModal({
 }) {
   const [form, setForm] = useState<OutreachContactFormValues>(initialValues);
   const orderedStages = sortStagesByPosition(stages);
+
+  // Non-binding "Claude suggests..." read — see suggestStageMove for the
+  // shared rule (also used by OutreachCard's compact version of this same
+  // banner). Ephemeral dismiss state only, no persistence, by design.
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  const currentStage = mode === "edit" && contact ? orderedStages.find((s) => s.id === contact.stageId) : undefined;
+  const suggestion =
+    mode === "edit" && contact && currentStage
+      ? suggestStageMove(
+          contact,
+          currentStage.name,
+          orderedStages.filter((s) => s.id !== contact.stageId),
+        )
+      : null;
+
+  // This modal has no dedicated "move" mutation of its own — `onSave` is
+  // the only PATCH-triggering path already wired in from the parent (see
+  // handleSave in OutreachBoard.tsx: PATCHes unconditionally and closes the
+  // modal on success), so Accept updates the form's stageId and saves
+  // immediately — a real commit, not just prefilling the dropdown for a
+  // later, separate Save click. Same name/stageId guard as the Save button
+  // itself, so Accept can't fire an invalid PATCH.
+  function handleAcceptSuggestion() {
+    if (!suggestion || !form.name.trim() || !form.stageId) return;
+    const updated = { ...form, stageId: suggestion.stageId };
+    setForm(updated);
+    onSave(updated);
+  }
 
   // Enrichment runs while this modal stays open (see the "Enrich" button
   // below) and resolves to an updated `contact` prop, not a form reset —
@@ -355,6 +385,16 @@ export function ContactFormModal({
                     </button>
                   )}
                 </div>
+              )}
+
+              {suggestion && !suggestionDismissed && (
+                <StageSuggestionBanner
+                  suggestion={suggestion}
+                  variant="full"
+                  disabled={saving || !form.name.trim() || !form.stageId}
+                  onAccept={handleAcceptSuggestion}
+                  onDismiss={() => setSuggestionDismissed(true)}
+                />
               )}
 
               {mode === "edit" && contact && (
