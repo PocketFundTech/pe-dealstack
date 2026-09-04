@@ -62,6 +62,7 @@ import { log } from '../utils/logger.js';
 import { supabase } from '../supabase.js';
 import { PERSONAL_DOMAINS } from './agents/contactEnrichment/state.js';
 import { recordTouch } from './outreachTouchLog.js';
+import { getOutreachSettings } from './outreachSettingsService.js';
 
 const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
 const ANYMAIL_FINDER_API_KEY = process.env.ANYMAIL_FINDER_API_KEY;
@@ -427,31 +428,79 @@ export async function enrichContact(contact: EnrichmentContact): Promise<EnrichC
 // waiting for a human to notice and drag it — the pipeline stage names
 // (Source -> Enrich -> Send -> ...) already describe this transition, so
 // leaving it manual once the data backing it exists is just friction.
+// Send -> Handle Reply, the third leg of this chain, lives separately in
+// resolveAutoAdvanceAfterSend below (a different trigger event, not an
+// enrichment result).
 //
-// Deliberately narrow: only advances FROM the org's first (lowest-position)
-// stage, and only when this run actually filled something in
-// (sourcesUsed.length > 0) — never regresses a contact already further
-// along (Send/Handle Reply/Escalate/etc.) just because someone re-ran
-// Enrich on it, and never advances a run that found nothing (which, for
-// company-only bulk imports, is most of them until they have a real
-// decision-maker name — see looksLikeCompanyNameOnly above). This does NOT
-// attempt full stage-derivation from touches in general — that still needs
-// the human workshop the source planning doc calls for; this is one
-// narrow, obviously-correct case.
+// Two rules, each independently toggleable per org (OutreachSettings —
+// see outreachSettingsService.ts), both positional (stage 1 = whatever is
+// at position 0, etc.) rather than name-matched, same convention the
+// original single-rule version used:
+//   A) position 0 -> position 1 ("Source" -> "Enrich"), only when this
+//      enrichment run actually filled something in (sourcesUsed.length > 0)
+//      — never on a run that found nothing, which for company-only bulk
+//      imports is most of them until they have a real decision-maker name
+//      (see looksLikeCompanyNameOnly above).
+//   B) position 1 -> position 2 ("Enrich" -> "Send"), only once the
+//      contact has a real email address — Reply.io (Send) needs one
+//      either way, so a contact without one sitting in "Send" would be
+//      misleading.
+// Never regresses a contact already further along (Send/Handle Reply/
+// Escalate/etc.) just because someone re-ran Enrich on it — each rule only
+// fires from its own specific starting position. This does NOT attempt
+// full stage-derivation from touches in general — that still needs the
+// human workshop the source planning doc calls for; these are two narrow,
+// mechanically-obvious cases.
 export async function resolveAutoAdvanceStage(
   orgId: string,
   currentStageId: string,
-  sourcesUsed: string[],
+  context: { sourcesUsed: string[]; hasEmail: boolean },
 ): Promise<string | null> {
-  if (sourcesUsed.length === 0) return null;
+  const settings = await getOutreachSettings(orgId);
   const { data: stages, error } = await supabase
     .from('OutreachStage')
     .select('id, position')
     .eq('organizationId', orgId)
     .order('position', { ascending: true });
   if (error || !stages || stages.length < 2) return null;
-  if (stages[0].id !== currentStageId) return null;
-  return stages[1].id;
+
+  const idx = stages.findIndex((s) => s.id === currentStageId);
+  if (idx === -1) return null;
+
+  if (idx === 0 && settings.autoAdvanceSourceToEnrich && context.sourcesUsed.length > 0) {
+    return stages[1].id;
+  }
+  if (idx === 1 && settings.autoAdvanceEnrichToSend && context.hasEmail && stages.length > 2) {
+    return stages[2].id;
+  }
+  return null;
+}
+
+// Third leg of the Source -> Enrich -> Send -> Handle Reply chain — a
+// different trigger event from the two rules above (a real Send actually
+// went out via Reply.io, not an enrichment result), so it's its own
+// function rather than another branch of resolveAutoAdvanceStage's
+// enrichment-shaped context. Used by routes/outreach-replyio.ts's
+// POST /contacts/:id/send, after a successful send. Same positional
+// convention: only fires from position 2 ("Send") to position 3
+// ("Handle Reply"), gated on its own settings toggle.
+export async function resolveAutoAdvanceAfterSend(
+  orgId: string,
+  currentStageId: string,
+): Promise<string | null> {
+  const settings = await getOutreachSettings(orgId);
+  if (!settings.autoAdvanceSendToHandleReply) return null;
+
+  const { data: stages, error } = await supabase
+    .from('OutreachStage')
+    .select('id, position')
+    .eq('organizationId', orgId)
+    .order('position', { ascending: true });
+  if (error || !stages || stages.length < 4) return null;
+
+  const idx = stages.findIndex((s) => s.id === currentStageId);
+  if (idx !== 2) return null;
+  return stages[3].id;
 }
 
 // ─── Persist helper ──────────────────────────────────────────────────
@@ -517,7 +566,10 @@ export async function enrichAndPersistOutreachContact(orgId: string, contactId: 
   if (result.updates.linkedinUrl && !contact.linkedinUrl) updates.linkedinUrl = result.updates.linkedinUrl;
   if (result.updates.company && !contact.company) updates.company = result.updates.company;
 
-  const autoAdvanceStageId = await resolveAutoAdvanceStage(orgId, contact.stageId, result.sourcesUsed);
+  const autoAdvanceStageId = await resolveAutoAdvanceStage(orgId, contact.stageId, {
+    sourcesUsed: result.sourcesUsed,
+    hasEmail: Boolean(updates.email || contact.email),
+  });
   if (autoAdvanceStageId) updates.stageId = autoAdvanceStageId;
 
   const { error: updateError } = await supabase

@@ -7,6 +7,7 @@ import { log } from '../utils/logger.js';
 import { listCampaigns, addContactToCampaign, checkForNewReplies } from '../services/replyIoService.js';
 import { recordOutreachReply } from '../services/outreachReplyRecorder.js';
 import { recordTouch } from '../services/outreachTouchLog.js';
+import { resolveAutoAdvanceAfterSend } from '../services/outreachEnrichment.js';
 
 // Reply.io send + reply-sync routes for the Outreach pipeline board — split
 // out of routes/outreach.ts (contact CRUD + enrich) to keep both files
@@ -110,11 +111,19 @@ router.post('/contacts/:id/send', async (req: Request, res) => {
       return res.status(502).json({ error: result.error || 'Failed to send via Reply.io' });
     }
 
-    const updates = {
+    const updates: Record<string, any> = {
       updatedAt: new Date().toISOString(),
       replyIoCampaignId: campaignId,
       sentAt: new Date().toISOString(),
     };
+
+    // Third leg of the auto-advance chain (see outreachEnrichment.ts's
+    // resolveAutoAdvanceStage) — a contact that's actually been sent
+    // shouldn't just sit in "Send" waiting for a human to notice and move
+    // it into "Handle Reply". Only fires from that specific stage
+    // position, gated on its own settings toggle.
+    const autoAdvanceStageId = await resolveAutoAdvanceAfterSend(orgId, contact.stageId);
+    if (autoAdvanceStageId) updates.stageId = autoAdvanceStageId;
 
     const { data: updated, error: updateError } = await supabase
       .from('OutreachContact')

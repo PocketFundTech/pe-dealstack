@@ -288,9 +288,12 @@ router.post('/contacts/:id/enrich', async (req: Request, res) => {
     if (result.updates.company && !contact.company) updates.company = result.updates.company;
 
     // See resolveAutoAdvanceStage's own comment (outreachEnrichment.ts) —
-    // only advances a contact off the org's first stage, only when this run
-    // actually found something.
-    const autoAdvanceStageId = await resolveAutoAdvanceStage(orgId, contact.stageId, result.sourcesUsed);
+    // Source->Enrich only when this run actually found something,
+    // Enrich->Send only once there's a real email to send to.
+    const autoAdvanceStageId = await resolveAutoAdvanceStage(orgId, contact.stageId, {
+      sourcesUsed: result.sourcesUsed,
+      hasEmail: Boolean(updates.email || contact.email),
+    });
     if (autoAdvanceStageId) updates.stageId = autoAdvanceStageId;
 
     const { data: updated, error: updateError } = await supabase

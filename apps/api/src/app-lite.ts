@@ -67,6 +67,7 @@ import dealsReactivationsRouter from './routes/deals-reactivations.js';
 import outreachRouter from './routes/outreach.js';
 import outreachReplyIoRouter from './routes/outreach-replyio.js';
 import outreachImportRouter from './routes/outreach-import.js';
+import outreachSettingsRouter from './routes/outreach-settings.js';
 import welcomeEmailRouter from './routes/welcome-email.js';
 import accountSecurityRouter from './routes/account-security.js';
 import { supabase } from './supabase.js';
@@ -411,6 +412,9 @@ app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware,
 // Private Circle CSV import — same base path + middleware chain, own file
 // for the same 500-line reason as outreachReplyIoRouter above.
 app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachImportRouter);
+// Per-org pipeline settings (stale threshold, auto-advance toggles) — same
+// base path + middleware chain, own file for the same 500-line reason.
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachSettingsRouter);
 
 // Internal admin (Pocket Fund team only — gate is inside the router via requireInternalAdmin)
 // Note: NO orgMiddleware — internal routes intentionally query across orgs.

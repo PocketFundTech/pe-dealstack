@@ -69,3 +69,7 @@ scripts/
 .worktrees/
 .vercel
 .env*
+
+# Supabase CLI local link cache — supabase/.temp/pooler-url embeds a real
+# DB password in its connection string. Never commit this directory.
+supabase/
