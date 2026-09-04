@@ -190,7 +190,8 @@ export function getOrgId(req: Request): string {
  * error, or slug mismatch returns 403. Never let a lookup failure fall
  * through to next().
  */
-export function requireOrgSlug(slug: string) {
+export function requireOrgSlug(slugOrSlugs: string | string[]) {
+  const allowedSlugs = Array.isArray(slugOrSlugs) ? slugOrSlugs : [slugOrSlugs];
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const orgId = req.user?.organizationId;
     if (!orgId) {
@@ -208,7 +209,7 @@ export function requireOrgSlug(slug: string) {
         .eq('id', orgId)
         .single();
 
-      if (error || !org || org.slug !== slug) {
+      if (error || !org || !allowedSlugs.includes(org.slug)) {
         res.status(403).json({
           error: 'Forbidden',
           message: 'This resource is not available to your organization',
