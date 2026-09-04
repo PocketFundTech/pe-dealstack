@@ -1,7 +1,7 @@
 "use client";
 
 import { useUser } from "@/providers/UserProvider";
-import { CICERO_CAPITAL_ORG_SLUG } from "@/lib/constants";
+import { OUTREACH_ALLOWED_ORG_SLUGS } from "@/lib/constants";
 import { OutreachBoard } from "@/components/outreach/OutreachBoard";
 
 export default function OutreachPage() {
@@ -9,7 +9,7 @@ export default function OutreachPage() {
 
   // Re-check access here rather than trusting the sidebar to have hidden the
   // link -- the sidebar filter is a UX convenience, not an access boundary.
-  const isCiceroCapital = user?.organization?.slug === CICERO_CAPITAL_ORG_SLUG;
+  const isCiceroCapital = OUTREACH_ALLOWED_ORG_SLUGS.includes(user?.organization?.slug ?? "");
 
   if (loading) {
     return (

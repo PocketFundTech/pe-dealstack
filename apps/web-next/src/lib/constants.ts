@@ -13,11 +13,19 @@ export type NavItem = {
   orgSlugAllowlist?: string[];
 };
 
-// Cicero Capital's Organization.slug. No Organization row exists for Cicero
-// Capital yet -- a separate migration is being written in parallel to create
-// it. Referenced here (instead of a magic string) so the nav gate and the
-// /outreach page re-check agree on the exact value.
-export const CICERO_CAPITAL_ORG_SLUG = "cicero-capital";
+// Orgs allowed to see/use Outreach. 'cicero-capital' is the real client;
+// 'pocket-fund' and 'cicero-capital-test-mtmtzb0d-ieqa' are wholly separate,
+// isolated test orgs created for safe Enrich/Send testing (see
+// apps/api/cicero-test-org-outreach-stages.sql). MUST stay in sync with the
+// backend's requireCiceroCapital allow-list (apps/api/src/middleware/
+// orgScope.ts) — that's the real access boundary; this and the /outreach
+// page re-check below are UX only (hide the link, and re-deny if someone
+// navigates there directly), not where enforcement actually happens.
+export const OUTREACH_ALLOWED_ORG_SLUGS = [
+  "cicero-capital",
+  "pocket-fund",
+  "cicero-capital-test-mtmtzb0d-ieqa",
+];
 
 export const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard", href: "/dashboard" },
@@ -28,7 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "admin", label: "Admin", icon: "admin_panel_settings", href: "/admin", adminOnly: true },
   { id: "divider", label: "", icon: "", href: "", divider: true },
   { id: "ai-reports", label: "AI Reports", icon: "auto_awesome", href: "/memo-builder", isAI: true, memberOnly: true },
-  { id: "outreach", label: "Outreach", icon: "campaign", href: "/outreach", orgSlugAllowlist: [CICERO_CAPITAL_ORG_SLUG] },
+  { id: "outreach", label: "Outreach", icon: "campaign", href: "/outreach", orgSlugAllowlist: OUTREACH_ALLOWED_ORG_SLUGS },
 ];
 
 export const STAGES = [
