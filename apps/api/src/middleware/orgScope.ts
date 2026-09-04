@@ -229,13 +229,20 @@ export function requireOrgSlug(slugOrSlugs: string | string[]) {
   };
 }
 
-/** Gates a router to the Cicero Capital org, plus 'pocket-fund' — a wholly
- *  separate, isolated Organization (own signup, own founding user
- *  pushkarrathod12@gmail.com, zero real data) created specifically for
- *  safe Outreach testing (Enrich/Send) without touching the real org's
- *  700+ imported companies or its live Reply.io account. See
- *  cicero-test-org-outreach-stages.sql for how its stages were seeded. */
-export const requireCiceroCapital = requireOrgSlug(['cicero-capital', 'pocket-fund']);
+/** Gates a router to the Cicero Capital org, plus two wholly separate,
+ *  isolated test orgs created specifically for safe Outreach testing
+ *  (Enrich/Send) without touching the real org's 700+ imported companies
+ *  or its live Reply.io account — see cicero-test-org-outreach-stages.sql
+ *  for how each one's stages were seeded:
+ *    - 'pocket-fund': founding user pushkarrathod12@gmail.com
+ *    - 'cicero-capital-test-mtmtzb0d-ieqa': org "Cicero Capital Test",
+ *      founding user deepkeswani10@gmail.com — confirmed as a legitimate
+ *      team signup before being added here, not left in by default. */
+export const requireCiceroCapital = requireOrgSlug([
+  'cicero-capital',
+  'pocket-fund',
+  'cicero-capital-test-mtmtzb0d-ieqa',
+]);
 
 /**
  * Verify a deal belongs to the user's organization.
