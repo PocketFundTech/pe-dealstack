@@ -1,0 +1,8 @@
+.worktrees/
+node_modules/
+.git/
+*.log
+.env
+.env.local
+.env.vercel*
+.planning/
