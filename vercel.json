@@ -1,7 +1,7 @@
 {
   "version": 2,
   "framework": "nextjs",
-  "installCommand": "rm -f package-lock.json && npm install --include=dev",
+  "installCommand": "rm -rf node_modules package-lock.json && npm install --include=dev",
   "buildCommand": "npm run build:api && npm run build --workspace=@ai-crm/web-next",
   "outputDirectory": "apps/web-next/.next",
   "crons": [
