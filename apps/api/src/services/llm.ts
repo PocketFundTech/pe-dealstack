@@ -19,6 +19,7 @@ import {
 import { recordUsageEvent } from './usage/trackedLLM.js';
 import { enforceUserGate, UserBlockedError } from './usage/enforcement.js';
 import { withCircuitBreaker } from './aiCircuitBreaker.js';
+import { classifyProviderRejection } from '../utils/aiErrors.js';
 import type { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 
 export { UserBlockedError } from './usage/enforcement.js';
@@ -155,46 +156,11 @@ function makeUsageHandler(
 // invokeStructured() has its own explicit primary→fallback retry so we
 // don't apply the wrapper there (no double-fallback chain).
 
-const FALLBACK_TRIGGER_HTTP_STATUSES = new Set([401, 402, 403, 429, 529]);
-const FALLBACK_TRIGGER_MESSAGE_HINTS = [
-  'credit balance',
-  'credit_balance',
-  'quota exceeded',
-  'insufficient quota',
-  'insufficient_credit',
-  'billing',
-  'payment required',
-  'organization is restricted',
-];
-
+// Classification lives in utils/aiErrors.ts (classifyProviderRejection) so
+// the extractor's "surface as 503" decision and this "try the next key"
+// decision can never disagree about what counts as a provider rejection.
 function shouldFallbackToOpenAI(err: any): boolean {
-  if (!err) return false;
-  // Anthropic SDK error envelopes vary — pull from multiple paths.
-  const status = err?.status ?? err?.statusCode ?? err?.error?.status;
-  const errType = err?.error?.type ?? err?.error?.error?.type ?? err?.type;
-  const message = String(
-    err?.message ?? err?.error?.message ?? err?.error?.error?.message ?? ''
-  ).toLowerCase();
-
-  // Typed Anthropic errors first (most reliable signal).
-  if (errType === 'rate_limit_error') return true;
-  if (errType === 'overloaded_error') return true;
-  if (errType === 'authentication_error') return true;
-  if (errType === 'permission_error') return true;
-
-  // HTTP status fallback.
-  if (typeof status === 'number' && FALLBACK_TRIGGER_HTTP_STATUSES.has(status)) {
-    return true;
-  }
-
-  // Anthropic's "credit balance too low" surfaces as a 400 with type
-  // invalid_request_error — only HTTP status can't catch it, so message-
-  // sniff. Cheap allowlist; if it ever drifts we add to the list.
-  if (FALLBACK_TRIGGER_MESSAGE_HINTS.some((hint) => message.includes(hint))) {
-    return true;
-  }
-
-  return false;
+  return classifyProviderRejection(err) !== null;
 }
 
 /**
@@ -490,11 +456,20 @@ function buildTier1AnthropicFallback(
  * Build the standard tier-1 fallback chain: Anthropic secondary key first
  * (if configured), then OpenAI direct (if configured). Empty array if
  * neither is available — wrapWithFallback short-circuits in that case.
+ *
+ * `primary` is the provider the chain hangs off. When the primary is
+ * already OpenAI direct (no ANTHROPIC_API_KEY → chatProvider 'openai'),
+ * the OpenAI-direct entry is skipped — it would be the same key that just
+ * failed — but ANTHROPIC_API_KEY_FALLBACK is still consulted. Before this,
+ * the chain was only ever built for an Anthropic primary, so a deployment
+ * with just OPENAI_API_KEY + ANTHROPIC_API_KEY_FALLBACK had NO fallback at
+ * all when OpenAI ran out of credit (2026-09-19 prod incident).
  */
 function buildTier1FallbackChain(
   operation: string,
   temperature: number,
   maxTokens: number,
+  primary: LLMProvider = 'anthropic',
 ): FallbackEntry[] {
   const chain: FallbackEntry[] = [];
   if (process.env.ANTHROPIC_API_KEY_FALLBACK) {
@@ -507,7 +482,7 @@ function buildTier1FallbackChain(
       },
     });
   }
-  if (process.env.OPENAI_API_KEY) {
+  if (process.env.OPENAI_API_KEY && primary !== 'openai') {
     chain.push({
       name: 'gpt-4o#openai-direct',
       build: () => {
@@ -533,11 +508,11 @@ export function getChatModel(temperature = 0.7, maxTokens = 1500, operation?: st
   const callbacks = [makeUsageHandler(operation, modelName, providerFor(provider))];
   const model = createModel(provider, modelName, temperature, maxTokens, callbacks);
   const tracked = trackModel(model, operation, modelName);
-  // Only wrap when primary is Anthropic and we have at least one fallback
-  // (secondary Anthropic key OR OpenAI). Wrap = patch .invoke; no cost when
-  // never triggered, but skipping when there's no point.
-  if (provider === 'anthropic') {
-    const chain = buildTier1FallbackChain(operation, temperature, maxTokens);
+  // Wrap when there is at least one fallback that isn't the primary itself
+  // (secondary Anthropic key, or OpenAI direct behind an Anthropic primary).
+  // Wrap = patch .invoke; no cost when never triggered.
+  if (provider === 'anthropic' || provider === 'openai') {
+    const chain = buildTier1FallbackChain(operation, temperature, maxTokens, provider);
     if (chain.length > 0) return wrapWithFallback(tracked, chain, operation);
   }
   return tracked;
@@ -568,8 +543,8 @@ export function getExtractionModel(maxTokens = 3000, operation?: string): BaseCh
   const callbacks = [makeUsageHandler(operation, modelName, providerFor(provider))];
   const model = createModel(provider, modelName, 0.1, maxTokens, callbacks);
   const tracked = trackModel(model, operation, modelName);
-  if (provider === 'anthropic') {
-    const chain = buildTier1FallbackChain(operation, 0.1, maxTokens);
+  if (provider === 'anthropic' || provider === 'openai') {
+    const chain = buildTier1FallbackChain(operation, 0.1, maxTokens, provider);
     if (chain.length > 0) return wrapWithFallback(tracked, chain, operation);
   }
   return tracked;

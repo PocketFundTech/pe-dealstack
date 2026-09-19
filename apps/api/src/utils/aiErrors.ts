@@ -19,15 +19,87 @@ export type AIErrorResponse = {
  */
 export class AIProviderUnavailableError extends AppError {
   provider: string;
+  /** Why the provider rejected us — set when thrown for a classified rejection. */
+  reason: ProviderRejectionReason | null;
+  /** Raw provider message (for logs / admins). */
+  detail: string | null;
 
-  constructor(provider: string) {
-    super(
-      `AI service (${provider}) is temporarily unavailable. Please try again in a moment.`,
-      503,
-      'AI_PROVIDER_UNAVAILABLE',
-    );
+  constructor(provider: string, opts?: { reason?: ProviderRejectionReason; detail?: string }) {
+    super(providerUnavailableMessage(provider, opts?.reason), 503, 'AI_PROVIDER_UNAVAILABLE');
     this.provider = provider;
+    this.reason = opts?.reason ?? null;
+    this.detail = opts?.detail ?? null;
   }
+}
+
+/**
+ * Provider-level rejections that are NEVER the document's or the user's
+ * fault: billing, bad key, rate limit, overload. Routes must surface these
+ * as 503 AI_PROVIDER_UNAVAILABLE instead of the "couldn't identify any deal
+ * information" content error (2026-09-19 prod incident: OpenAI out of
+ * credit → every ingest told users their CIM had no deal data).
+ */
+export type ProviderRejectionReason = 'quota' | 'auth' | 'rate_limit' | 'overloaded';
+
+const QUOTA_HINTS = [
+  'credit balance',
+  'credit_balance',
+  'no credits remaining',
+  'quota exceeded',
+  'insufficient quota',
+  'insufficient_quota',
+  'insufficient_credit',
+  'billing',
+  'payment required',
+  'organization is restricted',
+];
+
+function providerUnavailableMessage(provider: string, reason?: ProviderRejectionReason): string {
+  switch (reason) {
+    case 'quota':
+      return `AI service (${provider}) rejected the request: API credits are exhausted. This is a billing/configuration issue on our side, not a problem with your document — please contact your administrator.`;
+    case 'auth':
+      return `AI service (${provider}) rejected the request: the API key is invalid or missing. This is a configuration issue on our side, not a problem with your document — please contact your administrator.`;
+    case 'rate_limit':
+      return `AI service (${provider}) is rate-limiting requests. Please wait a moment and try again.`;
+    case 'overloaded':
+      return `AI service (${provider}) is overloaded. Please try again in a moment.`;
+    default:
+      return `AI service (${provider}) is temporarily unavailable. Please try again in a moment.`;
+  }
+}
+
+/**
+ * Classify a raw SDK / LangChain error as a provider rejection, or null when
+ * it is anything else (schema mismatch, parse failure, network, timeout…).
+ * Shared by the LLM fallback chain (decides whether to try the next key) and
+ * the extractor (decides whether to surface a 503 instead of returning null).
+ */
+export function classifyProviderRejection(
+  err: unknown,
+): { reason: ProviderRejectionReason; detail: string } | null {
+  if (!err) return null;
+  const e = err as any;
+  const status: unknown = e?.status ?? e?.statusCode ?? e?.error?.status;
+  const errType: unknown = e?.error?.type ?? e?.error?.error?.type ?? e?.type;
+  const code: unknown = e?.code ?? e?.error?.code;
+  const detail = String(e?.message ?? e?.error?.message ?? e?.error?.error?.message ?? '');
+  const lower = detail.toLowerCase();
+
+  const isQuota =
+    errType === 'insufficient_quota' ||
+    code === 'insufficient_quota' ||
+    code === 'credit_balance_exhausted' ||
+    status === 402 ||
+    QUOTA_HINTS.some((h) => lower.includes(h));
+  if (isQuota) return { reason: 'quota', detail };
+
+  if (errType === 'authentication_error' || errType === 'permission_error' || status === 401 || status === 403) {
+    return { reason: 'auth', detail };
+  }
+  if (errType === 'overloaded_error' || status === 529) return { reason: 'overloaded', detail };
+  if (errType === 'rate_limit_error' || status === 429) return { reason: 'rate_limit', detail };
+  return null;
 }
 
 /**

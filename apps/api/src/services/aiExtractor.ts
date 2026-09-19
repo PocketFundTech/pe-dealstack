@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { getExtractionModel, getModel, isLLMAvailable } from './llm.js';
+import { getExtractionModel, getModel, isLLMAvailable, getChatProviderName } from './llm.js';
+import { AIProviderUnavailableError, classifyProviderRejection } from '../utils/aiErrors.js';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { AI_MODELS, isOpenRouterEnabled } from '../utils/aiModels.js';
 import { log } from '../utils/logger.js';
@@ -251,7 +252,22 @@ IMPORTANT: When in doubt about whether a number is current-actual vs. target/pro
  * Extract structured deal data from document text using AI
  * Uses LangChain withStructuredOutput() for type-safe Zod-validated extraction
  */
-export async function extractDealDataFromText(text: string): Promise<ExtractedDealData | null> {
+export interface ExtractDealDataOptions {
+  /**
+   * Throw `AIProviderUnavailableError` (503) when the provider REJECTS the
+   * call — credits exhausted, bad key, rate limit, overload — instead of
+   * returning null. HTTP ingest routes set this so users see "AI service
+   * is unavailable (billing)" rather than "no deal information found".
+   * Background callers (inbox scan, deep pass, crons) keep the null
+   * contract by default.
+   */
+  throwOnProviderError?: boolean;
+}
+
+export async function extractDealDataFromText(
+  text: string,
+  options: ExtractDealDataOptions = {},
+): Promise<ExtractedDealData | null> {
   if (!isLLMAvailable()) {
     log.warn('AI extraction skipped: no LLM provider configured');
     return null;
@@ -319,7 +335,11 @@ export async function extractDealDataFromText(text: string): Promise<ExtractedDe
 
     return finalizeExtractedDealData(extracted, sourceLen);
   } catch (error) {
-    log.error('AI extraction error', undefined, describeAIError(error));
+    const rejection = classifyProviderRejection(error);
+    log.error('AI extraction error', undefined, { ...describeAIError(error), providerRejection: rejection?.reason ?? null });
+    if (rejection && options.throwOnProviderError) {
+      throw new AIProviderUnavailableError(getChatProviderName(), rejection);
+    }
     return null;
   }
 }

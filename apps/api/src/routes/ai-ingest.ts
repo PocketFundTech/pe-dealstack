@@ -6,6 +6,7 @@ import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtrac
 import { validateFile, sanitizeFilename, isPotentiallyDangerous, ALLOWED_MIME_TYPES } from '../services/fileValidator.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
+import { AIProviderUnavailableError } from '../utils/aiErrors.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, resolveUserId } from './notifications.js';
 import { getOrgId } from '../middleware/orgScope.js';
@@ -100,7 +101,7 @@ subRouter.post('/ai/ingest', upload.single('file'), async (req, res) => {
 
     // Extract deal data using AI
     log.info('Starting AI extraction');
-    const extractedData = await extractDealDataFromText(extractedText);
+    const extractedData = await extractDealDataFromText(extractedText, { throwOnProviderError: true });
 
     if (!extractedData) {
       log.error('AI Ingest: AI extraction returned null', undefined, {
@@ -359,6 +360,12 @@ subRouter.post('/ai/ingest', upload.single('file'), async (req, res) => {
       },
     });
   } catch (error) {
+    if (error instanceof AIProviderUnavailableError) {
+      log.error('AI Ingest blocked: AI provider rejected the request', undefined, {
+        provider: error.provider, reason: error.reason, detail: error.detail,
+      });
+      return res.status(503).json({ error: error.message, code: error.code, reason: error.reason });
+    }
     log.error('AI Ingest error', error);
     res.status(500).json({ error: 'Failed to process AI ingestion' });
   }
@@ -419,7 +426,7 @@ subRouter.post('/ai/extract', upload.single('file'), async (req, res) => {
     }
 
     // Extract deal data
-    const extractedData = await extractDealDataFromText(extractedText);
+    const extractedData = await extractDealDataFromText(extractedText, { throwOnProviderError: true });
 
     if (!extractedData) {
       return res.status(422).json({
@@ -435,6 +442,9 @@ subRouter.post('/ai/extract', upload.single('file'), async (req, res) => {
       extracted: extractedData,
     });
   } catch (error) {
+    if (error instanceof AIProviderUnavailableError) {
+      return res.status(503).json({ error: error.message, code: error.code, reason: error.reason });
+    }
     log.error('AI Extract error', error);
     res.status(500).json({ error: 'Failed to extract data' });
   }
