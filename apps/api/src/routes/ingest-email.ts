@@ -8,6 +8,7 @@ import { getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { extractTextFromPDF, upload } from './ingest-shared.js';
+import { runIngestFromBuffer } from './ingest-upload.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { createDealFromEmail } from '../integrations/gmail/autoCreateDeal.js';
 
@@ -146,10 +147,22 @@ subRouter.post('/bulk', upload.single('file'), async (req, res) => {
 
     const dealRows = parseExcelToDealRows(file.buffer);
     if (dealRows.length === 0) {
-      return res.status(400).json({
-        error: 'No valid deals found in file. Ensure you have a column named "Company" or "Company Name".',
-        hint: 'Supported columns: Company Name, Industry, Revenue, EBITDA, Stage, Description, Notes',
+      // The intake form sends EVERY spreadsheet here in "new deal" mode, so a
+      // financial model / CIM workbook (no "Company" column) lands on this
+      // path too. Treat it as a single-company document and run the normal
+      // ingest pipeline (Excel is a supported single-doc input there) instead
+      // of telling the user to add a column that makes no sense for their file.
+      log.info('Bulk ingest: no deal-list columns — routing to single-document ingest', {
+        filename: file.originalname,
       });
+      const result = await runIngestFromBuffer({
+        buffer: file.buffer,
+        mimeType: file.mimetype,
+        documentName: file.originalname,
+        fileSize: file.size,
+        req,
+      });
+      return res.status(result.status).json(result.body);
     }
 
     if (dealRows.length > 500) {

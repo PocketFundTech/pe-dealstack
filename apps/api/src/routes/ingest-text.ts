@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase } from '../supabase.js';
 import { extractDealDataFromText } from '../services/aiExtractor.js';
+import { AIProviderUnavailableError } from '../utils/aiErrors.js';
 import { z } from 'zod';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
@@ -55,7 +56,7 @@ subRouter.post('/text', async (req, res) => {
         log.warn('INGEST_ENGINE=claude text read failed — falling back to legacy extractor');
       }
     }
-    if (!aiData) aiData = await extractDealDataFromText(text);
+    if (!aiData) aiData = await extractDealDataFromText(text, { throwOnProviderError: true });
     if (!aiData) {
       return res.status(400).json({ error: 'Could not extract deal data from text. Try providing more detail.' });
     }
@@ -286,6 +287,12 @@ subRouter.post('/text', async (req, res) => {
       },
     });
   } catch (error) {
+    if (error instanceof AIProviderUnavailableError) {
+      log.error('Text ingest blocked: AI provider rejected the request', undefined, {
+        provider: error.provider, reason: error.reason, detail: error.detail,
+      });
+      return res.status(503).json({ error: error.message, code: error.code, reason: error.reason });
+    }
     log.error('Text ingest error', error);
     res.status(500).json({ error: 'Failed to process text input' });
   }
