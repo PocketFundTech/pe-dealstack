@@ -11,6 +11,7 @@ import { AuditLog } from '../services/auditLog.js';
 import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
+import { AIProviderUnavailableError } from '../utils/aiErrors.js';
 import { extractTextFromPDF, upload } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
@@ -221,11 +222,11 @@ export async function runIngestFromBuffer(
         log.info('Deep extraction succeeded', { extractionCount: deepResult.extractionCount });
       } else {
         log.warn('Deep extraction failed, falling back to standard extraction');
-        aiData = await extractDealDataFromText(extractedText);
+        aiData = await extractDealDataFromText(extractedText, { throwOnProviderError: true });
       }
     } else {
       log.debug('Step 2: Running AI data extraction');
-      aiData = await extractDealDataFromText(extractedText);
+      aiData = await extractDealDataFromText(extractedText, { throwOnProviderError: true });
     }
 
     if (!aiData) {
@@ -672,6 +673,13 @@ export async function runIngestFromBuffer(
       },
     };
   } catch (error) {
+    if (error instanceof AIProviderUnavailableError) {
+      // Billing / key / rate-limit rejection — NOT a document problem. Say so.
+      log.error('Ingest blocked: AI provider rejected the request', undefined, {
+        documentName, provider: error.provider, reason: error.reason, detail: error.detail,
+      });
+      return { status: 503, body: { error: error.message, code: error.code, reason: error.reason } };
+    }
     log.error('Ingest error', error);
     const message = error instanceof Error ? error.message : 'Failed to process document';
     return { status: 500, body: { error: 'Failed to process document', message } };
