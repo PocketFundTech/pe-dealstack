@@ -338,6 +338,13 @@ export function sortStagesByPosition(stages: OutreachStage[]): OutreachStage[] {
   return [...stages].sort((a, b) => a.position - b.position);
 }
 
+/** Synthetic, non-DB "stage" for the cross-cutting Stale view (see
+ *  useOutreachStaleness.ts) — never written to a contact's real `stageId`.
+ *  Gives that view the same stage-shaped chrome (tab label, OutreachColumn
+ *  header) as a real pipeline stage. */
+export const STALE_STAGE_ID = "__stale__";
+export const STALE_VIEW_STAGE: OutreachStage = { id: STALE_STAGE_ID, name: "Stale", position: -1 };
+
 /** Case-insensitive substring match against a stage's free-text name — same
  *  keyword-match style as StageSummaryCard's `iconForStage`, since stage
  *  names are admin-configurable (not a fixed enum), so nothing can hardcode

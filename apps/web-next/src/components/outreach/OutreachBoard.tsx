@@ -1,12 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, NotFoundError } from "@/lib/api";
 import { useToast } from "@/providers/ToastProvider";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { StageSummaryCard } from "./StageSummaryCard";
-import { StageDetailModal } from "./StageDetailModal";
-import { StaleContactsModal, STALE_STAGE_ID, STALE_VIEW_STAGE } from "./StaleContactsModal";
+import { StageTabStrip } from "./StageTabStrip";
+import { OutreachColumn } from "./OutreachColumn";
 import { ContactFormModal } from "./ContactFormModal";
 import { OutreachToolbar } from "./OutreachToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
@@ -20,6 +19,8 @@ import {
   emptyContactForm,
   contactToFormValues,
   sortStagesByPosition,
+  STALE_STAGE_ID,
+  STALE_VIEW_STAGE,
   type EnrichContactResult,
   type OutreachContact,
   type OutreachContactFormValues,
@@ -27,9 +28,10 @@ import {
 } from "./types";
 
 // ---------------------------------------------------------------------------
-// Outreach Kanban board — the "authorized" content of
+// Outreach pipeline board — the "authorized" content of
 // app/(app)/outreach/page.tsx. Fetches stages + contacts from the /outreach
-// API (built in parallel under apps/api/), renders one column per stage, and
+// API (built in parallel under apps/api/), renders StageTabStrip plus a
+// single active stage's OutreachColumn (or the synthetic Stale view's), and
 // handles create / move / edit / delete for contacts.
 // ---------------------------------------------------------------------------
 export function OutreachBoard() {
@@ -51,25 +53,22 @@ export function OutreachBoard() {
   const [deleting, setDeleting] = useState(false);
 
   // Contact id currently mid-enrichment, if any — drives the loading state on
-  // the "Enrich" action wherever it's triggered from (card menu or modal).
+  // the "Enrich" action wherever it's triggered from (row menu or modal).
   const [enrichingId, setEnrichingId] = useState<string | null>(null);
 
-  // Stage id currently being dragged over, if any — drives the dashed-border
-  // highlight on OutreachColumn. Same pattern as deals-page-kanban-view.tsx.
-  const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
-
-  // Stage id whose full contact list is open, if any — the board's default
-  // view is StageSummaryCard tiles only (see that file's header comment for
-  // why); clicking one opens StageDetailModal for that single stage.
-  const [openStageId, setOpenStageId] = useState<string | null>(null);
+  // Stage id StageTabStrip currently has selected — null until stages load,
+  // at which point `effectiveActiveStageId` below defaults it to the
+  // lowest-position ("Source") stage. The board shows exactly one stage's
+  // (or the synthetic Stale view's) OutreachColumn at a time — real stages
+  // can hold 700+ contacts, so rendering every stage inline at once is the
+  // scroll problem this (and the StageSummaryCard tiles before it) exists
+  // to avoid.
+  const [activeStageId, setActiveStageId] = useState<string | null>(null);
 
   const orderedStages = sortStagesByPosition(stages);
   // Lowest-position ("Source") stage — see resolveAutoAdvanceStage in
   // outreachEnrichment.ts. Reused for "Enrich all" + as the fallback add-stage.
   const sourceStageId = orderedStages[0]?.id;
-  // Real (non-synthetic) stage whose contact list is open, if any.
-  const openStage =
-    openStageId && openStageId !== STALE_STAGE_ID ? (orderedStages.find((s) => s.id === openStageId) ?? null) : null;
 
   const {
     selectedIds,
@@ -85,6 +84,16 @@ export function OutreachBoard() {
 
   // Computed cross-cutting filter over `contacts`, not a real stage — see useOutreachStaleness.ts.
   const { staleContacts } = useOutreachStaleness(contacts);
+  const staleIds = new Set(staleContacts.map((c) => c.id));
+
+  const effectiveActiveStageId = activeStageId ?? sourceStageId ?? "";
+  const isStaleActive = effectiveActiveStageId === STALE_STAGE_ID;
+  const activeStage = isStaleActive
+    ? STALE_VIEW_STAGE
+    : (orderedStages.find((s) => s.id === effectiveActiveStageId) ?? null);
+  const activeContacts = isStaleActive
+    ? staleContacts
+    : contacts.filter((c) => c.stageId === effectiveActiveStageId);
 
   const { sendModalContacts, sending, openSendModal, closeSendModal, confirmSend } = useOutreachSend(setContacts);
 
@@ -202,18 +211,6 @@ export function OutreachBoard() {
     }
   }
 
-  // Drag-and-drop is just a gesture for triggering the same move — no
-  // separate mutation logic, reuses handleMove's optimistic update/rollback.
-  function handleDrop(e: DragEvent<HTMLDivElement>, stageId: string) {
-    e.preventDefault();
-    setDragOverStageId(null);
-    const contactId = e.dataTransfer.getData("text/plain");
-    if (!contactId) return;
-    const contact = contacts.find((c) => c.id === contactId);
-    if (!contact || contact.stageId === stageId) return;
-    handleMove(contactId, stageId);
-  }
-
   // ─── Delete ─────────────────────────────────────────────────────────────
 
   function requestDelete() {
@@ -264,10 +261,23 @@ export function OutreachBoard() {
     }
   }
 
-  // Shared by StageDetailModal + the Stale view — opens SendConfirmModal for one contact.
+  // Shared by every OutreachColumn rendering — opens SendConfirmModal for one contact.
   function handleSendContact(contactId: string) {
     const target = contacts.find((c) => c.id === contactId);
     if (target) openSendModal([target]);
+  }
+
+  // "Select all" for the synthetic Stale view — can't reuse
+  // toggleSelectAllInStage (that looks contacts up by real `stageId`, and
+  // nothing actually has stageId "__stale__"). Built from the hook's
+  // generic per-contact toggleSelect instead, same logic that function uses
+  // internally, just against `staleContacts` rather than a stageId lookup.
+  function toggleSelectAllStale() {
+    const ids = staleContacts.map((c) => c.id);
+    const allSelected = ids.length > 0 && ids.every((id) => selectedIds.has(id));
+    for (const id of ids) {
+      if (selectedIds.has(id) === allSelected) toggleSelect(id);
+    }
   }
 
   // ─── Render ─────────────────────────────────────────────────────────────
@@ -342,68 +352,42 @@ export function OutreachBoard() {
           <p className="text-sm text-text-muted mt-1">Ask an admin to set up the outreach pipeline stages.</p>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-3">
-          {orderedStages.map((stage) => (
-            <StageSummaryCard
-              key={stage.id}
-              stage={stage}
-              contacts={contacts.filter((c) => c.stageId === stage.id)}
-              onOpen={setOpenStageId}
+        <>
+          <StageTabStrip
+            stages={orderedStages}
+            contacts={contacts}
+            staleContacts={staleContacts}
+            activeStageId={effectiveActiveStageId}
+            onSelectStage={setActiveStageId}
+          />
+          {activeStage && (
+            <OutreachColumn
+              stage={activeStage}
+              contacts={activeContacts}
+              allStages={orderedStages}
+              // Stale isn't a real stage to add into — new contacts from
+              // that view land in the real Source stage instead, same
+              // default StaleContactsModal used to hardcode.
+              onAddContact={(stageId) => openCreate(stageId === STALE_STAGE_ID ? (sourceStageId ?? "") : stageId)}
+              onOpenContact={openEdit}
+              onMoveContact={handleMove}
+              onEnrichContact={handleEnrich}
+              enrichingContactId={enrichingId}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onToggleSelectAll={isStaleActive ? toggleSelectAllStale : () => toggleSelectAllInStage(effectiveActiveStageId)}
+              onSendContact={handleSendContact}
+              staleIds={staleIds}
               // Only the Source stage gets "Enrich all" — see enrichAllInStage.
               onEnrichAll={
-                stage.id === sourceStageId
+                effectiveActiveStageId === sourceStageId
                   ? () => enrichAllInStage(contacts.filter((c) => c.stageId === sourceStageId).map((c) => c.id))
                   : undefined
               }
-              enriching={stage.id === sourceStageId ? bulkEnriching : undefined}
+              enrichingAll={effectiveActiveStageId === sourceStageId ? bulkEnriching : undefined}
             />
-          ))}
-          <StageSummaryCard
-            stage={STALE_VIEW_STAGE}
-            contacts={staleContacts}
-            onOpen={setOpenStageId}
-            icon="schedule"
-          />
-        </div>
-      )}
-
-      {openStageId === STALE_STAGE_ID && (
-        <StaleContactsModal
-          contacts={staleContacts}
-          allStages={orderedStages}
-          defaultAddStageId={sourceStageId ?? ""}
-          onClose={() => setOpenStageId(null)}
-          onAddContact={openCreate}
-          onOpenContact={openEdit}
-          onMoveContact={handleMove}
-          onEnrichContact={handleEnrich}
-          enrichingContactId={enrichingId}
-          selectedIds={selectedIds}
-          onToggleSelect={toggleSelect}
-          onSendContact={handleSendContact}
-        />
-      )}
-
-      {openStage && (
-        <StageDetailModal
-          stage={openStage}
-          contacts={contacts.filter((c) => c.stageId === openStage.id)}
-          allStages={orderedStages}
-          onClose={() => setOpenStageId(null)}
-          onAddContact={openCreate}
-          onOpenContact={openEdit}
-          onMoveContact={handleMove}
-          onEnrichContact={handleEnrich}
-          enrichingContactId={enrichingId}
-          selectedIds={selectedIds}
-          onToggleSelect={toggleSelect}
-          onToggleSelectAll={toggleSelectAllInStage}
-          dragOverStageId={dragOverStageId}
-          onDragOverStage={setDragOverStageId}
-          onDragLeaveStage={() => setDragOverStageId(null)}
-          onDropOnStage={handleDrop}
-          onSendContact={handleSendContact}
-        />
+          )}
+        </>
       )}
 
       {formOpen && (
