@@ -146,6 +146,10 @@ app.use(helmet({
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = [
   'https://app.avise.io',
+  // Current production custom domain — see the matching comment in app.ts
+  // for the full explanation. Kept in sync between the two files, same as
+  // every other CORS entry here.
+  'https://deals.avise.io',
   'https://lmmos.ai',
   'https://www.lmmos.ai',
   'https://pe-dealstack.vercel.app',
