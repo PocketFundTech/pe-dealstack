@@ -104,40 +104,50 @@ export function OutreachBoard() {
 
   // ─── Load ───────────────────────────────────────────────────────────────
 
+  // Initial state already reads as "loading, no error, live", so the mount
+  // effect calls fetchBoard directly; loadBoard (reloads) resets it first.
+  // State is set only in promise callbacks so the effect never sets state
+  // synchronously (react-hooks/set-state-in-effect).
+  const fetchBoard = useCallback(
+    () =>
+      // The API wraps list responses in a named field
+      // (`{ stages: [...] }` / `{ contacts: [...] }`) rather than returning
+      // bare arrays — see apps/api/src/routes/outreach.ts.
+      Promise.all([
+        api.get<{ stages: OutreachStage[] }>("/outreach/stages"),
+        api.get<{ contacts: OutreachContact[] }>("/outreach/contacts"),
+      ])
+        .then(([stagesData, contactsData]) => {
+          setStages(stagesData?.stages || []);
+          setContacts(contactsData?.contacts || []);
+        })
+        .catch((err) => {
+          // The outreach backend is being built in parallel — treat "not found"
+          // as "not deployed yet" rather than a hard error, matching the pattern
+          // used elsewhere for endpoints that may not exist yet (see
+          // DealTeasers.tsx / FirmTeaserSection.tsx).
+          if (err instanceof NotFoundError) {
+            setNotLive(true);
+          } else {
+            const message = err instanceof ApiError ? err.message : "Failed to load the outreach board";
+            setLoadError(message);
+            showToast(message, "error");
+          }
+        })
+        .finally(() => setLoading(false)),
+    [showToast],
+  );
+
   const loadBoard = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     setNotLive(false);
-    try {
-      // The API wraps list responses in a named field
-      // (`{ stages: [...] }` / `{ contacts: [...] }`) rather than returning
-      // bare arrays — see apps/api/src/routes/outreach.ts.
-      const [stagesData, contactsData] = await Promise.all([
-        api.get<{ stages: OutreachStage[] }>("/outreach/stages"),
-        api.get<{ contacts: OutreachContact[] }>("/outreach/contacts"),
-      ]);
-      setStages(stagesData?.stages || []);
-      setContacts(contactsData?.contacts || []);
-    } catch (err) {
-      // The outreach backend is being built in parallel — treat "not found"
-      // as "not deployed yet" rather than a hard error, matching the pattern
-      // used elsewhere for endpoints that may not exist yet (see
-      // DealTeasers.tsx / FirmTeaserSection.tsx).
-      if (err instanceof NotFoundError) {
-        setNotLive(true);
-      } else {
-        const message = err instanceof ApiError ? err.message : "Failed to load the outreach board";
-        setLoadError(message);
-        showToast(message, "error");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [showToast]);
+    await fetchBoard();
+  }, [fetchBoard]);
 
   useEffect(() => {
-    loadBoard();
-  }, [loadBoard]);
+    fetchBoard();
+  }, [fetchBoard]);
 
   const { syncingReplies, handleSyncReplies } = useOutreachSyncReplies(loadBoard);
 

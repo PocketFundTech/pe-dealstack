@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/formatters";
 import { ContactEnrichmentPanel } from "./ContactEnrichmentPanel";
@@ -107,16 +107,17 @@ export function ContactFormModal({
   // Enrichment runs while this modal stays open (see the "Enrich" button
   // below) and resolves to an updated `contact` prop, not a form reset —
   // pull the newly-populated title/LinkedIn straight into the form so the
-  // user sees them without closing and reopening the modal.
-  useEffect(() => {
-    if (mode !== "edit" || !contact) return;
+  // user sees them without closing and reopening the modal. Adjusted during
+  // render rather than in an effect (react.dev "you might not need an effect").
+  const [syncedEnrichedAt, setSyncedEnrichedAt] = useState(contact?.enrichedAt);
+  if (mode === "edit" && contact && contact.enrichedAt !== syncedEnrichedAt) {
+    setSyncedEnrichedAt(contact.enrichedAt);
     setForm((f) => ({
       ...f,
       title: contact.title || f.title,
       linkedinUrl: contact.linkedinUrl || f.linkedinUrl,
     }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contact?.enrichedAt]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

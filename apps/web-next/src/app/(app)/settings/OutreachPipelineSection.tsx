@@ -72,26 +72,37 @@ export function OutreachPipelineSection() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   // ── Load ──────────────────────────────────────────────────────────
-  const load = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const data = await api.get<OutreachSettings>(ROUTES.settings);
-      setSettings(data);
-      setLoaded(data);
-    } catch (err) {
-      console.warn("[settings/outreach-pipeline] load failed:", err);
-      setLoadError(
-        err instanceof Error ? err.message : "Failed to load outreach pipeline settings",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Initial state already reads as "loading, no error", so the mount effect
+  // calls fetchSettings directly and only the Retry path resets it first.
+  // State is set only in promise callbacks so the effect never sets state
+  // synchronously (react-hooks/set-state-in-effect).
+  const fetchSettings = useCallback(
+    () =>
+      api
+        .get<OutreachSettings>(ROUTES.settings)
+        .then((data) => {
+          setSettings(data);
+          setLoaded(data);
+        })
+        .catch((err) => {
+          console.warn("[settings/outreach-pipeline] load failed:", err);
+          setLoadError(
+            err instanceof Error ? err.message : "Failed to load outreach pipeline settings",
+          );
+        })
+        .finally(() => setLoading(false)),
+    [],
+  );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    fetchSettings();
+  }, [fetchSettings]);
+
+  const load = () => {
+    setLoading(true);
+    setLoadError(null);
+    fetchSettings();
+  };
 
   // ── Dirty / validity checks ───────────────────────────────────────
   const hasChanges = useMemo(() => {

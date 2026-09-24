@@ -66,7 +66,6 @@ export function CsvImportButton({ label, endpoint, onImported }: CsvImportButton
 
   useEffect(() => {
     if (!importing) return;
-    setElapsedSeconds(0);
     const interval = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
     return () => clearInterval(interval);
   }, [importing]);
@@ -79,6 +78,7 @@ export function CsvImportButton({ label, endpoint, onImported }: CsvImportButton
     const file = e.target.files?.[0] ?? null;
     e.target.value = "";
     if (!file || importing) return;
+    setElapsedSeconds(0);
     setImporting(true);
     try {
       const formData = new FormData();
