@@ -157,6 +157,15 @@ app.set('trust proxy', 1);
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = [
   'https://app.avise.io',
+  // Current production custom domain — confirmed via `vercel inspect` against
+  // the live prod deployment (2026-09-24): aliased to deals.avise.io, not
+  // app.avise.io. Without this, every frontend->API call from the real
+  // production site 500s with "Not allowed by CORS" regardless of anything
+  // else being configured correctly (confirmed in prod logs — this was
+  // mistaken for a missing ANTHROPIC_API_KEY, which was a red herring: the
+  // key resolves fine, the request never gets past CORS). Keeping
+  // app.avise.io too in case it's still an active alias/redirect.
+  'https://deals.avise.io',
   'https://lmmos.ai',
   'https://www.lmmos.ai',
   'https://pe-dealstack.vercel.app',
