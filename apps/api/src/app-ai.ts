@@ -98,6 +98,15 @@ app.use(helmet({
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = [
   'https://app.avise.io',
+  // Current production custom domain — see the matching comment in app.ts
+  // for the full explanation. This file (app-ai.ts) has its own SEPARATE
+  // CORS allowlist from app.ts/app-lite.ts — it's a third Express entry
+  // point (serves AI/memo/ingest/onboarding routes specifically, see
+  // web-next's api-bundles.ts), missed entirely on the first pass at this
+  // fix because only app.ts/app-lite.ts were grepped. Confirmed live: this
+  // exact gap was still 500ing POST /api/ingest with "Not allowed by CORS"
+  // even after app.ts/app-lite.ts were already fixed and deployed.
+  'https://deals.avise.io',
   'https://lmmos.ai',
   'https://www.lmmos.ai',
   'https://pe-dealstack.vercel.app',

@@ -125,6 +125,12 @@ export function IntegrationsSection({ onToast }: Props) {
     try {
       const result = await api.post<InitiateAuthResponse>(`/integrations/${provider}/connect`, {});
       if (result.mode === "oauth" && result.authUrl) {
+        // Standard OAuth redirect triggered from a click handler
+        // (handleConnect), not render/effect code. The rule flags any
+        // `window.location.href` reassignment as "modifying a variable
+        // defined outside a component" regardless of call-site context;
+        // navigating the browser here is the intended, correct side effect.
+        // eslint-disable-next-line react-hooks/immutability
         window.location.href = result.authUrl;
         return;
       }

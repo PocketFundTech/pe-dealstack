@@ -229,12 +229,14 @@ export default function DashboardPage() {
     pct: sectorTotal > 0 ? Math.round((count / sectorTotal) * 100) : 0,
     color: SECTOR_COLORS[i] || SECTOR_COLORS[SECTOR_COLORS.length - 1],
   }));
-  let cumPct = 0;
-  const gradientParts = allocation.map((a) => {
-    const start = cumPct;
-    cumPct += a.pct;
-    return `${a.color} ${start}% ${cumPct}%`;
-  });
+  const gradientParts = allocation.reduce<{ parts: string[]; cumPct: number }>(
+    (acc, a) => {
+      const start = acc.cumPct;
+      const end = start + a.pct;
+      return { parts: [...acc.parts, `${a.color} ${start}% ${end}%`], cumPct: end };
+    },
+    { parts: [], cumPct: 0 },
+  ).parts;
 
   // Helper: wraps a core widget in edit-mode decoration (dashed border, drag handle)
   const wrapCoreWidget = (coreId: CoreWidgetId, content: React.ReactNode, extraClass?: string) => {

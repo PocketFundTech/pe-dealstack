@@ -30,15 +30,6 @@ function AcceptInviteContent() {
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (!token) {
-      setErrorMessage("No invitation token provided. Please use the link from your invitation email.");
-      setStatus("invalid");
-      return;
-    }
-    verifyInvitation(token);
-  }, [token]);
-
   async function verifyInvitation(t: string) {
     try {
       const res = await fetch(`/api/public/invitations/verify/${t}`);
@@ -62,6 +53,15 @@ function AcceptInviteContent() {
       setStatus("invalid");
     }
   }
+
+  useEffect(() => {
+    if (!token) {
+      setErrorMessage("No invitation token provided. Please use the link from your invitation email.");
+      setStatus("invalid");
+      return;
+    }
+    verifyInvitation(token);
+  }, [token]);
 
   async function handleAccept(e: React.FormEvent) {
     e.preventDefault();
