@@ -6,6 +6,7 @@ import { getOrgId, verifyOutreachStageAccess, verifyOutreachContactAccess } from
 import { log } from '../utils/logger.js';
 import { enrichContact, getConfiguredProviders, resolveAutoAdvanceStage } from '../services/outreachEnrichment.js';
 import { recordTouch } from '../services/outreachTouchLog.js';
+import { resolveInternalUserId } from '../middleware/usageContext.js';
 
 // Outreach: manual pipeline-tracking board. Org-gated to Cicero Capital only
 // — see requireCiceroCapital in middleware/orgScope.ts, applied at the
@@ -105,6 +106,20 @@ router.post('/contacts', async (req: Request, res) => {
 
     // organizationId and createdBy come from the authenticated request only
     // — never trust these from the request body.
+    //
+    // req.user.id is the SUPABASE AUTH uuid (User.authId), not the internal
+    // User.id that OutreachContact.createdBy actually has an FK to — those
+    // two only happen to be equal for "legacy" users created before
+    // userService.ts's findOrCreateUser stopped setting User.id explicitly
+    // on signup (see that file's insert: id is DB-generated, authId is set
+    // separately). Any user signed up since then has a genuinely different
+    // id, and inserting the raw auth uuid 500s with a 23503 FK violation
+    // (confirmed live: "insert or update on table OutreachContact violates
+    // foreign key constraint OutreachContact_createdBy_fkey"). Resolve to
+    // the real internal id first — same helper usageContextMiddleware
+    // already uses for exactly this failure mode (see its doc comment).
+    const internalUserId = req.user?.id ? await resolveInternalUserId(req.user.id) : null;
+
     const { data: contact, error } = await supabase
       .from('OutreachContact')
       .insert({
@@ -116,7 +131,7 @@ router.post('/contacts', async (req: Request, res) => {
         phone: data.phone || null,
         channel: data.channel || 'proprietary',
         notes: data.notes || null,
-        createdBy: req.user?.id || null,
+        createdBy: internalUserId,
       })
       .select()
       .single();
