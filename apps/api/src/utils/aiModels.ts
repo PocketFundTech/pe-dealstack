@@ -10,9 +10,10 @@
 //
 // Routing strategy (post-OpenRouter-deprecation for tier 1):
 //   - Tier 1 prefers Anthropic direct (claude-sonnet-4-6) via @langchain/anthropic
-//     when ANTHROPIC_API_KEY is set. Falls back to OpenAI direct ('gpt-4.1') when
-//     only OPENAI_API_KEY is set. Falls back to OpenRouter ('anthropic/claude-sonnet-4.6')
-//     only when neither anthropic nor openai keys are present but OPENROUTER_API_KEY is.
+//     when ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is set. Falls back to OpenAI
+//     direct ('gpt-4.1') when only OPENAI_API_KEY is set. Falls back to OpenRouter
+//     ('anthropic/claude-sonnet-4.6') only when no Anthropic or OpenAI credentials
+//     are present but OPENROUTER_API_KEY is.
 //   - Tier 2-4 retain the legacy OpenRouter routing for now (the user only flagged
 //     tier 1 as the routing problem). If OPENROUTER_API_KEY is set, the `openai`
 //     SDK in src/openai.ts is pointed at openrouter.ai and the prefixed names below
@@ -20,10 +21,15 @@
 //   - Per-tier env overrides (LLM_TIER1_MODEL, ...) always win.
 
 import dotenv from 'dotenv';
+import { hasAnthropicCredentials } from '../services/anthropic.js';
 dotenv.config();
 
 const useOpenRouter = !!process.env.OPENROUTER_API_KEY;
-const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
+// Claude direct is "on" when either a standard API key (ANTHROPIC_API_KEY)
+// or a Claude subscription OAuth access token (ANTHROPIC_OAUTH_TOKEN) is
+// set — see services/anthropic.ts for the auth-resolution priority and the
+// exact mechanism each one uses.
+const hasAnthropic = hasAnthropicCredentials();
 
 // Direct-OpenAI fallbacks use the gpt-4.1 family (not gpt-4o): the gpt-4.1
 // models support 32K completion tokens, whereas gpt-4o caps at 16,384. The
@@ -75,12 +81,12 @@ export function isOpenRouterEnabled(): boolean {
 }
 
 /**
- * True when ANTHROPIC_API_KEY is present. When true, tier-1 callsites
- * (deal chat, memos, extraction reasoning) route through @langchain/anthropic
- * directly instead of OpenRouter or OpenAI.
+ * True when ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is present. When
+ * true, tier-1 callsites (deal chat, memos, extraction reasoning) route
+ * through @langchain/anthropic directly instead of OpenRouter or OpenAI.
  */
 export function isAnthropicEnabled(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return hasAnthropicCredentials();
 }
 
 /** Headers OpenRouter recommends for attribution / rate-limit pools */

@@ -30,6 +30,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { log } from '../utils/logger.js';
+import { hasAnthropicCredentials, getChatAnthropicAuthFields } from './anthropic.js';
 import { buildExtractionPrompt } from './extractionPrompt.js';
 import { periodHygieneGuidanceIfEnabled } from './extraction-evals/fewshot.js';
 import { MAX_TEXT_LENGTH } from './agents/financialAgent/config.js';
@@ -64,9 +65,11 @@ let cachedModel: ChatAnthropic | null = null;
 
 function getModel(): ChatAnthropic | null {
   if (cachedModel) return cachedModel;
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const authFields = getChatAnthropicAuthFields();
+  if (!authFields) return null;
   cachedModel = new ChatAnthropic({
     model: SONNET_MODEL,
+    ...authFields,
     maxTokens: MAX_OUTPUT_TOKENS,
     // Adaptive thinking: extraction is intelligence-sensitive (unit-scale
     // inference, period classification, derived-field reconciliation).
@@ -83,13 +86,12 @@ function getModel(): ChatAnthropic | null {
 }
 
 /**
- * True when ANTHROPIC_API_KEY is present in the environment. The cross-
- * verify wrapper uses this to decide whether to fan out to a second
- * extractor or fall through to GPT-only behaviour. Vercel users set this
- * via the project's env vars (the user names it ANTHROPIC_API_KEY).
+ * True when ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is present in the
+ * environment. The cross-verify wrapper uses this to decide whether to fan
+ * out to a second extractor or fall through to GPT-only behaviour.
  */
 export function isClaudeClassifierEnabled(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return hasAnthropicCredentials();
 }
 
 // ─── Main Function ────────────────────────────────────────────
@@ -105,7 +107,7 @@ export async function classifyFinancialsWithClaude(
 ): Promise<ClassificationResult | null> {
   const model = getModel();
   if (!model) {
-    log.warn('Claude classifier skipped: ANTHROPIC_API_KEY not set');
+    log.warn('Claude classifier skipped: ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN not set');
     return null;
   }
 
@@ -222,7 +224,7 @@ export async function classifyFinancialsWithClaude(
     if (err instanceof Anthropic.RateLimitError) {
       log.warn('Claude classifier: rate limited (retry handled by SDK already exhausted)');
     } else if (err instanceof Anthropic.AuthenticationError) {
-      log.error('Claude classifier: authentication failed — check ANTHROPIC_API_KEY');
+      log.error('Claude classifier: authentication failed — check ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN');
     } else if (err instanceof Anthropic.APIError) {
       log.error('Claude classifier: API error', {
         status: err.status,

@@ -8,9 +8,9 @@
  * answer per disputed field (with a citation requirement).
  *
  * Behaviour:
- *   - ANTHROPIC_API_KEY unset → falls back to GPT-only (existing behaviour
- *     before this module landed). Zero behaviour change for installations
- *     that don't opt in.
+ *   - Neither ANTHROPIC_API_KEY nor ANTHROPIC_OAUTH_TOKEN set → falls back
+ *     to GPT-only (existing behaviour before this module landed). Zero
+ *     behaviour change for installations that don't opt in.
  *   - Both extractions succeed and agree on every field within tolerance
  *     → skip the reconciliation call (cost optimization). Return the
  *     higher-confidence side, with a `crossVerify` warning recording the
@@ -32,6 +32,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { SystemMessage, HumanMessage, type AIMessageChunk } from '@langchain/core/messages';
 import { log } from '../utils/logger.js';
+import { getChatAnthropicAuthFields } from './anthropic.js';
 import {
   classifyFinancials,
   normalizeClassificationResult,
@@ -69,9 +70,11 @@ let cachedClient: ChatAnthropic | null = null;
 
 function getClient(): ChatAnthropic | null {
   if (cachedClient) return cachedClient;
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const authFields = getChatAnthropicAuthFields();
+  if (!authFields) return null;
   cachedClient = new ChatAnthropic({
     model: SONNET_MODEL,
+    ...authFields,
     maxTokens: RECONCILE_MAX_OUTPUT,
     // Adaptive extended thinking — preserved exactly. The reconciler runs
     // a deliberative compare-and-pick task over two extractions; adaptive

@@ -43,6 +43,9 @@ import legalDocumentsRouter from './routes/legal-documents.js';
 import ndaReviewRouter from './routes/nda-review.js';
 import legalDocEsignRouter from './routes/legal-doc-esign.js';
 import dropboxSignWebhookRouter from './routes/dropbox-sign-webhook.js';
+import outreachWebhooksRouter from './routes/outreach-webhooks.js';
+import outreachClayImportWebhookRouter from './routes/outreach-clay-import-webhook.js';
+import outreachClayEnrichmentWebhookRouter from './routes/outreach-clay-enrichment-webhook.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import dealAccessTimelineRouter from './routes/deal-access-timeline.js';
 import dealsTrashRouter from './routes/deals-trash.js';
@@ -76,10 +79,14 @@ import cronWeeklyDigestRouter from './routes/cron-weekly-digest.js';
 import cronShareExpiryWarningsRouter from './routes/cron-share-expiry-warnings.js';
 import cronReengagementNudgeRouter from './routes/cron-reengagement-nudge.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
+import outreachRouter from './routes/outreach.js';
+import outreachReplyIoRouter from './routes/outreach-replyio.js';
+import outreachImportRouter from './routes/outreach-import.js';
+import outreachSettingsRouter from './routes/outreach-settings.js';
 import { supabase } from './supabase.js';
 import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
-import { orgMiddleware } from './middleware/orgScope.js';
+import { orgMiddleware, requireCiceroCapital } from './middleware/orgScope.js';
 import { usageContextMiddleware } from './middleware/usageContext.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
@@ -157,6 +164,15 @@ app.set('trust proxy', 1);
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 const allowedOrigins = [
   'https://app.avise.io',
+  // Current production custom domain — confirmed via `vercel inspect` against
+  // the live prod deployment (2026-09-24): aliased to deals.avise.io, not
+  // app.avise.io. Without this, every frontend->API call from the real
+  // production site 500s with "Not allowed by CORS" regardless of anything
+  // else being configured correctly (confirmed in prod logs — this was
+  // mistaken for a missing ANTHROPIC_API_KEY, which was a red herring: the
+  // key resolves fine, the request never gets past CORS). Keeping
+  // app.avise.io too in case it's still an active alias/redirect.
+  'https://deals.avise.io',
   'https://lmmos.ai',
   'https://www.lmmos.ai',
   'https://pe-dealstack.vercel.app',
@@ -373,6 +389,26 @@ app.use('/api/integrations', integrationsPublicRouter);
 // Dropbox Sign eSignature webhook — public (HMAC-verified), mounted before auth.
 app.use('/api/webhooks', dropboxSignWebhookRouter);
 
+// Reply.io reply-event webhook — public, no auth header (Reply.io can't
+// carry a Supabase session). Authenticity = our own shared secret in the
+// URL path segment, verified inside the route — see routes/outreach-webhooks.ts
+// and services/replyIoService.ts (Reply.io has no native webhook signing).
+app.use('/api/webhooks/reply-io', outreachWebhooksRouter);
+
+// Clay inbound sourcing webhook — public, no auth header (Clay can't carry
+// a Supabase session either). Authenticity = our own shared secret in the
+// URL path segment (CLAY_IMPORT_WEBHOOK_SECRET), same pattern as the
+// Reply.io webhook above — see routes/outreach-clay-import-webhook.ts and
+// services/outreachClayImport.ts.
+app.use('/api/webhooks/clay-import', outreachClayImportWebhookRouter);
+
+// Clay enrichment RESULT callback — completes the loop enrichViaClay's own
+// comment flagged as a deliberate follow-up: Clay calling us back once its
+// enrichment waterfall finishes on a contact submitted via CLAY_WEBHOOK_URL.
+// Separate secret (CLAY_ENRICHMENT_RESULT_SECRET) from the import webhook
+// above — different Clay table/flow, least privilege.
+app.use('/api/webhooks/clay-enrichment', outreachClayEnrichmentWebhookRouter);
+
 // ========================================
 // Protected Routes (require authentication + org resolution)
 // ========================================
@@ -453,6 +489,19 @@ app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageCon
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);
+// Outreach pipeline-tracking board — Cicero Capital only (requireCiceroCapital
+// 403s any other org, even with a valid session and a guessed record id).
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachRouter);
+// Reply.io send/campaigns/sync-replies routes — split into their own file
+// to keep routes/outreach.ts under this repo's 500-line convention (see
+// AGENTS.md). Same base path + middleware chain as outreachRouter above.
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachReplyIoRouter);
+// Private Circle CSV import — same base path + middleware chain, own file
+// for the same 500-line reason as outreachReplyIoRouter above.
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachImportRouter);
+// Per-org pipeline settings (stale threshold, auto-advance toggles) — same
+// base path + middleware chain, own file for the same 500-line reason.
+app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachSettingsRouter);
 
 // ========================================
 // Internal Admin Routes (requireInternalAdmin gate inside router)

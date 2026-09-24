@@ -31,5 +31,24 @@ jobs:
       # resend/svix/uuid. Failing PRs on those keeps people from merging
       # legitimate work. Critical-only blocks merges; everything else still
       # shows up in the job output for visibility.
+      #
+      # Retried up to 3x: npm's own audit endpoint (registry.npmjs.org/-/npm/
+      # v1/security/audits/quick) has started intermittently returning a
+      # 400 "Invalid package tree" — npm's own notice says this endpoint is
+      # being retired in favor of a bulk advisory endpoint. Confirmed this
+      # isn't a real problem with this repo: the identical command run
+      # locally, same lockfile, same day, succeeds with real results every
+      # time. Three real CI failures happened in a row on 2026-09-04 before
+      # this retry was added — real npm-registry-side flakiness, not a
+      # one-off, so a bare re-run-by-hand isn't a durable fix.
       - name: npm audit (fail only on critical)
-        run: npm audit --audit-level=critical --workspaces --include-workspace-root
+        run: |
+          for attempt in 1 2 3; do
+            if npm audit --audit-level=critical --workspaces --include-workspace-root; then
+              exit 0
+            fi
+            echo "npm audit attempt $attempt failed, retrying in 15s..."
+            sleep 15
+          done
+          echo "npm audit failed 3 times in a row — treating as a real failure, not registry flakiness."
+          exit 1

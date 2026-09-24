@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUser } from "@/providers/UserProvider";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { OUTREACH_ALLOWED_ORG_SLUGS } from "@/lib/constants";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SecuritySection } from "./SecuritySection";
@@ -18,6 +19,7 @@ import { FirmTeaserSection } from "./FirmTeaserSection";
 import { AiUsageSection } from "./AiUsageSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { NDATemplatesSection } from "./NDATemplatesSection";
+import { OutreachPipelineSection } from "./OutreachPipelineSection";
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -32,6 +34,7 @@ const NAV_SECTIONS = [
   { id: "firm-teaser", label: "Firm Teaser", icon: "auto_awesome" },
   { id: "integrations", label: "Integrations", icon: "extension" },
   { id: "ai-usage", label: "AI Usage", icon: "analytics" },
+  { id: "outreach-pipeline", label: "Outreach Pipeline", icon: "campaign" },
 ] as const;
 
 const DEFAULT_PREFS: PrefsState = {
@@ -75,7 +78,18 @@ function parsePrefs(raw: UserProfile["preferences"]): {
 // ─── Page ───────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { refetch: refetchUser } = useUser();
+  const { user, refetch: refetchUser } = useUser();
+  // Outreach Pipeline settings only apply to orgs allowed to use Outreach at
+  // all — re-check here the same way apps/outreach/page.tsx and the sidebar
+  // (Sidebar.tsx's orgSlugAllowlist filter) do, so this section is never
+  // shown to orgs that can't even see the Outreach tab.
+  const showOutreachPipeline = OUTREACH_ALLOWED_ORG_SLUGS.includes(
+    user?.organization?.slug ?? "",
+  );
+  const visibleSections = useMemo(
+    () => NAV_SECTIONS.filter((s) => s.id !== "outreach-pipeline" || showOutreachPipeline),
+    [showOutreachPipeline],
+  );
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -124,7 +138,7 @@ export default function SettingsPage() {
 
   // Observe sections to highlight the active nav link while scrolling
   useEffect(() => {
-    const sectionIds = NAV_SECTIONS.map((s) => `section-${s.id}`);
+    const sectionIds = visibleSections.map((s) => `section-${s.id}`);
     const elements = sectionIds
       .map((id) => document.getElementById(id))
       .filter((el): el is HTMLElement => el !== null);
@@ -144,7 +158,7 @@ export default function SettingsPage() {
     );
     elements.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [loading]);
+  }, [loading, visibleSections]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -269,7 +283,7 @@ export default function SettingsPage() {
         {/* Sidebar */}
         <aside className="hidden lg:block w-56 shrink-0">
           <nav className="sticky top-6 flex flex-col gap-1">
-            {NAV_SECTIONS.map((section) => {
+            {visibleSections.map((section) => {
               const isActive = activeSection === section.id;
               return (
                 <a
@@ -345,6 +359,8 @@ export default function SettingsPage() {
           <NDATemplatesSection />
 
           <AiUsageSection />
+
+          {showOutreachPipeline && <OutreachPipelineSection />}
 
           {/* Deactivate Account */}
           <div className="flex items-center justify-between p-4 bg-red-50 border border-red-200 rounded-lg">

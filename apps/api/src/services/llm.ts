@@ -16,6 +16,7 @@ import {
   isOpenRouterEnabled,
   isAnthropicEnabled,
 } from '../utils/aiModels.js';
+import { getChatAnthropicAuthFields } from './anthropic.js';
 import { recordUsageEvent } from './usage/trackedLLM.js';
 import { enforceUserGate, UserBlockedError } from './usage/enforcement.js';
 import { withCircuitBreaker } from './aiCircuitBreaker.js';
@@ -41,7 +42,7 @@ interface LLMConfig {
 
 // Default chat provider cascade:
 //   1. LLM_CHAT_PROVIDER env override always wins.
-//   2. If ANTHROPIC_API_KEY is set → 'anthropic' (Claude direct).
+//   2. If ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is set → 'anthropic' (Claude direct).
 //   3. Otherwise fall back to 'openai' (which itself may route to OpenRouter
 //      or api.openai.com depending on OPENROUTER_API_KEY presence — see
 //      createOpenAIModel below).
@@ -205,7 +206,7 @@ function shouldFallbackToOpenAI(err: any): boolean {
  * actually needed. If ALL fallbacks also fail with a shouldFallback error,
  * the LAST error is rethrown.
  *
- * For tier-1 today: primary = Anthropic (ANTHROPIC_API_KEY), chain =
+ * For tier-1 today: primary = Anthropic (ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN), chain =
  * [Anthropic fallback key, OpenAI direct gpt-4o]. The two-step Anthropic
  * cascade lets the user keep production-grade Claude responses when the
  * primary key hits its credit limit, instead of dropping straight to GPT.
@@ -395,19 +396,30 @@ function createAnthropicModel(
   temperature = 0.7,
   maxTokens?: number,
   callbacks?: Partial<BaseCallbackHandler>[],
-  /** Override the env-default API key. Used by the secondary-key fallback path. */
-  apiKey: string | undefined = process.env.ANTHROPIC_API_KEY,
+  /** Override the resolved auth. Used by the secondary-key fallback path
+   *  (ANTHROPIC_API_KEY_FALLBACK) — always a standard API key, never OAuth. */
+  apiKeyOverride?: string,
 ): ChatAnthropic {
-  // ChatAnthropic v1.x accepts both `anthropicApiKey` and `apiKey`; pass the
-  // modern `apiKey` plus the legacy alias to be safe across minor versions.
   // maxTokens defaults to 1024 in ChatAnthropic if undefined; we surface it
   // explicitly so callers' explicit value (e.g. 2500 for dealChat) is honoured.
+  //
+  // Auth: an explicit apiKeyOverride always wins and uses the standard
+  // apiKey/anthropicApiKey fields (ChatAnthropic v1.x accepts both; passing
+  // the legacy alias too is defensive across minor versions). With no
+  // override, resolve from ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN via
+  // getChatAnthropicAuthFields() — see services/anthropic.ts for why the
+  // OAuth path needs a `createClient` override rather than a bare apiKey.
+  const authFields = apiKeyOverride
+    ? { apiKey: apiKeyOverride, anthropicApiKey: apiKeyOverride }
+    : getChatAnthropicAuthFields();
+  if (!authFields) {
+    throw new Error('Anthropic is not configured (set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN)');
+  }
   return new ChatAnthropic({
     model,
     temperature,
     ...(maxTokens !== undefined ? { maxTokens } : {}),
-    apiKey,
-    anthropicApiKey: apiKey,
+    ...authFields,
     ...(callbacks && callbacks.length > 0 ? { callbacks } : {}),
   });
 }

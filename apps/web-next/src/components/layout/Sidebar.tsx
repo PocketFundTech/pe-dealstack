@@ -98,10 +98,12 @@ export function Sidebar() {
 
   const isAdmin = user?.systemRole === "ADMIN";
   const isMember = user?.systemRole === "ADMIN" || user?.systemRole === "MEMBER";
+  const orgSlug = user?.organization?.slug;
 
   const visibleItems = NAV_ITEMS.filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
     if (item.memberOnly && !isMember) return false;
+    if (item.orgSlugAllowlist && !item.orgSlugAllowlist.includes(orgSlug ?? "")) return false;
     return true;
   });
 

@@ -57,6 +57,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
         avatar?: string;
         preferences?: Record<string, unknown>;
         isInternal?: boolean;
+        organization?: {
+          id: string;
+          name: string;
+          slug: string;
+          logo?: string | null;
+          plan?: string;
+        } | null;
       }>("/users/me");
 
       const appUser: AppUser = {
@@ -68,6 +75,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         avatar: data.avatar || "",
         preferences: data.preferences || {},
         isInternal: data.isInternal ?? false,
+        organization: data.organization ?? null,
       };
 
       setUser(appUser);
