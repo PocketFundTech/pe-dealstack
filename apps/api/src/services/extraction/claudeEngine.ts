@@ -259,6 +259,24 @@ async function runExtraction(
     extraBetas = [FILES_BETA];
   }
 
+  // Prompt caching: the system prompt and the document block are byte-for-
+  // byte identical across the (up to) two calls this function makes — the
+  // first pass and, when the validator fails, a single repair pass that
+  // resends the same document with only the trailing instruction text
+  // changed. Marking the last document block as cacheable caches that
+  // block plus everything before it (including the system prompt, sent
+  // first); the trailing instruction block is deliberately left uncached
+  // since it differs between the two calls and a cache write there would
+  // never hit. This is a pure cost optimization — extraction accounts for
+  // the large majority of tracked Anthropic spend (financial_extraction
+  // UsageEvent rows), and this changes nothing about what is sent or what
+  // comes back, only how a repeated prefix is billed (~90% cheaper on a
+  // hit within Anthropic's 5-minute cache window).
+  documentBlocks[documentBlocks.length - 1] = {
+    ...documentBlocks[documentBlocks.length - 1],
+    cache_control: { type: 'ephemeral' },
+  };
+
   const callEngine = async (extraInstruction?: string): Promise<ClassificationResult | null> => {
     try {
       const res = await trackedClaudeMessage({
@@ -267,8 +285,11 @@ async function runExtraction(
         // Built fresh per call (not module-scope) — CLAUDE.md: extraction
         // prompts must be injected with today's date at call time so
         // FY/LTM/"current quarter" period inference doesn't drift off the
-        // model's training cutoff.
-        system: buildExtractionSystemPrompt(getTodayIso()),
+        // model's training cutoff. Still cacheable: the date, and so this
+        // string, is identical across every call within the same run.
+        system: [
+          { type: 'text', text: buildExtractionSystemPrompt(getTodayIso()), cache_control: { type: 'ephemeral' } },
+        ],
         extraBetas,
         ...(tools ? { tools } : {}),
         messages: [

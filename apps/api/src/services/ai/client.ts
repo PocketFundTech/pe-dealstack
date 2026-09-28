@@ -48,11 +48,22 @@ export class AIRefusalError extends Error {
   }
 }
 
+/**
+ * A system-prompt text block, optionally marked cacheable. Pass an array
+ * (instead of a plain string) when the prompt is stable across repeated
+ * calls in the same request (e.g. a repair pass, or a container→text
+ * fallback resending the same instructions) — `cache_control: { type:
+ * 'ephemeral' }` on the last block tells Anthropic to cache everything up
+ * to and including it, cutting input cost ~90% on a hit within 5 minutes.
+ * Passed straight through to the SDK's `system` field either way.
+ */
+export type ClaudeSystemPrompt = string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+
 export interface ClaudeCallOptions {
   /** UsageEvent operation name, e.g. 'financial_extraction'. */
   operation: string;
   role: AiRole;
-  system?: string;
+  system?: ClaudeSystemPrompt;
   messages: Array<{ role: 'user' | 'assistant'; content: unknown }>;
   /** JSON schema for structured output (output_config.format). */
   outputSchema?: Record<string, unknown>;
