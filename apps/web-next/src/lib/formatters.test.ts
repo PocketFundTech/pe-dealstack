@@ -155,6 +155,33 @@ describe("formatRelativeTime", () => {
     const past = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
     expect(formatRelativeTime(past)).toBe("3 hours ago");
   });
+
+  it("formats far-past dates as an absolute date", () => {
+    const farPast = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    expect(formatRelativeTime(farPast.toISOString())).toBe(
+      `${months[farPast.getMonth()]} ${farPast.getDate()}, ${farPast.getFullYear()}`,
+    );
+  });
+
+  it("formats future timestamps as 'in X' instead of silently saying 'Just now'", () => {
+    expect(formatRelativeTime(new Date(Date.now() + 9 * 60 * 1000).toISOString())).toBe("in 9 mins");
+    expect(formatRelativeTime(new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString())).toBe("in 3 hours");
+    expect(formatRelativeTime(new Date(Date.now() + 9 * 24 * 60 * 60 * 1000).toISOString())).toBe("in 9 days");
+    expect(formatRelativeTime(new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString())).toBe("in 1 day");
+  });
+
+  it("formats far-future dates as an absolute date, same as far-past", () => {
+    const farFuture = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    expect(formatRelativeTime(farFuture.toISOString())).toBe(
+      `${months[farFuture.getMonth()]} ${farFuture.getDate()}, ${farFuture.getFullYear()}`,
+    );
+  });
+
+  it("treats sub-minute future timestamps as 'Just now' (absorbs clock skew)", () => {
+    expect(formatRelativeTime(new Date(Date.now() + 5_000).toISOString())).toBe("Just now");
+  });
 });
 
 describe("getCurrencySymbol", () => {
