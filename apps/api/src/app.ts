@@ -13,6 +13,7 @@ import documentsAlertsRouter from './routes/documents-alerts.js';
 import watchlistRouter from './routes/watchlist.js';
 import aiRouter from './routes/ai.js';
 import foldersRouter from './routes/folders.js';
+import dataRoomsRouter from './routes/data-rooms.js';
 import usersRouter from './routes/users.js';
 import organizationCriteriaRouter from './routes/organization-criteria.js';
 import dealsScorecardRouter from './routes/deals-scorecard.js';
@@ -444,6 +445,7 @@ app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageCon
 app.use('/api/documents', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsAlertsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dataRoomsRouter);
 app.use('/api/users', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
 // NDA playbook (GET/PATCH /nda-playbook) — literal path, so mount before
 // the generic organizationsRouter for the same reason as criteria.
