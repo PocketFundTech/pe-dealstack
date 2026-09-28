@@ -470,7 +470,30 @@ export async function* runDealChatAgentStreaming(
   const today = input.today ?? getTodayIso();
   const firmContext = await getFirmContextBlock(input.orgId).catch(() => '');
   const firmContextBlock = firmContext ? `=== FIRM CONTEXT ===\n${firmContext}\n\n` : '';
-  const system = `${firmContextBlock}${buildDealAgentSystemPrompt(today)}\n${SHARED_GUARDRAILS}\n\nCurrent Deal Context:\n${input.dealContext}\n\nDeal ID: ${input.dealId}\nOrganization ID: ${input.orgId}`;
+  // Prompt caching (token savings, 2026-09-29). This used to be ONE plain
+  // string with no cache_control, re-billed at full price on every Tool Runner
+  // iteration of every turn (~12.8K input tokens for a one-word "hi"). Same
+  // text, same order — split at the stable/per-deal seam into two cached
+  // blocks:
+  //  1. firm context + instructions + guardrails: stable per org for the day
+  //     (only the date changes, once a day), shared by every deal's chat.
+  //  2. deal context: stable for this deal across the tool loop and follow-up
+  //     questions within the 5-minute cache window.
+  // Tools render before system, so they ride inside the first cached prefix.
+  // `autoCache` adds a request-level breakpoint that moves forward with the
+  // growing tool transcript. 3 breakpoints total (limit is 4).
+  const system = [
+    {
+      type: 'text' as const,
+      text: `${firmContextBlock}${buildDealAgentSystemPrompt(today)}\n${SHARED_GUARDRAILS}`,
+      cache_control: { type: 'ephemeral' as const },
+    },
+    {
+      type: 'text' as const,
+      text: `Current Deal Context:\n${input.dealContext}\n\nDeal ID: ${input.dealId}\nOrganization ID: ${input.orgId}`,
+      cache_control: { type: 'ephemeral' as const },
+    },
+  ];
   const history = (input.history ?? []).slice(-10).map((h) => ({ role: h.role, content: h.content }));
   const messages = [...history, { role: 'user', content: input.message }];
 
@@ -498,6 +521,7 @@ export async function* runDealChatAgentStreaming(
     messages,
     tools,
     signal: internalController.signal,
+    autoCache: true,
   });
 
   let iterationCount = 0;

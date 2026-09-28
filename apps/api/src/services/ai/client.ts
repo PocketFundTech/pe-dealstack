@@ -214,10 +214,18 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
 export interface ClaudeStreamOptions {
   operation: string;
   role: AiRole;
-  system?: string;
+  /** A string, or text blocks carrying cache_control breakpoints. */
+  system?: ClaudeSystemPrompt;
   messages: unknown[];
   tools: unknown[];
   signal?: AbortSignal;
+  /**
+   * Request-level automatic caching (top-level `cache_control`). The API
+   * places the breakpoint on the last cacheable block and moves it forward
+   * as the tool loop grows, so each Tool Runner iteration reads the earlier
+   * iterations from cache instead of re-billing them at full price.
+   */
+  autoCache?: boolean;
 }
 
 /** Usage accumulated by the caller from stream events (message_start /
@@ -267,7 +275,8 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
       tools: opts.tools as never,
       ...(cfg.betas.length > 0 ? { betas: cfg.betas as never } : {}),
       stream: true,
-      ...(opts.system ? { system: opts.system } : {}),
+      ...(opts.system ? { system: opts.system as never } : {}),
+      ...(opts.autoCache ? { cache_control: { type: 'ephemeral' as const } } : {}),
       ...(cfg.fallbacks ? { fallbacks: cfg.fallbacks as never } : {}),
     },
     opts.signal ? { signal: opts.signal } : undefined,
