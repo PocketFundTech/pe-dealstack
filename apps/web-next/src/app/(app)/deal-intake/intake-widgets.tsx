@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/cn";
-import type { FollowUpQuestion } from "./components";
+import { ResultDisplay, type FollowUpQuestion, type IngestResponse } from "./components";
 
 /* ------------------------------------------------------------------ */
 /*  FollowUpQuestions                                                   */
@@ -74,6 +74,63 @@ export function FollowUpQuestions({ questions, answers, onAnswer, loading }: Fol
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  ResultWithFollowUp — ResultDisplay + the follow-up-questions card   */
+/*  that appears under it (extracted from IngestDealForm to keep that   */
+/*  component under the file-size cap; behavior unchanged).             */
+/* ------------------------------------------------------------------ */
+
+interface ResultWithFollowUpProps {
+  result: IngestResponse;
+  onReset: () => void;
+  followUpQuestions: FollowUpQuestion[];
+  followUpAnswers: Record<string, string>;
+  followUpLoading: boolean;
+  onAnswer: (questionId: string, answer: string) => void;
+  onSaveAndGoToDeal: () => void;
+  onSkip: () => void;
+}
+
+export function ResultWithFollowUp({
+  result, onReset, followUpQuestions, followUpAnswers, followUpLoading, onAnswer, onSaveAndGoToDeal, onSkip,
+}: ResultWithFollowUpProps) {
+  return (
+    <div>
+      <ResultDisplay result={result} onReset={onReset} />
+      {result.deal && (followUpLoading || followUpQuestions.length > 0) && (
+        <div className="bg-surface-card rounded-lg border border-border-subtle shadow-card p-5 mt-4">
+          <FollowUpQuestions
+            questions={followUpQuestions}
+            answers={followUpAnswers}
+            onAnswer={onAnswer}
+            loading={followUpLoading}
+          />
+          {Object.keys(followUpAnswers).length > 0 && (
+            <div className="mt-5">
+              <button
+                onClick={onSaveAndGoToDeal}
+                className="w-full py-2.5 px-4 rounded-lg text-white text-sm font-medium hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                style={{ backgroundColor: "#003366" }}
+              >
+                <span className="material-symbols-outlined text-[18px]">save</span>
+                Save & View Deal
+              </button>
+              <p className="text-center mt-2">
+                <button
+                  onClick={onSkip}
+                  className="text-[11px] text-gray-400 hover:text-gray-600 cursor-pointer transition-colors"
+                >
+                  Skip -- I&apos;ll add context later
+                </button>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

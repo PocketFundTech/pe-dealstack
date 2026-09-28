@@ -2,7 +2,7 @@
 // `api` helper for JSON calls; upload uses raw fetch since api is JSON-only.
 
 import { api, NotFoundError } from "@/lib/api";
-import { createClient } from "@/lib/supabase/client";
+import { uploadViaSignedUrl } from "@/lib/storageUpload";
 import type {
   APIDocument,
   APIFolder,
@@ -79,28 +79,19 @@ export async function uploadDocument(
   file: File,
   options?: { autoUpdateDeal?: boolean },
 ): Promise<APIDocument | null> {
-  const supabase = createClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const token = sessionData.session?.access_token;
+  // Upload the bytes straight to Supabase Storage (bypasses the server's
+  // request-body size cap), then send only the small metadata as JSON.
+  const meta = await uploadViaSignedUrl(file, { purpose: "data-room", dealId });
 
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("folderId", folderId);
-  formData.append("type", "OTHER");
-  if (options?.autoUpdateDeal) {
-    formData.append("autoUpdateDeal", "true");
-  }
-
-  const res = await fetch(`/api/deals/${dealId}/documents`, {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
+  return api.post<APIDocument>(`/deals/${dealId}/documents`, {
+    storagePath: meta.storagePath,
+    fileName: meta.fileName,
+    mimeType: meta.mimeType,
+    size: meta.size,
+    folderId,
+    type: "OTHER",
+    ...(options?.autoUpdateDeal ? { autoUpdateDeal: true } : {}),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Upload failed (${res.status})`);
-  }
-  return res.json();
 }
 
 export async function deleteDocument(documentId: string): Promise<boolean> {

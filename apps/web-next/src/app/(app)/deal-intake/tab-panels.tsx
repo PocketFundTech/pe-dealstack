@@ -123,6 +123,45 @@ export function FileUploadPanel({
 }
 
 /* ------------------------------------------------------------------ */
+/*  UploadProgressList — per-file status rows shown while a multi-file  */
+/*  batch is processing (extracted from IngestDealForm's loading state  */
+/*  to keep that component under the file-size cap).                    */
+/* ------------------------------------------------------------------ */
+
+interface UploadProgressListProps {
+  files: FileUploadItem[];
+}
+
+export function UploadProgressList({ files }: UploadProgressListProps) {
+  return (
+    <div className="mt-5 flex flex-col gap-1.5 text-left">
+      {files.map((f, i) => (
+        <div key={`${f.file.name}-${i}`} className="flex items-center gap-2 rounded-md bg-white/60 px-3 py-2">
+          <span
+            className={cn(
+              "material-symbols-outlined text-[16px] shrink-0",
+              f.status === "done" && "text-emerald-600",
+              f.status === "failed" && "text-red-500",
+              f.status === "uploading" && "text-primary animate-spin",
+              f.status === "pending" && "text-text-muted",
+            )}
+          >
+            {f.status === "done" ? "check_circle" : f.status === "failed" ? "error" : f.status === "uploading" ? "progress_activity" : "schedule"}
+          </span>
+          <span className="flex-1 min-w-0 truncate text-xs text-text-main">{f.file.name}</span>
+          {f.status === "failed" && f.message && (
+            <span className="text-[11px] text-red-600 truncate max-w-[45%]" title={f.message}>{f.message}</span>
+          )}
+          {f.status === "uploading" && f.message && (
+            <span className="text-[11px] text-text-muted truncate max-w-[45%]">{f.message}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  TextInputPanel                                                      */
 /* ------------------------------------------------------------------ */
 
