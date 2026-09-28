@@ -176,12 +176,22 @@ Then extract all income statement, balance sheet, and cash flow data into the re
  * model to force "USD" here would mislabel a EUR/GBP document without
  * converting any values.
  */
-export function buildRepairInstruction(failures: string[], previousJson: string): string {
+/**
+ * @param failedTypes Statement types that failed validation. When given, the
+ *   repair returns ONLY those — the caller's merge (mergeRepairedStatements)
+ *   keeps every other statement from the first pass anyway, so regenerating
+ *   them was pure wasted output on the most expensive model. The full
+ *   previous extraction is still shown as context for cross-statement checks.
+ */
+export function buildRepairInstruction(failures: string[], previousJson: string, failedTypes?: string[]): string {
+  const scope = failedTypes && failedTypes.length > 0
+    ? `Return ONLY these statement types, corrected: ${failedTypes.join(', ')}. Omit every other statement — they passed validation and are kept as-is. Use the same JSON structure.`
+    : 'Return the FULL corrected extraction in the same JSON structure.';
   return `A deterministic validator found these problems with your previous extraction:
 ${failures.map((f) => `- ${f}`).join('\n')}
 
 Your previous extraction, already normalized to canonical MILLIONS scale (currency unchanged from the document):
 ${previousJson}
 
-Re-examine the document and return the FULL corrected extraction in the same JSON structure. Fix the flagged values by re-reading the source pages; keep values that were correct unchanged. The anchor above is already scale-normalized — report ALL values (corrected and unchanged) in MILLIONS to match it exactly, with unitScale set to "MILLIONS" on every statement. Keep each statement's currency exactly as shown in the anchor — do NOT change it to USD or any other currency. Do NOT re-derive as-printed units for this repair pass.`;
+Re-examine the document. ${scope} Fix the flagged values by re-reading the source pages; keep values that were correct unchanged. The anchor above is already scale-normalized — report ALL values in each statement you return (corrected and unchanged) in MILLIONS to match it exactly, with unitScale set to "MILLIONS" on every statement you return. Keep each statement's currency exactly as shown in the anchor — do NOT change it to USD or any other currency. Do NOT re-derive as-printed units for this repair pass.`;
 }
