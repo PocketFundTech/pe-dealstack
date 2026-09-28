@@ -10,7 +10,9 @@ export type UsageProvider =
   | 'gemini'
   | 'anthropic'
   | 'apify'
-  | 'azure_doc_intelligence';
+  | 'azure_doc_intelligence'
+  | 'tavily'
+  | 'llamaparse';
 
 export type UsageStatus = 'success' | 'error' | 'rate_limited' | 'blocked';
 

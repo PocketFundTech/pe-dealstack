@@ -57,7 +57,7 @@ router.post('/suggest-meta', async (req, res) => {
     }
 
     try {
-      const model = getFastModel(0.3, 300);
+      const model = getFastModel(0.3, 300, 'memo_suggest_meta');
       const dealCtx = JSON.stringify({
         name: deal.name,
         company: (deal as any).company?.name,

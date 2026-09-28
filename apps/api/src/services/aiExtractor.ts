@@ -6,6 +6,42 @@ import { AI_MODELS, isOpenRouterEnabled } from '../utils/aiModels.js';
 import { log } from '../utils/logger.js';
 import { wrapDocumentContent } from './agents/guardrails.js';
 import { getTodayIso } from '../utils/dates.js';
+import { recordUsageEvent } from './usage/trackedLLM.js';
+import type { BaseCallbackHandler } from '@langchain/core/callbacks/base';
+
+// getModel() (llm.ts's bare escape hatch) has no `operation` label / usage
+// callback of its own — unlike getExtractionModel/getChatModel/getFastModel,
+// so the fallback path below needs its own tracking callback wired through
+// invoke's config (same "callbacks propagate through withStructuredOutput"
+// mechanism documented on llm.ts's makeUsageHandler).
+function makeFallbackUsageHandler(operation: string, modelName: string): Partial<BaseCallbackHandler> {
+  return {
+    name: 'aiExtractor-fallback-usage-tracker',
+    async handleLLMEnd(output: any): Promise<void> {
+      const gen0 = output?.generations?.[0]?.[0]?.message;
+      const usage = gen0?.usage_metadata ?? output?.llmOutput?.tokenUsage ?? output?.llmOutput?.usage ?? null;
+      await recordUsageEvent({
+        operation,
+        model: modelName,
+        provider: 'openai',
+        promptTokens: usage?.input_tokens ?? usage?.promptTokens ?? usage?.prompt_tokens ?? 0,
+        completionTokens: usage?.output_tokens ?? usage?.completionTokens ?? usage?.completion_tokens ?? 0,
+        status: 'success',
+      });
+    },
+    async handleLLMError(err: any): Promise<void> {
+      await recordUsageEvent({
+        operation,
+        model: modelName,
+        provider: 'openai',
+        promptTokens: 0,
+        completionTokens: 0,
+        status: 'error',
+        metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+      });
+    },
+  };
+}
 
 // Extract the actual provider error from an OpenAI-SDK APIError. OpenRouter
 // wraps upstream provider errors as `400 Provider returned error` and tucks
@@ -330,6 +366,7 @@ export async function extractDealDataFromText(
         ...invokeOpts,
         runName: 'financial_extraction_fallback',
         tags: [...invokeOpts.tags, 'fallback', fallbackModelName],
+        callbacks: [makeFallbackUsageHandler('financial_extraction_fallback', fallbackModelName)],
       });
     }
 

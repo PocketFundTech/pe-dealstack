@@ -24,6 +24,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { verifyReplyIoWebhookSecret } from '../services/replyIoService.js';
 import { recordOutreachReply } from '../services/outreachReplyRecorder.js';
+import { runAsOrgSystem } from '../middleware/usageContext.js';
 
 const router = Router();
 
@@ -104,15 +105,17 @@ router.post('/:secret', async (req: Request, res: Response) => {
     // Persistence + reply-intent classification shared with the on-demand
     // poll path (routes/outreach.ts POST /sync-replies) — see
     // services/outreachReplyRecorder.ts.
-    const result = await recordOutreachReply({
-      organizationId: org.id,
-      contactId: contact.id,
-      name: contact.name,
-      company: contact.company,
-      channel: contact.channel,
-      replyText: replyText ?? null,
-      replyDate,
-    });
+    const result = await runAsOrgSystem(org.id, 'webhook:reply-io', () =>
+      recordOutreachReply({
+        organizationId: org.id,
+        contactId: contact.id,
+        name: contact.name,
+        company: contact.company,
+        channel: contact.channel,
+        replyText: replyText ?? null,
+        replyDate,
+      }),
+    );
 
     if (!result.persisted) {
       log.error('reply-io webhook: failed to record reply', { contactId: contact.id, eventType });

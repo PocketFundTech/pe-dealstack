@@ -3,6 +3,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { runSignalMonitorViaManagedAgents } from '../services/managedAgents/signalMonitorOrchestrator.js';
+import { runAsOrgSystem } from '../middleware/usageContext.js';
 
 const router = Router();
 const BATCH_SIZE = 5;
@@ -24,7 +25,7 @@ router.post('/', async (req: Request, res: Response) => {
     const batch = orgs.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
       batch.map((org) =>
-        runSignalMonitorViaManagedAgents(org.id).catch((err) => {
+        runAsOrgSystem(org.id, 'cron:signal-scan', () => runSignalMonitorViaManagedAgents(org.id)).catch((err) => {
           captureAgentError(err, { context: 'cron-signal-scan', organizationId: org.id });
           return { status: 'failed' as const, error: err instanceof Error ? err.message : String(err) };
         }),

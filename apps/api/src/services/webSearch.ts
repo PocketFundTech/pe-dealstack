@@ -90,8 +90,13 @@ export async function searchWeb(query: string, maxResults = 8): Promise<SearchRe
 // ==========================================
 
 async function searchViaApify(query: string, maxResults: number): Promise<SearchResult[]> {
-  return trackedApifyCall('web_search', 1, APIFY_PRICES.searchUsd, async () => {
-    try {
+  // IMPORTANT: the inner fn must THROW on failure, not swallow-and-return-[].
+  // trackedApifyCall only records status 'error' when its fn rejects — a
+  // caught-and-return-[] here previously made every Apify actor failure
+  // record as a full-cost 'success' UsageEvent. The outer try/catch below
+  // restores the original "return [] on failure" behavior for callers.
+  try {
+    return await trackedApifyCall('web_search', 1, APIFY_PRICES.searchUsd, async () => {
       const client = new ApifyClient({ token: APIFY_API_KEY });
 
       const run = await client.actor('apify/google-search-scraper').call({
@@ -121,11 +126,11 @@ async function searchViaApify(query: string, maxResults: number): Promise<Search
 
       log.info('Apify search complete', { query, results: results.length });
       return results;
-    } catch (error) {
-      log.error('Apify search failed', { query, error: (error as Error).message });
-      return [];
-    }
-  });
+    });
+  } catch (error) {
+    log.error('Apify search failed', { query, error: (error as Error).message });
+    return [];
+  }
 }
 
 // ==========================================
@@ -153,8 +158,11 @@ export async function scrapeLinkedInProfile(linkedinUrl: string): Promise<Linked
     return null;
   }
 
-  return trackedApifyCall('linkedin_scrape', 1, APIFY_PRICES.linkedInProfileUsd, async () => {
-    try {
+  // Same fix as searchViaApify: the inner fn must throw on failure so
+  // trackedApifyCall records status 'error' instead of a full-cost
+  // 'success'; the outer try/catch restores "return null on failure".
+  try {
+    return await trackedApifyCall('linkedin_scrape', 1, APIFY_PRICES.linkedInProfileUsd, async () => {
       const client = new ApifyClient({ token: APIFY_API_KEY });
 
       const run = await client.actor('anchor/linkedin-profile-scraper').call({
@@ -191,11 +199,11 @@ export async function scrapeLinkedInProfile(linkedinUrl: string): Promise<Linked
 
       log.info('LinkedIn profile scraped', { name: result.name, experience: result.experience.length });
       return result;
-    } catch (error) {
-      log.error('LinkedIn scrape failed', { linkedinUrl, error: (error as Error).message });
-      return null;
-    }
-  });
+    });
+  } catch (error) {
+    log.error('LinkedIn scrape failed', { linkedinUrl, error: (error as Error).message });
+    return null;
+  }
 }
 
 // ==========================================

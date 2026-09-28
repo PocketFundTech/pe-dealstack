@@ -1,4 +1,4 @@
-import { openai } from '../../../openai.js';
+import { openai, trackedChatCompletion } from '../../../openai.js';
 import { MODEL_FAST } from '../../../utils/aiModels.js';
 import { log } from '../../../utils/logger.js';
 import { dealEmailClassifierSchema, type DealEmailClassification } from './schema.js';
@@ -32,7 +32,8 @@ export async function runDealEmailClassifier(
       : input.bodyText;
 
   try {
-    const completion = await openai.chat.completions.create(
+    const completion = await trackedChatCompletion(
+      'deal_email_classification',
       {
         model: MODEL_FAST,
         response_format: { type: 'json_object' },

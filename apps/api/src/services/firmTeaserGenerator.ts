@@ -8,6 +8,7 @@ import { log } from '../utils/logger.js';
 import { anthropic, isClaudeEnabled } from './anthropic.js';
 import { formatDealHeadline } from '../utils/financialFormat.js';
 import type { TeaserCriterion, TeaserFit, TeaserVerdict } from './firmTeaserTypes.js';
+import { recordAnthropicMessageUsage } from './usage/trackedAnthropic.js';
 
 // ─── Constants (no magic strings) ───────────────────────────────────
 
@@ -223,11 +224,33 @@ export async function generateTeaser({
 
   const content = `Here is the deal to assess against the "${profileName}" profile:\n\n${buildDealContext(deal)}`;
 
-  const response = await anthropic.messages.create({
+  const start = Date.now();
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model: TEASER_MODEL,
+      max_tokens: TEASER_MAX_TOKENS,
+      system,
+      messages: [{ role: 'user', content }],
+    });
+  } catch (err) {
+    await recordAnthropicMessageUsage({
+      operation: 'firm_teaser',
+      model: TEASER_MODEL,
+      usage: null,
+      status: 'error',
+      durationMs: Date.now() - start,
+      metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+    });
+    throw err;
+  }
+
+  await recordAnthropicMessageUsage({
+    operation: 'firm_teaser',
     model: TEASER_MODEL,
-    max_tokens: TEASER_MAX_TOKENS,
-    system,
-    messages: [{ role: 'user', content }],
+    usage: response.usage,
+    status: 'success',
+    durationMs: Date.now() - start,
   });
 
   const rawText = extractResponseText(response.content as Array<{ type: string; text?: string }>);
@@ -326,11 +349,33 @@ export async function generateSystemPrompt({
     parts.push('', 'Firm context (from uploaded doc + notes):', contextText.trim());
   }
 
-  const response = await anthropic.messages.create({
+  const start = Date.now();
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model: TEASER_MODEL,
+      max_tokens: PROMPT_GEN_MAX_TOKENS,
+      system,
+      messages: [{ role: 'user', content: parts.join('\n') }],
+    });
+  } catch (err) {
+    await recordAnthropicMessageUsage({
+      operation: 'firm_teaser_prompt_gen',
+      model: TEASER_MODEL,
+      usage: null,
+      status: 'error',
+      durationMs: Date.now() - start,
+      metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+    });
+    throw err;
+  }
+
+  await recordAnthropicMessageUsage({
+    operation: 'firm_teaser_prompt_gen',
     model: TEASER_MODEL,
-    max_tokens: PROMPT_GEN_MAX_TOKENS,
-    system,
-    messages: [{ role: 'user', content: parts.join('\n') }],
+    usage: response.usage,
+    status: 'success',
+    durationMs: Date.now() - start,
   });
 
   const rawText = extractResponseText(response.content as Array<{ type: string; text?: string }>);
