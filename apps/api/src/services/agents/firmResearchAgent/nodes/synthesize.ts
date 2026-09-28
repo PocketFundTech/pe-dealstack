@@ -36,8 +36,9 @@ const FirmProfileSchema = z.object({
 });
 
 const PersonProfileSchema = z.object({
-  title: z.string().default(''),
-  role: z.string().default(''),
+  // Undescribed, "title" was read as the person's NAME ("Dev Shah") in prod.
+  title: z.string().default('').describe('Job title only, e.g. "Managing Partner" or "Associate". Never the person\'s name. Empty if not explicitly stated.'),
+  role: z.string().default('').describe('Functional role at the firm, e.g. "Deal lead" or "Founder". Never the person\'s name.'),
   bio: z.string().default(''),
   experience: z.array(z.string()).default([]),
   education: z.string().default(''),

@@ -288,16 +288,23 @@ router.post('/:dealId/chat', async (req, res) => {
         if (firmProfile.teamSize) contextParts.push(`Team Size: ${firmProfile.teamSize}`);
       }
 
-      // Also inject person context if available
+      // Identify the current user from the fields they control in Settings
+      // (User.name / User.title). Do NOT use onboardingStatus.personProfile:
+      // it's a one-off research blob that can describe the wrong person — in
+      // prod it held another founder's LinkedIn profile with their NAME in
+      // `title`, so the chat greeted Ganesh as "Hi Dev" (2026-09-29).
       const { data: userData } = await supabase
         .from('User')
-        .select('onboardingStatus')
+        .select('name, title')
         .eq('authId', req.user?.id)
         .single();
 
-      const personProfile = (userData?.onboardingStatus as any)?.personProfile;
-      if (personProfile?.title) {
-        contextParts.push(`\nYour Role: ${personProfile.title}${personProfile.bio ? ' — ' + personProfile.bio : ''}`);
+      const userName = typeof userData?.name === 'string' ? userData.name.trim() : '';
+      if (userName) {
+        const userTitle = typeof userData?.title === 'string' ? userData.title.trim() : '';
+        contextParts.push(
+          `\nYou are assisting: ${userName}${userTitle ? ` (${userTitle})` : ''}. Address them by this name only.`,
+        );
       }
     } catch (err) {
       // Non-blocking — firm context is supplementary
