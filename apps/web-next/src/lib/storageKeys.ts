@@ -17,4 +17,8 @@ export const STORAGE_KEYS = {
   // closing the review modal, remounting the dashboard, and navigation — rather
   // than forcing a slow re-scan to see them again.
   inboxScanResult: "pe-inbox-scan-result",
+  // Whether the user collapsed the Data Room AI Quick Insights panel. Only
+  // written once the user explicitly toggles it — the narrower-than-1536px
+  // default collapse is re-derived from the viewport each load, not stored.
+  vdrInsightsCollapsed: "pe-vdr-insights-collapsed",
 } as const;

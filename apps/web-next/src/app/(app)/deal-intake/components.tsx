@@ -46,7 +46,13 @@ export interface IngestResponse {
   deal?: { id: string; name: string };
   extraction?: ExtractionResult;
   isUpdate?: boolean;
-  summary?: { imported: number; failed: number; total: number };
+  summary?: {
+    imported: number;
+    failed: number;
+    total: number;
+    deals?: Array<{ dealId: string; companyName: string }>;
+    errors?: Array<{ companyName: string; error: string }>;
+  };
 }
 
 /* ------------------------------------------------------------------ */

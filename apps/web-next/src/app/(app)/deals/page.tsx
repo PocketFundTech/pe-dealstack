@@ -334,7 +334,7 @@ export default function DealsPage() {
         </div>
         <button
           type="button"
-          onClick={openDealIntake}
+          onClick={() => openDealIntake()}
           className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-text-secondary hover:border-[#003366] hover:text-[#003366] bg-surface-card text-sm font-medium transition-colors"
         >
           <span className="material-symbols-outlined text-[18px]">upload_file</span>

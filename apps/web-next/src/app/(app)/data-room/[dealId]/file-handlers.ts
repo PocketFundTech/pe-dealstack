@@ -310,6 +310,13 @@ interface UploadDeps {
   showToast: ToastFn;
 }
 
+// Bounded concurrency: uploading many files strictly sequentially (the old
+// for-await loop) meant a batch of 10 files paid the sum of every upload's
+// latency before any of them showed up in the UI. 3 concurrent uploads gives
+// most of the speedup without opening dozens of simultaneous multipart
+// requests against the API.
+const UPLOAD_CONCURRENCY = 3;
+
 export function createConfirmUpload(deps: UploadDeps) {
   const {
     dealId, activeFolderId, pendingUploadFiles, autoUpdateDeal,
@@ -322,26 +329,39 @@ export function createConfirmUpload(deps: UploadDeps) {
     setPendingUploadFiles(null);
     setUploadError(null);
     const failures: string[] = [];
-    const uploaded: APIDocument[] = [];
+    let successCount = 0;
 
-    for (const file of pendingUploadFiles) {
+    const uploadOne = async (file: File) => {
       try {
         const doc = await uploadDocument(dealId, activeFolderId, file, { autoUpdateDeal });
-        if (doc) uploaded.push(doc);
+        if (doc) {
+          successCount += 1;
+          // Add this file to the list as soon as ITS upload returns, rather
+          // than waiting for the whole batch — the document row is created
+          // (possibly with status 'processing' while AI extraction runs in
+          // the background) so the user sees it immediately.
+          const newFile = transformDocument(doc as APIDocument);
+          setAllFiles((prev) => [newFile, ...prev]);
+          setFolders((prev) =>
+            prev.map((f) => (f.id === activeFolderId ? { ...f, fileCount: f.fileCount + 1 } : f)),
+          );
+        }
       } catch (err) {
         failures.push(`${file.name}: ${err instanceof Error ? err.message : "upload failed"}`);
       }
-    }
+    };
 
-    if (uploaded.length > 0) {
-      const newFiles = uploaded.map(transformDocument);
-      setAllFiles((prev) => [...newFiles, ...prev]);
-      setFolders((prev) =>
-        prev.map((f) =>
-          f.id === activeFolderId ? { ...f, fileCount: f.fileCount + uploaded.length } : f,
-        ),
-      );
-      showToast(`${uploaded.length} file(s) uploaded successfully`, "success");
+    const queue = [...pendingUploadFiles];
+    const workers = Array.from({ length: Math.min(UPLOAD_CONCURRENCY, queue.length) }, async () => {
+      let next: File | undefined;
+      while ((next = queue.shift())) {
+        await uploadOne(next);
+      }
+    });
+    await Promise.all(workers);
+
+    if (successCount > 0) {
+      showToast(`${successCount} file(s) uploaded successfully`, "success");
     }
     if (failures.length > 0) {
       setUploadError(failures.join("; "));

@@ -427,6 +427,8 @@ export function transformDocument(apiDoc: APIDocument): VDRFile {
     folderId: apiDoc.folderId || "",
     isHighlighted: apiDoc.isHighlighted,
     tags: apiDoc.tags || [],
+    status: apiDoc.status,
+    docType: apiDoc.type,
   };
 }
 

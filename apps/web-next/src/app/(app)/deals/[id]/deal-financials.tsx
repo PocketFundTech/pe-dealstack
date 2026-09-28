@@ -146,8 +146,18 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
     }
   }, [dealId, loadFinancials]);
 
-  // Progress messages matching legacy (cycle every 15s)
+  // Live elapsed-time label ("Extracting… 45s") — replaces the old fake
+  // 15s-cycling message set ("reading file" / "analyzing data" / "almost
+  // done") which showed "almost done" at the 30s mark regardless of actual
+  // progress. There is no real progress signal from the backend, so an
+  // honest elapsed timer is the least-misleading thing we can show.
   const [extractLabel, setExtractLabel] = useState("");
+
+  // Client-side hard stop. The backend's own per-doc budget is 240s
+  // (PER_DOC_BUDGET_MS in financials-extraction.ts); 290s gives it a little
+  // headroom to respond with its own error before we give up on the fetch
+  // entirely, while still being well under typical platform request limits.
+  const EXTRACT_CLIENT_TIMEOUT_MS = 290_000;
 
   // handleExtract accepts an optional (documentId, documentName) pair. When
   // provided, the request runs single-doc against that document only — the
@@ -158,18 +168,16 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
     if (extracting) return;
     setExtracting(true);
     if (documentId) setExtractingDocId(documentId);
-    setExtractLabel("Extracting… (30–60s)");
 
-    const progressMsgs = [
-      "Extracting… (reading file)",
-      "Extracting… (analyzing data)",
-      "Extracting… (almost done)",
-    ];
-    let idx = 0;
+    const startedAt = Date.now();
+    setExtractLabel("Extracting… 0s");
     const progressTimer = setInterval(() => {
-      idx = (idx + 1) % progressMsgs.length;
-      setExtractLabel(progressMsgs[idx]);
-    }, 15000);
+      const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+      setExtractLabel(`Extracting… ${elapsedSec}s`);
+    }, 1000);
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), EXTRACT_CLIENT_TIMEOUT_MS);
 
     try {
       // Single-doc path passes documentId in the body; the API forces
@@ -182,6 +190,7 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
       const result = await api.post<ExtractionResult>(
         `/deals/${dealId}/financials/extract`,
         body,
+        { signal: controller.signal },
       );
 
       // Small delay before fetching — the API may return success before data
@@ -191,6 +200,7 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
 
       const stored = result?.result?.periodsStored ?? 0;
       const warnings = result?.result?.warnings ?? [];
+      const allFailed = result?.result?.allFailed ?? false;
       const docsUsed =
         (result as unknown as { result?: { documentsUsed?: number } })?.result
           ?.documentsUsed;
@@ -199,11 +209,19 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
           ?.documentsFailed;
 
       if (stored === 0) {
+        // warnings[0] carries the real, humanized reason (e.g. "AI provider
+        // account is out of credits" or "took too long and was stopped")
+        // when the route classified one — surface that instead of the
+        // generic "no data found" copy, which was misleading every doc
+        // that failed for a reason that had nothing to do with the
+        // document's content (prod incident 2026-09-28).
         const warningMsg =
           warnings.length > 0
             ? warnings[0]
             : "No financial data found in the documents. Try uploading a P&L, Balance Sheet, or CIM.";
-        showToast(warningMsg, "warning", { title: "No Data Extracted" });
+        showToast(warningMsg, allFailed ? "error" : "warning", {
+          title: allFailed ? "Extraction Failed" : "No Data Extracted",
+        });
       } else {
         // Distinct toast for the single-doc path so the user sees which
         // doc was just re-extracted; bulk path keeps the across-N-docs copy.
@@ -222,11 +240,12 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
     } catch (err) {
       const msg =
         err instanceof Error && err.name === "AbortError"
-          ? "Extraction timed out (>2 min). The file may be too large — try again or upload a simpler P&L."
+          ? "Extraction is taking longer than 5 minutes and was stopped on this end. The documents may be too large — try again, or extract one document at a time."
           : "Could not extract financial data — document may be encrypted or unsupported";
-      showToast(msg, "warning", { title: "No Data Extracted" });
+      showToast(msg, "error", { title: "Extraction Failed" });
     } finally {
       clearInterval(progressTimer);
+      clearTimeout(abortTimer);
       setExtracting(false);
       setExtractingDocId(null);
       setExtractLabel("");

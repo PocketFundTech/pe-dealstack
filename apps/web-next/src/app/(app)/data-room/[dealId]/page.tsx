@@ -55,7 +55,7 @@ import {
   createRequestDocument,
   createConfirmUpload,
 } from "./file-handlers";
-import { useInitialLoad, useFolderInsights } from "./data-loaders";
+import { useInitialLoad, useFolderInsights, useProcessingPoll, useInsightsCollapse } from "./data-loaders";
 import { generateVDRReport } from "./report-generator";
 
 interface PageProps {
@@ -80,7 +80,6 @@ export default function DataRoomDealPage({ params }: PageProps) {
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
-  const [insightsCollapsed, setInsightsCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [teamMembers, setTeamMembers] = useState<Array<{ id: string; role: string; user?: { name?: string; avatar?: string; email?: string } }>>([]);
   const [showTeamModal, setShowTeamModal] = useState(false);
@@ -100,6 +99,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
     setTimeout(() => setToast(null), 5000);
   }, []);
 
+  const [insightsCollapsed, handleToggleInsightsCollapse] = useInsightsCollapse();
   const isSearching = searchQuery.trim().length > 0;
 
   useInitialLoad({
@@ -114,6 +114,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
   });
 
   useFolderInsights({ activeFolderId, setInsights });
+  useProcessingPoll({ dealId, activeFolderId, allFiles, setAllFiles });
 
   // ─── Derived data ────────────────────────────────────────────────
   const filteredFiles = useMemo(() => {
@@ -421,7 +422,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
         onGenerateInsights={handleGenerateInsights}
         isGenerating={generating}
         isCollapsed={insightsCollapsed}
-        onToggleCollapse={() => setInsightsCollapsed((v) => !v)}
+        onToggleCollapse={handleToggleInsightsCollapse}
       />
 
       {pendingUploadFiles && (

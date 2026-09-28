@@ -13,13 +13,17 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { IngestDealForm } from "./IngestDealForm";
+import type { DealOption } from "@/app/(app)/deal-intake/components";
 
 interface IngestDealModalProps {
   open: boolean;
   onClose: () => void;
+  /** When set, the modal opens directly in "Update Existing Deal" mode with
+   *  this deal pre-selected. See IngestDealForm's preselectedDeal prop. */
+  preselectedDeal?: DealOption | null;
 }
 
-export function IngestDealModal({ open, onClose }: IngestDealModalProps) {
+export function IngestDealModal({ open, onClose, preselectedDeal = null }: IngestDealModalProps) {
   // Escape to close + body scroll lock while open.
   useEffect(() => {
     if (!open) return;
@@ -76,7 +80,7 @@ export function IngestDealModal({ open, onClose }: IngestDealModalProps) {
 
         {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-          <IngestDealForm variant="modal" onClose={onClose} />
+          <IngestDealForm variant="modal" onClose={onClose} preselectedDeal={preselectedDeal} />
         </div>
       </div>
     </div>,

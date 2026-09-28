@@ -9,14 +9,21 @@ import { TEXT_SOURCE_TYPES } from "./components";
 /*  FileUploadPanel                                                     */
 /* ------------------------------------------------------------------ */
 
+export interface FileUploadItem {
+  file: File;
+  status: "pending" | "uploading" | "done" | "failed";
+  message?: string;
+}
+
 interface FileUploadPanelProps {
-  selectedFile: File | null;
+  files: FileUploadItem[];
   dragOver: boolean;
   setDragOver: (v: boolean) => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onDrop: (e: React.DragEvent) => void;
   onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onClear: () => void;
+  onRemoveFile: (index: number) => void;
+  onClearAll: () => void;
   onUpload: () => void;
   onUploadDirect?: () => void;
   processing: boolean;
@@ -26,8 +33,8 @@ interface FileUploadPanelProps {
 }
 
 export function FileUploadPanel({
-  selectedFile, dragOver, setDragOver, fileInputRef, onDrop, onFileSelect,
-  onClear, onUpload, onUploadDirect, processing, actionLabel,
+  files, dragOver, setDragOver, fileInputRef, onDrop, onFileSelect,
+  onRemoveFile, onClearAll, onUpload, onUploadDirect, processing, actionLabel,
   showDirectUpload, directUploadDisabled,
 }: FileUploadPanelProps) {
   return (
@@ -45,6 +52,7 @@ export function FileUploadPanel({
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           className="absolute inset-0 opacity-0 cursor-pointer"
           accept=".pdf,.docx,.doc,.xlsx,.xls,.txt,.csv"
           onChange={onFileSelect}
@@ -52,38 +60,52 @@ export function FileUploadPanel({
         <span className="material-symbols-outlined text-4xl text-text-muted">cloud_upload</span>
         <div className="text-center">
           <p className="text-sm font-medium text-text-main">
-            Drag & drop a file here, or <span className="text-primary font-semibold">browse</span>
+            Drag & drop files here, or <span className="text-primary font-semibold">browse</span>
           </p>
           <p className="text-xs text-text-muted mt-1">
-            PDF, Word (.docx, .doc), Excel (.xlsx), or Text (.txt) -- Max 50MB
+            PDF, Word (.docx, .doc), Excel (.xlsx), or Text (.txt) -- Max 50MB each -- multiple files supported
           </p>
         </div>
       </div>
 
-      {selectedFile && (
-        <div className="mt-4 flex items-center gap-3 rounded-lg bg-primary-light/50 border border-primary/20 px-4 py-3">
-          <span className="material-symbols-outlined text-primary">description</span>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-text-main truncate">{selectedFile.name}</p>
-            <p className="text-xs text-text-muted">{formatFileSize(selectedFile.size)}</p>
-          </div>
-          <button
-            onClick={(e) => { e.stopPropagation(); onClear(); }}
-            className="p-1 rounded hover:bg-white/50 text-text-muted hover:text-red-500 transition-colors"
-          >
-            <span className="material-symbols-outlined text-[18px]">close</span>
-          </button>
+      {files.length > 0 && (
+        <div className="mt-4 flex flex-col gap-2">
+          {files.map((item, index) => (
+            <div key={`${item.file.name}-${index}`} className="flex items-center gap-3 rounded-lg bg-primary-light/50 border border-primary/20 px-4 py-3">
+              <span className="material-symbols-outlined text-primary">description</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-text-main truncate">{item.file.name}</p>
+                <p className="text-xs text-text-muted">{formatFileSize(item.file.size)}</p>
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); onRemoveFile(index); }}
+                disabled={processing}
+                className="p-1 rounded hover:bg-white/50 text-text-muted hover:text-red-500 transition-colors disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+          ))}
+          {files.length > 1 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onClearAll(); }}
+              disabled={processing}
+              className="self-end text-xs text-text-muted hover:text-red-500 disabled:opacity-50 transition-colors"
+            >
+              Clear all
+            </button>
+          )}
         </div>
       )}
 
       <button
         onClick={onUpload}
-        disabled={!selectedFile || processing}
+        disabled={files.length === 0 || processing}
         className="mt-4 w-full py-2.5 px-4 rounded-lg text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
         style={{ backgroundColor: "#003366" }}
       >
         <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
-        Extract & {actionLabel}
+        Extract & {actionLabel}{files.length > 1 ? ` (${files.length} files)` : ""}
       </button>
 
       {showDirectUpload && (

@@ -10,6 +10,7 @@
  */
 
 import { z } from 'zod';
+import { getTodayIso } from '../../utils/dates.js';
 
 export const RAW_UNIT_SCALES = ['UNITS', 'THOUSANDS', 'MILLIONS', 'BILLIONS'] as const;
 
@@ -103,7 +104,18 @@ export const EXTRACTION_JSON_SCHEMA = {
 // ── Prompts ───────────────────────────────────────────────────────────
 // Canonical vocabulary mirrors financialSchema.ts keys so the existing
 // validator/orchestrator/UI keep working unchanged.
-export const EXTRACTION_SYSTEM_PROMPT = `You are a private-equity financial analyst extracting 3-statement financial data from deal documents (CIMs, financial packages, filings).
+/**
+ * Build the extraction system prompt with today's date injected at call
+ * time. CLAUDE.md: "AI classifier needs a current-date injection" — without
+ * this, period inference (FY/LTM/"current quarter") drifts off the model's
+ * training cutoff instead of the real wall-clock date. `todayIso` defaults
+ * to a fresh getTodayIso() call — callers should NOT cache the return value
+ * of this function across requests, or the date freezes at first call.
+ */
+export function buildExtractionSystemPrompt(todayIso: string = getTodayIso()): string {
+  return `You are a private-equity financial analyst extracting 3-statement financial data from deal documents (CIMs, financial packages, filings).
+
+DATE CONTEXT — TODAY IS ${todayIso}. Use THIS date as the boundary for HISTORICAL vs PROJECTED period classification, NOT your training cutoff. Any period whose end date is on or before ${todayIso} is HISTORICAL; any period whose end date is after ${todayIso} is PROJECTED. Do NOT label a recent-looking past period as PROJECTED just because it looks recent — check it against ${todayIso}.
 
 Rules:
 - Report every value EXACTLY as printed in the document. Do NOT convert units or currencies — instead set unitScale (UNITS/THOUSANDS/MILLIONS/BILLIONS) and currency per statement to describe how the document prints them.
@@ -116,6 +128,7 @@ Rules:
 - Every line item needs sourcePage (1-based) and a short verbatim sourceQuote when the value is visible in the document; use null only when genuinely unavailable.
 - One period entry per fiscal period column. Projected periods keep their suffix (e.g. "2025E").
 - If a statement type is absent, omit it and add a warning.`;
+}
 
 export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balance sheet, and cash flow data from the attached document into the required JSON structure.`;
 
@@ -126,8 +139,16 @@ export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balanc
  * dump — the flattening step is what drove legacy spreadsheet extraction
  * accuracy to ~25% (merged cells, "$ in 000s" header rows, pivoted layouts,
  * multi-table sheets all lose structure in text form).
+ *
+ * Date is injected the same way as buildExtractionSystemPrompt — the model
+ * infers period type (historical vs projected) from the workbook's own
+ * columns, but a fiscal-year label like "FY26" is ambiguous without today's
+ * date as an anchor.
  */
-export const EXCEL_CONTAINER_INSTRUCTION = `A spreadsheet file has been uploaded to your code execution environment.
+export function buildExcelContainerInstruction(todayIso: string = getTodayIso()): string {
+  return `A spreadsheet file has been uploaded to your code execution environment.
+
+DATE CONTEXT — TODAY IS ${todayIso}. Use this date, not your training cutoff, to classify periods as HISTORICAL (ends on or before ${todayIso}) vs PROJECTED (ends after ${todayIso}).
 
 Read the ACTUAL cells with Python (pandas / openpyxl) — never work from a summary or from memory:
 1. List every sheet in the workbook (for CSV, treat the file as one sheet).
@@ -136,6 +157,7 @@ Read the ACTUAL cells with Python (pandas / openpyxl) — never work from a summ
 4. Determine unit scale and currency from cells you actually printed — never assume them.
 
 Then extract all income statement, balance sheet, and cash flow data into the required JSON structure. Every value must come from a cell you printed. For sourceQuote use the sheet name + cell reference + printed value (e.g. "IS!B7: 36,286"); for sourcePage use the 1-based sheet index.`;
+}
 
 /**
  * Repair prompt: one pass, targeted at deterministic validator failures.

@@ -44,7 +44,6 @@ function getAnalysisStyle(type: string) {
 
 export function FileTable({
   files,
-  folderName = "Folder",
   onFileClick,
   onDeleteFile,
   onRenameFile,
@@ -90,7 +89,7 @@ export function FileTable({
         {/* No overflow-hidden here — it clips the row-action dropdown.
             Table corners use border-radius via children's first/last styling. */}
         <div className="border border-slate-200 rounded-lg bg-white shadow-sm">
-          <table className="min-w-full divide-y divide-slate-200">
+          <table className="w-full table-fixed divide-y divide-slate-200">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="py-3.5 pl-4 pr-3 text-left text-xs font-semibold text-slate-500 sm:pl-6" scope="col">
@@ -103,16 +102,19 @@ export function FileTable({
                     Name
                   </div>
                 </th>
-                <th className="px-3 py-3.5 text-left text-xs font-semibold text-slate-500 w-[40%]" scope="col">
+                <th className="px-3 py-3.5 text-left text-xs font-semibold text-slate-500 w-[30%]" scope="col">
                   AI Analysis
                 </th>
-                <th className="px-3 py-3.5 text-left text-xs font-semibold text-slate-500" scope="col">
+                <th
+                  className="hidden xl:table-cell px-3 py-3.5 text-left text-xs font-semibold text-slate-500 w-32"
+                  scope="col"
+                >
                   Author
                 </th>
-                <th className="px-3 py-3.5 text-left text-xs font-semibold text-slate-500" scope="col">
+                <th className="px-3 py-3.5 text-left text-xs font-semibold text-slate-500 w-28" scope="col">
                   Date
                 </th>
-                <th className="relative py-3.5 pl-3 pr-4 sm:pr-6" scope="col">
+                <th className="relative w-16 py-3.5 pl-3 pr-4 sm:pr-6" scope="col">
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>
@@ -141,11 +143,11 @@ export function FileTable({
                       onClick={() => onFileClick?.(file)}
                     >
                       <td
-                        className={`whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6 ${
+                        className={`py-4 pl-4 pr-3 text-sm sm:pl-6 ${
                           file.isHighlighted ? "border-l-4 border-l-primary" : ""
                         }`}
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
                           <div
                             className={`flex size-10 shrink-0 items-center justify-center rounded ${iconStyle.bg}`}
                           >
@@ -153,7 +155,7 @@ export function FileTable({
                               {FILE_ICON[file.type] || FILE_ICON.other}
                             </span>
                           </div>
-                          <div className="flex flex-col">
+                          <div className="flex flex-col min-w-0">
                             {renamingFileId === file.id ? (
                               <input
                                 ref={renameInputRef}
@@ -174,11 +176,21 @@ export function FileTable({
                                 className="font-medium text-slate-900 px-2 py-1 border border-primary rounded focus:outline-none focus:ring-2 focus:ring-primary/20 min-w-[200px]"
                               />
                             ) : (
-                              <div className="font-medium text-slate-900 group-hover:text-primary transition-colors">
+                              <div
+                                className="font-medium text-slate-900 group-hover:text-primary transition-colors truncate"
+                                title={file.name}
+                              >
                                 {file.name}
                               </div>
                             )}
-                            <div className="text-xs text-slate-400">{file.size}</div>
+                            <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                              <span>{file.size}</span>
+                              {file.docType && file.docType !== "OTHER" && (
+                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                                  {file.docType}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -190,7 +202,10 @@ export function FileTable({
                             </span>
                             {file.analysis.label}
                           </div>
-                          <p className="text-xs leading-relaxed text-slate-600 line-clamp-2">
+                          <p
+                            className="text-xs leading-relaxed text-slate-600 line-clamp-2"
+                            title={file.analysis.description}
+                          >
                             {file.analysis.description}
                           </p>
                           {file.analysis.type === "standard" && onReanalyze && (
@@ -208,7 +223,7 @@ export function FileTable({
                           )}
                         </div>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-4 text-sm text-slate-500">
+                      <td className="hidden xl:table-cell whitespace-nowrap px-3 py-4 text-sm text-slate-500">
                         <div className="flex items-center gap-2">
                           <div
                             className="size-6 rounded-full bg-cover bg-slate-200 flex items-center justify-center text-[10px] font-semibold text-slate-600"
@@ -327,13 +342,6 @@ export function FileTable({
         </div>
       </div>
 
-      {files.length > 0 && (
-        <div className="flex justify-center mt-4">
-          <button className="text-xs font-medium text-slate-500 hover:text-primary transition-colors">
-            View all {files.length} files in {folderName}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

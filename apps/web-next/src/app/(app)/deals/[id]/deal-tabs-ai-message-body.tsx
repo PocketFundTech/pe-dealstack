@@ -29,7 +29,7 @@ export function AiMessageBody({ content }: { content: string }) {
   if (parts.length === 0) {
     return (
       <div
-        className="chat-markdown space-y-1 break-words [&_p]:mb-1.5 [&_ul]:pl-4 [&_ul]:list-disc [&_li]:mb-0.5 [&_strong]:font-semibold"
+        className="chat-markdown space-y-1 break-words [&_p]:mb-1.5 [&_ul]:pl-4 [&_ul]:list-disc [&_ol]:pl-4 [&_ol]:list-decimal [&_li]:mb-0.5 [&_strong]:font-semibold"
         dangerouslySetInnerHTML={{
           __html: DOMPurify.sanitize(renderMarkdown(content)),
         }}
@@ -67,7 +67,7 @@ export function AiMessageBody({ content }: { content: string }) {
         return (
           <div
             key={idx}
-            className="chat-markdown space-y-1 break-words [&_p]:mb-1.5 [&_ul]:pl-4 [&_ul]:list-disc [&_li]:mb-0.5 [&_strong]:font-semibold"
+            className="chat-markdown space-y-1 break-words [&_p]:mb-1.5 [&_ul]:pl-4 [&_ul]:list-disc [&_ol]:pl-4 [&_ol]:list-decimal [&_li]:mb-0.5 [&_strong]:font-semibold"
             dangerouslySetInnerHTML={{
               __html: DOMPurify.sanitize(renderMarkdown(part.content)),
             }}

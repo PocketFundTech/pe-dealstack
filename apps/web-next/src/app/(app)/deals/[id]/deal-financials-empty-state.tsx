@@ -42,7 +42,7 @@ export function DealFinancialsEmptyState({
         {extracting ? (
           <>
             <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
-            {extractLabel || "Extracting… (30–60s)"}
+            {extractLabel || "Extracting…"}
           </>
         ) : (
           <>

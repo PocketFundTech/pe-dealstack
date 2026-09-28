@@ -15,7 +15,6 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
-import { formatFileSize } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
 import {
   type DealOption,
@@ -29,7 +28,7 @@ import {
   ResultDisplay,
 } from "@/app/(app)/deal-intake/components";
 import { FollowUpQuestions, WarningBanner } from "@/app/(app)/deal-intake/intake-widgets";
-import { FileUploadPanel, TextInputPanel } from "@/app/(app)/deal-intake/tab-panels";
+import { FileUploadPanel, TextInputPanel, type FileUploadItem } from "@/app/(app)/deal-intake/tab-panels";
 import { DealTeaserPopup } from "@/app/(app)/deal-intake/DealTeaserPopup";
 import type { DealTeaser } from "@/lib/teaser";
 import {
@@ -38,6 +37,7 @@ import {
   isGooglePickerConfigured,
 } from "@/lib/googlePicker";
 import { emitDealsChanged } from "@/lib/appEvents";
+import { planFileUpload, resolveDealFromResponse } from "@/components/deal-intake/batchPlan";
 
 // Drive MIME allow-list for ingest — mirrors the multipart upload's accepted
 // types plus native Google Docs/Sheets (exported server-side to PDF/XLSX).
@@ -61,21 +61,25 @@ interface IngestDealFormProps {
   /** Called when the user finishes (e.g. after navigating to the new deal). The
    *  modal uses this to close itself; the page route ignores it. */
   onClose?: () => void;
+  /** When set, the form opens directly in "Update Existing Deal" mode with
+   *  this deal pre-selected (e.g. opened from a deal's own page/menu so the
+   *  user doesn't have to re-search for the deal they're already on). */
+  preselectedDeal?: DealOption | null;
 }
 
-export function IngestDealForm({ variant = "page", onClose }: IngestDealFormProps) {
+export function IngestDealForm({ variant = "page", onClose, preselectedDeal = null }: IngestDealFormProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("file");
 
   /* ---- Deal selector ---- */
-  const [mode, setMode] = useState<"new" | "existing">("new");
+  const [mode, setMode] = useState<"new" | "existing">(preselectedDeal ? "existing" : "new");
   const [dealSearch, setDealSearch] = useState("");
   const [dealOptions, setDealOptions] = useState<DealOption[]>([]);
-  const [selectedDeal, setSelectedDeal] = useState<DealOption | null>(null);
+  const [selectedDeal, setSelectedDeal] = useState<DealOption | null>(preselectedDeal);
   const [loadingDeals, setLoadingDeals] = useState(false);
   const [showDealDropdown, setShowDealDropdown] = useState(false);
 
   /* ---- File upload ---- */
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<FileUploadItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -141,32 +145,42 @@ export function IngestDealForm({ variant = "page", onClose }: IngestDealFormProp
   /*  File handling                                                     */
   /* ================================================================ */
 
-  const validateAndSetFile = (file: File) => {
+  const addFiles = (incoming: FileList | File[]) => {
     setWarning(null);
-    if (file.size > MAX_FILE_SIZE) {
+    const oversized: string[] = [];
+    const accepted: File[] = [];
+    Array.from(incoming).forEach((file) => {
+      if (file.size > MAX_FILE_SIZE) oversized.push(file.name);
+      else accepted.push(file);
+    });
+    if (oversized.length > 0) {
       setWarning({
         title: "File too large",
-        message: `This file is ${formatFileSize(file.size)}, but the maximum upload size is 50MB. Please compress the file or use a smaller version.`,
+        message: `${oversized.join(", ")} exceed${oversized.length === 1 ? "s" : ""} the maximum upload size of 50MB and ${oversized.length === 1 ? "was" : "were"} skipped.`,
       });
-      setSelectedFile(null);
-      return;
     }
-    setSelectedFile(file);
+    if (accepted.length > 0) {
+      setFiles((prev) => [...prev, ...accepted.map((file) => ({ file, status: "pending" as const }))]);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) validateAndSetFile(file);
+    if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) validateAndSetFile(file);
+    if (e.target.files?.length) addFiles(e.target.files);
+    // Allow re-selecting the same file(s) after removal.
+    e.target.value = "";
   };
 
-  const clearFile = () => {
-    setSelectedFile(null); setWarning(null);
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const clearFiles = () => {
+    setFiles([]); setWarning(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -217,9 +231,18 @@ export function IngestDealForm({ variant = "page", onClose }: IngestDealFormProp
   };
 
   const resetForm = () => {
-    setSelectedFile(null); setTextInput("");
+    setFiles([]); setTextInput("");
     setWarning(null); clearState();
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // 503 AI_PROVIDER_UNAVAILABLE means the AI provider (not the document)
+  // rejected the request — surface that message as-is instead of the generic
+  // "no deal information found" wording.
+  const parseErrorMessage = (data: unknown): string => {
+    const d = data as { code?: string; error?: string; message?: string };
+    if (d?.code === "AI_PROVIDER_UNAVAILABLE" && d.error) return d.error;
+    return d?.message || d?.error || "Upload failed";
   };
 
   const beginProcessing = (msg: string) => {
@@ -250,46 +273,135 @@ export function IngestDealForm({ variant = "page", onClose }: IngestDealFormProp
     }
   }, []);
 
-  const handleUploadFile = async () => {
-    if (!selectedFile) return;
+  // Uploads every selected file sequentially. In "new" mode the FIRST file
+  // creates the deal (via /ingest or /ingest/bulk for spreadsheets); every
+  // subsequent file is attached to that same deal via /ingest + dealId. In
+  // "existing" mode every file is attached to the selected deal. One file
+  // failing doesn't abort the rest of the batch — each file gets its own
+  // pending/uploading/done/failed status.
+  const handleUploadFiles = async () => {
+    if (files.length === 0) return;
     if (mode === "existing" && !selectedDeal) { setError("Please select a deal first."); return; }
+
     beginProcessing("Extracting deal data...");
-    try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      if (mode === "existing" && selectedDeal) formData.append("dealId", selectedDeal.id);
-      const isExcel = /\.(xlsx|xls|csv)$/i.test(selectedFile.name);
-      const useBulk = isExcel && mode !== "existing";
-      const response = await authFetchRaw(useBulk ? "/ingest/bulk" : "/ingest", { method: "POST", body: formData });
-      if (response.status === 413) {
-        setWarning({ title: "File too large", message: "Maximum upload size is 50MB. Please compress the file or try a smaller version." });
-        return;
+    setFiles((prev) => prev.map((f) => ({ ...f, status: "pending" as const, message: undefined })));
+
+    let createdDealId: string | null = null;
+    let createdDealName: string | null = null;
+    let stopReason: string | null = null;
+    let lastSuccessResult: IngestResponse | null = null;
+    let anySucceeded = false;
+
+    for (let i = 0; i < files.length; i++) {
+      if (stopReason) {
+        setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: stopReason! } : f)));
+        continue;
       }
-      const data: IngestResponse = await response.json();
-      if (!response.ok) throw new Error((data as unknown as { message?: string; error?: string }).message || (data as unknown as { error?: string }).error || "Upload failed");
-      setResult(data);
-      emitDealsChanged({ dealId: data.deal?.id, source: "ingest-upload" });
-      fireFollowUp(data);
-      if (mode === "new" && data.deal?.id) {
-        maybeShowTeaserPopup({ id: data.deal.id, name: data.deal.name });
+
+      const current = files[i];
+      setProgressMessage(files.length > 1 ? `Processing ${current.file.name} (${i + 1}/${files.length})...` : "Extracting deal data...");
+      setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "uploading" } : f)));
+
+      const plan = planFileUpload({
+        fileName: current.file.name,
+        index: i,
+        mode,
+        selectedDealId: selectedDeal?.id ?? null,
+        createdDealId,
+      });
+
+      try {
+        const formData = new FormData();
+        formData.append("file", current.file);
+        if (plan.dealId) formData.append("dealId", plan.dealId);
+        const response = await authFetchRaw(plan.endpoint, { method: "POST", body: formData });
+
+        if (response.status === 413) {
+          setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: "Maximum upload size is 50MB." } : f)));
+          continue;
+        }
+
+        const data: IngestResponse = await response.json();
+        if (!response.ok) {
+          setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: parseErrorMessage(data) } : f)));
+          continue;
+        }
+
+        anySucceeded = true;
+        lastSuccessResult = data;
+        setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "done" } : f)));
+        emitDealsChanged({ dealId: data.deal?.id, source: "ingest-upload" });
+        fireFollowUp(data);
+
+        if (mode === "new" && i === 0) {
+          const resolved = resolveDealFromResponse(data);
+          if (resolved.multipleDeals) {
+            stopReason = "Skipped — the first file created several deals. Add this document via \"Update Existing Deal\" once you know which one it belongs to.";
+          } else if (resolved.dealId) {
+            createdDealId = resolved.dealId;
+            createdDealName = resolved.dealName;
+          }
+        }
+      } catch (err) {
+        setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: err instanceof Error ? err.message : "Upload failed" } : f)));
       }
-    } catch (err) { setError(err instanceof Error ? err.message : "Upload failed"); }
-    finally { endProcessing(); }
+    }
+
+    endProcessing();
+
+    if (stopReason) {
+      setWarning({
+        title: "Multiple deals created",
+        message: "The first file created several deals, so the remaining files weren't attached to any of them. Use \"Update Existing Deal\" to add them once you've picked the right deal.",
+      });
+    }
+
+    if (!anySucceeded) {
+      setError(files.length > 1 ? "All uploads failed. See the status next to each file above." : "Upload failed");
+      return;
+    }
+
+    if (lastSuccessResult) {
+      setResult(lastSuccessResult);
+      if (mode === "new" && createdDealId) {
+        maybeShowTeaserPopup({ id: createdDealId, name: createdDealName || lastSuccessResult.deal?.name || "" });
+      }
+    }
   };
 
   const handleUploadDirect = async () => {
-    if (!selectedFile || !selectedDeal) return;
+    if (files.length === 0 || !selectedDeal) return;
     beginProcessing("Uploading to Data Room...");
-    try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      const response = await authFetchRaw(`/deals/${selectedDeal.id}/documents`, { method: "POST", body: formData });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Upload failed");
+    setFiles((prev) => prev.map((f) => ({ ...f, status: "pending" as const, message: undefined })));
+
+    let anySucceeded = false;
+    for (let i = 0; i < files.length; i++) {
+      const current = files[i];
+      setProgressMessage(files.length > 1 ? `Uploading ${current.file.name} (${i + 1}/${files.length})...` : "Uploading to Data Room...");
+      setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "uploading" } : f)));
+      try {
+        const formData = new FormData();
+        formData.append("file", current.file);
+        const response = await authFetchRaw(`/deals/${selectedDeal.id}/documents`, { method: "POST", body: formData });
+        const data = await response.json();
+        if (!response.ok) {
+          setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: parseErrorMessage(data) } : f)));
+          continue;
+        }
+        anySucceeded = true;
+        setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "done" } : f)));
+      } catch (err) {
+        setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: err instanceof Error ? err.message : "Upload failed" } : f)));
+      }
+    }
+
+    endProcessing();
+    if (anySucceeded) {
       setResult({ deal: { id: selectedDeal.id, name: selectedDeal.name }, isUpdate: true });
       emitDealsChanged({ dealId: selectedDeal.id, source: "ingest-direct-upload" });
-    } catch (err) { setError(err instanceof Error ? err.message : "Upload failed"); }
-    finally { endProcessing(); }
+    } else {
+      setError(files.length > 1 ? "All uploads failed. See the status next to each file above." : "Upload failed");
+    }
   };
 
   // Import a file straight from the user's Google Drive via the Picker, then
@@ -410,19 +522,20 @@ export function IngestDealForm({ variant = "page", onClose }: IngestDealFormProp
           {activeTab === "file" && (
             <div className="flex flex-col gap-4">
               <FileUploadPanel
-                selectedFile={selectedFile}
+                files={files}
                 dragOver={dragOver}
                 setDragOver={setDragOver}
                 fileInputRef={fileInputRef}
                 onDrop={handleDrop}
                 onFileSelect={handleFileSelect}
-                onClear={clearFile}
-                onUpload={handleUploadFile}
+                onRemoveFile={removeFile}
+                onClearAll={clearFiles}
+                onUpload={handleUploadFiles}
                 onUploadDirect={handleUploadDirect}
                 processing={processing}
                 actionLabel={actionLabel}
                 showDirectUpload={mode === "existing"}
-                directUploadDisabled={!selectedFile || !selectedDeal || processing}
+                directUploadDisabled={files.length === 0 || !selectedDeal || processing}
               />
               {isGooglePickerConfigured && (
                 <>
@@ -466,6 +579,30 @@ export function IngestDealForm({ variant = "page", onClose }: IngestDealFormProp
           </div>
           <p className="text-sm font-medium text-text-main">{progressMessage || "Extracting deal data..."}</p>
           <p className="text-xs text-text-secondary mt-1">AI is analyzing the content and extracting company information</p>
+
+          {activeTab === "file" && files.length > 1 && (
+            <div className="mt-5 flex flex-col gap-1.5 text-left">
+              {files.map((f, i) => (
+                <div key={`${f.file.name}-${i}`} className="flex items-center gap-2 rounded-md bg-white/60 px-3 py-2">
+                  <span
+                    className={cn(
+                      "material-symbols-outlined text-[16px] shrink-0",
+                      f.status === "done" && "text-emerald-600",
+                      f.status === "failed" && "text-red-500",
+                      f.status === "uploading" && "text-primary animate-spin",
+                      f.status === "pending" && "text-text-muted",
+                    )}
+                  >
+                    {f.status === "done" ? "check_circle" : f.status === "failed" ? "error" : f.status === "uploading" ? "progress_activity" : "schedule"}
+                  </span>
+                  <span className="flex-1 min-w-0 truncate text-xs text-text-main">{f.file.name}</span>
+                  {f.status === "failed" && f.message && (
+                    <span className="text-[11px] text-red-600 truncate max-w-[45%]" title={f.message}>{f.message}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

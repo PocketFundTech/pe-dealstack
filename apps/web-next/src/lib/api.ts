@@ -279,8 +279,8 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   getRaw: (path: string) => requestRaw(path),
   postStream,
-  post: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: "POST", body: JSON.stringify(body) }),
+  post: <T>(path: string, body: unknown, opts?: { signal?: AbortSignal }) =>
+    request<T>(path, { method: "POST", body: JSON.stringify(body), signal: opts?.signal }),
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown) =>
