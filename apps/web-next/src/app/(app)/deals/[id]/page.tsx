@@ -13,6 +13,7 @@ import {
   type Activity,
   type Tab,
   ChatTab,
+  TABS,
 } from "./components";
 import { useResizablePanel } from "./use-resizable-panel";
 import { DealPageLoadingSkeleton, DealPageErrorState } from "./deal-page-skeletons";
@@ -207,6 +208,17 @@ export default function DealDetailPage() {
 
     return () => clearInterval(interval);
   }, [deal]);
+
+  // Deep-link into a specific tab, e.g. /deals/:id?tab=Documents from the
+  // Data Room card's "Open room" flow. Read once client-side — activeTab
+  // only affects markup rendered after `loading` flips false (see the guard
+  // above), so this can never disagree with what the server rendered.
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab && (TABS as readonly string[]).includes(tab)) {
+      setActiveTab(tab as Tab);
+    }
+  }, []);
 
   // -----------------------------------------------------------------------
   // Handlers — pure logic lives in deal-page-handlers.ts. These thin wrappers
