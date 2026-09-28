@@ -201,4 +201,10 @@ describe('POST /api/cron/reengagement-nudge', () => {
     expect(sendReengagementEmail).toHaveBeenCalledTimes(1);
     expect(sendReengagementEmail).toHaveBeenCalledWith({ to: 'dormant7@user.com', name: 'Seven' });
   });
+
+  it('also responds to GET, matching how Vercel Cron actually invokes it', async () => {
+    const app = await buildApp();
+    const res = await request(app).get('/api/cron/reengagement-nudge');
+    expect(res.status).toBe(401);
+  });
 });

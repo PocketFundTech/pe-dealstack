@@ -17,7 +17,8 @@ const router = Router();
 
 const WARNING_WINDOW_MS = 48 * 60 * 60 * 1000;
 
-router.post('/', async (req: Request, res: Response) => {
+// Vercel Cron Jobs always invoke via GET; POST is kept for manual/test triggering.
+const handler = async (req: Request, res: Response) => {
   const auth = req.headers.authorization || '';
 
   // An unset secret and a wrong secret must look IDENTICAL to the caller —
@@ -129,6 +130,9 @@ router.post('/', async (req: Request, res: Response) => {
   log.info('Share expiry warning sweep complete', { total: shares.length, warningsSent });
 
   res.json({ warningsSent });
-});
+};
+
+router.get('/', handler);
+router.post('/', handler);
 
 export default router;

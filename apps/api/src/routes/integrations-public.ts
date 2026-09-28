@@ -38,7 +38,8 @@ router.get('/oauth/:provider/callback', async (req: Request, res: Response, _nex
   }
 });
 
-router.post('/_cron/sync-all', async (req: Request, res: Response, next: NextFunction) => {
+// Vercel Cron Jobs always invoke via GET; POST is kept for manual/test triggering.
+const syncAllHandler = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const expected = process.env.CRON_SECRET;
     if (!expected) return res.status(401).json({ error: 'Unauthorized' });
@@ -51,6 +52,9 @@ router.post('/_cron/sync-all', async (req: Request, res: Response, next: NextFun
     const result = await syncAll();
     res.json({ ok: true, ...result });
   } catch (err) { next(err); }
-});
+};
+
+router.get('/_cron/sync-all', syncAllHandler);
+router.post('/_cron/sync-all', syncAllHandler);
 
 export default router;

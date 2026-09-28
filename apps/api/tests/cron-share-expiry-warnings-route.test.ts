@@ -233,4 +233,10 @@ describe('POST /api/cron/share-expiry-warnings', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ warningsSent: 1 });
   });
+
+  it('also responds to GET, matching how Vercel Cron actually invokes it', async () => {
+    const app = await buildApp();
+    const res = await request(app).get('/api/cron/share-expiry-warnings');
+    expect(res.status).toBe(401);
+  });
 });

@@ -64,4 +64,18 @@ describe('POST /api/cron/signal-scan', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ scanned: 2, failed: 1 });
   });
+
+  it('also responds to GET, matching how Vercel Cron actually invokes it', async () => {
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table !== 'Organization') throw new Error(`Unexpected table: ${table}`);
+      return { select: () => ({ eq: async () => ({ data: [{ id: 'org-1' }], error: null }) }) };
+    });
+    runSignalMonitorViaManagedAgents.mockResolvedValue({ status: 'completed' });
+
+    const app = await buildApp();
+    const res = await request(app).get('/api/cron/signal-scan').set('Authorization', 'Bearer test-secret');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ scanned: 1, failed: 0 });
+  });
 });

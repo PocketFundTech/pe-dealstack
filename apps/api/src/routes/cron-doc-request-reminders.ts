@@ -23,7 +23,8 @@ function uploadUrl(token: string): string {
   return `${process.env.APP_URL || 'http://localhost:3002'}/upload/${token}`;
 }
 
-router.post('/', async (req: Request, res: Response) => {
+// Vercel Cron Jobs always invoke via GET; POST is kept for manual/test triggering.
+const handler = async (req: Request, res: Response) => {
   const auth = req.headers.authorization || '';
 
   // An unset secret and a wrong secret must look IDENTICAL to the caller —
@@ -132,6 +133,9 @@ router.post('/', async (req: Request, res: Response) => {
     log.error('Doc request reminder sweep threw', { error: error.message });
     res.status(500).json({ error: 'Reminder sweep failed' });
   }
-});
+};
+
+router.get('/', handler);
+router.post('/', handler);
 
 export default router;

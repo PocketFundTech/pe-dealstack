@@ -16,7 +16,8 @@ const router = Router();
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-router.post('/', async (req: Request, res: Response) => {
+// Vercel Cron Jobs always invoke via GET; POST is kept for manual/test triggering.
+const handler = async (req: Request, res: Response) => {
   const auth = req.headers.authorization || '';
 
   // An unset secret and a wrong secret must look IDENTICAL to the caller —
@@ -114,6 +115,9 @@ router.post('/', async (req: Request, res: Response) => {
 
   log.info('Weekly digest sweep complete', { orgsProcessed, emailsSent });
   res.json({ orgsProcessed, emailsSent });
-});
+};
+
+router.get('/', handler);
+router.post('/', handler);
 
 export default router;
