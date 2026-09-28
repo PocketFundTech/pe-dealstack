@@ -119,14 +119,34 @@ function makeUsageHandler(
         output?.llmOutput?.tokenUsage ??
         output?.llmOutput?.usage ??
         null;
+      // LangChain's usage_metadata.input_tokens (Anthropic path, via
+      // @langchain/anthropic) INCLUDES cache tokens — unlike the raw
+      // Anthropic SDK, whose usage.input_tokens excludes them. Subtract the
+      // cache counts so promptTokens stays UNCACHED-only, matching what
+      // recordUsageEvent/computeCostUsd expect (see trackedLLM.ts docblock),
+      // and pass the cache counts on separately so they're priced at their
+      // own (cheaper) rates instead of folded into full-price input.
+      const cacheRead = usage?.input_token_details?.cache_read ?? 0;
+      const cacheCreation = usage?.input_token_details?.cache_creation ?? 0;
+      const rawInputTokens =
+        usage?.input_tokens ?? usage?.promptTokens ?? usage?.prompt_tokens ?? 0;
+      const promptTokens = Math.max(0, rawInputTokens - cacheRead - cacheCreation);
+      // LangChain doesn't currently break cache_creation down by 5m/1h TTL —
+      // treat it all as 5m, same fallback the Anthropic SDK docs specify
+      // when cache_creation's own breakdown is absent.
       await recordUsageEvent({
         operation,
-        model: modelName,
+        // Prefer the model that actually served the response when the
+        // provider surfaces it (Anthropic's response_metadata.model can
+        // differ from the requested alias on a fallback); fall back to the
+        // configured model name otherwise.
+        model: gen0?.response_metadata?.model ?? output?.llmOutput?.model ?? modelName,
         provider,
-        promptTokens:
-          usage?.input_tokens ?? usage?.promptTokens ?? usage?.prompt_tokens ?? 0,
+        promptTokens,
         completionTokens:
           usage?.output_tokens ?? usage?.completionTokens ?? usage?.completion_tokens ?? 0,
+        cacheReadTokens: cacheRead,
+        cacheWrite5mTokens: cacheCreation,
         status: 'success',
       });
     },

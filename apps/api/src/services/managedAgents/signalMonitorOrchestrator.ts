@@ -28,6 +28,13 @@ export async function runSignalMonitorViaManagedAgents(organizationId: string): 
     status: result.status === 'completed' ? 'success' : 'error',
     usage: result.usage,
     durationMs: Date.now() - start,
+    // Authoritative session cost (tokens + web search at $10/1k + runtime at
+    // $0.08/h) — this nightly per-org job is web-search heavy, so pricing it
+    // from tokens alone would miss most of its real cost.
+    costOverrideUsd: result.costOverrideUsd,
+    model: result.model,
+    webSearchRequests: result.webSearchRequests,
+    activeSeconds: result.activeSeconds,
   });
 
   return result.status === 'completed' ? { status: 'completed' } : { status: 'failed', error: result.error };

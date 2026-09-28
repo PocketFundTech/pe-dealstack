@@ -3,10 +3,30 @@ import { log } from '../../utils/logger.js';
 
 export type ToolHandler = (organizationId: string, input: any) => Promise<unknown>;
 
+export interface DrainSessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWrite5mTokens?: number;
+  cacheWrite1hTokens?: number;
+}
+
 export interface DrainSessionResult {
   status: 'completed' | 'failed';
   error?: string;
-  usage: { inputTokens: number; outputTokens: number };
+  usage: DrainSessionUsage;
+  /**
+   * Authoritative session cost in USD, from the session's `usage.list_cost`
+   * (already includes tokens + web search + runtime — see the Managed Agents
+   * API reference). `amount` is an integer string in CENTS. Present whenever
+   * the final session record could be retrieved, even on a failed/errored
+   * drain — Anthropic still bills whatever the session actually did.
+   */
+  costOverrideUsd?: number;
+  /** Model that actually served the session, from `session.agent.model.id`. */
+  model?: string;
+  webSearchRequests?: number;
+  activeSeconds?: number;
 }
 
 export interface CreateSessionAndDrainParams {
@@ -88,14 +108,63 @@ export async function createSessionAndDrain(params: CreateSessionAndDrainParams)
     return null;
   };
 
-  for await (const event of client.beta.sessions.events.list(session.id)) {
-    const result = await handleEvent(event);
-    if (result) return result;
-  }
-  for await (const event of stream) {
-    const result = await handleEvent(event);
-    if (result) return result;
-  }
+  // Attach the session's authoritative final usage (list_cost, cache tokens,
+  // web search count, active_seconds, served model) to whatever result we're
+  // about to return. `list_cost.amount` is an integer string in CENTS.
+  // Best-effort — a failed retrieve falls back to the token counts we
+  // accumulated from stream events rather than losing the result entirely.
+  const finalize = async (partial: DrainSessionResult): Promise<DrainSessionResult> => {
+    try {
+      const finalSession = await client.beta.sessions.retrieve(session.id);
+      const su = finalSession.usage;
+      const listCost = su?.list_cost;
+      return {
+        ...partial,
+        usage: {
+          inputTokens: su?.input_tokens ?? partial.usage.inputTokens,
+          outputTokens: su?.output_tokens ?? partial.usage.outputTokens,
+          cacheReadTokens: su?.cache_read_input_tokens,
+          cacheWrite5mTokens: su?.cache_creation?.ephemeral_5m_input_tokens,
+          cacheWrite1hTokens: su?.cache_creation?.ephemeral_1h_input_tokens,
+        },
+        costOverrideUsd: listCost ? Number(listCost.amount) / 100 : partial.costOverrideUsd,
+        model: finalSession.agent?.model?.id ?? partial.model,
+        webSearchRequests: su?.server_tool_use?.web_search_requests,
+        activeSeconds: su?.active_seconds,
+      };
+    } catch (err) {
+      log.warn('createSessionAndDrain: failed to retrieve final session usage — recording accumulated stream usage only', {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return partial;
+    }
+  };
 
-  return { status: 'failed', error: 'Stream ended without a terminal event', usage };
+  // Never throw past this point — a thrown error here would skip usage
+  // recording for a session Anthropic has already billed. Any failure while
+  // draining events is captured as a 'failed' result instead, and finalize()
+  // still attempts to pull the authoritative final cost for it.
+  try {
+    for await (const event of client.beta.sessions.events.list(session.id)) {
+      const result = await handleEvent(event);
+      if (result) return await finalize(result);
+    }
+    for await (const event of stream) {
+      const result = await handleEvent(event);
+      if (result) return await finalize(result);
+    }
+
+    return await finalize({ status: 'failed', error: 'Stream ended without a terminal event', usage });
+  } catch (err) {
+    log.error('createSessionAndDrain: event loop threw — recording usage for the partial session', {
+      sessionId: session.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return await finalize({
+      status: 'failed',
+      error: err instanceof Error ? err.message : String(err),
+      usage,
+    });
+  }
 }

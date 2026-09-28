@@ -10,7 +10,15 @@ const GEMINI_EMBED_PRICE_PER_1K_CHARS_USD = Number(
   process.env.GEMINI_EMBED_PRICE_PER_1K_CHARS_USD ?? 0.000025,
 );
 
-const EMBEDDING_MODEL = 'text-embedding-004';
+/**
+ * Fallback label only — used when a caller doesn't pass `model`. The real
+ * embedding model is whatever rag.ts's getEmbeddingsModel() actually
+ * constructed (`process.env.EMBEDDING_MODEL || 'gemini-embedding-001'`).
+ * Don't duplicate that resolution here: a second hardcoded constant drifts
+ * from the real model the moment EMBEDDING_MODEL is set (it did — this used
+ * to read 'text-embedding-004', a model rag.ts has never called).
+ */
+const DEFAULT_EMBEDDING_MODEL_LABEL = 'gemini-embedding-001';
 
 function totalChars(items: string[]): number {
   let n = 0;
@@ -30,6 +38,10 @@ export async function trackedEmbedDocuments<T>(
   operation: string,
   texts: string[],
   fn: () => Promise<T>,
+  /** The real embedding model in use (read from rag.ts's resolution of
+   *  EMBEDDING_MODEL, not re-derived here). Falls back to the documented
+   *  default label if the caller doesn't pass one. */
+  model: string = DEFAULT_EMBEDDING_MODEL_LABEL,
 ): Promise<T> {
   const start = Date.now();
   const chars = totalChars(texts);
@@ -38,23 +50,25 @@ export async function trackedEmbedDocuments<T>(
     await recordUsageEvent({
       operation,
       provider: 'gemini',
+      model,
       units: texts.length,
       unitCostUsd: (chars / 1000) * GEMINI_EMBED_PRICE_PER_1K_CHARS_USD,
       status: 'success',
       durationMs: Date.now() - start,
-      metadata: { embeddingModel: EMBEDDING_MODEL, charCount: chars },
+      metadata: { embeddingModel: model, charCount: chars },
     });
     return result;
   } catch (err) {
     await recordUsageEvent({
       operation,
       provider: 'gemini',
+      model,
       units: texts.length,
       unitCostUsd: 0,
       status: 'error',
       durationMs: Date.now() - start,
       metadata: {
-        embeddingModel: EMBEDDING_MODEL,
+        embeddingModel: model,
         errorMessage: err instanceof Error ? err.message : String(err),
       },
     });
@@ -70,6 +84,7 @@ export async function trackedEmbedQuery<T>(
   operation: string,
   text: string,
   fn: () => Promise<T>,
+  model: string = DEFAULT_EMBEDDING_MODEL_LABEL,
 ): Promise<T> {
   const start = Date.now();
   const chars = text?.length ?? 0;
@@ -78,23 +93,25 @@ export async function trackedEmbedQuery<T>(
     await recordUsageEvent({
       operation,
       provider: 'gemini',
+      model,
       units: 1,
       unitCostUsd: (chars / 1000) * GEMINI_EMBED_PRICE_PER_1K_CHARS_USD,
       status: 'success',
       durationMs: Date.now() - start,
-      metadata: { embeddingModel: EMBEDDING_MODEL, charCount: chars },
+      metadata: { embeddingModel: model, charCount: chars },
     });
     return result;
   } catch (err) {
     await recordUsageEvent({
       operation,
       provider: 'gemini',
+      model,
       units: 1,
       unitCostUsd: 0,
       status: 'error',
       durationMs: Date.now() - start,
       metadata: {
-        embeddingModel: EMBEDDING_MODEL,
+        embeddingModel: model,
         errorMessage: err instanceof Error ? err.message : String(err),
       },
     });
@@ -104,5 +121,5 @@ export async function trackedEmbedQuery<T>(
 
 export const EMBEDDING_PRICES = {
   perKCharsUsd: GEMINI_EMBED_PRICE_PER_1K_CHARS_USD,
-  model: EMBEDDING_MODEL,
+  model: DEFAULT_EMBEDDING_MODEL_LABEL,
 };

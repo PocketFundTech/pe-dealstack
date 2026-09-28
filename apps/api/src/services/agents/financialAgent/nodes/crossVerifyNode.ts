@@ -338,13 +338,32 @@ export async function crossVerifyNode(
       });
       throw err;
     }
-    const claudeUsage = response.usage_metadata;
+    const claudeUsage = response.usage_metadata as
+      | { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number; cache_creation?: number } }
+      | undefined;
+    // LangChain's usage_metadata.input_tokens INCLUDES cache tokens (unlike
+    // the raw Anthropic SDK) — subtract them so promptTokens stays
+    // UNCACHED-only and pass the cache counts on separately so they're
+    // priced at their own rate instead of full-price input (see llm.ts
+    // makeUsageHandler for the same split, and trackedLLM.ts's docblock).
+    const cacheRead = claudeUsage?.input_token_details?.cache_read ?? 0;
+    const cacheCreation = claudeUsage?.input_token_details?.cache_creation ?? 0;
+    const rawInputTokens = claudeUsage?.input_tokens ?? 0;
+    const promptTokens = Math.max(0, rawInputTokens - cacheRead - cacheCreation);
+    // Served model — response_metadata.model reflects what actually
+    // answered (this call doesn't use a fallback chain today, but the
+    // field is authoritative when present).
+    const servedModel =
+      (response as unknown as { response_metadata?: { model?: string } }).response_metadata?.model ??
+      'claude-haiku-4-5-20251001';
     await recordUsageEvent({
       operation: 'financial_extraction',
-      model: 'claude-haiku-4-5-20251001',
+      model: servedModel,
       provider: 'anthropic',
-      promptTokens: claudeUsage?.input_tokens ?? 0,
+      promptTokens,
       completionTokens: claudeUsage?.output_tokens ?? 0,
+      cacheReadTokens: cacheRead,
+      cacheWrite5mTokens: cacheCreation,
       status: 'success',
       durationMs: Date.now() - start,
     });

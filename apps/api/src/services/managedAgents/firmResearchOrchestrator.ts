@@ -37,12 +37,22 @@ export async function runFirmResearchViaManagedAgents(input: RunFirmResearchInpu
       status: result.status === 'completed' ? 'success' : 'error',
       usage: result.usage,
       durationMs: Date.now() - start,
+      costOverrideUsd: result.costOverrideUsd,
+      model: result.model,
+      webSearchRequests: result.webSearchRequests,
+      activeSeconds: result.activeSeconds,
     });
 
     if (result.status === 'failed') {
       await markResearchFailed(input.organizationId, result.error || 'unknown error');
     }
   } catch (err) {
+    // createSessionAndDrain no longer throws once a session exists — it
+    // catches its own event-loop errors and still returns a 'failed' result
+    // with the session's final usage attached (see session.ts finalize()).
+    // This catch is now reached only when the session was never created
+    // (e.g. sessions.create() itself failed), so there is no billable usage
+    // to record here.
     captureAgentError(err, { context: 'firmResearchOrchestrator:runFirmResearchViaManagedAgents' });
     await markResearchFailed(input.organizationId, err instanceof Error ? err.message : String(err));
   } finally {

@@ -75,6 +75,67 @@ describe('runFirmResearchViaManagedAgents', () => {
     expect(releaseResearchLock).toHaveBeenCalledWith('org-1');
   });
 
+  // Cost-accuracy (usage-cost-accuracy): the session's authoritative
+  // list_cost / served model / cache tokens / web-search count must flow
+  // through to the ledger row instead of being re-derived or dropped.
+  it('forwards the session result costOverrideUsd, model, cache tokens and web-search metadata', async () => {
+    acquireResearchLock.mockResolvedValue(true);
+    createSessionAndDrain.mockResolvedValue({
+      status: 'completed',
+      usage: { inputTokens: 5000, outputTokens: 800, cacheReadTokens: 3000, cacheWrite5mTokens: 400 },
+      costOverrideUsd: 7.42,
+      model: 'claude-opus-5',
+      webSearchRequests: 6,
+      activeSeconds: 90,
+    });
+
+    const { runFirmResearchViaManagedAgents } = await getOrchestrator();
+    await runFirmResearchViaManagedAgents({
+      organizationId: 'org-1',
+      firmName: 'Acme Capital',
+      websiteUrl: 'https://acme.example',
+      linkedinUrl: '',
+    });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      operation: 'firm_research_managed_agent',
+      model: 'claude-opus-5',
+      costOverrideUsd: 7.42,
+      cacheReadTokens: 3000,
+      cacheWrite5mTokens: 400,
+    });
+    expect(recorded[0].metadata).toMatchObject({ webSearchRequests: 6, activeSeconds: 90 });
+  });
+
+  // createSessionAndDrain no longer throws once a session exists (session.ts
+  // catches its own event-loop errors) — this catch is reached only when the
+  // session was never created, so there's no billable usage to lose.
+  it('reaches the catch (no usage recorded) only when createSessionAndDrain itself throws before a session exists', async () => {
+    acquireResearchLock.mockResolvedValue(true);
+    createSessionAndDrain.mockRejectedValue(new Error('sessions.create unreachable'));
+    let updatedSettings: any = null;
+    mockSupabase.from.mockImplementation(() => ({
+      select: () => ({ eq: () => ({ single: async () => ({ data: { settings: {} }, error: null }) }) }),
+      update: (payload: any) => {
+        updatedSettings = payload.settings;
+        return { eq: async () => ({ error: null }) };
+      },
+    }));
+
+    const { runFirmResearchViaManagedAgents } = await getOrchestrator();
+    await runFirmResearchViaManagedAgents({
+      organizationId: 'org-1',
+      firmName: 'Acme Capital',
+      websiteUrl: 'https://acme.example',
+      linkedinUrl: '',
+    });
+
+    expect(recorded).toHaveLength(0);
+    expect(updatedSettings).toMatchObject({ researchStatus: 'failed', researchError: 'sessions.create unreachable' });
+    expect(releaseResearchLock).toHaveBeenCalledWith('org-1');
+  });
+
   it('marks researchStatus failed and releases the lock when the session fails', async () => {
     acquireResearchLock.mockResolvedValue(true);
     createSessionAndDrain.mockResolvedValue({ status: 'failed', error: 'boom', usage: { inputTokens: 0, outputTokens: 0 } });

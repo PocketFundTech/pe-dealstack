@@ -486,7 +486,10 @@ export async function* runDealChatAgentStreaming(
   };
 
   let fullText = '';
-  const usage = { inputTokens: 0, outputTokens: 0 };
+  const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 };
+  // Served model — read off message_start (fallback-aware; may differ from
+  // the requested role alias if the request routed through a fallback).
+  let servedModel: string | undefined;
 
   const { runner, recordUsage } = trackedClaudeStream({
     operation: 'deal_chat',
@@ -504,13 +507,17 @@ export async function* runDealChatAgentStreaming(
       if (iterationCount > getAgentRecursionLimit()) {
         internalController.abort();
         cleanup();
-        await recordUsage(usage, 'error');
+        await recordUsage(usage, 'error', servedModel);
         yield { type: 'error', message: 'Reached the maximum number of tool calls for this response. Please try rephrasing or asking a more specific question.' };
         return;
       }
       for await (const event of messageStream as AsyncIterable<any>) {
         if (event.type === 'message_start') {
           usage.inputTokens += event.message?.usage?.input_tokens ?? 0;
+          usage.cacheReadTokens += event.message?.usage?.cache_read_input_tokens ?? 0;
+          usage.cacheWrite5mTokens += event.message?.usage?.cache_creation?.ephemeral_5m_input_tokens ?? 0;
+          usage.cacheWrite1hTokens += event.message?.usage?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+          if (event.message?.model) servedModel = event.message.model;
         }
         if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
           const toolName = event.content_block.name;
@@ -528,18 +535,18 @@ export async function* runDealChatAgentStreaming(
   } catch (error: any) {
     cleanup();
     if (internalController.signal.aborted) {
-      await recordUsage(usage, 'error');
+      await recordUsage(usage, 'error', servedModel);
       yield { type: 'error', message: `Response timed out after ${timeoutMs}ms. Please try again.` };
       return;
     }
-    await recordUsage(usage, 'error');
+    await recordUsage(usage, 'error', servedModel);
     captureAgentError(error, { agent: 'dealChatAgent', node: 'stream' });
     yield { type: 'error', message: classifyAIError(error.message || 'Unknown error') };
     return;
   }
 
   cleanup();
-  await recordUsage(usage, 'success');
+  await recordUsage(usage, 'success', servedModel);
 
   for (const effect of sideEffects) yield { type: 'side_effect', effect };
   for (const update of updates) yield { type: 'update', update };
