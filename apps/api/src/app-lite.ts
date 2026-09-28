@@ -1,7 +1,3 @@
-// MUST be the first import — aliases a mis-named Anthropic key env var onto
-// ANTHROPIC_API_KEY before anthropic.ts (or anything else) reads it at
-// module load time. See utils/anthropicKeyAlias.ts.
-import './utils/anthropicKeyAlias.js';
 import * as Sentry from '@sentry/node';
 import express, { type Request } from 'express';
 import helmet from 'helmet';
