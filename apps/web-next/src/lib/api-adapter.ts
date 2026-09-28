@@ -8,7 +8,7 @@
 
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
-import type { NextRequest } from "next/server";
+import { after, type NextRequest } from "next/server";
 
 export type ExpressHandler = (
   req: unknown,
@@ -67,6 +67,14 @@ export async function proxyToExpress(
     socket: fakeSocket,
     complete: false,
     aborted: false,
+    // Lets Express routes (see apps/api/src/utils/afterResponse.ts) schedule
+    // work that runs after the response is sent without it being dropped
+    // when the Vercel function freezes post-response. `after()` is only
+    // valid to call within this request's execution scope, which we're
+    // still inside of here (proxyToExpress hasn't returned yet).
+    runAfterResponse: (fn: () => void | Promise<void>) => {
+      after(fn);
+    },
   }) as unknown as IncomingMessage;
 
   // ── Build a streaming-capable fake ServerResponse ────────────────────────
