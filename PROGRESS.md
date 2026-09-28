@@ -5,6 +5,44 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 75 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 01:58 IST
+
+#### Goal: fix the chat greeting the founder as "Hi Dev", fix the Anthropic key incident, and make page-to-page navigation faster.
+
+#### 1. Anthropic key incident (PRs #146, #147)
+
+**Problem:** every AI call failed with "credit balance is too low" even after a new key was added in Vercel.
+
+**Root cause:** the first new key was added as `Antropic_api_avise` (a name no code reads) and was itself out of credit (tested directly against the Anthropic API → 400). PR #146 aliased that name onto `ANTHROPIC_API_KEY` *with priority*; once the founder put a second, working key (tested → 200) directly into `ANTHROPIC_API_KEY`, the alias overwrote it with the dead one at startup.
+
+**Fix:** PR #147 reverted the alias. Verified live: next deal-chat call succeeded (12,762 in / 292 out tokens). **Still to do (founder):** delete `Antropic_api_avise` in Vercel and revoke both keys that were pasted in plaintext in chat.
+
+#### 2. Chat greeted Ganesh as "Hi Dev" (this PR)
+
+**Root cause:** the chat prompt never states who the user is; it injected `User.onboardingStatus.personProfile` as "Your Role: …". Ganesh's profile had been researched from Dev's LinkedIn (`devlikesbizness`) and the model had put the *name* "Dev Shah" into the undescribed `title` field. The Settings values (`User.name` / `User.title`) were correct but never reached the prompt.
+
+**Fix:** chat now injects "You are assisting: <Settings name> (<Settings title>)" and no longer uses the onboarding blob; the onboarding schema now describes `title`/`role` as job title / functional role, never a name. 3 route tests.
+
+#### 3. Slow navigation (this PR)
+
+**Measured root cause:** every API response carried `x-vercel-id: bom1::iad1` — functions ran in **US East** while the DB is in **Tokyo**. The new Vercel project (Sept 17 move) defaulted to `iad1`; the old project had been switched to Tokyo in the dashboard, and the code-level `preferredRegion` doesn't override the project region. Each request: India → US → Tokyo DB, 3–4 sequential queries across the Pacific.
+
+**Fixes:**
+- `vercel.json` `"regions": ["hnd1"]` — functions next to the DB.
+- `staleTimes.dynamic: 30` — revisits reuse the page payload for 30s.
+- Dashboard, deals, contacts, templates, graphs, NDAs, deal detail, settings now cached via `useApiQuery` (instant revisit, background refresh; mutations write through).
+- Deal detail's duplicate `/financials` request removed; settings' triplicate `/users/me` and `/organizations/me` deduped.
+- chart.js / recharts lazy-loaded; notification polling paused in background tabs.
+- Review rules: a failed background refresh never replaces cached data with an error screen; dashboard always revalidates (no freshness window); deleting a deal doesn't blank card financials.
+
+**Ruled out:** middleware auth check per navigation is local (Supabase uses ES256 keys).
+
+**Open:** PR #141 (data-room summary endpoint — fixes the N+1 requests behind the data-room console timeouts) is green and ready; it only needs an approval.
+
+---
+
 ### Session 74 — September 28, 2026
 
 #### Timestamp: September 28, 2026 — 21:16 IST
