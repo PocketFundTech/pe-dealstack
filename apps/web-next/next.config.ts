@@ -22,6 +22,15 @@ const nextConfig: NextConfig = {
   // file tracer scopes to apps/web-next/ and misses next/dist/compiled/* on
   // Vercel, breaking the lambda packaging step (ENOENT on @opentelemetry/api).
   outputFileTracingRoot: REPO_ROOT,
+  // Reuse a visited page's RSC payload for 30s instead of a server round trip
+  // on every back-and-forth navigation (Next 15+ default for dynamic pages is
+  // 0s). The (app) layout is force-dynamic, so without this every sidebar
+  // click waits on the page function before the client can even start its
+  // own data fetches. Page data itself is fetched client-side, so 30s of RSC
+  // reuse can't show stale deal data.
+  experimental: {
+    staleTimes: { dynamic: 30 },
+  },
   // Tell Next/webpack not to try to bundle Express + its node-side deps —
   // they're full of dynamic requires and platform-specifics that don't
   // bundle cleanly. With these external, the tracer follows the imports

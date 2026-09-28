@@ -57,8 +57,21 @@ export function NotificationCountProvider({ children }: { children: ReactNode })
     // effect body.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
-    const id = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
+    // Don't poll from background tabs: every open tab was hitting the API
+    // every 15s forever, competing with the foreground tab's page loads.
+    // Catch up immediately when the tab becomes visible again.
+    const tick = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const id = setInterval(tick, POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [userId, refresh]);
 
   return (
