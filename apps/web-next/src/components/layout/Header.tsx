@@ -86,7 +86,7 @@ export function Header() {
                 in docs/planning/WEB-NEXT-PORT-PLAN.md. */}
             <button
               type="button"
-              onClick={openDealIntake}
+              onClick={() => openDealIntake()}
               className="flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg shadow-sm hover:bg-[#002855] transition-colors text-sm font-medium"
               style={{ backgroundColor: "#003366" }}
             >

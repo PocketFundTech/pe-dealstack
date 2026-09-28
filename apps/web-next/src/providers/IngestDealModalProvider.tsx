@@ -16,9 +16,13 @@ import {
   type ReactNode,
 } from "react";
 import { IngestDealModal } from "@/components/deal-intake/IngestDealModal";
+import type { DealOption } from "@/app/(app)/deal-intake/components";
 
 interface IngestDealModalContextValue {
-  openDealIntake: () => void;
+  /** Pass a deal to open the modal pre-scoped to "Update Existing Deal" for
+   *  that deal (e.g. from a deal detail page's "Add Document" action). Omit
+   *  to open in the default "Create New Deal" mode. */
+  openDealIntake: (deal?: DealOption) => void;
   closeDealIntake: () => void;
 }
 
@@ -26,14 +30,21 @@ const IngestDealModalContext = createContext<IngestDealModalContextValue | null>
 
 export function IngestDealModalProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [preselectedDeal, setPreselectedDeal] = useState<DealOption | null>(null);
 
-  const openDealIntake = useCallback(() => setOpen(true), []);
-  const closeDealIntake = useCallback(() => setOpen(false), []);
+  const openDealIntake = useCallback((deal?: DealOption) => {
+    setPreselectedDeal(deal ?? null);
+    setOpen(true);
+  }, []);
+  const closeDealIntake = useCallback(() => {
+    setOpen(false);
+    setPreselectedDeal(null);
+  }, []);
 
   return (
     <IngestDealModalContext.Provider value={{ openDealIntake, closeDealIntake }}>
       {children}
-      <IngestDealModal open={open} onClose={closeDealIntake} />
+      <IngestDealModal open={open} onClose={closeDealIntake} preselectedDeal={preselectedDeal} />
     </IngestDealModalContext.Provider>
   );
 }
