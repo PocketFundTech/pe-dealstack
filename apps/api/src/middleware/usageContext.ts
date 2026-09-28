@@ -9,6 +9,8 @@ export interface UsageContext {
   organizationId: string;
   requestId?: string;
   source: 'http' | 'background' | 'test';
+  /** Set for cron / webhook / background work with no requesting user (e.g. "cron:signal-scan"). */
+  systemSource?: string;
 }
 
 const storage = new AsyncLocalStorage<UsageContext>();
@@ -24,6 +26,51 @@ export function getUsageContext(): UsageContext | undefined {
 
 export function runWithUsageContext<T>(ctx: UsageContext, fn: () => T): T {
   return storage.run(ctx, fn);
+}
+
+// orgId → the internal User.id that system usage is attributed to.
+const orgSystemUserId = new Map<string, string>();
+
+/**
+ * Run work that has no requesting user — cron jobs, webhooks, background
+ * processing — with a usage context bound to the organization, so its AI
+ * spend is recorded instead of silently dropped ("no usage context bound").
+ *
+ * UsageEvent.userId is NOT NULL, so the row is attributed to the org's
+ * earliest admin (falling back to its earliest user) and marked
+ * `metadata.attribution = "system"` with `systemSource` for filtering.
+ * An already-bound request context is kept as-is. If the org has no user the
+ * work still runs, unrecorded, with a warning.
+ */
+export async function runAsOrgSystem<T>(
+  organizationId: string,
+  systemSource: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  if (getUsageContext()) return fn();
+  let userId = orgSystemUserId.get(organizationId);
+  if (!userId) {
+    try {
+      const pick = async (roles: string[] | null) => {
+        let q = supabase.from('User').select('id').eq('organizationId', organizationId);
+        if (roles) q = q.in('role', roles);
+        const { data } = await q.order('createdAt', { ascending: true }).limit(1);
+        return (data as Array<{ id: string }> | null)?.[0]?.id;
+      };
+      userId = (await pick(['ADMIN'])) ?? (await pick(null));
+      if (userId) orgSystemUserId.set(organizationId, userId);
+    } catch (err) {
+      log.error('runAsOrgSystem: org user lookup threw', { err, organizationId });
+    }
+  }
+  if (!userId) {
+    log.warn('runAsOrgSystem: no user to attribute system usage to — running unrecorded', {
+      organizationId,
+      systemSource,
+    });
+    return fn();
+  }
+  return storage.run({ userId, organizationId, source: 'background', systemSource }, fn);
 }
 
 /**
