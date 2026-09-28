@@ -5,6 +5,30 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 74 — September 28, 2026
+
+#### Timestamp: September 28, 2026 — 22:50 IST
+
+#### Goal: work through the founder's follow-up punch list from Session 73 (13 items) — everything that didn't need the founder's own input, one PR each.
+
+**Shipped and merged (PRs #137–#140):**
+- **#137** — fixed the "Local preview only, uncommitted" wording left in the Session 71/72 log entries (stale since the redesign merged), added Session 73.
+- **#138** — fixed the 2 API tests that failed on every PR (`dealChatAgent(-Streaming)-bounds`, confirmed already failing on #134/#135/#136 too). Root cause: neither test mocked `firmContextService.js`, so `getFirmContextBlock()` hit a real, unreachable Supabase host and took ~7s to fail DNS resolution — blowing past the 150ms/2s the tests asserted. Not a real bug (the function already resolves to `''` on error); mocked it, both files now run in <1s. Full suite: 185/185 → **now 0 failing files, every PR since is green on Test.**
+- **#139** — `formatRelativeTime()` (the shared date helper, 28 call sites — notifications, activity feeds, contacts, deal teasers, document rows, memo builder) computed `now - date` and fell through every branch for a *future* date, always landing on "Just now" no matter how far ahead. A task due in 9 days read "Just now" everywhere except the redesigned dashboard (which had already dodged this with its own `dueLabel()`). Now symmetric: past unchanged, future is "in X", sub-minute either side still "Just now" (extends clock-skew tolerance to the future side too).
+- **#140** — the Data Room card's secondary action was supposed to open a deal straight on its Documents tab (`?tab=Documents`) per the original redesign spec, but shipped as a plain "Deal page" link to Overview because the deal page couldn't deep-link into a tab yet. Added `?tab=` support (read once on mount via `window.location.search`, same convention as the page's existing `#hash-scroll` deep link) and restored the "Request documents" label + link.
+
+**Shipped, PR open (#141):** `GET /api/data-rooms/summary` — replaces the Data Room index's per-room fan-out (~3 requests × N rooms) with one org-scoped request (6 Supabase queries total, grouped by dealId server-side). The redesign spec explicitly deferred this ("a summary endpoint can replace this later without changing the UI") pending the founder's call — approved this session. Response shape matches `RoomStats` exactly, so no UI/markup changed. Frontend tries the summary endpoint once per page load; any failure falls back to the original per-room fetching unchanged.
+
+**Shipped, PR open, migration pending — dashboard snoozes moved off localStorage.** The Today queue's Snooze action was per-browser only (see Session 71's known limitation). New `DashboardSnooze` table (userId + itemKey unique, RLS matching `Watchlist`'s pattern) + `GET/POST/DELETE /api/snoozes`, both mounted in `app.ts`/`app-lite.ts`. `triage.ts` dropped `readSnoozes`/`writeSnoozes` (kept `snoozeUntil`, still pure); `use-dashboard-data.ts` now fetches snoozes alongside deals/tasks on every load and persists snooze/unsnooze fire-and-forget (optimistic UI, best-effort write — a failed persist just means the item can reappear next reload, not corrupted state).
+
+**🔴 Migration required before this is done** — `apps/api/dashboard-snooze-migration.sql`, tracked as row 5 in `docs/PENDING-MIGRATIONS.md`. Per the migration gate: the code is merge-ready, `/api/snoozes` will 500 until the founder runs it in Supabase, and this feature is **not** complete until that's confirmed back.
+
+**Still blocked on the founder (not attempted):** Google OAuth client ID/secret (Gmail/Drive still down), a real production upload/chat-message smoke test of the restored Claude-native pipeline, and the intermittent Vercel "account blocked" state seen twice during Session 73's deploys.
+
+**Verification across all six items:** each PR's own description has the full breakdown (tests added, `tsc --noEmit`, full-suite pass counts, and for #141/snoozes the actual `npm run build:api` production build). No regressions found in any full suite re-run.
+
+---
+
 ### Session 73 — September 28, 2026
 
 #### Timestamp: September 28, 2026 — 16:15 IST

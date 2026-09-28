@@ -38,6 +38,7 @@ describe("pickBundle", () => {
     ["/api/public/doc-requests/sometoken", "lite"], // public broker upload page
     ["/api/contacts", "lite"],
     ["/api/users/me", "lite"],
+    ["/api/snoozes", "lite"], // dashboard Today-queue snoozes, no LLM
   ])("%s → %s", (pathname, bundle) => {
     expect(pickBundle(pathname)).toBe(bundle);
   });
