@@ -80,6 +80,7 @@ import cronWeeklyDigestRouter from './routes/cron-weekly-digest.js';
 import cronShareExpiryWarningsRouter from './routes/cron-share-expiry-warnings.js';
 import cronReengagementNudgeRouter from './routes/cron-reengagement-nudge.js';
 import cronReactivationRouter from './routes/cron-reactivation.js';
+import cronUsageReconciliationRouter from './routes/cron-usage-reconciliation.js';
 import outreachRouter from './routes/outreach.js';
 import outreachReplyIoRouter from './routes/outreach-replyio.js';
 import outreachImportRouter from './routes/outreach-import.js';
@@ -379,6 +380,7 @@ app.use('/api/cron/reactivation', cronReactivationRouter);
 app.use('/api/cron/weekly-digest', cronWeeklyDigestRouter);
 app.use('/api/cron/share-expiry-warnings', cronShareExpiryWarningsRouter);
 app.use('/api/cron/reengagement-nudge', cronReengagementNudgeRouter);
+app.use('/api/cron/usage-reconciliation', cronUsageReconciliationRouter);
 
 // Integration webhooks + OAuth callbacks must be public — providers POST/GET
 // here without an auth header. Auth is enforced via signed state tokens
