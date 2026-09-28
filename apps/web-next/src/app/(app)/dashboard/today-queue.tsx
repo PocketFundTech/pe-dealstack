@@ -56,7 +56,7 @@ function QueueRow({ item, now, onComplete, onSnooze, onAssign, loadTeam }: {
   const meta = KIND_META[item.kind];
   const snoozeLabel = SNOOZE_DAYS[item.kind] === 1 ? "Snooze until tomorrow" : "Snooze for a week";
 
-  let title: React.ReactNode;
+  let title: string;
   let detail: React.ReactNode;
   let href: string | null = null;
   let primary: React.ReactNode = null;
