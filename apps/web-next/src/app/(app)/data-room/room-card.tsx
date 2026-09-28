@@ -150,7 +150,7 @@ export function RoomCard({ deal, status, failed, showCreated, now, onRetry }: Pr
 
       <footer className="relative z-10 flex items-center justify-between border-t border-(--dash-rule) px-5 py-2.5 text-xs">
         <Link href={`/data-room/${deal.id}`} className="font-semibold text-(--dash-blue) hover:underline">Open room →</Link>
-        <Link href={`/deals/${deal.id}`} className="text-(--dash-ink-3) hover:text-(--dash-ink)">Deal page</Link>
+        <Link href={`/deals/${deal.id}?tab=Documents`} className="text-(--dash-ink-3) hover:text-(--dash-ink)">Request documents</Link>
       </footer>
     </article>
   );
