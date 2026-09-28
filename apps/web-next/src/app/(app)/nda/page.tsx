@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/providers/ToastProvider";
 import { CreateDocModal } from "./CreateDocModal";
@@ -57,9 +58,15 @@ export default function NdaPage() {
   const { showToast } = useToast();
   const searchParams = useSearchParams();
 
-  const [docs, setDocs] = useState<LegalDocumentWithDeal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Stale-while-revalidate cache: revisiting /nda renders instantly.
+  const docsQuery = useApiQuery<LegalDocumentWithDeal[]>("/legal-documents?docType=NDA");
+  const docs = useMemo<LegalDocumentWithDeal[]>(
+    () => (Array.isArray(docsQuery.data) ? docsQuery.data : []),
+    [docsQuery.data],
+  );
+  const loading = docsQuery.isLoading;
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? (docsQuery.error && docsQuery.data === undefined ? docsQuery.error.message || "Failed to load NDAs" : null);
   const [view, setView] = useState<View>({ mode: "gallery" });
   const [deleteTarget, setDeleteTarget] =
     useState<LegalDocumentWithDeal | null>(null);
@@ -128,23 +135,11 @@ export default function NdaPage() {
   // effect reads it directly.
   const fetchingRef = useRef(false);
 
-  const loadDocs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<LegalDocumentWithDeal[]>(
-        "/legal-documents?docType=NDA",
-      );
-      setDocs(Array.isArray(data) ? data : []);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to load NDAs";
-      console.warn("[nda] load failed:", err);
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const { refetch: refetchDocs } = docsQuery;
+  const loadDocs = useCallback(() => {
+    setActionError(null);
+    return refetchDocs();
+  }, [refetchDocs]);
 
   // Ask the backend to poll Drive for counterparty signatures (the active
   // detection path while push webhooks are disabled on Vercel). Best-effort —
@@ -170,9 +165,8 @@ export default function NdaPage() {
     }
   }, [checkSignatures, loadDocs]);
 
-  useEffect(() => {
-    loadDocs();
-  }, [loadDocs]);
+  // The useApiQuery hook above already fetches (or serves cached data) on
+  // mount, so no separate initial-load effect is needed here.
 
   // Poll once on mount so a signature completed while away surfaces without
   // needing a tab blur/focus. Best-effort; refreshes the list when done.
@@ -237,7 +231,7 @@ export default function NdaPage() {
     const target = deleteTarget;
     // Optimistic remove — refetch on failure to reconcile. Backend soft-deletes
     // so the row still exists, just hidden from GET responses.
-    setDocs((ds) => ds.filter((d) => d.id !== target.id));
+    docsQuery.mutate((ds) => (ds ?? []).filter((d) => d.id !== target.id));
     setDeleteTarget(null);
     try {
       await api.delete(`/legal-documents/${target.id}`);
@@ -283,7 +277,7 @@ export default function NdaPage() {
       ...doc,
       deal: { ...dealCtx, id: doc.dealId },
     };
-    setDocs((ds) => [withDeal, ...ds]);
+    docsQuery.mutate((ds) => [withDeal, ...(ds ?? [])]);
     showToast(`Created "${doc.title}"`, "success");
     setView({ mode: "edit", doc: withDeal });
     loadDocs();
@@ -299,7 +293,7 @@ export default function NdaPage() {
       ...doc,
       deal: { id: doc.dealId, target: null, projectName: null },
     };
-    setDocs((ds) => [withDeal, ...ds]);
+    docsQuery.mutate((ds) => [withDeal, ...(ds ?? [])]);
     showToast(`Imported "${doc.title}"`, "success");
     setView({ mode: "edit", doc: withDeal });
     loadDocs();
@@ -314,7 +308,7 @@ export default function NdaPage() {
       ...doc,
       deal: { id: doc.dealId, target: null, projectName: null },
     };
-    setDocs((ds) => [withDeal, ...ds]);
+    docsQuery.mutate((ds) => [withDeal, ...(ds ?? [])]);
     showToast(`Imported "${doc.title}"`, "success");
     setView({ mode: "gdocView", doc: withDeal });
     loadDocs();
@@ -323,8 +317,8 @@ export default function NdaPage() {
   function handleGdocSent(updated: LegalDocumentWithDeal) {
     // Echo the post-send row into the list + keep the gdocView open with the
     // freshest data (status now SENT). Preserve the existing deal join.
-    setDocs((ds) =>
-      ds.map((d) =>
+    docsQuery.mutate((ds) =>
+      (ds ?? []).map((d) =>
         d.id === updated.id ? { ...d, ...updated, deal: d.deal } : d,
       ),
     );
@@ -341,8 +335,8 @@ export default function NdaPage() {
   }
 
   function handleSaved(updated: LegalDocument) {
-    setDocs((ds) =>
-      ds.map((d) => (d.id === updated.id ? { ...d, ...updated, deal: d.deal } : d)),
+    docsQuery.mutate((ds) =>
+      (ds ?? []).map((d) => (d.id === updated.id ? { ...d, ...updated, deal: d.deal } : d)),
     );
     // Keep the editor open with the freshest data so the user can keep
     // working. The toast that signals success fires inside FullEditPage.
@@ -390,7 +384,7 @@ export default function NdaPage() {
         onImportGdoc={handleImportGdoc}
         onEdit={handleEdit}
         onDelete={handleDeleteRequest}
-        onDismissError={() => setError(null)}
+        onDismissError={() => setActionError(null)}
       />
 
       {view.mode === "reviewIncoming" && (

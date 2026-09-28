@@ -1,6 +1,18 @@
 // Constants and shared types for the deal-financials panel.
 // Ported from legacy financials-helpers.js — see deal-financials.tsx for usage.
 
+// Shared useApiQuery cache key for GET /deals/:id/financials. Both
+// FinancialMetricsRow and FinancialStatusBadge (deal-layout.tsx) read
+// through this key so they share a single request instead of firing two
+// independent fetches on every deal-page load. deal-financials.tsx
+// invalidates it whenever financials change (extract / remove-by-document /
+// auto-resolve) so those two header widgets stay in sync. A leaf module
+// (no React, no other local imports) so both sides can import it without a
+// cycle.
+export function financialsKey(dealId: string): string {
+  return `/deals/${dealId}/financials`;
+}
+
 export const LINE_ITEM_LABELS: Record<string, string> = {
   revenue: "Revenue", cogs: "Cost of Goods Sold", gross_profit: "Gross Profit",
   gross_margin_pct: "Gross Margin %", sga: "SG&A", rd: "R&D",

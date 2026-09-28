@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { api } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { USERS_ME_KEY } from "./settings-api-keys";
 import { authFetchRaw } from "../deal-intake/components";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -57,8 +59,11 @@ const FIELDS: { label: string; key: keyof FirmProfileData }[] = [
 // ─── Component ──────────────────────────────────────────────────────
 
 export function FirmProfileSection() {
+  // Shared with the settings page's own /users/me load (page.tsx) --
+  // useApiQuery dedupes the two mount-time fetches into one request. See
+  // settings-api-keys.ts.
+  const usersMeQuery = useApiQuery<UserMeResponse>(USERS_ME_KEY);
   const [firmProfile, setFirmProfile] = useState<FirmProfileData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -102,27 +107,36 @@ export function FirmProfileSection() {
     }
   };
 
-  const loadFirmProfile = useCallback(async () => {
-    try {
-      const data = await api.get<UserMeResponse>("/users/me");
-      const orgSettings = data?.organization?.settings || {};
-      setFirmProfile(orgSettings.firmProfile || null);
-      setOrgWebsite(orgSettings.firmWebsite || data?.organization?.website || "");
-      setOrgLinkedin(orgSettings.firmLinkedin || "");
-      setFirmDocText(orgSettings.firmDocText || "");
-      setLoadError(false);
-    } catch (err) {
-      console.warn("[settings/firm-profile] failed to load:", err);
-      setFirmProfile(null);
-      setLoadError(true);
-    } finally {
-      setLoading(false);
-    }
+  const applyFirmProfile = useCallback((data: UserMeResponse) => {
+    const orgSettings = data?.organization?.settings || {};
+    setFirmProfile(orgSettings.firmProfile || null);
+    setOrgWebsite(orgSettings.firmWebsite || data?.organization?.website || "");
+    setOrgLinkedin(orgSettings.firmLinkedin || "");
+    setFirmDocText(orgSettings.firmDocText || "");
+    setLoadError(false);
   }, []);
 
+  // Seeded once per mount from the shared /users/me cache entry, same as
+  // the old one-shot loadFirmProfile -- so a background revalidation of
+  // that shared key (e.g. triggered by the settings page's own General
+  // section) never stomps org-website/LinkedIn/doc-text fields the user is
+  // mid-editing here. handleRefresh below re-applies explicitly after a
+  // successful AI research run.
+  const appliedInitial = useRef(false);
   useEffect(() => {
-    loadFirmProfile();
-  }, [loadFirmProfile]);
+    if (appliedInitial.current) return;
+    if (usersMeQuery.data) {
+      applyFirmProfile(usersMeQuery.data);
+      appliedInitial.current = true;
+    } else if (usersMeQuery.error) {
+      console.warn("[settings/firm-profile] failed to load:", usersMeQuery.error);
+      setFirmProfile(null);
+      setLoadError(true);
+      appliedInitial.current = true;
+    }
+  }, [usersMeQuery.data, usersMeQuery.error, applyFirmProfile]);
+
+  const loading = usersMeQuery.isLoading;
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -146,9 +160,14 @@ export function FirmProfileSection() {
           type: "success",
           text: "Profile refreshed successfully",
         });
-        // Reload the firm profile data after a short delay
+        // Reload the firm profile data after a short delay. refetch() also
+        // writes the fresh response into the shared /users/me cache entry,
+        // so the settings page's General section (and any other reader)
+        // sees it too.
         setTimeout(() => {
-          loadFirmProfile();
+          usersMeQuery.refetch().then((raw) => {
+            if (raw) applyFirmProfile(raw);
+          });
           setRefreshStatus(null);
         }, 1500);
       } else {

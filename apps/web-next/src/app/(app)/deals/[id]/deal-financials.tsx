@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { api, NotFoundError } from "@/lib/api";
+import { mutateApiCache } from "@/lib/useApiQuery";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { useToast } from "@/providers/ToastProvider";
 import { type FinancialStatement } from "./deal-financials-charts";
@@ -25,6 +26,7 @@ const BalanceSheetChart = dynamic(
 );
 import {
   TAB_CONFIG,
+  financialsKey,
   type ChartType,
   type StatementType,
 } from "./deal-financials-constants";
@@ -91,6 +93,12 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
         api.get<{ documents?: FinancialDocLite[] }>(`/deals/${dealId}`),
       ]);
 
+      // Also write-through to deal-layout.tsx's shared financials cache key.
+      const syncStatements = (next: FinancialStatement[]) => {
+        setStatements(next);
+        mutateApiCache(financialsKey(dealId), next);
+      };
+
       if (stmtData.status === "fulfilled") {
         // API returns raw array, but handle wrapped responses too
         const raw = stmtData.value as unknown;
@@ -101,13 +109,13 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
             : Array.isArray((raw as Record<string, unknown>)?.financials)
               ? (raw as Record<string, unknown>).financials as FinancialStatement[]
               : [];
-        setStatements(arr);
+        syncStatements(arr);
       } else {
         const err = stmtData.reason;
         const msg = err instanceof Error ? err.message : "Failed to load financials";
         // Treat 404/Not Found as empty data rather than an error
         if (err instanceof NotFoundError || msg.includes("404") || msg.toLowerCase().includes("not found")) {
-          setStatements([]);
+          syncStatements([]);
         } else {
           setError(msg);
         }

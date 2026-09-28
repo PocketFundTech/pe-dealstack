@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type SetStateAction } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/providers/ToastProvider";
+import { useApiQuery, mutateApiCache } from "@/lib/useApiQuery";
+import { flattenDeal, type RawDeal } from "./deal-page-flatten";
 
 import {
   type DealDetail,
@@ -42,6 +44,14 @@ import {
 // Sub-components are kept "dumb" (state + setters as props). The data loading
 // orchestration (loadDeal/loadActivities/loadChatHistory) and the resizable
 // panel logic stay here so they can be coordinated in one place.
+//
+// Perf: the `/deals/:id` GET goes through useApiQuery (src/lib/useApiQuery.ts)
+// instead of a plain useState+useEffect fetch, so revisiting a deal renders
+// instantly from cache and revalidates in the background instead of showing
+// the skeleton again. The raw response is flattened via flattenDeal
+// (deal-page-flatten.ts). Every place that used to call `setDeal(...)` now
+// goes through the `setDeal` adapter below, which rewrites the underlying
+// cache entry via `mutateApiCache` so cache + render stay consistent.
 // ---------------------------------------------------------------------------
 
 export default function DealDetailPage() {
@@ -63,9 +73,31 @@ export default function DealDetailPage() {
     onDoubleClick,
   } = useResizablePanel();
 
-  const [deal, setDeal] = useState<DealDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const dealKey = dealId ? `/deals/${dealId}` : null;
+  const dealQuery = useApiQuery<RawDeal>(dealKey);
+  const deal = useMemo(() => (dealQuery.data ? flattenDeal(dealQuery.data) : null), [dealQuery.data]);
+  const loading = dealQuery.isLoading;
+  const error = dealQuery.error ? dealQuery.error.message || "Failed to load deal" : "";
+
+  // Adapter so every existing `setDeal(...)` call site (direct value, or a
+  // `(prev) => next` updater against the flattened DealDetail shape) keeps
+  // working unchanged, while actually writing through to the shared cache
+  // entry so other readers of this key (and a later remount) see the update.
+  const setDeal = useCallback<Dispatch<SetStateAction<DealDetail | null>>>(
+    (action) => {
+      if (!dealKey) return;
+      mutateApiCache<RawDeal>(dealKey, (prevRaw) => {
+        const prevFlat = prevRaw ? flattenDeal(prevRaw) : null;
+        const nextFlat =
+          typeof action === "function"
+            ? (action as (prev: DealDetail | null) => DealDetail | null)(prevFlat)
+            : action;
+        return (nextFlat ?? prevRaw) as RawDeal;
+      });
+    },
+    [dealKey],
+  );
+
   const [activeTab, setActiveTab] = useState<Tab>("Overview");
 
   // Stage change modal
@@ -88,8 +120,9 @@ export default function DealDetailPage() {
   // Delete-deal confirmation
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // Documents
-  const [documents, setDocuments] = useState<DocItem[]>([]);
+  // Documents — seeded synchronously from any cached deal so a warm
+  // revisit doesn't flash an empty list while `loadDeal` below resolves.
+  const [documents, setDocuments] = useState<DocItem[]>(() => deal?.documents || []);
   const [uploading, setUploading] = useState(false);
   const [driveImporting, setDriveImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -112,31 +145,16 @@ export default function DealDetailPage() {
   // Data loading
   // -----------------------------------------------------------------------
 
+  // loadDeal now forces a revalidation of the cached `/deals/:id` entry
+  // (deduped against the hook's own mount-time fetch via useApiQuery's
+  // in-flight map) and re-syncs the local `documents` state from the fresh
+  // response -- same contract callers (chat side-effects, the mount effect
+  // below) relied on when this did its own fetch.
+  const { refetch: refetchDeal } = dealQuery;
   const loadDeal = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const raw = await api.get<DealDetail & { teamMembers?: Array<{ role: string; user: { id: string; name: string; avatar?: string; email?: string } }> }>(`/deals/${dealId}`);
-      // Flatten teamMembers -> team (API returns nested join, frontend expects flat)
-      const data: DealDetail = {
-        ...raw,
-        team: raw.team || raw.teamMembers?.map((tm) => ({
-          id: tm.user?.id || "",
-          name: tm.user?.name || "",
-          avatar: tm.user?.avatar,
-          email: tm.user?.email,
-          role: tm.role,
-        })) || [],
-      };
-      setDeal(data);
-      setDocuments(data.documents || []);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to load deal";
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, [dealId]);
+    const raw = await refetchDeal();
+    if (raw) setDocuments(flattenDeal(raw).documents || []);
+  }, [refetchDeal]);
 
   const loadActivities = useCallback(async () => {
     setActivitiesLoading(true);
@@ -325,7 +343,11 @@ export default function DealDetailPage() {
     return <DealPageLoadingSkeleton />;
   }
 
-  if (error || !deal) {
+  // Only when there's nothing to show. A failed BACKGROUND revalidation keeps
+  // the cached deal in the store alongside the error — replacing a good,
+  // already-rendered deal with an error page over a transient blip would be
+  // worse than the stale-while-revalidate cache it replaced.
+  if (!deal) {
     return <DealPageErrorState error={error} />;
   }
 

@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useApiQuery } from "@/lib/useApiQuery";
 import type { Template } from "./types";
 import { TemplateEditor } from "./TemplateEditor";
 import { TemplatePreviewModal } from "./TemplatePreviewModal";
@@ -31,9 +32,17 @@ const TEMPLATE_TYPES = [
 
 export default function TemplatesPage() {
   const router = useRouter();
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Stale-while-revalidate cache: revisiting /templates renders instantly.
+  const templatesQuery = useApiQuery<Template[]>("/templates");
+  const templates = useMemo<Template[]>(
+    () => (Array.isArray(templatesQuery.data) ? templatesQuery.data : []),
+    [templatesQuery.data],
+  );
+  const loading = templatesQuery.isLoading;
+  // Action errors (create/duplicate/delete) are layered on top of the query's
+  // own load error so the banner can show either without the two competing.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? (templatesQuery.error && templatesQuery.data === undefined ? templatesQuery.error.message || "Failed to load templates" : null);
   const [activeTab, setActiveTab] = useState<string>("investment-memos");
   const [search, setSearch] = useState("");
 
@@ -72,23 +81,12 @@ export default function TemplatesPage() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  /* ---- Fetch templates ---- */
-  const loadTemplates = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<Template[]>("/templates");
-      setTemplates(Array.isArray(data) ? data : []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load templates");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadTemplates();
-  }, [loadTemplates]);
+  /* ---- Refetch templates (revalidate the cache) ---- */
+  const { refetch: refetchTemplates } = templatesQuery;
+  const loadTemplates = useCallback(() => {
+    setActionError(null);
+    return refetchTemplates();
+  }, [refetchTemplates]);
 
   /* ---- Filtered + sorted list ---- */
   const activeCategory = TABS.find((t) => t.key === activeTab)?.category || "INVESTMENT_MEMO";
@@ -138,13 +136,13 @@ export default function TemplatesPage() {
         isActive: true,
         permissions: "FIRM_WIDE",
       });
-      setTemplates((prev) => [created, ...prev]);
+      templatesQuery.mutate((prev) => [created, ...(prev ?? [])]);
       setSelectedId(created.id);
       setShowCreate(false);
       setCreateForm({ name: "", description: "", category: "investment-memo" });
       showToast("Template created successfully", "success");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create template");
+      setActionError(err instanceof Error ? err.message : "Failed to create template");
     } finally {
       setCreating(false);
     }
@@ -155,11 +153,11 @@ export default function TemplatesPage() {
     setMenuId(null);
     try {
       const dup = await api.post<Template>(`/templates/${id}/duplicate`, {});
-      setTemplates((prev) => [dup, ...prev]);
+      templatesQuery.mutate((prev) => [dup, ...(prev ?? [])]);
       setSelectedId(dup.id);
       showToast("Template duplicated", "success");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to duplicate template");
+      setActionError(err instanceof Error ? err.message : "Failed to duplicate template");
     }
   };
 
@@ -173,11 +171,11 @@ export default function TemplatesPage() {
     if (!deleteTarget) return;
     try {
       await api.delete(`/templates/${deleteTarget}`);
-      setTemplates((prev) => prev.filter((t) => t.id !== deleteTarget));
+      templatesQuery.mutate((prev) => (prev ?? []).filter((t) => t.id !== deleteTarget));
       if (selectedId === deleteTarget) setSelectedId(null);
       showToast("Template deleted", "success");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete template");
+      setActionError(err instanceof Error ? err.message : "Failed to delete template");
     }
     setDeleteTarget(null);
   };
@@ -193,9 +191,9 @@ export default function TemplatesPage() {
   /* ---- Editor callbacks ---- */
   const handleTemplateUpdate = useCallback(
     (updated: Template) => {
-      setTemplates((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      templatesQuery.mutate((prev) => (prev ?? []).map((t) => (t.id === updated.id ? updated : t)));
     },
-    []
+    [templatesQuery]
   );
 
   const handleEditorCancel = useCallback(() => {
@@ -286,7 +284,7 @@ export default function TemplatesPage() {
           <div className="mx-8 mt-2 flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
             <span className="material-symbols-outlined text-[18px]">error</span>
             {error}
-            <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">
+            <button onClick={() => setActionError(null)} className="ml-auto text-red-400 hover:text-red-600">
               <span className="material-symbols-outlined text-[18px]">close</span>
             </button>
           </div>

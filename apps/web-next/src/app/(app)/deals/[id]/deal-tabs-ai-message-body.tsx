@@ -15,10 +15,30 @@
 // paragraphs without breaking markdown nesting.
 // ---------------------------------------------------------------------------
 
+import dynamic from "next/dynamic";
 import DOMPurify from "dompurify";
 import { renderMarkdown } from "@/lib/markdown";
 import { splitMessageWithCharts } from "@/lib/dealchat-skills/chart-spec";
-import { DealChatChartArtifact } from "./deal-chat-chart-artifact";
+
+// chart.js + react-chartjs-2 are heavy (deal-financials.tsx already lazy-loads
+// them for the same reason). DealChatChartArtifact used to be a static import
+// here, which pulled chart.js into every deal page's initial bundle via
+// deal-tabs.tsx -> deal-tabs-ai-message-body.tsx, regardless of whether any
+// chat message ever contains a chart. Load it lazily so chart.js is only
+// fetched once a message actually needs to render one. ssr:false is safe:
+// this only ever renders inside the already-client ChatTab subtree.
+const DealChatChartArtifact = dynamic(
+  () => import("./deal-chat-chart-artifact").then((m) => m.DealChatChartArtifact),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="my-2 h-[240px] w-full animate-pulse rounded-lg bg-gray-100"
+        aria-hidden="true"
+      />
+    ),
+  },
+);
 
 export function AiMessageBody({ content }: { content: string }) {
   const parts = splitMessageWithCharts(content);

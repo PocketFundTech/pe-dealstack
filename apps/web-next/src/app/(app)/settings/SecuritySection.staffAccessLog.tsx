@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { useApiQuery, mutateApiCache } from "@/lib/useApiQuery";
+import { ORGANIZATIONS_ME_KEY } from "./settings-api-keys";
 import { useUser } from "@/providers/UserProvider";
 
 // Customer-visible Pocket Fund staff access log + Slack/email
@@ -179,33 +181,31 @@ function NotificationConfig({
   const role = (user?.systemRole || "").toUpperCase();
   const isAdmin = ADMIN_ROLES.includes(role);
 
+  // Shared with SecuritySection.trust and TeamSection.requireMfa, which
+  // also read /organizations/me -- useApiQuery dedupes the three mount-time
+  // fetches into one request. See settings-api-keys.ts.
+  const orgQuery = useApiQuery<OrgWebhookConfig>(ORGANIZATIONS_ME_KEY, { enabled: isAdmin });
   const [webhookUrl, setWebhookUrl] = useState("");
   const [notifyEmail, setNotifyEmail] = useState("");
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  // Seeded once per mount (same as the old one-shot load) so a background
+  // revalidation of the shared key never overwrites a URL/email the admin
+  // is mid-typing.
+  const appliedInitial = useRef(false);
   useEffect(() => {
-    if (!isAdmin) {
-      setLoading(false);
-      return;
+    if (!isAdmin || appliedInitial.current) return;
+    if (orgQuery.data) {
+      setWebhookUrl(orgQuery.data.staffAccessWebhookUrl ?? "");
+      setNotifyEmail(orgQuery.data.staffAccessNotifyEmail ?? "");
+      appliedInitial.current = true;
+    } else if (orgQuery.error) {
+      console.warn("[settings/security/notify-config] load failed:", orgQuery.error);
+      appliedInitial.current = true;
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await api.get<OrgWebhookConfig>("/organizations/me");
-        if (cancelled) return;
-        setWebhookUrl(data.staffAccessWebhookUrl ?? "");
-        setNotifyEmail(data.staffAccessNotifyEmail ?? "");
-      } catch (err) {
-        console.warn("[settings/security/notify-config] load failed:", err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAdmin]);
+  }, [isAdmin, orgQuery.data, orgQuery.error]);
+
+  const loading = isAdmin && orgQuery.isLoading;
 
   if (!user) return null;
 
@@ -249,6 +249,13 @@ function NotificationConfig({
         staffAccessWebhookUrl: webhookUrl || null,
         staffAccessNotifyEmail: notifyEmail || null,
       });
+      // Merge into the shared /organizations/me cache entry so other
+      // sections reading it don't see stale webhook/notify fields.
+      mutateApiCache<OrgWebhookConfig>(ORGANIZATIONS_ME_KEY, (prev) => ({
+        ...(prev ?? ({} as OrgWebhookConfig)),
+        staffAccessWebhookUrl: webhookUrl || null,
+        staffAccessNotifyEmail: notifyEmail || null,
+      }));
       const wired = !!(webhookUrl || notifyEmail);
       onToast(
         wired

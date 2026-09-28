@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, type DragEvent } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, type DragEvent } from "react";
 import { api } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   SORT_OPTIONS,
@@ -33,26 +34,11 @@ import { exportDealsToCSV } from "./deals-csv-export";
 
 export default function DealsPage() {
   const { openDealIntake } = useIngestDealModal();
-  const [deals, setDeals] = useState<Deal[]>([]);
-  // Latest INCOME_STATEMENT summary per deal — fetched in parallel with
-  // the deals list so cards can render revenue/EBITDA at the correct
-  // unitScale instead of falling through formatCurrency() (which assumes
-  // MILLIONS and turns extracted "$6.7K" data into "$6.7M").
-  const [summaries, setSummaries] = useState<FinancialSummariesMap>({});
-  // True until the bulk financial-summaries fetch resolves. While true,
-  // the cards render an em-dash for revenue/EBITDA instead of falling
-  // through to formatCurrency(deal.revenue / deal.ebitda) — which assumes
-  // MILLIONS and prints stale legacy column data at the wrong magnitude
-  // (e.g. deal.ebitda = 21.5 stored at thousands → "$21.5M").
-  const [summariesLoading, setSummariesLoading] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"list" | "kanban">("list");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [stageModal, setStageModal] = useState(false);
   const [bulkPassConfirm, setBulkPassConfirm] = useState(false);
-  const [industries, setIndustries] = useState<string[]>([]);
   const [filters, setFilters] = useState<DealFilters>({
     stage: "",
     industry: "",
@@ -65,6 +51,9 @@ export default function DealsPage() {
   });
   const [activeMetrics, setActiveMetrics] = useState<MetricKey[]>([...DEFAULT_CARD_METRICS]);
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+  // Mutation-side errors (delete/bulk actions) layered on top of the query's
+  // own load error so both surfaces share the same ErrorState banner.
+  const [actionError, setActionError] = useState<string | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load view preference and metrics from localStorage
@@ -85,77 +74,91 @@ export default function DealsPage() {
     }
   }, []);
 
-  const loadDeals = useCallback(async (opts?: { silent?: boolean }) => {
-    // `silent` refetches keep the current list on screen (no skeleton flash) —
-    // used for background refreshes triggered by an ingest elsewhere or a tab
-    // refocus, as opposed to the initial load / filter change.
-    if (!opts?.silent) setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (filters.stage) params.set("stage", filters.stage);
-      if (filters.industry) params.set("industry", filters.industry);
-      if (filters.minDealSize) params.set("minDealSize", filters.minDealSize);
-      if (filters.maxDealSize) params.set("maxDealSize", filters.maxDealSize);
-      if (filters.priority) params.set("priority", filters.priority);
-      if (filters.search) params.set("search", filters.search);
-      if (filters.sortBy) params.set("sortBy", filters.sortBy);
-      if (filters.sortOrder) params.set("sortOrder", filters.sortOrder);
-      params.set("limit", "50");
-
-      const data = await api.get<Deal[]>(`/deals?${params}`);
-      const raw = Array.isArray(data) ? data : [];
-      // Flatten company.name into companyName so cards can display it
-      const list = raw.map((d) => ({
-        ...d,
-        companyName: d.companyName || d.company?.name || undefined,
-      }));
-      setDeals(list);
-      setIndustries([...new Set(list.map((d) => d.industry).filter(Boolean) as string[])].sort());
-
-      // Bulk financial summaries — does NOT block the initial cards
-      // render (names/stages/AI thesis appear immediately), but the
-      // cards hold revenue/EBITDA as em-dash skeletons until this
-      // resolves so we never paint stale legacy column data through
-      // formatCurrency() (which assumes MILLIONS).
-      setSummariesLoading(true);
-      void (async () => {
-        try {
-          const dealIds = list.map((d) => d.id).join(",");
-          if (!dealIds) {
-            setSummaries({});
-            return;
-          }
-          const resp = await api.get<{ summaries: FinancialSummariesMap }>(
-            `/deals/financial-summaries?dealIds=${encodeURIComponent(dealIds)}`,
-          );
-          setSummaries(resp?.summaries ?? {});
-        } catch (err) {
-          console.warn("[deals] financial summaries fetch failed:", err);
-          setSummaries({});
-        } finally {
-          setSummariesLoading(false);
-        }
-      })();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load deals");
-    } finally {
-      setLoading(false);
-    }
+  // Stale-while-revalidate cache: revisiting /deals with the same filters
+  // renders instantly. The key mirrors every filter/sort/pagination param
+  // that used to go into the fetch, so a filter change is a new cache entry.
+  const dealsQueryKey = useMemo(() => {
+    const params = new URLSearchParams();
+    if (filters.stage) params.set("stage", filters.stage);
+    if (filters.industry) params.set("industry", filters.industry);
+    if (filters.minDealSize) params.set("minDealSize", filters.minDealSize);
+    if (filters.maxDealSize) params.set("maxDealSize", filters.maxDealSize);
+    if (filters.priority) params.set("priority", filters.priority);
+    if (filters.search) params.set("search", filters.search);
+    if (filters.sortBy) params.set("sortBy", filters.sortBy);
+    if (filters.sortOrder) params.set("sortOrder", filters.sortOrder);
+    params.set("limit", "50");
+    return `/deals?${params}`;
   }, [filters]);
 
-  useEffect(() => {
-    loadDeals();
-  }, [loadDeals]);
+  const dealsQuery = useApiQuery<Deal[]>(dealsQueryKey);
 
-  // Auto-refresh: refetch silently (no skeleton) when a deal is ingested/updated
-  // elsewhere — e.g. a Google Drive import through the ingest modal — or when the
-  // tab regains focus (covers the background Gmail sync). Keeps the pipeline
-  // current without a manual reload.
+  // Flatten company.name into companyName so cards can display it.
+  const deals = useMemo<Deal[]>(() => {
+    const raw = Array.isArray(dealsQuery.data) ? dealsQuery.data : [];
+    return raw.map((d) => ({
+      ...d,
+      companyName: d.companyName || d.company?.name || undefined,
+    }));
+  }, [dealsQuery.data]);
+
+  const industries = useMemo(
+    () => [...new Set(deals.map((d) => d.industry).filter(Boolean) as string[])].sort(),
+    [deals],
+  );
+
+  const loading = dealsQuery.isLoading;
+  // A load error only replaces the list when there's nothing cached to show —
+  // a failed BACKGROUND revalidation keeps the cached list on screen. (Same
+  // rule on contacts/templates/graphs/nda and deal detail.)
+  const error = actionError ?? (dealsQuery.error && dealsQuery.data === undefined ? dealsQuery.error.message || "Failed to load deals" : null);
+
+  // Bulk financial summaries — fetched alongside the list, does NOT block the
+  // initial cards render (names/stages/AI thesis appear immediately), but the
+  // cards hold revenue/EBITDA as em-dash skeletons until this resolves so we
+  // never paint stale legacy column data through formatCurrency() (which
+  // assumes MILLIONS).
+  const dealIdsKey = useMemo(() => deals.map((d) => d.id).join(","), [deals]);
+  const summariesQuery = useApiQuery<{ summaries: FinancialSummariesMap }>(
+    dealIdsKey ? `/deals/financial-summaries?dealIds=${encodeURIComponent(dealIdsKey)}` : null,
+  );
+  // Deleting a deal changes dealIdsKey → a new, uncached summaries key, which
+  // would flash every card back to "—". When the current deals are a subset
+  // of the last resolved set (i.e. only deletions), that map is still correct
+  // for every card, so keep painting it. Any NEW deal id (filter/search/sort
+  // change) must wait for its own fetch — never paint a card from a map that
+  // didn't include it (it would fall through to legacy columns at the wrong
+  // magnitude).
+  const [lastResolved, setLastResolved] = useState<{ ids: Set<string>; map: FinancialSummariesMap } | null>(null);
+  const resolvedSummaries = summariesQuery.data?.summaries;
   useEffect(() => {
-    const off = onDealsChanged(() => loadDeals({ silent: true }));
+    if (resolvedSummaries && dealIdsKey) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors an external cache entry
+      setLastResolved({ ids: new Set(dealIdsKey.split(",")), map: resolvedSummaries });
+    }
+  }, [resolvedSummaries, dealIdsKey]);
+  const reusable = !resolvedSummaries && lastResolved !== null && deals.every((d) => lastResolved.ids.has(d.id));
+  const summaries = resolvedSummaries ?? (reusable ? (lastResolved?.map ?? {}) : {});
+  const summariesLoading = summariesQuery.isLoading && !reusable;
+
+  const { refetch: refetchDeals } = dealsQuery;
+  const { refetch: refetchSummaries } = summariesQuery;
+  // Full reload: revalidates both the list and the summaries. Used for the
+  // initial retry button and after a bulk mutation.
+  const loadDeals = useCallback(() => {
+    setActionError(null);
+    return Promise.allSettled([refetchDeals(), refetchSummaries()]);
+  }, [refetchDeals, refetchSummaries]);
+
+  // Auto-refresh: revalidate silently (cached data stays on screen, no
+  // skeleton) when a deal is ingested/updated elsewhere — e.g. a Google
+  // Drive import through the ingest modal — or when the tab regains focus
+  // (covers the background Gmail sync). Keeps the pipeline current without
+  // a manual reload.
+  useEffect(() => {
+    const off = onDealsChanged(() => loadDeals());
     const onVisible = () => {
-      if (document.visibilityState === "visible") loadDeals({ silent: true });
+      if (document.visibilityState === "visible") loadDeals();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -197,14 +200,14 @@ export default function DealsPage() {
   const handleDelete = async (id: string) => {
     try {
       await api.delete(`/deals/${id}`);
-      setDeals((prev) => prev.filter((d) => d.id !== id));
+      dealsQuery.mutate((prev) => (prev ?? []).filter((d) => d.id !== id));
       setSelected((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete deal");
+      setActionError(err instanceof Error ? err.message : "Failed to delete deal");
     }
     setDeleteTarget(null);
   };
@@ -216,11 +219,11 @@ export default function DealsPage() {
     const failed = results.filter((r) => r.status === "rejected");
     if (succeededIds.length > 0) {
       const succeededSet = new Set(succeededIds);
-      setDeals((prev) => prev.filter((d) => !succeededSet.has(d.id)));
+      dealsQuery.mutate((prev) => (prev ?? []).filter((d) => !succeededSet.has(d.id)));
     }
     if (failed.length > 0) {
       console.warn("[deals] bulk delete failures:", failed.map((r) => (r as PromiseRejectedResult).reason));
-      setError(`${failed.length} of ${ids.length} deletes failed.`);
+      setActionError(`${failed.length} of ${ids.length} deletes failed.`);
     }
     setSelected(new Set());
     setDeleteTarget(null);
@@ -232,7 +235,7 @@ export default function DealsPage() {
     const failed = results.filter((r) => r.status === "rejected");
     if (failed.length > 0) {
       console.warn("[deals] bulk stage-change failures:", failed.map((r) => (r as PromiseRejectedResult).reason));
-      setError(`${failed.length} of ${ids.length} stage updates failed.`);
+      setActionError(`${failed.length} of ${ids.length} stage updates failed.`);
     }
     setStageModal(false);
     clearSelection();
@@ -267,7 +270,7 @@ export default function DealsPage() {
   const handleRemoveSample = async (id: string) => {
     try {
       await api.delete(`/deals/${id}`);
-      setDeals((prev) => prev.filter((d) => d.id !== id));
+      dealsQuery.mutate((prev) => (prev ?? []).filter((d) => d.id !== id));
     } catch (err) {
       console.warn("[deals] removeSample failed:", err);
     }
@@ -283,13 +286,17 @@ export default function DealsPage() {
     if (!deal || deal.stage === newStage) return;
     const oldStage = deal.stage;
     // Optimistic update
-    setDeals((prev) => prev.map((d) => (d.id === dealId ? { ...d, stage: newStage } : d)));
+    dealsQuery.mutate((prev) =>
+      (prev ?? []).map((d) => (d.id === dealId ? { ...d, stage: newStage } : d)),
+    );
     try {
       await api.patch(`/deals/${dealId}`, { stage: newStage });
     } catch (err) {
       console.warn("[deals] kanban drop failed, reverting:", err);
       // Revert on error
-      setDeals((prev) => prev.map((d) => (d.id === dealId ? { ...d, stage: oldStage } : d)));
+      dealsQuery.mutate((prev) =>
+        (prev ?? []).map((d) => (d.id === dealId ? { ...d, stage: oldStage } : d)),
+      );
     }
   };
 

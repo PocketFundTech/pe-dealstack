@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useApiQuery, mutateApiCache } from "@/lib/useApiQuery";
+import { ORGANIZATIONS_ME_KEY } from "./settings-api-keys";
 import { useUser } from "@/providers/UserProvider";
 
 // Admin-only toggle for Organization.requireMFA. When enabled, members
@@ -24,28 +26,20 @@ export function RequireMfaToggle({
   onToast: (msg: string, type: "success" | "error") => void;
 }) {
   const { user } = useUser();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Shared with SecuritySection.trust and SecuritySection.staffAccessLog,
+  // which also read /organizations/me -- useApiQuery dedupes the three
+  // mount-time fetches into one request. See settings-api-keys.ts.
+  const orgQuery = useApiQuery<OrgMe>(ORGANIZATIONS_ME_KEY);
+  const enabled = orgQuery.data ? !!orgQuery.data.requireMFA : orgQuery.error ? false : null;
+  const loading = orgQuery.isLoading;
   const [saving, setSaving] = useState(false);
   const [showEnableConfirm, setShowEnableConfirm] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await api.get<OrgMe>("/organizations/me");
-        if (!cancelled) setEnabled(!!data.requireMFA);
-      } catch (err) {
-        console.warn("[settings/team/require-mfa] load failed:", err);
-        if (!cancelled) setEnabled(false);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (orgQuery.error) {
+      console.warn("[settings/team/require-mfa] load failed:", orgQuery.error);
+    }
+  }, [orgQuery.error]);
 
   if (!user) return null;
   const role = (user.systemRole || "").toUpperCase();
@@ -57,7 +51,13 @@ export function RequireMfaToggle({
     setShowEnableConfirm(false);
     try {
       await api.patch<OrgMe>("/organizations/me", { requireMFA: next });
-      setEnabled(next);
+      // Update the shared cache so TrustPosture / the staff-access-log
+      // section (both also reading /organizations/me) reflect this
+      // immediately instead of only on their next mount.
+      mutateApiCache<OrgMe>(ORGANIZATIONS_ME_KEY, (prev) => ({
+        ...(prev ?? ({} as OrgMe)),
+        requireMFA: next,
+      }));
       onToast(
         next
           ? "Org-wide 2FA requirement enabled"
