@@ -27,7 +27,15 @@ vi.mock('../src/middleware/orgScope.js', () => ({
 }));
 vi.mock('../src/routes/ingest-shared.js', async () => {
   const multer = (await import('multer')).default;
-  return { extractTextFromPDF: vi.fn(), upload: multer({ storage: multer.memoryStorage() }) };
+  return {
+    extractTextFromPDF: vi.fn(),
+    upload: multer({ storage: multer.memoryStorage() }),
+    resolveUploadedFile: async (req: any) =>
+      req.file
+        ? { file: { buffer: req.file.buffer, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size } }
+        : { file: null },
+    cleanupStagingObject: async () => {},
+  };
 });
 
 const runIngestFromBuffer = vi.fn();
