@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useNotificationCount } from "@/providers/NotificationCountProvider";
 import { Modal } from "./Modal";
-import { DealOptions, UserOptions, INPUT_CLS, LABEL_CLS, type SharedProps } from "./form-primitives";
+import { DealOptions, UserOptions, INPUT_CLS, LABEL_CLS, BTN_PRIMARY, BTN_SECONDARY, type SharedProps } from "./form-primitives";
 
 export function ScheduleReviewModal({
   open,
@@ -12,6 +12,7 @@ export function ScheduleReviewModal({
   deals,
   users,
   onToast,
+  prefill,
   onScheduled,
 }: SharedProps & { onScheduled: () => void }) {
   const { refresh: refreshNotifications } = useNotificationCount();
@@ -37,6 +38,17 @@ export function ScheduleReviewModal({
       setNotes("");
     }
   }, [open]);
+
+  // Opened from a row (e.g. "Nudge") — start from that context.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    /* eslint-disable react-hooks/set-state-in-effect */
+      if (prefill.dealId) setDealId(prefill.dealId);
+      if (prefill.userId) setUserId(prefill.userId);
+      if (prefill.title) setTitle(prefill.title);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, prefill]);
+
 
   const submit = async () => {
     const t = title.trim();
@@ -79,14 +91,14 @@ export function ScheduleReviewModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Schedule Review"
-      titleIcon={{ name: "calendar_month" }}
+      title="Schedule a review"
+      subtitle="Reviews appear in Upcoming Reviews and the reviewer’s tasks."
       footer={
         <>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-main hover:bg-gray-100 rounded-lg transition-colors"
+            className={BTN_SECONDARY}
           >
             Cancel
           </button>
@@ -94,7 +106,7 @@ export function ScheduleReviewModal({
             type="button"
             onClick={submit}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-white bg-primary hover:bg-primary-hover rounded-lg transition-colors disabled:opacity-50"
+            className={BTN_PRIMARY}
           >
             {saving ? "Scheduling..." : "Schedule Review"}
           </button>

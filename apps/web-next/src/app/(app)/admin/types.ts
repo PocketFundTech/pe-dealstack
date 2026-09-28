@@ -15,8 +15,14 @@ export interface AdminDeal {
   name: string;
   dealName?: string;
   stage: string;
+  status?: string;
+  priority?: string;
+  industry?: string;
+  currency?: string;
   dealSize?: number;
-  teamMembers?: { userId: string; user?: { id: string } }[];
+  updatedAt: string;
+  assignedUser?: { id?: string; name?: string; email?: string };
+  teamMembers?: { userId: string; role?: string; user?: { id: string; name?: string; email?: string } }[];
 }
 
 export interface AdminTaskAssignee {

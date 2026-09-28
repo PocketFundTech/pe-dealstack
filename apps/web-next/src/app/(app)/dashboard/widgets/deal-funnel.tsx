@@ -6,11 +6,11 @@ import { WidgetShell, WidgetEmpty, WidgetError, WidgetLoading } from "./shell";
 
 // Ported from deal-funnel.js.
 const STAGES: Array<{ key: string; label: string; color: string; also?: string[] }> = [
-  { key: "INITIAL_REVIEW", label: "Sourcing", color: "#60A5FA" },
-  { key: "DUE_DILIGENCE", label: "Due Diligence", color: "#003366" },
-  { key: "IOI_SUBMITTED", label: "IOI / LOI", color: "#F59E0B", also: ["LOI_SUBMITTED"] },
-  { key: "NEGOTIATION", label: "Negotiation", color: "#8B5CF6", also: ["CLOSING"] },
-  { key: "CLOSED_WON", label: "Closed", color: "#10B981" },
+  { key: "INITIAL_REVIEW", label: "Sourcing", color: "var(--dash-blue-4)" },
+  { key: "DUE_DILIGENCE", label: "Due Diligence", color: "var(--dash-blue-2)" },
+  { key: "IOI_SUBMITTED", label: "IOI / LOI", color: "var(--dash-blue)", also: ["LOI_SUBMITTED"] },
+  { key: "NEGOTIATION", label: "Negotiation", color: "var(--dash-blue)", also: ["CLOSING"] },
+  { key: "CLOSED_WON", label: "Closed", color: "var(--dash-green)" },
 ];
 
 type DealRow = { stage: string; status?: string };
@@ -59,24 +59,23 @@ export function DealFunnelWidget() {
       ) : !rows ? (
         <WidgetLoading />
       ) : (
-        <div className="p-4 space-y-3">
+        <ol className="px-5 py-4 flex flex-col gap-3.5">
           {rows.map((r) => (
-            <div key={r.label}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-text-secondary">{r.label}</span>
-                <span className="text-xs text-text-muted">
-                  <strong className="text-text-main">{r.count}</strong> · {r.pct}%
+            <li key={r.label} className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between text-[0.8125rem]">
+                <span className="text-(--dash-ink)">{r.label}</span>
+                <span className="dash-num text-(--dash-ink-3)">
+                  <strong className="font-semibold text-(--dash-ink)">{r.count}</strong> · {r.pct}%
                 </span>
               </div>
-              <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{ width: `${Math.max(r.pct, 2)}%`, backgroundColor: r.color }}
-                />
+              <div className="h-1 rounded-full bg-(--dash-wash) overflow-hidden">
+                {r.count > 0 && (
+                  <div className="dash-bar h-full rounded-full" style={{ width: `${r.pct}%`, backgroundColor: r.color }} />
+                )}
               </div>
-            </div>
+            </li>
           ))}
-        </div>
+        </ol>
       )}
     </WidgetShell>
   );

@@ -1,57 +1,56 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+// Command Center — "team ledger". Main column: what's slipping across the
+// team → who's carrying what → every task. Rail: security posture, upcoming
+// reviews, team activity. Actions open pre-filled in a side sheet.
+
+import { useCallback, useMemo, useState } from "react";
 import { useUser } from "@/providers/UserProvider";
 import { useApiQuery } from "@/lib/useApiQuery";
-import { formatCurrency } from "@/lib/formatters";
-import { cn } from "@/lib/cn";
-import { ResourceAllocation } from "./ResourceAllocation";
+import { api } from "@/lib/api";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { UndoBar, useUndoBar } from "@/components/dash/undo-bar";
+import { useNow } from "../dashboard/use-now";
+import { AdminMasthead } from "./admin-masthead";
+import { SlippingList } from "./slipping-list";
+import { TeamWorkload } from "./team-workload";
 import { TaskTable } from "./TaskTable";
+import { SecurityStrip } from "./security-strip";
 import { UpcomingReviews } from "./UpcomingReviews";
 import { ActivityFeed } from "./ActivityFeed";
-import { SecurityDashboard } from "./SecurityDashboard";
-import {
-  AssignDealModal,
-  CreateTaskModal,
-  ScheduleReviewModal,
-  SendReminderModal,
-} from "./modals";
+import { AssignDealModal, CreateTaskModal, ScheduleReviewModal, SendReminderModal } from "./modals";
+import { isLive, isOverdue, slipping, workload } from "./admin-logic";
+import type { ActionPrefill } from "./form-primitives";
+import type { FilterValue } from "./TaskTable.helpers";
 import type { AdminDeal, AdminTask, AdminTeamMember } from "./types";
+import "@/components/dash/dash.css";
 
-// Roles that can see the admin dashboard. Matches admin-dashboard.js RBAC gate
-// (admin / partner / principal); VIEWER and MEMBER are blocked.
+// Roles that can see the Command Center (VIEWER / MEMBER are blocked); only
+// ADMIN can assign deals and create tasks.
 const ADMIN_VISIBLE_ROLES = new Set(["ADMIN", "PARTNER", "PRINCIPAL"]);
-
-// Only ADMIN can create/assign (hide management modals for partners/principals).
 const ADMIN_MANAGEMENT_ROLE = "ADMIN";
 
-type OverdueFilter = "ALL" | "OVERDUE";
+type ActionKind = "assign" | "task" | "review" | "reminder";
 
 export default function AdminPage() {
   const { user } = useUser();
+  const now = useNow();
+  const undo = useUndoBar();
+  const [action, setAction] = useState<{ kind: ActionKind; prefill?: ActionPrefill } | null>(null);
+  const [taskFilter, setTaskFilter] = useState<{ value: FilterValue; nonce: number }>();
   const [lastUpdated, setLastUpdated] = useState(() => Date.now());
-  const [externalTaskFilter, setExternalTaskFilter] = useState<OverdueFilter | undefined>();
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-  const [openModal, setOpenModal] = useState<
-    "assign" | "task" | "review" | "reminder" | null
-  >(null);
 
   const role = (user?.systemRole || user?.role || "").toUpperCase();
   const canManage = role === ADMIN_MANAGEMENT_ROLE;
   const canView = ADMIN_VISIBLE_ROLES.has(role);
 
-  // Read-only dashboard data via the shared stale-while-revalidate cache, so
-  // returning to /admin renders instantly from cache and revalidates in the
-  // background instead of re-running the three fetches and showing a spinner.
+  // Stale-while-revalidate cache: returning to /admin renders instantly.
   const enabled = !!user && canView;
-  const teamQuery = useApiQuery<AdminTeamMember[] | { users: AdminTeamMember[] }>(
-    "/users?isActive=true",
-    { enabled },
-  );
+  const teamQuery = useApiQuery<AdminTeamMember[] | { users: AdminTeamMember[] }>("/users?isActive=true", { enabled });
   const dealsQuery = useApiQuery<AdminDeal[] | { deals: AdminDeal[] }>("/deals", { enabled });
   const tasksQuery = useApiQuery<{ tasks: AdminTask[] }>("/tasks?limit=100", { enabled });
 
-  const teamMembers = useMemo<AdminTeamMember[]>(() => {
+  const team = useMemo<AdminTeamMember[]>(() => {
     const v = teamQuery.data;
     return v === undefined ? [] : Array.isArray(v) ? v : v.users || [];
   }, [teamQuery.data]);
@@ -61,311 +60,160 @@ export default function AdminPage() {
   }, [dealsQuery.data]);
   const tasks = useMemo<AdminTask[]>(() => tasksQuery.data?.tasks || [], [tasksQuery.data]);
 
-  // Spinner until the user is known and the first load of all three settles.
   const loading = !user || teamQuery.isLoading || dealsQuery.isLoading || tasksQuery.isLoading;
+  const refreshing = teamQuery.isValidating || dealsQuery.isValidating || tasksQuery.isValidating;
 
+  const { refetch: refetchTeam } = teamQuery;
+  const { refetch: refetchDeals } = dealsQuery;
+  const { refetch: refetchTasks } = tasksQuery;
   const refresh = useCallback(() => {
     setLastUpdated(Date.now());
-    return Promise.allSettled([
-      teamQuery.refetch(),
-      dealsQuery.refetch(),
-      tasksQuery.refetch(),
-    ]);
-  }, [teamQuery, dealsQuery, tasksQuery]);
+    return Promise.allSettled([refetchTeam(), refetchDeals(), refetchTasks()]);
+  }, [refetchTeam, refetchDeals, refetchTasks]);
 
-  const showToast = useCallback((message: string, type: "success" | "error") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  }, []);
+  const { show } = undo;
+  const notice = useCallback(
+    (message: string, tone: "neutral" | "error" = "neutral", onUndo?: () => void) => show({ message, tone, undo: onUndo }),
+    [show],
+  );
+  // Adapter for the action forms, which report success/error toasts.
+  const onToast = useCallback((message: string, type: "success" | "error") => notice(message, type === "error" ? "error" : "neutral"), [notice]);
 
-  // Tick "Last updated" label every minute for freshness
-  useEffect(() => {
-    const id = setInterval(() => setLastUpdated((v) => v), 60_000);
-    return () => clearInterval(id);
-  }, []);
+  const reassign = useCallback(async (task: AdminTask, member: AdminTeamMember) => {
+    const previous = task.assignedTo ?? null;
+    try {
+      await api.patch(`/tasks/${task.id}`, { assignedTo: member.id });
+      refresh();
+      notice(`${member.name || member.email} now owns “${task.title}”`, "neutral", async () => {
+        try {
+          await api.patch(`/tasks/${task.id}`, { assignedTo: previous });
+          refresh();
+        } catch (err) {
+          console.warn("[admin] undo reassign failed:", err);
+        }
+      });
+    } catch (err) {
+      console.warn("[admin] reassign failed:", err);
+      notice("Couldn't reassign that task. Please try again.", "error");
+    }
+  }, [refresh, notice]);
 
-  // ─── RBAC gate ────────────────────────────────────────────────────
+  const closeAction = useCallback(() => setAction(null), []);
+  const openAction = (kind: ActionKind, prefill?: ActionPrefill) => setAction({ kind, prefill });
 
+  // ─── Access gate ──────────────────────────────────────────────────
   if (user && !canView) {
     return (
-      <div className="p-4 md:p-6 mx-auto max-w-[1600px] w-full flex items-center justify-center py-20">
-        <div className="text-center">
-          <span className="material-symbols-outlined text-5xl text-red-400">lock</span>
-          <h2 className="mt-3 text-lg font-bold text-text-main">Access Denied</h2>
-          <p className="text-sm text-text-muted mt-1">
-            You do not have permission to view the Command Center.
-          </p>
+      <div className="dash flex items-center justify-center px-4 py-24">
+        <div className="max-w-sm text-center">
+          <span className="material-symbols-outlined text-[32px] text-(--dash-ink-3)">lock</span>
+          <h1 className="dash-display mt-2 text-xl text-(--dash-ink)">Command Center is for admins and partners</h1>
+          <p className="mt-1 text-sm text-(--dash-ink-2)">Ask a workspace admin if you need team-wide visibility.</p>
         </div>
       </div>
     );
   }
 
-  if (loading) {
-    return (
-      <div className="p-4 md:p-6 mx-auto max-w-[1600px] w-full flex items-center justify-center py-20">
-        <div className="text-center text-text-muted">
-          <span className="material-symbols-outlined text-4xl animate-spin">progress_activity</span>
-          <p className="mt-2 text-sm">Loading Command Center...</p>
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <CommandCenterSkeleton />;
 
-  // ─── Derived stats ───────────────────────────────────────────────
+  // ─── Derived ──────────────────────────────────────────────────────
+  const rows = workload(team, deals, tasks, now);
+  const slip = slipping(deals, tasks, now);
+  const overdueCount = tasks.filter((t) => isOverdue(t, now)).length;
+  const unownedCount = slip.filter((s) => s.kind === "unowned").length;
 
-  const now = new Date();
-  const totalMembers = teamMembers.length;
-  const activeMembers = teamMembers.filter((m) => m.isActive !== false);
-  const totalVolume = deals.reduce((sum, d) => sum + (d.dealSize || 0), 0);
-  const overdueTasks = tasks.filter(
-    (t) => t.dueDate && new Date(t.dueDate) < now && t.status !== "COMPLETED",
-  );
-  const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const dueThisWeek = tasks.filter((t) => {
-    if (!t.dueDate || t.status === "COMPLETED") return false;
-    const d = new Date(t.dueDate);
-    return d >= now && d <= weekFromNow;
-  });
-  const membersWithDeals = new Set<string>();
-  deals.forEach((d) =>
-    d.teamMembers?.forEach((tm) => {
-      const uid = tm.user?.id || tm.userId;
-      if (uid) membersWithDeals.add(uid);
-    }),
-  );
-  const assignedCount = membersWithDeals.size;
-  const utilization =
-    totalMembers > 0 ? Math.min(100, Math.round((assignedCount / totalMembers) * 100)) : 0;
-
-  const scrollTo = (id: string) => {
-    const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  const jump = (target: "team" | "tasks-overdue" | "slipping") => {
+    if (target === "tasks-overdue") setTaskFilter({ value: "OVERDUE", nonce: Date.now() });
+    const id = target === "tasks-overdue" ? "tasks" : target;
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const refreshAfterAction = () => {
-    refresh();
-  };
+  const shared = { deals, users: team, onToast, onClose: closeAction, prefill: action?.prefill };
 
   return (
-    <div className="p-4 md:p-6 mx-auto max-w-[1600px] w-full flex flex-col gap-6">
-      {/* Toast */}
-      {toast && (
-        <div
-          className={cn(
-            "fixed top-4 right-4 z-[60] flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-all border",
-            toast.type === "success"
-              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-              : "bg-red-50 text-red-700 border-red-200",
-          )}
-        >
-          <span className="material-symbols-outlined text-[18px]">
-            {toast.type === "success" ? "check_circle" : "error"}
-          </span>
-          {toast.message}
-        </div>
-      )}
+    <div className="dash px-4 py-6 md:px-8 md:py-9 lg:px-10">
+      <div className="dash-reveal mx-auto flex w-full max-w-[1480px] flex-col gap-7">
+        <AdminMasthead
+          now={now}
+          people={team.length}
+          liveDeals={deals.filter(isLive).length}
+          overdue={overdueCount}
+          unowned={unownedCount}
+          slipping={slip.length}
+          lastUpdated={lastUpdated}
+          refreshing={refreshing}
+          canManage={canManage}
+          onRefresh={refresh}
+          onJump={jump}
+          onNew={(kind) => openAction(kind)}
+        />
 
-      {/* Command Center Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-text-main tracking-tight font-display">
-            Command Center
-          </h1>
-          <p className="text-text-secondary text-sm mt-1">
-            Overview of team performance and active deal flow.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs font-medium bg-primary-light text-primary px-3 py-1.5 rounded-full flex items-center gap-1.5 border border-primary/20">
-            <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-            System Operational
-          </span>
-          <span className="text-xs text-text-muted">
-            Last updated: {formatLastUpdated(lastUpdated)}
-          </span>
+        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
+          <div className="flex min-w-0 flex-col gap-6">
+            <SlippingList items={slip} members={team} canManage={canManage} onOpenAction={openAction} onReassign={reassign} />
+            <TeamWorkload rows={rows} canManage={canManage} onOpenAction={openAction} />
+            <TaskTable tasks={tasks} now={now} externalFilter={taskFilter} onTasksChanged={refresh} onNotice={notice} />
+          </div>
+          <aside aria-label="Security, reviews and activity" className="grid min-w-0 items-start gap-6 md:grid-cols-2 xl:grid-cols-1">
+            <SecurityStrip />
+            <UpcomingReviews tasks={tasks} now={now} onScheduleClick={() => openAction("review")} />
+            <div className="md:col-span-2 xl:col-span-1"><ActivityFeed /></div>
+          </aside>
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="flex flex-wrap items-center gap-3">
-        {canManage && (
-          <>
-            <button
-              type="button"
-              onClick={() => setOpenModal("assign")}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-primary hover:bg-primary-hover rounded-lg shadow-sm transition-all"
-            >
-              <span className="material-symbols-outlined text-[18px]">add</span>
-              Assign Deal
-            </button>
-            <button
-              type="button"
-              onClick={() => setOpenModal("task")}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary-light hover:bg-primary/10 rounded-lg transition-all"
-            >
-              <span className="material-symbols-outlined text-[18px]">add_task</span>
-              Create Task
-            </button>
-          </>
-        )}
-        <button
-          type="button"
-          onClick={() => setOpenModal("review")}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-secondary hover:text-primary hover:bg-gray-100 rounded-lg transition-all"
-        >
-          <span className="material-symbols-outlined text-[18px]">calendar_month</span>
-          Schedule Review
-        </button>
-        <button
-          type="button"
-          onClick={() => setOpenModal("reminder")}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-secondary hover:text-primary hover:bg-gray-100 rounded-lg transition-all"
-        >
-          <span className="material-symbols-outlined text-[18px]">notifications_active</span>
-          Send Reminder
-        </button>
-      </div>
-
-      {/* Stats cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-        <StatCard
-          label="Team"
-          icon="groups"
-          value={activeMembers.length}
-          subtitle={`${activeMembers.length} active / ${totalMembers} total`}
-          onClick={() => scrollTo("resource-allocation")}
-        />
-        <StatCard
-          label="Deal Volume"
-          icon="payments"
-          value={formatCurrency(totalVolume)}
-          subtitle={`across ${deals.length} deal${deals.length !== 1 ? "s" : ""}`}
-          onClick={() => scrollTo("resource-allocation")}
-        />
-        <StatCard
-          label="Overdue"
-          icon="pending_actions"
-          value={overdueTasks.length > 0 ? overdueTasks.length : "—"}
-          subtitle={`${dueThisWeek.length} due this week`}
-          valueColor={overdueTasks.length > 0 ? "#ef4444" : undefined}
-          onClick={() => {
-            setExternalTaskFilter("OVERDUE");
-            scrollTo("task-table-body");
-          }}
-        />
-        <StatCard
-          label="Utilization"
-          icon="speed"
-          value={`${utilization}%`}
-          subtitle={`${assignedCount}/${totalMembers} members assigned`}
-          onClick={() => scrollTo("resource-allocation")}
-        />
-      </div>
-
-      {/* Main grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 space-y-6">
-          <ResourceAllocation members={teamMembers} deals={deals} tasks={tasks} />
-          <TaskTable
-            tasks={tasks}
-            externalFilter={externalTaskFilter}
-            onTasksChanged={refreshAfterAction}
-            onToast={showToast}
-          />
-        </div>
-        <div className="xl:col-span-1 space-y-6">
-          <SecurityDashboard />
-          <ActivityFeed />
-          <UpcomingReviews
-            tasks={tasks}
-            onScheduleClick={() => setOpenModal("review")}
-          />
-        </div>
-      </div>
-
-      {/* Modals */}
-      <AssignDealModal
-        open={openModal === "assign"}
-        onClose={() => setOpenModal(null)}
-        deals={deals}
-        users={teamMembers}
-        onToast={showToast}
-        onAssigned={refreshAfterAction}
-      />
-      <CreateTaskModal
-        open={openModal === "task"}
-        onClose={() => setOpenModal(null)}
-        deals={deals}
-        users={teamMembers}
-        onToast={showToast}
-        onCreated={refreshAfterAction}
-      />
-      <ScheduleReviewModal
-        open={openModal === "review"}
-        onClose={() => setOpenModal(null)}
-        deals={deals}
-        users={teamMembers}
-        onToast={showToast}
-        onScheduled={refreshAfterAction}
-      />
-      <SendReminderModal
-        open={openModal === "reminder"}
-        onClose={() => setOpenModal(null)}
-        deals={deals}
-        users={teamMembers}
-        onToast={showToast}
-      />
+      <AssignDealModal {...shared} open={action?.kind === "assign"} onAssigned={refresh} />
+      <CreateTaskModal {...shared} open={action?.kind === "task"} onCreated={refresh} />
+      <ScheduleReviewModal {...shared} open={action?.kind === "review"} onScheduled={refresh} />
+      <SendReminderModal {...shared} open={action?.kind === "reminder"} />
+      <UndoBar notice={undo.notice} onDismiss={undo.dismiss} />
     </div>
   );
 }
 
-// ─── Helpers / sub-components ────────────────────────────────────────
-
-function formatLastUpdated(ts: number): string {
-  const diffMs = Date.now() - ts;
-  const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "Just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  return `${hours}h ago`;
-}
-
-function StatCard({
-  label,
-  icon,
-  value,
-  subtitle,
-  valueColor,
-  onClick,
-}: {
-  label: string;
-  icon: string;
-  value: string | number;
-  subtitle: string;
-  valueColor?: string;
-  onClick?: () => void;
-}) {
+function CommandCenterSkeleton() {
+  const panel = "dash-panel overflow-hidden";
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="relative flex flex-col gap-1 rounded-lg border border-border-subtle bg-surface-card p-5 shadow-card hover:shadow-card-hover hover:border-primary/30 transition-all cursor-pointer text-left"
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">
-          {label}
-        </span>
-        <span className="material-symbols-outlined text-text-muted text-[20px]">{icon}</span>
+    <div className="dash px-4 py-6 md:px-8 md:py-9 lg:px-10" aria-busy="true" aria-label="Loading Command Center">
+      <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-7">
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2.5">
+            <Skeleton.Line width={170} height={10} />
+            <Skeleton.Line width={260} height={30} />
+            <Skeleton.Line width={380} height={14} />
+          </div>
+          <div className="dash-double-rule" />
+        </div>
+        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
+          <div className="flex flex-col gap-6">
+            {[3, 5, 5].map((n, p) => (
+              <div key={p} className={panel}>
+                <div className="px-6 pt-5 pb-3.5"><Skeleton.Line width={130} height={18} /></div>
+                {Array.from({ length: n }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-4 border-t border-(--dash-rule) px-6 py-3.5">
+                    <Skeleton.Circle size={28} />
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <Skeleton.Line width={`${55 - i * 6}%`} height={13} />
+                      <Skeleton.Line width="30%" height={10} />
+                    </div>
+                    <Skeleton width={72} height={24} rounded="md" />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-1">
+            {[4, 3, 5].map((n, p) => (
+              <div key={p} className={panel}>
+                <div className="border-b border-(--dash-rule) px-5 pt-4 pb-3"><Skeleton.Line width={110} height={16} /></div>
+                <div className="flex flex-col gap-3 px-5 py-4">
+                  {Array.from({ length: n }).map((_, i) => <Skeleton.Line key={i} width={`${85 - i * 10}%`} height={12} />)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
-      <div className="flex items-end gap-2 mt-3">
-        <h3
-          className="text-3xl font-bold tracking-tight"
-          style={{ color: valueColor || "#111827" }}
-        >
-          {value}
-        </h3>
-      </div>
-      <p className="text-xs text-text-muted mt-1">{subtitle}</p>
-    </button>
+    </div>
   );
 }

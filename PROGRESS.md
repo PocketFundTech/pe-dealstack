@@ -5,6 +5,139 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 72 — September 28, 2026
+
+#### Timestamp: September 28, 2026 — IST
+
+#### Goal: Redesign the Admin "Command Center" in the same language as the dashboard. Local preview only, uncommitted.
+
+The direction was agreed through a brainstorm: *team oversight* as the core job, actions in context through a side sheet, and a "team ledger + rail" layout. Spec: `docs/superpowers/specs/2026-09-28-command-center-team-ledger-design.md`.
+
+**Problems found in the old page:**
+- **Negative due dates:** "In -215 days" appeared on completed tasks, because the due formatter skipped the overdue branch for completed tasks.
+- **Nonsense deal volume:** "Deal volume $10000001B" summed USD and INR deals (plus test data) as one number.
+- **Unhelpful allocation rows:** Resource Allocation showed duplicate chips ("DMpro DMpro DMpro"), and its capacity was a flat deals ÷ 5.
+- **Fake status pill:** "System Operational" wasn't checking anything.
+- **Off-palette card:** Upcoming Reviews was a dark navy card.
+
+**Built:**
+- **Masthead:** a summary line that jumps to each section, and a "New ▾" menu.
+- **Slipping list:** org-wide overdue, unowned and stale items with *Nudge* (pre-filled reminder), *Reassign ▾* (`PATCH /tasks` `assignedTo`, with undo) and *Assign*.
+- **Team workload ledger:** load relative to the busiest person, Stretched/Idle tags, de-duplicated deal names, and a per-person ⋯ menu.
+- **Task table:** tabs with counts, correct due labels, deal shown under the title, a status menu with undo, and inline delete confirmation.
+- **Rail:** a compact security panel, a light Upcoming reviews panel, and a restyled Team activity feed.
+- **Side sheet:** all four actions now open in it, pre-filled from context.
+
+**Shared module `src/components/dash/`:** `dash.css`, `undo-bar`, `side-sheet`, `menu`, `avatar`. The dashboard was moved onto these, and its deals drawer now uses `SideSheet`. Decorative icons are marked `aria-hidden` across both pages, because icon names were being read as part of button labels ("notifications Nudge").
+
+**Removed:** `ResourceAllocation.tsx` and `SecurityDashboard.tsx`, replaced by `team-workload.tsx` and `security-strip.tsx`. Nothing else imported them.
+
+**Verified:**
+- `tsc` is clean, apart from the existing missing `api/dist` errors.
+- ESLint shows only the 7 existing `set-state-in-effect` warnings. The same warnings appear on `origin/main` for these forms and the activity feed.
+- 28/28 tests pass across the admin and dashboard suites.
+- Visual check through a temporary mock-data harness (since deleted) at 1600px and 390px, covering the Nudge sheet pre-fill, the row menu and the Overdue jump.
+
+**No migrations.**
+
+#### Data Room index redesign (same session)
+
+The direction was agreed through a brainstorm: *room status at a glance*, rich cards, and frontend-only data (the founder chose this over a new summary endpoint). Spec: `docs/superpowers/specs/2026-09-28-data-room-index-design.md`.
+
+**Before:** a grid of identical folder-icon cards showing only name, industry, a raw stage enum and a date. Nothing about the room's contents, and passed deals mixed in with live ones.
+
+**Built:**
+- **Masthead:** live totals (rooms, documents, open requests, live share links).
+- **Toolbar:** tabs Active / Needs attention / Passed / All, search, and sort by latest upload, coverage or name.
+- **Cards:** a folder-coverage meter with the document count, the latest upload (from `Deal.lastDocument*`), request and share chips, attention reasons, and "created <date>" to tell apart duplicate names (Nino Burgers ×4, DMpro ×3).
+- **New room:** now opens in the shared side sheet.
+
+**Stats loading:** stats come from `/deals/:id/folders` (`fileCount`), `/doc-requests` and `/shares`. `/documents` was deliberately avoided because it returns full rows, including extracted text. At most 4 rooms load at a time, visible first, with a session cache and a retry on each card.
+
+**Deviation from the approved design:** the "Request documents" action became "Deal page", because the deal page can't deep-link to its Documents tab.
+
+**Bug caught during the visual check:** a loading placeholder `<div>` sat inside a `<p>`, which is invalid HTML and caused a hydration error. Fixed.
+
+**Verified:**
+- `tsc` is clean, and the new data-room files have 0 lint findings.
+- 70/70 tests pass across `src/app/(app)` (including 8 new `room-status` tests).
+- Visual check at 1600px and 390px through a temporary mock-data harness (since deleted).
+
+---
+
+### Session 71 — September 27, 2026
+
+#### Timestamp: September 27, 2026 — 12:31 IST
+
+#### Goal: Redesign the dashboard ("refined banker"). Local preview only, not deployed.
+
+Branch `feat/dashboard-redesign` (worktree `.worktrees/dashboard-redesign`, off `main` @ 930718e). Uncommitted and unpushed, pending founder review on `localhost:3002`.
+
+**Problem:** the dashboard read as a generic SaaS template. It had four identical stat cards, a multi-colour donut, big icon tiles, and a subtitle promising "AI market analysis" that doesn't exist. Hierarchy was flat: every widget had the same weight, shadow and bold 16px title.
+
+**What changed (dashboard only; every style is scoped under `.dash`, so no other page is affected):**
+- **Type:** kept **Inter** so the whole product uses one font. A Bodoni Moda + Schibsted Grotesk pairing was previewed and rejected by the founder. Hierarchy now comes from semibold weight, tight tracking and tabular figures.
+- **Masthead:** a dateline, a serif greeting and a factual summary line ("17 active deals, 3 in diligence. 1 task overdue.", with overdue in red), all above an accounting double rule. "Add widget", "Edit layout" and **New deal** moved up here. The two full-width buttons at the bottom of the page are gone.
+- **Pipeline:** the 4 stat cards are now one ledger band with a shared distribution bar. The last column was relabelled from "Closed" to "Closing", because it counts Negotiation + Closing + Won.
+- **Active Priorities:** a hairline table with a 5-step stage tick scale, High-priority tags, initials avatars and right-aligned tabular values. Legacy enum stages such as `LOI_OFFER` now get a readable label instead of the raw enum.
+- **My Tasks:** open tasks sort first by due date and completed ones sink. Rows are labelled "Overdue · 3 days ago" or "Due …".
+- **Portfolio Allocation:** the donut became ranked horizontal bars on a Banker Blue ramp.
+- **Widget shell and optional widgets** (funnel, quick actions, deadlines, signal monitor): one flat panel style, Banker Blue ramp instead of purple/orange, and empty states rewritten to explain what the widget does.
+- Core and optional widgets now share one masonry flow. Motion is a single staggered reveal plus bars that grow in; both honour `prefers-reduced-motion`.
+- Split `PortfolioSignalsWidget` into `widgets/portfolio-signals.tsx` (re-exported) to keep `dashboard-widgets.tsx` under 500 lines. Removed the dead `MarketSentimentCard` (no importers).
+- Design context recorded in `.impeccable.md`.
+
+**Verified:** `tsc` clean (except the existing missing `api/dist` errors), dashboard ESLint shows no new warnings, and the dashboard vitest suite passes 3/3. Checked visually at 1440px and 390px through a temporary mock-data harness, which has since been deleted.
+
+**No migrations.**
+
+#### Timestamp: September 27, 2026 — 20:45 IST
+
+#### Goal: Dashboard v2, the "Morning brief". The founder called v1 "very basic" and asked for more detail and UX.
+
+The direction was agreed through a short brainstorm: lead with "what needs me today", allow quick inline actions, and use a briefing column plus a right rail. Spec: `docs/superpowers/specs/2026-09-27-dashboard-morning-brief-design.md`.
+
+**Built (still local, uncommitted):**
+- **Today queue.** One ranked list of overdue tasks, tasks due today, ownerless deals (High/Urgent, or at Diligence or later) and stale deals (no update in 14+ days). The actions are inline:
+  - *Done* comes with an undo.
+  - *Snooze* lasts 1 or 7 days and is stored per browser.
+  - *Assign ▾* is a keyboard-navigable team menu that PATCHes `assignedTo`.
+  - *Review* opens the deal.
+- **Pipeline funnel.** Five stages, each with a count, a bar scaled to the largest stage and a stale count. Clicking a stage opens a right-side **deals drawer** (focus trapping, Esc to close), replacing the centred stage modal.
+- **Active Priorities.** Three tabs (By priority / Needs attention with a count / Recently updated). A new **Last touch** column turns amber once a deal is stale. On hover, *Data room* and *Open* replace the value. A footer shows "Showing 6 of N".
+- **Right rail:**
+  - **My Tasks** is grouped into Overdue / Today / Upcoming / No date. Completed tasks collapse, and there's an inline **Add task** with due chips.
+  - **Portfolio Allocation** merges near-duplicate sectors ("Food & Beverage(s)"), and each row opens the drawer.
+  - The Inbox Deal Finder and optional widgets follow. Rail order can be dragged in edit mode.
+- **Masthead:** "N things need you today" links to the queue. "Updated X ago ↻" refreshes on click, and the page refetches silently on returning to the tab after 5+ minutes. "Customize ▾" merges the two old buttons.
+- **Details:**
+  - Each section has its own error state with Retry.
+  - Skeletons match the new layout, including the route `loading.tsx`.
+  - Actions are optimistic and roll back on failure.
+  - On phones, the queue badges become coloured eyebrows above the title.
+  - Reduced motion is honoured.
+
+**Bugs found along the way:**
+- **Wrong due labels:** `formatRelativeTime` renders every *future* date as "Just now", so "Due …" labels for upcoming tasks were wrong. The dashboard now uses its own `dueLabel` in `triage.ts`. The shared formatter is untouched and still needs fixing for other callers.
+- **Tasks not filtered to you:** the dashboard fetched `/tasks?limit=20` across the whole org, not "my" tasks. It now shows tasks assigned to you or to no one.
+- **CSS overriding utilities:** `dashboard.css` was unlayered and silently beat Tailwind utilities. It's now in `@layer components`.
+
+**Follow-up fix (founder report, 21:10 IST): the Customize menu was cut off.** The staggered-reveal animation leaves each page section in its own stacking context, so the later Today panel painted over the masthead's dropdown. Fix:
+- The masthead now gets `relative z-20`.
+- The Today panel no longer uses `overflow-hidden`, so the Assign popover can't be clipped. Its edge rows are rounded instead.
+- The Assign menu opens upward when there's no room below it.
+- Menu items no longer wrap.
+- The "Last touch" column is renamed "Updated", so it no longer collides with the next header at narrower widths.
+
+**Defaults:** the Deal Funnel and Upcoming Deadlines widgets dropped out of `DEFAULT_VISIBLE`, because the core funnel and task groups now cover them. Existing users' saved layouts are unaffected.
+
+**Verified:**
+- 19/19 dashboard tests pass: 11 for the triage logic, plus queue/undo component tests and the existing signals test.
+- `tsc` is clean, and ESLint shows only the 2 existing warnings in untouched widgets.
+- Visual check at 1600px and 390px through a temporary mock-data harness (since deleted), covering the assign flow, drawer, undo bar and add-task.
+
+---
+
 ### Session 70 — August 25 – September 4, 2026
 
 #### Timestamp: September 4, 2026 — 12:59 IST

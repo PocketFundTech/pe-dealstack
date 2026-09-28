@@ -1,88 +1,50 @@
 "use client";
 
+import { cn } from "@/lib/cn";
 import type { AdminTaskStatus } from "./types";
 
-// Constants, helpers, and the small status-badge / due-date renderers used
-// by TaskTable. Extracted from TaskTable.tsx so the parent module stays under
-// the 500-line cap.
+// Constants + the status badge used by TaskTable (kept separate so the table
+// module stays small).
 
-// ─── Constants ───────────────────────────────────────────────────────
-
-export const TASK_PAGE_SIZE = 20;
-export const STATUS_OPTIONS: AdminTaskStatus[] = ["PENDING", "IN_PROGRESS", "COMPLETED", "STUCK"];
+export const TASK_PAGE_SIZE = 12;
+export const STATUS_OPTIONS: AdminTaskStatus[] = ["PENDING", "IN_PROGRESS", "STUCK", "COMPLETED"];
 export const PRIORITY_RANK: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
 
-export const PRIORITY_STYLES: Record<string, string> = {
-  URGENT: "bg-red-50 text-red-600 border-red-100",
-  HIGH: "bg-red-50 text-red-600 border-red-100",
-  MEDIUM: "bg-slate-100 text-slate-600 border-slate-200",
-  LOW: "bg-gray-100 text-text-secondary border-gray-200",
+export type FilterValue = "OPEN" | "OVERDUE" | "WEEK" | "DONE" | "ALL";
+
+export const FILTER_TABS: { value: FilterValue; label: string }[] = [
+  { value: "OPEN", label: "Open" },
+  { value: "OVERDUE", label: "Overdue" },
+  { value: "WEEK", label: "Due this week" },
+  { value: "DONE", label: "Done" },
+  { value: "ALL", label: "All" },
+];
+
+const STATUS_META: Record<AdminTaskStatus, { label: string; dot: string; text: string }> = {
+  PENDING: { label: "To do", dot: "bg-(--dash-rule-strong)", text: "text-(--dash-ink-2)" },
+  IN_PROGRESS: { label: "In progress", dot: "bg-(--dash-blue-2)", text: "text-(--dash-blue)" },
+  STUCK: { label: "Stuck", dot: "bg-(--dash-red)", text: "text-(--dash-red)" },
+  COMPLETED: { label: "Done", dot: "bg-(--dash-green)", text: "text-(--dash-green)" },
+  CANCELLED: { label: "Cancelled", dot: "bg-(--dash-rule-strong)", text: "text-(--dash-ink-3)" },
 };
 
-export type FilterValue = "ALL" | AdminTaskStatus | "OVERDUE";
-
-export const FILTER_OPTIONS: { value: FilterValue; label: string; icon: string }[] = [
-  { value: "ALL", label: "All Tasks", icon: "list" },
-  { value: "PENDING", label: "Pending", icon: "hourglass_empty" },
-  { value: "IN_PROGRESS", label: "In Progress", icon: "play_circle" },
-  { value: "COMPLETED", label: "Completed", icon: "check_circle" },
-  { value: "OVERDUE", label: "Overdue", icon: "warning" },
-];
-
-export type SortField = "createdAt" | "dueDate" | "priority";
-export const SORT_OPTIONS: { value: SortField; label: string }[] = [
-  { value: "createdAt", label: "Date Created" },
-  { value: "dueDate", label: "Due Date" },
-  { value: "priority", label: "Priority" },
-];
-
-// ─── Helpers ─────────────────────────────────────────────────────────
-
-export function formatDueDate(dateStr: string | null, isOverdue: boolean) {
-  if (!dateStr) return <span className="text-text-muted">No date</span>;
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffDays = Math.round((date.getTime() - now.getTime()) / 86400000);
-
-  if (isOverdue) {
-    const overdueDays = Math.abs(diffDays);
-    return <>{overdueDays === 0 ? "Overdue (today)" : `Overdue (${overdueDays}d)`}</>;
-  }
-  if (diffDays === 0) return <>Today</>;
-  if (diffDays === 1) return <>Tomorrow</>;
-  if (diffDays < 7) return <>In {diffDays} days</>;
-  return <>{date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</>;
+export function StatusBadge({ status }: { status: AdminTaskStatus }) {
+  const m = STATUS_META[status] ?? STATUS_META.PENDING;
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap text-[0.8125rem] font-medium", m.text)}>
+      <span className={cn("size-1.5 rounded-full", m.dot)} />
+      {m.label}
+    </span>
+  );
 }
 
-export function renderStatusBadge(status: AdminTaskStatus, isOverdue: boolean) {
-  if (status === "COMPLETED") {
-    return (
-      <span className="text-secondary flex items-center gap-1.5">
-        <span className="material-symbols-outlined text-[16px]">check_circle</span>
-        Completed
-      </span>
-    );
-  }
-  if (isOverdue || status === "STUCK") {
-    return (
-      <span className="text-red-600 flex items-center gap-1.5 font-medium">
-        <span className="material-symbols-outlined text-[16px]">error</span>
-        {status === "STUCK" ? "Stuck" : "Overdue"}
-      </span>
-    );
-  }
-  if (status === "IN_PROGRESS") {
-    return (
-      <span className="text-primary flex items-center gap-1.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-        In Progress
-      </span>
-    );
+export function PriorityTag({ priority }: { priority: string }) {
+  if (priority !== "HIGH" && priority !== "URGENT") {
+    return priority === "LOW" ? <span className="text-xs text-(--dash-ink-3)">Low</span> : <span className="sr-only">Normal</span>;
   }
   return (
-    <span className="text-text-muted flex items-center gap-1.5">
-      <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-      Pending
+    <span className="rounded-sm bg-(--dash-red-wash) px-1.5 py-px text-[0.625rem] font-bold uppercase tracking-wider text-(--dash-red)">
+      {priority === "URGENT" ? "Urgent" : "High"}
     </span>
   );
 }

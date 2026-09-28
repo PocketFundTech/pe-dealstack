@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useNotificationCount } from "@/providers/NotificationCountProvider";
 import { Modal } from "./Modal";
-import { UserOptions, INPUT_CLS, LABEL_CLS, type SharedProps } from "./form-primitives";
+import { UserOptions, INPUT_CLS, LABEL_CLS, BTN_PRIMARY, BTN_SECONDARY, type SharedProps } from "./form-primitives";
 
 export function SendReminderModal({
   open,
@@ -12,6 +12,7 @@ export function SendReminderModal({
   deals,
   users,
   onToast,
+  prefill,
 }: SharedProps) {
   const { refresh: refreshNotifications } = useNotificationCount();
   const [userId, setUserId] = useState("");
@@ -26,6 +27,17 @@ export function SendReminderModal({
       setDealId("");
     }
   }, [open]);
+
+  // Opened from a row (e.g. "Nudge") — start from that context.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    /* eslint-disable react-hooks/set-state-in-effect */
+      if (prefill.dealId) setDealId(prefill.dealId);
+      if (prefill.userId) setUserId(prefill.userId);
+      if (prefill.message) setMessage(prefill.message);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, prefill]);
+
 
   const submit = async () => {
     if (!userId) {
@@ -65,14 +77,14 @@ export function SendReminderModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Send Reminder"
-      titleIcon={{ name: "notifications_active", className: "text-orange-500" }}
+      title="Send a reminder"
+      subtitle="Lands in their notification bell straight away."
       footer={
         <>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-main hover:bg-gray-100 rounded-lg transition-colors"
+            className={BTN_SECONDARY}
           >
             Cancel
           </button>
@@ -80,7 +92,7 @@ export function SendReminderModal({
             type="button"
             onClick={submit}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors disabled:opacity-50"
+            className={BTN_PRIMARY}
           >
             {saving ? "Sending..." : "Send Reminder"}
           </button>
