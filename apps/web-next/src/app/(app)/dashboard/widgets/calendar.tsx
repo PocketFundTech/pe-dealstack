@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useMemo } from "react";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { WidgetShell, WidgetEmpty, WidgetError, WidgetLoading } from "./shell";
 
 // Ported from calendar.js. Next-7-days union of
@@ -16,66 +16,57 @@ function startOfDay(d: Date): Date {
   return x;
 }
 
+// Stale-while-revalidate cache: the tasks key matches use-dashboard-data.ts's
+// own `/tasks?limit=100` query, so this widget dedupes/shares that fetch
+// instead of firing a second one. The deals key (limit=500) is wider than
+// the dashboard's own `/deals?limit=200`, so it stays a separate cache entry.
 export function CalendarWidget() {
-  const [groups, setGroups] = useState<Array<{ dateLabel: string; events: Event[] }> | null>(null);
-  const [error, setError] = useState(false);
+  const tasksQuery = useApiQuery<{ tasks?: TaskRow[] } | TaskRow[]>("/tasks?limit=100");
+  const dealsQuery = useApiQuery<DealRow[] | { deals: DealRow[] }>("/deals?limit=500");
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [tasksData, dealsData] = await Promise.all([
-          api.get<{ tasks?: TaskRow[] } | TaskRow[]>("/tasks?limit=100"),
-          api.get<DealRow[] | { deals: DealRow[] }>("/deals?limit=500"),
-        ]);
-        if (cancelled) return;
-        const tasks = Array.isArray(tasksData) ? tasksData : tasksData.tasks || [];
-        const deals = Array.isArray(dealsData) ? dealsData : dealsData.deals || [];
+  const error = !!tasksQuery.error || !!dealsQuery.error;
+  const loading = tasksQuery.isLoading || dealsQuery.isLoading;
 
-        const today = startOfDay(new Date());
-        const horizon = new Date(today.getTime() + 7 * 86400000);
+  const groups = useMemo(() => {
+    if (loading || error) return null;
+    const tasksData = tasksQuery.data;
+    const dealsData = dealsQuery.data;
+    if (tasksData === undefined || dealsData === undefined) return null;
+    const tasks = Array.isArray(tasksData) ? tasksData : tasksData.tasks || [];
+    const deals = Array.isArray(dealsData) ? dealsData : dealsData.deals || [];
 
-        const events: Event[] = [];
-        for (const t of tasks) {
-          if (!t.dueDate || t.status === "COMPLETED") continue;
-          const d = new Date(t.dueDate);
-          if (d < today || d >= horizon) continue;
-          events.push({ date: d, label: t.title, icon: "task_alt", color: "#003366" });
-        }
-        for (const d of deals) {
-          if (!d.targetCloseDate) continue;
-          const dt = new Date(d.targetCloseDate);
-          if (dt < today || dt >= horizon) continue;
-          events.push({ date: dt, label: `${d.name} closing`, icon: "flag", color: "#10B981" });
-        }
+    const today = startOfDay(new Date());
+    const horizon = new Date(today.getTime() + 7 * 86400000);
 
-        if (events.length === 0) {
-          setGroups([]);
-          return;
-        }
+    const events: Event[] = [];
+    for (const t of tasks) {
+      if (!t.dueDate || t.status === "COMPLETED") continue;
+      const d = new Date(t.dueDate);
+      if (d < today || d >= horizon) continue;
+      events.push({ date: d, label: t.title, icon: "task_alt", color: "#003366" });
+    }
+    for (const d of deals) {
+      if (!d.targetCloseDate) continue;
+      const dt = new Date(d.targetCloseDate);
+      if (dt < today || dt >= horizon) continue;
+      events.push({ date: dt, label: `${d.name} closing`, icon: "flag", color: "#10B981" });
+    }
 
-        events.sort((a, b) => a.date.getTime() - b.date.getTime());
-        const byDay = new Map<string, Event[]>();
-        for (const e of events) {
-          const key = startOfDay(e.date).toISOString();
-          const arr = byDay.get(key) || [];
-          arr.push(e);
-          byDay.set(key, arr);
-        }
-        const grouped = [...byDay.entries()].map(([key, evs]) => ({
-          dateLabel: new Date(key).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
-          events: evs,
-        }));
-        setGroups(grouped);
-      } catch (err) {
-        console.warn("[dashboard/calendar] failed to load tasks/deals:", err);
-        if (!cancelled) setError(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (events.length === 0) return [];
+
+    events.sort((a, b) => a.date.getTime() - b.date.getTime());
+    const byDay = new Map<string, Event[]>();
+    for (const e of events) {
+      const key = startOfDay(e.date).toISOString();
+      const arr = byDay.get(key) || [];
+      arr.push(e);
+      byDay.set(key, arr);
+    }
+    return [...byDay.entries()].map(([key, evs]) => ({
+      dateLabel: new Date(key).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      events: evs,
+    }));
+  }, [loading, error, tasksQuery.data, dealsQuery.data]);
 
   return (
     <WidgetShell title="This Week" icon="calendar_month">

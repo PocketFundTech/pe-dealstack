@@ -1,14 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/providers/ToastProvider";
-import { Builder } from "./Builder";
 import { DealPicker, type PickableDeal } from "./DealPicker";
 import { Gallery } from "./Gallery";
 import type { Graph, GraphWithDeal } from "./types";
+
+// The Builder pulls in recharts (ChartRenderer.tsx), which the gallery view
+// never needs. Load it lazily so recharts is only fetched once the user
+// actually opens the chart builder, keeping the default /graphs load light.
+const Builder = dynamic(() => import("./Builder").then((m) => m.Builder), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center py-24 text-sm text-slate-500">
+      Loading chart builder…
+    </div>
+  ),
+});
 
 // The page is a simple state machine:
 //   - "gallery": showing the firm-wide list (default)
@@ -26,9 +39,15 @@ export default function GraphsPage() {
   const { showToast } = useToast();
   const searchParams = useSearchParams();
 
-  const [graphs, setGraphs] = useState<GraphWithDeal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Stale-while-revalidate cache: revisiting /graphs renders instantly.
+  const graphsQuery = useApiQuery<GraphWithDeal[]>("/graphs");
+  const graphs = useMemo<GraphWithDeal[]>(
+    () => (Array.isArray(graphsQuery.data) ? graphsQuery.data : []),
+    [graphsQuery.data],
+  );
+  const loading = graphsQuery.isLoading;
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? (graphsQuery.error && graphsQuery.data === undefined ? graphsQuery.error.message || "Failed to load graphs" : null);
   const [view, setView] = useState<View>({ mode: "gallery" });
   const [deleteTarget, setDeleteTarget] = useState<GraphWithDeal | null>(null);
 
@@ -49,25 +68,11 @@ export default function GraphsPage() {
     deepLinkHandled.current = true;
   }, [searchParams]);
 
-  const loadGraphs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<GraphWithDeal[]>("/graphs");
-      setGraphs(Array.isArray(data) ? data : []);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to load graphs";
-      console.warn("[graphs] load failed:", err);
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadGraphs();
-  }, [loadGraphs]);
+  const { refetch: refetchGraphs } = graphsQuery;
+  const loadGraphs = useCallback(() => {
+    setActionError(null);
+    return refetchGraphs();
+  }, [refetchGraphs]);
 
   /* -------------------- Gallery callbacks -------------------- */
 
@@ -100,7 +105,7 @@ export default function GraphsPage() {
     if (!deleteTarget) return;
     const target = deleteTarget;
     // Optimistic remove — restore on failure so the user can retry.
-    setGraphs((gs) => gs.filter((g) => g.id !== target.id));
+    graphsQuery.mutate((gs) => (gs ?? []).filter((g) => g.id !== target.id));
     setDeleteTarget(null);
     try {
       await api.delete(`/graphs/${target.id}`);
@@ -134,9 +139,10 @@ export default function GraphsPage() {
     // Merge the saved row back into the gallery state so the user sees their
     // change without a full refetch. The list endpoint embeds `deal`; on
     // create we synthesise it from the deal label we already had on screen.
-    setGraphs((gs) => {
+    graphsQuery.mutate((gs) => {
+      const prev = gs ?? [];
       if (wasEditing) {
-        return gs.map((g) =>
+        return prev.map((g) =>
           g.id === saved.id ? { ...g, ...saved, deal: g.deal } : g,
         );
       }
@@ -144,7 +150,7 @@ export default function GraphsPage() {
         ? { id: view.dealId, target: view.dealLabel.split(" · ")[0] || null, projectName: null }
         : { id: saved.dealId, target: null, projectName: null };
       const withDeal: GraphWithDeal = { ...saved, deal: { ...dealCtx, id: saved.dealId } };
-      return [withDeal, ...gs];
+      return [withDeal, ...prev];
     });
     showToast(wasEditing ? "Graph updated" : "Graph saved", "success");
     setView({ mode: "gallery" });
@@ -174,7 +180,7 @@ export default function GraphsPage() {
           onCreate={handleCreate}
           onEdit={handleEdit}
           onDelete={handleDeleteRequest}
-          onDismissError={() => setError(null)}
+          onDismissError={() => setActionError(null)}
         />
       )}
 

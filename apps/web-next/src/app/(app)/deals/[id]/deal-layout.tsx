@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { cn } from "@/lib/cn";
 import {
   formatCurrency,
@@ -11,8 +11,9 @@ import {
   type UnitScale,
 } from "@/lib/formatters";
 import { comparePeriodChronologically } from "./deal-financials-period-scope";
+import { financialsKey } from "./deal-financials-constants";
 import { STAGE_LABELS } from "@/lib/constants";
-import { api } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { type DealDetail, type TeamMember, PIPELINE_STAGES, TERMINAL_STAGES } from "./deal-detail-shared";
 
@@ -228,61 +229,48 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
     deal.cachedEbitda != null ||
     deal.cachedEbitdaMargin != null;
 
-  const [latestIncome, setLatestIncome] = useState<IncomeStatementRow | null>(null);
+  // Shared with FinancialStatusBadge below (and invalidated by
+  // deal-financials.tsx after extraction/removal) so the two header widgets
+  // that both need /deals/:id/financials share a single request instead of
+  // firing it twice on every deal-page load. Skipped entirely when the
+  // cache (deal.cachedRevenue etc.) already covers Revenue/EBITDA/Margin.
+  const financialsQuery = useApiQuery<IncomeStatementRow[]>(
+    deal.id ? financialsKey(deal.id) : null,
+    { enabled: Boolean(deal.id) && !cacheHit },
+  );
   // True while the /deals/:id/financials request is in flight. Without this,
   // the legacy `deal.revenue` / `deal.ebitda` columns render first (with a
   // possibly-wrong margin computed from MILLIONS-assumed values), then snap
   // to the in-unit FinancialStatement values once the fetch returns — visible
   // flicker on the EBITDA Margin card especially. Suppressed entirely when
   // the cache is populated since we don't need the fallback fetch.
-  const [statementLoading, setStatementLoading] = useState<boolean>(
-    Boolean(deal.id) && !cacheHit,
-  );
+  const statementLoading = !cacheHit && financialsQuery.isLoading;
 
+  const latestIncome = useMemo<IncomeStatementRow | null>(() => {
+    if (cacheHit) return null;
+    const rows = Array.isArray(financialsQuery.data) ? financialsQuery.data : [];
+    const incomeRows = rows.filter((r) => r.statementType === "INCOME_STATEMENT");
+    if (incomeRows.length === 0) return null;
+    // Prefer historical/LTM periods (skip projections). The API uses
+    // HISTORICAL/PROJECTED/LTM; older snapshots may use ACTUAL.
+    const historical = incomeRows.filter(
+      (r) => r.periodType === "HISTORICAL" || r.periodType === "ACTUAL" || r.periodType === "LTM",
+    );
+    const candidates = historical.length > 0 ? historical : incomeRows;
+    // comparePeriodChronologically sorts ascending; reverse to get newest.
+    const sorted = [...candidates].sort((a, b) =>
+      comparePeriodChronologically(b.period, a.period),
+    );
+    return sorted[0] ?? null;
+  }, [cacheHit, financialsQuery.data]);
+
+  // Fall back to deal-level fields silently — the income statement table
+  // below renders independently and surfaces its own errors.
   useEffect(() => {
-    if (cacheHit) {
-      // Cached fields fully cover Revenue / EBITDA / Margin in actual
-      // dollars. Skip the fallback statement fetch entirely.
-      setStatementLoading(false);
-      setLatestIncome(null);
-      return;
+    if (financialsQuery.error) {
+      console.warn("[deal-layout] FinancialMetricsRow income fetch failed:", financialsQuery.error);
     }
-    let cancelled = false;
-    setStatementLoading(true);
-    (async () => {
-      try {
-        const data = await api.get<IncomeStatementRow[]>(`/deals/${deal.id}/financials`);
-        if (cancelled) return;
-        const rows = Array.isArray(data) ? data : [];
-        const incomeRows = rows.filter((r) => r.statementType === "INCOME_STATEMENT");
-        if (incomeRows.length === 0) {
-          setLatestIncome(null);
-          return;
-        }
-        // Prefer historical/LTM periods (skip projections). The API uses
-        // HISTORICAL/PROJECTED/LTM; older snapshots may use ACTUAL.
-        const historical = incomeRows.filter(
-          (r) => r.periodType === "HISTORICAL" || r.periodType === "ACTUAL" || r.periodType === "LTM",
-        );
-        const candidates = historical.length > 0 ? historical : incomeRows;
-        // comparePeriodChronologically sorts ascending; reverse to get newest.
-        const sorted = [...candidates].sort((a, b) =>
-          comparePeriodChronologically(b.period, a.period),
-        );
-        setLatestIncome(sorted[0] ?? null);
-      } catch (err) {
-        // Fall back to deal-level fields silently — the income statement
-        // table below renders independently and surfaces its own errors.
-        console.warn("[deal-layout] FinancialMetricsRow income fetch failed:", err);
-        if (!cancelled) setLatestIncome(null);
-      } finally {
-        if (!cancelled) setStatementLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [deal.id, cacheHit]);
+  }, [financialsQuery.error]);
 
   // Resolve revenue / EBITDA / margin via the canonical precedence helper.
   // - cached: ACTUAL DOLLARS, margin precomputed by the server.
@@ -539,34 +527,34 @@ export function DealViewers({ team }: { team: TeamMember[] }) {
 // ---------------------------------------------------------------------------
 
 export function FinancialStatusBadge({ dealId }: { dealId: string }) {
-  const [status, setStatus] = useState<"loading" | "none" | "data">("loading");
-  const [avgConfidence, setAvgConfidence] = useState(0);
+  // Same cache key as FinancialMetricsRow above — mounted together on every
+  // deal page, this makes the two share one /deals/:id/financials request
+  // (useApiQuery dedupes concurrent callers of the same key) instead of
+  // firing it twice.
+  const financialsQuery = useApiQuery<Array<{ extractionConfidence?: number | null }>>(
+    dealId ? financialsKey(dealId) : null,
+  );
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await api.get<Array<{ extractionConfidence?: number | null }>>(`/deals/${dealId}/financials`);
-        if (cancelled) return;
-        const statements = Array.isArray(data) ? data : [];
-        if (statements.length === 0) {
-          setStatus("none");
-          return;
-        }
-        setStatus("data");
-        const confidences = statements
-          .map((s) => s.extractionConfidence)
-          .filter((c): c is number => c != null);
-        if (confidences.length > 0) {
-          setAvgConfidence(Math.round(confidences.reduce((a, b) => a + b, 0) / confidences.length));
-        }
-      } catch (err) {
-        console.warn("[deal-layout] financials status fetch failed:", err);
-        if (!cancelled) setStatus("none");
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [dealId]);
+    if (financialsQuery.error) {
+      console.warn("[deal-layout] financials status fetch failed:", financialsQuery.error);
+    }
+  }, [financialsQuery.error]);
+
+  const statements = Array.isArray(financialsQuery.data) ? financialsQuery.data : [];
+  const status: "loading" | "none" | "data" = financialsQuery.isLoading
+    ? "loading"
+    : statements.length === 0
+      ? "none"
+      : "data";
+  const avgConfidence = useMemo(() => {
+    const confidences = statements
+      .map((s) => s.extractionConfidence)
+      .filter((c): c is number => c != null);
+    return confidences.length > 0
+      ? Math.round(confidences.reduce((a, b) => a + b, 0) / confidences.length)
+      : 0;
+  }, [statements]);
 
   if (status === "loading") return null;
 

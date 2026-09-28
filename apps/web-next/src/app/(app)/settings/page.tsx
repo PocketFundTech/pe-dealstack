@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useUser } from "@/providers/UserProvider";
 import { api } from "@/lib/api";
+import { useApiQuery, mutateApiCache } from "@/lib/useApiQuery";
 import { cn } from "@/lib/cn";
 import { OUTREACH_ALLOWED_ORG_SLUGS } from "@/lib/constants";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { USERS_ME_KEY } from "./settings-api-keys";
 import { SecuritySection } from "./SecuritySection";
 import { type PrefsState } from "./PreferencesSection";
 import { ProfileSection, type UserProfile } from "./ProfileSection";
@@ -90,8 +92,11 @@ export default function SettingsPage() {
     () => NAV_SECTIONS.filter((s) => s.id !== "outreach-pipeline" || showOutreachPipeline),
     [showOutreachPipeline],
   );
+  // Shared with FirmProfileSection, which reads the same /users/me endpoint
+  // for org-settings fields -- useApiQuery dedupes the two into one request
+  // instead of two. See settings-api-keys.ts.
+  const usersMeQuery = useApiQuery<UserProfile>(USERS_ME_KEY);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -120,21 +125,27 @@ export default function SettingsPage() {
     setNotificationPrefs(notifications);
   }, []);
 
-  const loadProfile = useCallback(async () => {
-    try {
-      const data = await api.get<UserProfile>("/users/me");
-      applyProfile(data);
-    } catch (err) {
-      console.warn("[settings] load failed:", err);
-      showToast(err instanceof Error ? err.message : "Failed to load profile", "error");
-    } finally {
-      setLoading(false);
-    }
-  }, [applyProfile, showToast]);
-
+  // Editable fields (name/title/prefs/notificationPrefs) are seeded from
+  // /users/me exactly once per mount -- same as the old one-shot loadProfile
+  // -- so a background revalidation of the shared cache entry (e.g. because
+  // FirmProfileSection or another tab refetched it) never clobbers text the
+  // user is mid-typing. `profile` itself (read-only display data + the
+  // Cancel-to-last-saved snapshot) is likewise only synced on that first
+  // load and after an explicit save.
+  const appliedInitialProfile = useRef(false);
   useEffect(() => {
-    loadProfile();
-  }, [loadProfile]);
+    if (appliedInitialProfile.current) return;
+    if (usersMeQuery.data) {
+      applyProfile(usersMeQuery.data);
+      appliedInitialProfile.current = true;
+    } else if (usersMeQuery.error) {
+      console.warn("[settings] load failed:", usersMeQuery.error);
+      showToast(usersMeQuery.error.message || "Failed to load profile", "error");
+      appliedInitialProfile.current = true;
+    }
+  }, [usersMeQuery.data, usersMeQuery.error, applyProfile, showToast]);
+
+  const loading = usersMeQuery.isLoading;
 
   // Observe sections to highlight the active nav link while scrolling
   useEffect(() => {
@@ -173,6 +184,9 @@ export default function SettingsPage() {
       };
       const updated = await api.patch<UserProfile>("/users/me", payload);
       applyProfile(updated);
+      // Keep the shared /users/me cache entry in sync so FirmProfileSection
+      // (and any other reader) sees the save without an extra fetch.
+      mutateApiCache(USERS_ME_KEY, updated);
       setHasChanges(false);
       showToast("Changes saved successfully", "success");
       refetchUser();
@@ -328,6 +342,7 @@ export default function SettingsPage() {
             setTitle={setTitle}
             onAvatarUploaded={(updated) => {
               applyProfile(updated);
+              mutateApiCache(USERS_ME_KEY, updated);
               refetchUser();
             }}
             onToast={showToast}
