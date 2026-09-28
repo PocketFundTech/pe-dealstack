@@ -5,6 +5,40 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 74 — September 28, 2026
+
+#### Timestamp: September 28, 2026 — 21:16 IST
+
+#### Goal: Fix six product issues Gaurav B reported on Slack against the live Jantar Energia test deal.
+
+#### 1. Root cause for each, traced against live production logs before writing any fix
+
+Set up a clean worktree on latest `main`, cherry-picked the still-unmerged `fix/ingest-provider-rejection` (PR #132) as a base, then dispatched four parallel investigation agents (read-only) followed by four parallel implementation agents, one per issue area. Production `vercel logs` for the exact deal in the screenshots confirmed two of the six were live billing/timeout failures, not document problems:
+
+```
+"Financial agent timed out after 120000ms" ... "Per-doc extraction issue"
+"Your credit balance is too low to access the Anthropic API..." (Anthropic 400, live at 19:49-19:58 IST)
+```
+
+Both returned HTTP 200 with `periodsStored: 0` and no reason attached, which is why the product showed the generic "No financial data found in the documents" instead of the real cause.
+
+#### 2. Fixes (PR #144 — `fix/gaurav-feedback-2026-09-28`, branched off current `main`)
+
+1. **Ingest modal "CIM only"**: modal took one file, always in "Create New Deal" mode. Now accepts multiple files (planned by a new pure `batchPlan.ts`) and can open pre-scoped to "Update Existing Deal" for a given deal.
+2. **Spreadsheet ingest "No valid deals found in file"**: fixed by the cherry-picked PR #132 fallback to single-document ingest when a spreadsheet has no deal-list column.
+3. **Data room upload speed**: `documents-upload.ts` awaited the full AI pipeline (extraction, deep financial pass, deal merge) before responding. Now responds as soon as the Document row is stored and runs AI work in the background via a new `runAfterResponse()` helper backed by Next's `after()`; client uploads run 3 at a time instead of sequentially.
+4. **Data room hidden file details**: `FileTable.tsx` had no fixed column layout, so an unbounded Name column pushed Author/Date/actions off-screen. Fixed with `table-fixed`, truncation + tooltips, and an insights panel that defaults collapsed below 1536px (persisted in localStorage).
+5. **"Extract Financials not working"**: the real per-document failure reason (timeout or provider error) was discarded and always reported as "no financial data." Route now returns `result.warnings` with the humanized real cause and `result.allFailed`; frontend shows it instead of the generic message. Agent timeout raised 120s → 240s to match the route's per-doc budget, and its `AbortSignal` is now threaded through to the Anthropic client so a timed-out run actually stops calling the paid API. Also closed the CLAUDE.md-flagged gap: `EXTRACTION_SYSTEM_PROMPT`/`EXCEL_CONTAINER_INSTRUCTION` in the now-live Claude extraction engine were static constants with no current-date injection — converted to builder functions that inject today's date per call, matching what the legacy path already did.
+6. **Unreadable AI chat responses**: the opening chat message was hand-built raw JSX (`deal.aiThesis` dumped into a `<p>`), bypassing the markdown renderer entirely — source of the literal ".." after "sp. z o.o.". Replaced with a structured markdown builder (headline, key metrics, highlights, risks). `lib/markdown.ts` rewritten as a line-based parser adding GitHub-style table support (the chat system prompts already ask for tables the old renderer couldn't display) and fixing numbered lists / stray `<br>`s between list items.
+
+90 new tests across both apps, each confirmed failing before its fix. `apps/api`: `tsc --noEmit` clean, full suite 194 files / 1907 tests passing. `apps/web-next`: `tsc --noEmit` clean, full suite 24 files / 362 tests passing. One flaky, unrelated API test failure observed on 1 of 3 consecutive full-suite runs with no code change in between (passed on retry).
+
+#### 3. Founder action required
+
+Production is out of Anthropic credits (same account issue as Session 71 — confirmed live in the logs above). This is a billing action; this PR only ensures that once credits are restored, a real failure is never again shown to the user as "no data in your documents."
+
+---
+
 ### Session 73 — September 28, 2026
 
 #### Timestamp: September 28, 2026 — 16:15 IST
