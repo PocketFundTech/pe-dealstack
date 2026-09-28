@@ -1,17 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   buildTodayQueue,
   dueLabel,
   groupSectors,
   isUnowned,
   nextUpcomingTask,
-  readSnoozes,
   sectorKey,
   snoozeUntil,
   touchLabel,
-  writeSnoozes,
   DAY_MS,
-  SNOOZE_STORAGE_KEY,
 } from "./triage";
 import type { Deal, Task } from "./components";
 
@@ -110,24 +107,7 @@ describe("sectors", () => {
   });
 });
 
-describe("snoozes", () => {
-  // Node's built-in localStorage shadows jsdom's in this runtime, so use an
-  // in-memory stub for these storage round-trips.
-  beforeEach(() => {
-    const store = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => void store.set(k, v),
-      removeItem: (k: string) => void store.delete(k),
-    });
-    expect(window.localStorage.getItem(SNOOZE_STORAGE_KEY)).toBeNull();
-  });
-
-  it("round-trips and prunes expired entries", () => {
-    writeSnoozes({ a: NOW + 1000, b: NOW - 1000 });
-    expect(readSnoozes(NOW)).toEqual({ a: NOW + 1000 });
-  });
-
+describe("snoozeUntil", () => {
   it("snoozes to the start of a future day", () => {
     expect(new Date(snoozeUntil(1, NOW)).getHours()).toBe(0);
     expect(snoozeUntil(1, NOW)).toBeGreaterThan(NOW);

@@ -13,6 +13,7 @@ import watchlistRouter from './routes/watchlist.js';
 import foldersRouter from './routes/folders.js';
 import usersRouter from './routes/users.js';
 import notificationsRouter from './routes/notifications.js';
+import snoozesRouter from './routes/snoozes.js';
 import invitationsRouter from './routes/invitations.js';
 import invitationsAcceptRouter from './routes/invitations-accept.js';
 import templatesRouter from './routes/templates.js';
@@ -360,6 +361,7 @@ app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageCon
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
 app.use('/api/users', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
 app.use('/api/notifications', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, snoozesRouter);
 app.use('/api/templates', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, templatesRouter);
 // CustomGraph CRUD — /api/graphs and /api/deals/:dealId/graphs
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, graphsRouter);

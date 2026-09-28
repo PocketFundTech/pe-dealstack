@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { onDealsChanged } from "@/lib/appEvents";
 import type { Deal, Task } from "./components";
-import { readSnoozes, snoozeUntil, writeSnoozes } from "./triage";
+import { snoozeUntil } from "./triage";
 
 export interface TeamMember {
   id: string;
@@ -36,9 +36,14 @@ export function useDashboardData() {
 
   const load = useCallback(async () => {
     setRefreshing(true);
-    const [dealsRes, tasksRes] = await Promise.allSettled([
+    // Snoozes ride along with deals/tasks (not localStorage — GET
+    // /snoozes is server-side, so a snooze made on one device is honoured
+    // on another) and refresh on every reload for the same reason: it's a
+    // small, cheap, org-agnostic read, not worth a separate load path.
+    const [dealsRes, tasksRes, snoozesRes] = await Promise.allSettled([
       api.get<Deal[] | { deals: Deal[] }>("/deals?limit=200&sortBy=updatedAt&sortOrder=desc"),
       api.get<{ tasks: Task[] } | Task[]>("/tasks?limit=100"),
+      api.get<{ snoozes: Record<string, string> }>("/snoozes"),
     ]);
     if (dealsRes.status === "fulfilled") {
       const v = dealsRes.value;
@@ -56,6 +61,16 @@ export function useDashboardData() {
       console.warn("[dashboard] failed to load tasks:", tasksRes.reason);
       setTasksError(true);
     }
+    if (snoozesRes.status === "fulfilled") {
+      const raw = snoozesRes.value.snoozes ?? {};
+      const parsed: Record<string, number> = {};
+      for (const [key, iso] of Object.entries(raw)) parsed[key] = new Date(iso).getTime();
+      setSnoozes(parsed);
+    } else {
+      // Non-fatal: worst case a snoozed item briefly reappears in the
+      // queue until the next successful reload.
+      console.warn("[dashboard] failed to load snoozes:", snoozesRes.reason);
+    }
     const now = Date.now();
     lastUpdatedRef.current = now;
     setLastUpdated(now);
@@ -63,13 +78,8 @@ export function useDashboardData() {
     setRefreshing(false);
   }, []);
 
-  // Initial load + snooze hydration (localStorage is client-only).
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    setSnoozes(readSnoozes(Date.now()));
-    load();
-  }, [load]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount
+  useEffect(() => { load(); }, [load]);
 
   // A deal ingested/updated elsewhere (e.g. the ingest modal) refreshes silently.
   useEffect(() => onDealsChanged(() => { load(); }), [load]);
@@ -133,11 +143,16 @@ export function useDashboardData() {
     }
   }, []);
 
+  // Snooze/unsnooze are low-stakes and called fire-and-forget from page.tsx
+  // (no await, no catch there) — update the UI immediately and best-effort
+  // persist server-side; a failed write just means the item can reappear on
+  // the next reload rather than corrupting anything, so unlike the
+  // mutations above this doesn't roll back or rethrow on failure.
   const snooze = useCallback((key: string, days: number) => {
-    setSnoozes((prev) => {
-      const next = { ...prev, [key]: snoozeUntil(days, Date.now()) };
-      writeSnoozes(next);
-      return next;
+    const until = snoozeUntil(days, Date.now());
+    setSnoozes((prev) => ({ ...prev, [key]: until }));
+    api.post("/snoozes", { itemKey: key, until: new Date(until).toISOString() }).catch((err) => {
+      console.warn("[dashboard] failed to persist snooze:", err);
     });
   }, []);
 
@@ -145,8 +160,10 @@ export function useDashboardData() {
     setSnoozes((prev) => {
       const next = { ...prev };
       delete next[key];
-      writeSnoozes(next);
       return next;
+    });
+    api.delete(`/snoozes/${encodeURIComponent(key)}`).catch((err) => {
+      console.warn("[dashboard] failed to remove snooze:", err);
     });
   }, []);
 

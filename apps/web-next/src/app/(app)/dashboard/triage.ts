@@ -6,7 +6,6 @@ import type { Deal, Task } from "./components";
 
 export const STALE_DAYS = 14;
 export const DAY_MS = 86_400_000;
-export const SNOOZE_STORAGE_KEY = "avise-dash-snoozes";
 
 const DEAD_STATUSES = new Set(["ARCHIVED", "PASSED"]);
 const DEAD_STAGES = new Set(["PASSED", "CLOSED_WON", "CLOSED_LOST"]);
@@ -230,28 +229,12 @@ export function groupSectors(deals: Deal[], top = 4): SectorGroup[] {
 }
 
 // ---------------------------------------------------------------------------
-// Snoozes (per-browser until there is a server-side field)
+// Snoozes
 // ---------------------------------------------------------------------------
-
-export function readSnoozes(now: number): Record<string, number> {
-  try {
-    const raw = window.localStorage.getItem(SNOOZE_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, number>;
-    return Object.fromEntries(Object.entries(parsed).filter(([, until]) => typeof until === "number" && until > now));
-  } catch (err) {
-    console.warn("[dashboard] failed to read snoozes:", err);
-    return {};
-  }
-}
-
-export function writeSnoozes(snoozes: Record<string, number>): void {
-  try {
-    window.localStorage.setItem(SNOOZE_STORAGE_KEY, JSON.stringify(snoozes));
-  } catch (err) {
-    console.warn("[dashboard] failed to persist snoozes:", err);
-  }
-}
+// Persisted server-side (GET/POST/DELETE /api/snoozes — see
+// use-dashboard-data.ts) so a snooze made on one device is respected on
+// another. This file stays I/O-free; snoozeUntil() is the one bit of pure
+// logic the server route and the hook both need.
 
 /** Snooze until the start of the day `days` from now. */
 export function snoozeUntil(days: number, now: number): number {

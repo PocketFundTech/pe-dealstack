@@ -18,6 +18,7 @@ import organizationCriteriaRouter from './routes/organization-criteria.js';
 import dealsScorecardRouter from './routes/deals-scorecard.js';
 import chatRouter from './routes/chat.js';
 import notificationsRouter from './routes/notifications.js';
+import snoozesRouter from './routes/snoozes.js';
 import ingestRouter from './routes/ingest.js';
 import memosRouter from './routes/memos.js';
 import invitationsRouter from './routes/invitations.js';
@@ -451,6 +452,7 @@ app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddle
 app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
 app.use('/api/notifications', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
+app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, snoozesRouter);
 app.use('/api/ingest', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ingestRouter);
 app.use('/api/memos', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, memosRouter);
 app.use('/api/templates', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, templatesRouter);

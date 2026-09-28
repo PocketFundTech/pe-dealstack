@@ -1,4 +1,4 @@
-# ✅ SUPABASE MIGRATIONS — ALL RUN AND VERIFIED (2026-08-18)
+# 🔴 SUPABASE MIGRATIONS — ONE PENDING (added 2026-09-28)
 
 > **HARD GATE.** Vercel does **not** run `apps/api/*.sql`. Code can ship green,
 > pass every test, and still 500 in production because the tables don't exist.
@@ -8,7 +8,9 @@
 > that back in writing.** Tests passing is not confirmation. A green PR is not
 > confirmation. Only an explicit "I ran it" from the founder counts.
 
-**Status: 🟢 COMPLETE — all four migrations run by the founder and verified live against Supabase on 2026-08-18.**
+**Status: 🔴 PENDING — row 5 below (`dashboard-snooze-migration.sql`) has not
+been run.** Rows 1–4 were run and verified live on 2026-08-18 (see the
+2026-08-18 record further down in this file) and are unaffected.
 
 Keep this file. The gate above still governs any FUTURE migration: a new
 `.sql` gets a new row, the status drops back to 🔴, and no feature
@@ -24,11 +26,40 @@ depending on it may be called complete until the founder runs it.
 | 2 | `apps/api/deal-reactivation-migration.sql` | Deal Reactivation | `feat/deal-reactivation` | ☑ 2026-08-18 |
 | 3 | `apps/api/nda-review-migration.sql` | NDA Redlining | `feat/nda-review` | ☑ 2026-08-18 |
 | 4 | `apps/api/deal-model-migration.sql` | Model Export | `feat/model-export` | ☑ 2026-08-18 |
+| 5 | `apps/api/dashboard-snooze-migration.sql` | Server-side dashboard snoozes (Today queue's Snooze/Undo, moved off per-browser localStorage) | `feat/dashboard-snoozes-server` | ☐ **not run** |
 
-_Rows 2–4 are added as each feature lands. A row with an unchecked box blocks
-that feature's completion claim._
+_New rows are added as each feature lands. A row with an unchecked box blocks
+that feature's completion claim. Row 5's feature (`POST/GET/DELETE
+/api/snoozes`, `apps/api/src/routes/snoozes.ts`) is already merge-ready and
+will 500 on every call until row 5 is run — the frontend degrades gracefully
+(snoozes just don't persist, per-item, with a console.warn) but is not
+"done" until then._
+
+**Row 5, to run:**
+```
+apps/api/dashboard-snooze-migration.sql
+```
+Creates `public."DashboardSnooze"` (userId, itemKey, until — unique on
+userId+itemKey) with RLS matching the `Watchlist` table's pattern. No
+existing table is touched.
+
+**How to run it:** Supabase SQL editor → New query → paste the file's
+contents → Run → confirm "Success" → tick the box in the table above.
+Idempotent (`CREATE TABLE IF NOT EXISTS`), safe to re-run.
+
+**Post-run verification:**
+```sql
+-- Expect 1 row
+select table_name from information_schema.tables
+where table_schema = 'public' and table_name = 'DashboardSnooze';
+
+-- Expect relrowsecurity = true (RLS on — browser anon key must see 0 rows)
+select relrowsecurity from pg_class where relname = 'DashboardSnooze';
+```
 
 ---
+
+## Historical record — 2026-08-18 batch (rows 1–4, already run)
 
 Applied via the combined script `apps/api/migrations-2026-08-18-all.sql`.
 Verified live against Supabase 2026-08-18:
