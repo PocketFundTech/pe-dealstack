@@ -28,6 +28,7 @@ describe("pickBundle", () => {
     ["/api/deals/123", "lite"],
     ["/api/deals/123/shares", "lite"], // D4 regression: share-link CRUD
     ["/api/deals/123/doc-requests", "lite"], // doc-request CRUD is mounted in app-lite
+    ["/api/data-rooms/summary", "lite"], // plain Supabase reads, no LLM — mounted in app-lite
     ["/api/deals/123/model", "lite"], // model export is pure computation, no LLM
     ["/api/deals/123/model/export", "lite"],
     ["/api/deals/reactivations", "lite"], // the feed is a plain read (router is in both bundles)
