@@ -12,6 +12,7 @@ import { AIMessageActions } from "./deal-tabs-ai-message-actions";
 import { ArtifactActionButton } from "./deal-tabs-artifact-button";
 import { SlashMenu } from "./deal-tabs-slash-menu";
 import { AiMessageBody } from "./deal-tabs-ai-message-body";
+import { buildWelcomeMessage } from "./deal-welcome-message";
 import { filterSkills, findSkillCommand, expandChatInput, type Skill } from "@/lib/dealchat-skills";
 
 // ---------------------------------------------------------------------------
@@ -249,17 +250,7 @@ export function ChatTab({
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-bold text-text-muted ml-1">Avise AI</span>
                 <div className="ai-bubble-gradient border border-border-subtle rounded-2xl rounded-tl-none p-4 text-sm text-text-secondary shadow-sm">
-                  {deal?.aiThesis ? (
-                    <>
-                      <p>I&apos;ve analyzed the documents for <strong>{deal.name}</strong>. {deal.aiThesis}</p>
-                      <p className="mt-2">What would you like to know about this deal?</p>
-                    </>
-                  ) : (
-                    <>
-                      <p>I&apos;m ready to help analyze this deal. Ask me about financials, risks, or any uploaded documents.</p>
-                      <p className="mt-2">What would you like to know?</p>
-                    </>
-                  )}
+                  <AiMessageBody content={buildWelcomeMessage(deal)} />
                 </div>
               </div>
             </div>

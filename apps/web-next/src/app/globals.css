@@ -325,6 +325,34 @@ body {
 }
 .chat-markdown li { margin-bottom: 0.15rem; }
 
+/* GFM tables rendered by lib/markdown.ts. Wrapped in .chat-table-wrap so a
+   wide table scrolls horizontally instead of blowing out the chat bubble. */
+.chat-markdown .chat-table-wrap {
+  margin: 0.35rem 0 0.6rem;
+  overflow-x: auto;
+  border: 1px solid #E5E9EF;
+  border-radius: 0.5rem;
+}
+.chat-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+.chat-markdown th, .chat-markdown td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid #E5E9EF;
+  text-align: left;
+  white-space: nowrap;
+}
+.chat-markdown thead th {
+  background: #F8F9FA;
+  font-weight: 600;
+  color: #003366;
+  border-bottom: 1px solid #E5E9EF;
+}
+.chat-markdown tbody tr:last-child td { border-bottom: none; }
+
 /* ============================================================
    Avise — Skeleton Loading Shimmer
    Reusable skeleton classes for premium loading states.

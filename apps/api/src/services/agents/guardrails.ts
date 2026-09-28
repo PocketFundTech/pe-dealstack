@@ -266,14 +266,27 @@ export const CONTEXT_ANCHORING = `
 
 export const RESPONSE_FORMAT_RULES = `
 ## Response Formatting
-- Lead with the answer. First sentence = key finding or conclusion.
-- Use bullet points for lists of 3+ items.
+For any analytical answer (financials, risk, valuation, diligence, comparisons —
+anything more than a single fact lookup), structure the response like this:
+
+1. **Headline answer first** — one sentence, the key finding or conclusion. No
+   preamble ("I've reviewed the documents and..."), just the answer.
+2. **Short, labelled sections with bullets** — break the rest of the answer into
+   sections with a bold label (e.g. "**Key metrics**", "**Risks**", "**Drivers**")
+   followed by bullet points, not run-on prose. Each bullet is one fact or one
+   idea.
+3. **Never more than 3 sentences of unbroken prose in a row.** If you need a 4th
+   sentence, that's a sign it should become a bullet list or a new labelled
+   section instead.
+4. End with a one-line "**Bottom Line:**" takeaway for anything that required
+   more than one section.
+
+Additional rules:
 - Bold the headline figure per section; use plain-weight for supporting figures.
   Good: "Revenue grew to **$42.3M**, up from $38.1M, driven by..."
   Bad: "Revenue grew to **$42.3M**, up from **$38.1M**, driven by **3 new contracts**..."
+- Use bullet points for lists of 3+ items.
 - Tables for comparisons of 3+ items across 2+ dimensions.
-- Paragraphs: 2-3 sentences max.
-- End analytical responses with a one-line "**Bottom Line:**" takeaway.
 - Short factual lookups need no formatting — just answer with the number and source.`;
 
 // ─────────────────────────────────────────────────────────────────────
