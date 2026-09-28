@@ -20,7 +20,7 @@ describe('modelPrices', () => {
 
   it('returns prices for a known model', async () => {
     const price = await getModelPrice('gpt-4o');
-    expect(price).toEqual({ inputPricePer1M: 2.5, outputPricePer1M: 10.0 });
+    expect(price).toMatchObject({ inputPricePer1M: 2.5, outputPricePer1M: 10.0 });
   });
 
   it('returns null for unknown model', async () => {

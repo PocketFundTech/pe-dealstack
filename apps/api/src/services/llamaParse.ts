@@ -18,9 +18,34 @@
  */
 
 import { log } from '../utils/logger.js';
+import { recordUsageEvent } from './usage/trackedLLM.js';
 
 const apiKey = process.env.LLAMA_CLOUD_API_KEY;
 const LLAMA_BASE = 'https://api.cloud.llamaindex.ai/api/v1';
+
+// Per-page price — NOT verified against the team's actual LlamaParse plan
+// tier; override via env once confirmed.
+const LLAMA_PARSE_PRICE_PER_PAGE_USD = Number(
+  process.env.LLAMA_PARSE_PRICE_PER_PAGE_USD ?? 0.003,
+);
+
+async function recordLlamaParseUsage(
+  status: 'success' | 'error',
+  pages: number,
+  durationMs: number,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  await recordUsageEvent({
+    operation: 'document_parse',
+    provider: 'llamaparse',
+    model: 'llamaparse',
+    units: pages,
+    unitCostUsd: pages * LLAMA_PARSE_PRICE_PER_PAGE_USD,
+    status,
+    durationMs,
+    metadata,
+  });
+}
 
 if (!apiKey) {
   log.warn('LLAMA_CLOUD_API_KEY not set — LlamaParse disabled, falling back to pdf-parse');
@@ -42,6 +67,7 @@ export async function parseWithLlama(
   }
 
   const sizeKB = Math.round(fileBuffer.length / 1024);
+  const start = Date.now();
 
   try {
     log.info('LlamaParse: starting PDF parse', { fileName, sizeKB });
@@ -68,6 +94,7 @@ export async function parseWithLlama(
         fileName,
         sizeKB,
       });
+      await recordLlamaParseUsage('error', 0, Date.now() - start, { stage: 'upload', status: uploadRes.status });
       return null;
     }
 
@@ -76,6 +103,7 @@ export async function parseWithLlama(
 
     if (!jobId) {
       log.error('LlamaParse: upload response missing job id', undefined, { uploadData });
+      await recordLlamaParseUsage('error', 0, Date.now() - start, { stage: 'upload_missing_job_id' });
       return null;
     }
 
@@ -113,6 +141,7 @@ export async function parseWithLlama(
       }
       if (lastStatus === 'ERROR' || lastStatus === 'CANCELED') {
         log.error('LlamaParse: job terminal failure', undefined, { jobId, status: lastStatus });
+        await recordLlamaParseUsage('error', 0, Date.now() - start, { stage: 'poll', jobStatus: lastStatus });
         return null;
       }
       // Still PENDING — continue polling.
@@ -120,6 +149,7 @@ export async function parseWithLlama(
 
     if (!succeeded) {
       log.warn('LlamaParse: timeout after 60s', { jobId, lastStatus });
+      await recordLlamaParseUsage('error', 0, Date.now() - start, { stage: 'poll_timeout', jobStatus: lastStatus });
       return null;
     }
 
@@ -141,6 +171,7 @@ export async function parseWithLlama(
         status: markdownRes.status,
         body: errText.slice(0, 500),
       });
+      await recordLlamaParseUsage('error', 0, Date.now() - start, { stage: 'result_fetch', status: markdownRes.status });
       return null;
     }
 
@@ -156,6 +187,7 @@ export async function parseWithLlama(
 
     if (!text || text.trim().length === 0) {
       log.warn('LlamaParse: returned empty markdown', { jobId, pages });
+      await recordLlamaParseUsage('error', pages, Date.now() - start, { stage: 'empty_markdown' });
       return null;
     }
 
@@ -166,9 +198,15 @@ export async function parseWithLlama(
       fileName,
     });
 
+    await recordLlamaParseUsage('success', pages, Date.now() - start, { fileName });
+
     return { text, pages };
   } catch (err) {
     log.error('LlamaParse: unexpected error', err, { fileName, sizeKB });
+    await recordLlamaParseUsage('error', 0, Date.now() - start, {
+      stage: 'unexpected_error',
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }

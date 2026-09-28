@@ -16,9 +16,35 @@
 
 import { z } from 'zod';
 import { log } from '../../../../utils/logger.js';
+import { recordUsageEvent } from '../../../usage/trackedLLM.js';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const MAX_SEARCHES_PER_TURN = 3;
+
+// Per-credit price — NOT verified against the team's actual Tavily plan
+// tier; override via env once confirmed. Tavily bills in "credits": a
+// basic search is 1 credit, an advanced search is 2.
+const TAVILY_PRICE_PER_CREDIT_USD = Number(process.env.TAVILY_PRICE_PER_CREDIT_USD ?? 0.008);
+
+/** Record one Tavily HTTP attempt (primary or fallback key) as a UsageEvent. */
+async function recordTavilySearch(
+  depth: 'basic' | 'advanced',
+  status: 'success' | 'error',
+  durationMs: number,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  const credits = depth === 'advanced' ? 2 : 1;
+  await recordUsageEvent({
+    operation: 'deal_chat_web_search',
+    provider: 'tavily',
+    model: `tavily-${depth}`,
+    units: credits,
+    unitCostUsd: credits * TAVILY_PRICE_PER_CREDIT_USD,
+    status,
+    durationMs,
+    metadata,
+  });
+}
 
 interface TavilyResult {
   title?: string;
@@ -196,13 +222,23 @@ export function makeWebSearchTool() {
 
       // If primary already exhausted in this turn, skip straight to fallback.
       let keyTier: 'primary' | 'fallback' = primaryExhausted && fallbackKey ? 'fallback' : 'primary';
+      let attemptStart = Date.now();
       let attempt = await tavilyOnce(keyTier === 'fallback' ? fallbackKey! : primaryKey, requestBody);
+      await recordTavilySearch(effectiveDepth, attempt.ok ? 'success' : 'error', Date.now() - attemptStart, {
+        keyTier,
+        ...(attempt.ok ? {} : { reason: attempt.reason }),
+      });
 
       if (!attempt.ok && attempt.rateLimited && keyTier === 'primary' && fallbackKey) {
         log.warn('[web_search] primary key rate-limited/credits-exhausted, rolling to fallback for the rest of this turn', { query });
         primaryExhausted = true;
+        attemptStart = Date.now();
         attempt = await tavilyOnce(fallbackKey, requestBody);
         keyTier = 'fallback';
+        await recordTavilySearch(effectiveDepth, attempt.ok ? 'success' : 'error', Date.now() - attemptStart, {
+          keyTier,
+          ...(attempt.ok ? {} : { reason: attempt.reason }),
+        });
       }
 
       if (!attempt.ok) {

@@ -33,6 +33,7 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import { SystemMessage, HumanMessage, type AIMessageChunk } from '@langchain/core/messages';
 import { log } from '../utils/logger.js';
 import { getChatAnthropicAuthFields } from './anthropic.js';
+import { recordUsageEvent } from './usage/trackedLLM.js';
 import {
   classifyFinancials,
   normalizeClassificationResult,
@@ -343,6 +344,7 @@ async function reconcileWithSonnet(
   const systemPrompt = buildReconcilePrompt();
   const userMessage = formatReconcileUserMessage(truncatedSource, gpt, claude, diffs);
 
+  const start = Date.now();
   try {
     // System message content is an array of TextBlockParams with
     // cache_control: ephemeral — ChatAnthropic forwards the first
@@ -423,6 +425,24 @@ async function reconcileWithSonnet(
       cacheWriteTokens: message.usage_metadata?.input_token_details?.cache_creation,
     });
 
+    // usage_metadata.input_tokens INCLUDES cache (see llm.ts makeUsageHandler
+    // doc comment) — subtract the cache portions to get the uncached
+    // promptTokens field recordUsageEvent expects.
+    const cacheReadTokens = message.usage_metadata?.input_token_details?.cache_read ?? 0;
+    const cacheWrite5mTokens = message.usage_metadata?.input_token_details?.cache_creation ?? 0;
+    const totalInputTokens = message.usage_metadata?.input_tokens ?? 0;
+    await recordUsageEvent({
+      operation: 'financial_extraction_reconcile',
+      provider: 'anthropic',
+      model: SONNET_MODEL,
+      promptTokens: Math.max(0, totalInputTokens - cacheReadTokens - cacheWrite5mTokens),
+      completionTokens: message.usage_metadata?.output_tokens ?? 0,
+      cacheReadTokens,
+      cacheWrite5mTokens,
+      status: 'success',
+      durationMs: Date.now() - start,
+    });
+
     return result;
   } catch (err) {
     // LangChain's wrapAnthropicClientError preserves the original
@@ -434,6 +454,16 @@ async function reconcileWithSonnet(
     } else {
       log.error('Cross-verify reconciler: unexpected error', err);
     }
+    await recordUsageEvent({
+      operation: 'financial_extraction_reconcile',
+      provider: 'anthropic',
+      model: SONNET_MODEL,
+      promptTokens: 0,
+      completionTokens: 0,
+      status: 'error',
+      durationMs: Date.now() - start,
+      metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+    });
     return null;
   }
 }

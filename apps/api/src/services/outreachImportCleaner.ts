@@ -49,6 +49,7 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import { log } from '../utils/logger.js';
 import { hasAnthropicCredentials, getChatAnthropicAuthFields } from './anthropic.js';
+import { makeAnthropicUsageCallback } from './usage/trackedAnthropic.js';
 
 // ─── Config ──────────────────────────────────────────────────────────
 
@@ -189,7 +190,11 @@ async function cleanOneBatch(batch: RawImportNameFields[]): Promise<Map<number, 
           ),
           new HumanMessage(prompt),
         ],
-        { runName: 'outreachImportCleaner', tags: ['outreach', 'import-cleaning'] },
+        {
+          runName: 'outreachImportCleaner',
+          tags: ['outreach', 'import-cleaning'],
+          callbacks: [makeAnthropicUsageCallback('outreach_import_cleaning', SONNET_MODEL)],
+        },
       );
 
     const parsed = cleanBatchSchema.parse(structured);

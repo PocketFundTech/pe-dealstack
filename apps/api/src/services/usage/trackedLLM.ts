@@ -1,7 +1,7 @@
 import { supabase } from '../../supabase.js';
 import { log } from '../../utils/logger.js';
 import { getUsageContext } from '../../middleware/usageContext.js';
-import { getModelPrice, computeCostUsd } from './modelPrices.js';
+import { getModelPrice, computeCostUsd, type CacheTokenCounts } from './modelPrices.js';
 import { getCreditsForOperation } from './operationCredits.js';
 
 export type UsageProvider =
@@ -10,7 +10,9 @@ export type UsageProvider =
   | 'gemini'
   | 'anthropic'
   | 'apify'
-  | 'azure_doc_intelligence';
+  | 'azure_doc_intelligence'
+  | 'tavily'
+  | 'llamaparse';
 
 export type UsageStatus = 'success' | 'error' | 'rate_limited' | 'blocked';
 
@@ -22,18 +24,34 @@ interface RecordUsageEventBase {
   metadata?: Record<string, unknown>;
 }
 
-/** LLM call: cost is computed from token counts × ModelPrice lookup. */
-interface RecordUsageEventLLM extends RecordUsageEventBase {
+/**
+ * LLM call: cost is computed from token counts × ModelPrice lookup.
+ *
+ * `promptTokens` is UNCACHED input only — pass Anthropic's cache counts
+ * separately (`usage.cache_read_input_tokens`, and
+ * `usage.cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`),
+ * because `usage.input_tokens` excludes them and they bill at different rates.
+ * LangChain's `usage_metadata.input_tokens` INCLUDES them — subtract before
+ * passing (see llm.ts makeUsageHandler).
+ */
+interface RecordUsageEventLLM extends RecordUsageEventBase, CacheTokenCounts {
   model: string;
   promptTokens: number;
   completionTokens: number;
+  /**
+   * Authoritative cost from the provider (e.g. a Managed Agents session's
+   * `usage.list_cost`, which already includes web search + runtime). Used
+   * as-is instead of the token × price computation.
+   */
+  costOverrideUsd?: number;
   unitCostUsd?: never;
-  units?: never;
+  units?: number;
 }
 
-/** Non-LLM call (Apify, Azure DocIntel): caller supplies the cost directly. */
+/** Non-LLM call (Apify, Azure DocIntel, Tavily, LlamaParse, embeddings): caller supplies the cost directly. */
 interface RecordUsageEventNonLLM extends RecordUsageEventBase {
-  model?: never;
+  /** Optional label for the model/actor/product so rows aren't null. */
+  model?: string;
   promptTokens?: never;
   completionTokens?: never;
   unitCostUsd: number;
@@ -66,17 +84,30 @@ export async function recordUsageEvent(input: RecordUsageEventInput): Promise<vo
   try {
     const promptTokens = input.promptTokens ?? 0;
     const completionTokens = input.completionTokens ?? 0;
-    const totalTokens = promptTokens + completionTokens;
+    const llm = input.unitCostUsd === undefined ? (input as RecordUsageEventLLM) : null;
+    const cacheTokens: CacheTokenCounts = {
+      cacheReadTokens: llm?.cacheReadTokens ?? 0,
+      cacheWrite5mTokens: llm?.cacheWrite5mTokens ?? 0,
+      cacheWrite1hTokens: llm?.cacheWrite1hTokens ?? 0,
+    };
+    const cacheTotal =
+      (cacheTokens.cacheReadTokens ?? 0) + (cacheTokens.cacheWrite5mTokens ?? 0) + (cacheTokens.cacheWrite1hTokens ?? 0);
+    // Every token the provider processed — cached ones included.
+    const totalTokens = promptTokens + completionTokens + cacheTotal;
 
     let costUsd = 0;
     const extraMetadata: Record<string, unknown> = {};
+    if (cacheTotal > 0) Object.assign(extraMetadata, cacheTokens);
 
     if (input.unitCostUsd !== undefined) {
       costUsd = input.unitCostUsd;
+    } else if (llm?.costOverrideUsd !== undefined) {
+      costUsd = llm.costOverrideUsd;
+      extraMetadata.costSource = 'provider_reported';
     } else if (input.model) {
       const price = await getModelPrice(input.model);
       if (price) {
-        costUsd = computeCostUsd(price, promptTokens, completionTokens);
+        costUsd = computeCostUsd(price, promptTokens, completionTokens, cacheTokens);
       } else {
         log.warn('recordUsageEvent: unknown model, costUsd=0', { model: input.model });
         extraMetadata.priceLookupFailed = true;
@@ -99,7 +130,15 @@ export async function recordUsageEvent(input: RecordUsageEventInput): Promise<vo
       credits,
       status: input.status,
       durationMs: input.durationMs ?? null,
-      metadata: { ...(input.metadata ?? {}), ...extraMetadata, requestId: ctx.requestId },
+      metadata: {
+        ...(input.metadata ?? {}),
+        ...extraMetadata,
+        requestId: ctx.requestId,
+        // Cron / webhook / background work has no requesting user: it is
+        // attributed to an org admin (UsageEvent.userId is NOT NULL) and
+        // flagged here so per-user reports can exclude it.
+        ...(ctx.systemSource ? { attribution: 'system', systemSource: ctx.systemSource } : {}),
+      },
     };
 
     const { error } = await supabase.from('UsageEvent').insert(row);

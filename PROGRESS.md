@@ -5,6 +5,39 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 76 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 02:46 IST
+
+#### Goal: track every AI token and its real cost, everywhere in the product.
+
+#### 1. What was wrong (full audit of every AI call site)
+
+The `UsageEvent` ledger was wrong in both directions:
+- **Undercounted:** Anthropic cache tokens were never recorded (`usage.input_tokens` excludes them — after PR #145 turned on prompt caching, most of extraction's input vanished from the ledger); ~12 call sites recorded nothing (firm teaser, legacy financial classifier + reconciler, outreach cleaner, reply classifier, 3 OpenAI agents, memo suggestions, extraction fallback, Tavily, LlamaParse); cron / webhook / integration-sync work was dropped entirely ("no usage context bound"); failed and aborted calls recorded 0 tokens although Anthropic billed them; managed-agent web search ($10/1k) and runtime ($0.08/h) were never counted.
+- **Overcounted:** LangChain paths billed cache reads at the full input price (10× too much); `claude-sonnet-5` was priced at $3/$15 instead of the $2/$10 list price (+50% on chat, memo, NDA, scorecard, managed agents); Apify failures were recorded as full-cost successes.
+- **$0 rows:** `claude-sonnet-4-6` had no price row; date-suffixed served model ids missed the exact-match price table.
+
+Prices and cache multipliers (read 0.1×, 5-min write 1.25×, 1-hour write 2×) verified against the Claude API reference, not memory.
+
+#### 2. Fixes (PR `feat/usage-cost-accuracy`)
+
+- **Cost core:** cache-aware pricing, date-suffix fallback, provider-reported cost override, `runAsOrgSystem` so background work is attributed to the org (flagged `attribution: system`).
+- **Every call path records exact usage:** direct SDK, streaming chat, LangChain (cache split), managed agents (authoritative `list_cost`), embeddings, background uploads; errors/aborts record what was billed; ledger writes are awaited.
+- **Coverage:** all ~12 untracked call sites + Tavily + LlamaParse; signal-scan and reactivation crons, reply-io webhook and every integration sync now recorded.
+- **Daily reconciliation:** 03:00 UTC cron compares the ledger with Anthropic's Admin API cost report, stores drift in `UsageReconciliation`, alerts over 5% and $0.50.
+
+Review caught one gap the agents' scopes missed: the nightly signal monitor still priced its sessions from tokens only (missing web-search cost) — fixed with a test that fails first. Also reverted an unintended `package-lock.json` rewrite left by a local `npm install`.
+
+Tests: API 2005 passing (≈45 new), `tsc` clean, build clean.
+
+#### 3. Founder actions required
+1. **Run `apps/api/usage-cost-accuracy-migration.sql`** in Supabase (price corrections, new providers, reconciliation table) — tracked in `docs/PENDING-MIGRATIONS.md`. Until then the sonnet-5 / sonnet-4-6 prices stay wrong.
+2. **Create an Anthropic Admin API key** (`sk-ant-admin01-…`, Console → Settings → Admin keys) and set `ANTHROPIC_ADMIN_KEY` in Vercel — without it the reconciliation job skips.
+3. Optional: `ANTHROPIC_RECONCILE_WORKSPACE_ID` if the Anthropic org is shared with other apps; verify the Tavily / LlamaParse per-unit prices against your plans (`TAVILY_PRICE_PER_CREDIT_USD`, `LLAMA_PARSE_PRICE_PER_PAGE_USD`).
+
+---
+
 ### Session 75 — September 29, 2026
 
 #### Timestamp: September 29, 2026 — 01:58 IST

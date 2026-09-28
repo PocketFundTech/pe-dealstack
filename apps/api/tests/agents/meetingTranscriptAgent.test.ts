@@ -29,6 +29,7 @@ describe('runTranscriptAnalysis', () => {
     });
     vi.doMock('../../src/openai.js', () => ({
       openai: { chat: { completions: { create } } },
+      trackedChatCompletion: (_operation: string, params: any, options: any) => create(params, options),
     }));
 
     const { runTranscriptAnalysis } = await import(
@@ -59,6 +60,7 @@ describe('runTranscriptAnalysis', () => {
   it('returns null when transcript is empty', async () => {
     vi.doMock('../../src/openai.js', () => ({
       openai: { chat: { completions: { create: vi.fn() } } },
+      trackedChatCompletion: vi.fn(),
     }));
     const { runTranscriptAnalysis } = await import(
       '../../src/services/agents/meetingTranscriptAgent/index.js'
@@ -70,7 +72,7 @@ describe('runTranscriptAnalysis', () => {
   });
 
   it('returns null when openai client is missing', async () => {
-    vi.doMock('../../src/openai.js', () => ({ openai: null }));
+    vi.doMock('../../src/openai.js', () => ({ openai: null, trackedChatCompletion: vi.fn() }));
     const { runTranscriptAnalysis } = await import(
       '../../src/services/agents/meetingTranscriptAgent/index.js'
     );
@@ -86,6 +88,7 @@ describe('runTranscriptAnalysis', () => {
     });
     vi.doMock('../../src/openai.js', () => ({
       openai: { chat: { completions: { create } } },
+      trackedChatCompletion: (_operation: string, params: any, options: any) => create(params, options),
     }));
     const { runTranscriptAnalysis } = await import(
       '../../src/services/agents/meetingTranscriptAgent/index.js'

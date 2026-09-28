@@ -41,6 +41,7 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import { log } from '../utils/logger.js';
 import { hasAnthropicCredentials, getChatAnthropicAuthFields } from './anthropic.js';
+import { makeAnthropicUsageCallback } from './usage/trackedAnthropic.js';
 
 // ─── Config ──────────────────────────────────────────────────────────
 
@@ -196,7 +197,11 @@ export async function classifyReplyIntent(
           ),
           new HumanMessage(prompt),
         ],
-        { runName: 'replyIntentClassifier', tags: ['outreach', 'reply-intent'] },
+        {
+          runName: 'replyIntentClassifier',
+          tags: ['outreach', 'reply-intent'],
+          callbacks: [makeAnthropicUsageCallback('reply_intent_classification', SONNET_MODEL)],
+        },
       );
 
     const result = classificationSchema.parse(structured);

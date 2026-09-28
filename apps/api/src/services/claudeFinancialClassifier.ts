@@ -44,6 +44,7 @@ import {
   type ClassificationResult,
   type ClassifyOptions,
 } from './financialClassifier.js';
+import { recordAnthropicMessageUsage } from './usage/trackedAnthropic.js';
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -141,6 +142,7 @@ export async function classifyFinancialsWithClaude(
     hasLineItemHints: Boolean(options?.lineItemHints),
   });
 
+  const start = Date.now();
   try {
     // System prompt as a single text block carrying cache_control. When
     // ChatAnthropic sees a SystemMessage with array content, it forwards
@@ -216,6 +218,14 @@ export async function classifyFinancialsWithClaude(
       outputTokens: rawUsage?.output_tokens,
     });
 
+    await recordAnthropicMessageUsage({
+      operation: 'financial_extraction',
+      model: SONNET_MODEL,
+      usage: rawUsage,
+      status: 'success',
+      durationMs: Date.now() - start,
+    });
+
     return result;
   } catch (err) {
     // SDK typed exceptions per shared/error-codes.md — most-specific first.
@@ -233,6 +243,14 @@ export async function classifyFinancialsWithClaude(
     } else {
       log.error('Claude classifier: unexpected error', err);
     }
+    await recordAnthropicMessageUsage({
+      operation: 'financial_extraction',
+      model: SONNET_MODEL,
+      usage: null,
+      status: 'error',
+      durationMs: Date.now() - start,
+      metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+    });
     return null;
   }
 }

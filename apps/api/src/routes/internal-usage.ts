@@ -162,6 +162,32 @@ router.get('/usage/cost-breakdown', async (req: Request, res: Response) => {
   res.json({ series, reconciliation });
 });
 
+// GET /api/internal/usage/reconciliation?days=30
+// Reads the daily Anthropic ledger-vs-billing drift rows written by the
+// usage-reconciliation cron (src/routes/cron-usage-reconciliation.ts). The
+// table (UsageReconciliation) is created by usage-cost-accuracy-migration.sql,
+// which is run by hand — degrade to an empty list rather than 500 if it's
+// not there yet.
+router.get('/usage/reconciliation', async (req: Request, res: Response) => {
+  const days = Math.min(Number(req.query.days ?? 30), 365);
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+
+  const { data, error } = await supabase
+    .from('UsageReconciliation')
+    .select('*')
+    .gte('day', since.toISOString().slice(0, 10))
+    .order('day', { ascending: false });
+
+  if (error) {
+    if (error.code === 'PGRST205' || error.code === '42P01') {
+      return res.json({ rows: [] });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  res.json({ rows: data ?? [] });
+});
+
 // POST /api/internal/users/:userId/throttle  body: { value: boolean }
 router.post('/users/:userId/throttle', async (req: Request, res: Response) => {
   const { value } = req.body;

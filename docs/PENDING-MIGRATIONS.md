@@ -1,25 +1,32 @@
-# 🔴 ONE MIGRATION PENDING — `model-prices-anthropic-direct-seed.sql` (found 2026-09-28)
+# 🔴 ONE MIGRATION PENDING — `usage-cost-accuracy-migration.sql` (2026-09-29)
 
-While double-checking a reported Anthropic cost figure, found that
-`apps/api/model-prices-anthropic-direct-seed.sql` (already written and
-committed, author/date unclear) has never been run. Without it,
-`ModelPrice` has no row for `claude-sonnet-4-6` (the served-model id
-Anthropic actually returns for direct-Anthropic Sonnet calls — the app's
-static role map only ever requests `claude-sonnet-5`), so every deal-chat
-call is logged in `UsageEvent` at **$0 cost** instead of its real cost.
-Confirmed live: 19 calls / 172K tokens this week alone tracked as $0.
-Idempotent (`ON CONFLICT ... DO UPDATE`), so it's safe to run any time —
-run it in the Supabase SQL editor, then tick the box below.
+Run **only this one**. It supersedes `model-prices-anthropic-direct-seed.sql`
+(flagged 2026-09-28 — do not run that one separately; everything it did is
+included here, with corrected prices).
+
+What it fixes in the AI cost ledger (`UsageEvent`):
+- **`claude-sonnet-5` priced at $3/$15 instead of the $2/$10 list price** —
+  every chat, memo, NDA, scorecard and managed-agent row overstated by 50%.
+- **`claude-sonnet-4-6` missing** — deal chat and legacy extraction recorded **$0**.
+- Adds optional explicit cache prices (Fable 5.1 cache reads at $0.25/MTok).
+- Allows `tavily` / `llamaparse` providers — until it runs, Tavily and
+  LlamaParse usage rows fail to insert (logged, nothing else breaks).
+- Creates `UsageReconciliation` for the daily check against Anthropic's own
+  cost report — until it runs, the job computes but can't store results.
+
+The code is written to work before and after this runs; until it does, the
+price fixes above are not in effect. Idempotent — safe to re-run.
 
 | # | Migration file | Fixes | Run? |
 |---|---|---|---|
-| 1 | `apps/api/model-prices-anthropic-direct-seed.sql` | Deal-chat cost tracking undercounts to $0 | ☐ |
+| 1 | `apps/api/usage-cost-accuracy-migration.sql` | Correct Claude prices, new providers, reconciliation table | ☐ |
 
-Verify after running:
+Verify after running (queries also at the bottom of the file):
 ```sql
-select model, provider, "inputPricePer1M", "outputPricePer1M"
-  from public."ModelPrice" where model like 'claude-%';
--- expect claude-sonnet-4-6 and claude-haiku-4-5 present
+select model, "inputPricePer1M", "outputPricePer1M", "cacheReadPricePer1M"
+  from public."ModelPrice" where model like 'claude-%' order by model;
+-- claude-sonnet-5 = 2 / 10; claude-sonnet-4-6 = 3 / 15
+select to_regclass('public."UsageReconciliation"');  -- not null
 ```
 
 ---

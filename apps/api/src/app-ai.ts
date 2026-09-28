@@ -21,6 +21,7 @@ import cronReactivationRouter from './routes/cron-reactivation.js';
 import cronWeeklyDigestRouter from './routes/cron-weekly-digest.js';
 import cronShareExpiryWarningsRouter from './routes/cron-share-expiry-warnings.js';
 import cronReengagementNudgeRouter from './routes/cron-reengagement-nudge.js';
+import cronUsageReconciliationRouter from './routes/cron-usage-reconciliation.js';
 import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import legalDocumentsRouter from './routes/legal-documents.js';
 import ndaReviewRouter from './routes/nda-review.js';
@@ -214,6 +215,7 @@ app.use('/api/cron/reactivation', cronReactivationRouter);
 app.use('/api/cron/weekly-digest', cronWeeklyDigestRouter);
 app.use('/api/cron/share-expiry-warnings', cronShareExpiryWarningsRouter);
 app.use('/api/cron/reengagement-nudge', cronReengagementNudgeRouter);
+app.use('/api/cron/usage-reconciliation', cronUsageReconciliationRouter);
 
 // ========================================
 // Protected Routes (require authentication + org resolution)
