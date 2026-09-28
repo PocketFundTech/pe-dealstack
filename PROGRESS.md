@@ -5,11 +5,36 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 73 — September 28, 2026
+
+#### Timestamp: September 28, 2026 — 16:15 IST
+
+#### Goal: Ship the dashboard/Command Center/Data Room redesign (Sessions 71-72) to production, then restore what the 2026-09-17 Vercel project move had silently dropped.
+
+**Shipped.** PR #136 (`feat/dashboard-redesign` → `main`, merge commit `0ceed51`) was reviewed, its CI failures triaged (one real: a `today-queue.tsx` type only caught by CI's lockfile-pinned `@types/react`, fixed; two pre-existing API test failures unrelated to this PR, confirmed already failing on #134/#135), approved, and merged. Vercel deployed it to `app.avise.io` / `deals.avise.io`. Verified live: all three pages render from the merged commit, API routes respond, no new errors in the runtime logs.
+
+**While checking production, re-discovered the 2026-09-17 Vercel project move's dropped env vars** (first found in Session 71's ingest-provider-rejection fix) — the founder asked directly whether documents still go through manual text extraction instead of Claude reading them natively, which surfaced that every Claude-native flag from the August rollout (`EXTRACTION_ENGINE`, `INGEST_ENGINE`, `DEAL_CHAT_ENGINE`, `EXCEL_EXTRACTION_MODE`) had silently reverted to its legacy default after the move, because the new Vercel project never got them.
+
+**Restored in production** (env vars added via `vercel env add` + a redeploy; secrets added by the founder through the Vercel dashboard, values never seen by Claude):
+- `EXTRACTION_ENGINE=claude`, `INGEST_ENGINE=claude`, `DEAL_CHAT_ENGINE=streaming`, `EXCEL_EXTRACTION_MODE=container` — added directly (not secrets).
+- `CRON_SECRET`, `OAUTH_STATE_SECRET` — freshly generated (not the pre-move values, which are gone).
+- `POCKET_FUND_STAFF_EMAILS`, `RESEND_FROM_EMAIL=welcome@avise.io` — added by the founder.
+
+**Still missing:** `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Gmail inbox scan, Drive import, Google Docs NDA flow are down until these are set — also need to confirm the OAuth client's redirect URIs cover `app.avise.io`). `APIFY_API_KEY` skipped deliberately (firm research feature, founder call). `LLAMA_CLOUD_API_KEY` / `AZURE_DOC_INTEL_*` / `MANAGED_AGENTS_*` / `CLAY_*` not restored — all gate features that are currently off, not urgent.
+
+**Not yet verified end-to-end:** a real PDF/Excel upload and a live deal-chat message against the restored Claude engines (no test document pushed through production yet); the first scheduled-job run under the new `CRON_SECRET` (next fires ~12:00 UTC / 17:30 IST).
+
+**Agent permissions note:** Claude Code's auto-mode blocks writing Vercel secret values and blocks self-modifying its own permission file — both by design. Plain (non-sensitive) env vars and `vercel redeploy` were allowed once the founder added explicit Bash rules for them. Secret values were always handed to the founder as copy/paste steps for the Vercel dashboard.
+
+**No code changes, no migrations.** Follow-up: PR to fix the "Local preview only, uncommitted" wording left in the Session 71/72 entries above, now that this is merged and live (this PR).
+
+---
+
 ### Session 72 — September 28, 2026
 
 #### Timestamp: September 28, 2026 — IST
 
-#### Goal: Redesign the Admin "Command Center" in the same language as the dashboard. Local preview only, uncommitted.
+#### Goal: Redesign the Admin "Command Center" in the same language as the dashboard.
 
 The direction was agreed through a brainstorm: *team oversight* as the core job, actions in context through a side sheet, and a "team ledger + rail" layout. Spec: `docs/superpowers/specs/2026-09-28-command-center-team-ledger-design.md`.
 
@@ -69,9 +94,9 @@ The direction was agreed through a brainstorm: *room status at a glance*, rich c
 
 #### Timestamp: September 27, 2026 — 12:31 IST
 
-#### Goal: Redesign the dashboard ("refined banker"). Local preview only, not deployed.
+#### Goal: Redesign the dashboard ("refined banker").
 
-Branch `feat/dashboard-redesign` (worktree `.worktrees/dashboard-redesign`, off `main` @ 930718e). Uncommitted and unpushed, pending founder review on `localhost:3002`.
+Branch `feat/dashboard-redesign` (off `main` @ 930718e). Built and reviewed on `localhost:3002` before merging — see Session 73.
 
 **Problem:** the dashboard read as a generic SaaS template. It had four identical stat cards, a multi-colour donut, big icon tiles, and a subtitle promising "AI market analysis" that doesn't exist. Hierarchy was flat: every widget had the same weight, shadow and bold 16px title.
 
@@ -97,7 +122,7 @@ Branch `feat/dashboard-redesign` (worktree `.worktrees/dashboard-redesign`, off 
 
 The direction was agreed through a short brainstorm: lead with "what needs me today", allow quick inline actions, and use a briefing column plus a right rail. Spec: `docs/superpowers/specs/2026-09-27-dashboard-morning-brief-design.md`.
 
-**Built (still local, uncommitted):**
+**Built:**
 - **Today queue.** One ranked list of overdue tasks, tasks due today, ownerless deals (High/Urgent, or at Diligence or later) and stale deals (no update in 14+ days). The actions are inline:
   - *Done* comes with an undo.
   - *Snooze* lasts 1 or 7 days and is stored per browser.
