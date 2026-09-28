@@ -39,32 +39,30 @@ export function QuickActionsWidget() {
 
   return (
     <WidgetShell title="Quick Actions" icon="bolt">
-      <div className="grid grid-cols-2 gap-3 p-4">
+      <ul className="flex flex-col divide-y divide-(--dash-rule)">
         {actions.map((a) => {
           const className =
-            "flex flex-col items-center justify-center gap-2 p-4 rounded-lg border border-border-subtle hover:border-primary hover:bg-primary-light/30 transition-all group";
+            "group flex w-full items-center gap-3 px-5 py-3 text-left text-sm text-(--dash-ink) transition-colors hover:bg-(--dash-wash)";
           const inner = (
             <>
-              <span className="material-symbols-outlined text-primary text-[28px] group-hover:scale-110 transition-transform">
-                {a.icon}
+              <span className="material-symbols-outlined text-[18px] text-(--dash-blue-2)">{a.icon}</span>
+              <span className="flex-1 font-medium">{a.label}</span>
+              <span className="material-symbols-outlined text-[16px] text-(--dash-ink-3) transition-transform group-hover:translate-x-0.5 group-hover:text-(--dash-blue)">
+                arrow_forward
               </span>
-              <span className="text-xs font-semibold text-text-main">{a.label}</span>
             </>
           );
-          if (a.onClick) {
-            return (
-              <button key={a.label} type="button" onClick={a.onClick} className={className}>
-                {inner}
-              </button>
-            );
-          }
           return (
-            <Link key={a.label} href={a.href!} className={className}>
-              {inner}
-            </Link>
+            <li key={a.label}>
+              {a.onClick ? (
+                <button type="button" onClick={a.onClick} className={className}>{inner}</button>
+              ) : (
+                <Link href={a.href!} className={className}>{inner}</Link>
+              )}
+            </li>
           );
         })}
-      </div>
+      </ul>
     </WidgetShell>
   );
 }

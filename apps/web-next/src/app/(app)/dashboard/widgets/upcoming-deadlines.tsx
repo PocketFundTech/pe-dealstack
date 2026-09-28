@@ -19,10 +19,10 @@ function colorForDue(dueDate: string) {
   const due = new Date(dueDate);
   due.setHours(0, 0, 0, 0);
   const days = Math.round((due.getTime() - now.getTime()) / 86400000);
-  if (days < 0) return { color: "#EF4444", label: "Overdue", bg: "#FEE2E2" };
-  if (days <= 2) return { color: "#F59E0B", label: days === 0 ? "Today" : `${days}d`, bg: "#FEF3C7" };
-  if (days <= 7) return { color: "#003366", label: `${days}d`, bg: "#DBEAFE" };
-  return { color: "#6B7280", label: `${days}d`, bg: "#F3F4F6" };
+  if (days < 0) return { color: "var(--dash-red)", label: "Overdue", bg: "var(--dash-red-wash)" };
+  if (days <= 2) return { color: "var(--dash-brass)", label: days === 0 ? "Today" : `In ${days}d`, bg: "var(--dash-brass-wash)" };
+  if (days <= 7) return { color: "var(--dash-blue)", label: `In ${days}d`, bg: "var(--dash-wash)" };
+  return { color: "var(--dash-ink-2)", label: `In ${days}d`, bg: "var(--dash-wash)" };
 }
 
 export function UpcomingDeadlinesWidget() {
@@ -61,30 +61,30 @@ export function UpcomingDeadlinesWidget() {
       ) : upcoming.length === 0 ? (
         <WidgetEmpty message="No upcoming deadlines" icon="event_available" />
       ) : (
-        <div className="p-2">
+        <ul className="flex flex-col divide-y divide-(--dash-rule)">
           {upcoming.map((t) => {
             const meta = colorForDue(t.dueDate!);
-            const dateLabel = new Date(t.dueDate!).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-            const dealName = t.deal?.name ? ` · ${t.deal.name}` : "";
+            const due = new Date(t.dueDate!);
             return (
-              <div key={t.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors">
+              <li key={t.id} className="flex items-center gap-4 px-5 py-3">
+                <span className="flex w-9 shrink-0 flex-col items-center leading-none">
+                  <span className="dash-label text-[0.625rem]">{due.toLocaleDateString("en-US", { month: "short" })}</span>
+                  <span className="dash-figure text-xl text-(--dash-ink)">{due.getDate()}</span>
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm font-medium text-(--dash-ink) truncate">{t.title}</span>
+                  {t.deal?.name && <span className="block text-xs text-(--dash-ink-3) truncate">{t.deal.name}</span>}
+                </span>
                 <span
-                  className="text-[10px] font-bold px-2 py-1 rounded uppercase shrink-0"
+                  className="shrink-0 rounded-sm px-1.5 py-0.5 text-[0.625rem] font-bold uppercase tracking-wider"
                   style={{ background: meta.bg, color: meta.color }}
                 >
                   {meta.label}
                 </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-text-main truncate">{t.title}</p>
-                  <p className="text-xs text-text-muted truncate">
-                    {dateLabel}
-                    {dealName}
-                  </p>
-                </div>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
     </WidgetShell>
   );

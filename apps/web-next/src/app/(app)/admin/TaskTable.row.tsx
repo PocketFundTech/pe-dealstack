@@ -1,149 +1,102 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { cn } from "@/lib/cn";
-import { getInitials } from "@/lib/formatters";
+import { Avatar } from "@/components/dash/avatar";
+import { Menu } from "@/components/dash/menu";
+import { isOverdue, isReview, taskDueText } from "./admin-logic";
 import type { AdminTask, AdminTaskStatus } from "./types";
-import {
-  PRIORITY_STYLES, STATUS_OPTIONS,
-  formatDueDate, renderStatusBadge,
-} from "./TaskTable.helpers";
+import { PriorityTag, STATUS_OPTIONS, StatusBadge } from "./TaskTable.helpers";
 
-// One row of the global task table, plus its inline status dropdown.
-// Extracted from TaskTable.tsx so the parent module stays under the 500-line
-// cap.
+const TONE = {
+  red: "font-medium text-(--dash-red)",
+  brass: "font-medium text-(--dash-brass)",
+  ink: "text-(--dash-ink)",
+  muted: "text-(--dash-ink-3)",
+} as const;
 
+export const TD = "px-4 py-3 align-middle first:pl-6 last:pr-6";
+
+/** One task row. Status changes via a small menu; delete confirms inline. */
 export function TaskTableRow({
   task,
   now,
-  openStatusFor,
-  onToggleStatusMenu,
   onUpdateStatus,
-  onAskDelete,
+  onDelete,
 }: {
   task: AdminTask;
-  now: Date;
-  openStatusFor: string | null;
-  onToggleStatusMenu: (id: string | null) => void;
-  onUpdateStatus: (taskId: string, status: AdminTaskStatus) => void;
-  onAskDelete: (id: string, title: string) => void;
+  now: number;
+  onUpdateStatus: (task: AdminTask, status: AdminTaskStatus) => void;
+  onDelete: (task: AdminTask) => void;
 }) {
-  const isOverdue =
-    !!task.dueDate &&
-    new Date(task.dueDate) < now &&
-    task.status !== "COMPLETED";
-  const assignee = task.assignee;
+  const [confirming, setConfirming] = useState(false);
+  const due = taskDueText(task, now);
+  const review = isReview(task);
+  const title = review ? task.title.replace(/^\[Review\]\s*/, "") : task.title;
+  const who = task.assignee?.name || task.assignee?.email?.split("@")[0];
+
   return (
-    <tr
-      className={cn(
-        "hover:bg-gray-50 transition-colors",
-        isOverdue && "bg-red-50/30",
-      )}
-    >
-      <td className="px-5 py-4 font-medium text-text-main">
-        {task.deal ? (
-          <Link
-            href={`/deals/${task.deal.id}`}
-            className="hover:text-primary hover:underline transition-colors"
-          >
-            {task.title}
-          </Link>
-        ) : (
-          task.title
-        )}
-      </td>
-      <td className="px-5 py-4">
-        <span
-          className={cn(
-            "inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium border",
-            PRIORITY_STYLES[task.priority] || PRIORITY_STYLES.MEDIUM,
+    <tr className={cn("group transition-colors hover:bg-(--dash-paper)", isOverdue(task, now) && "bg-(--dash-red-wash)/40")}>
+      <td className={TD}>
+        <div className="flex min-w-0 items-center gap-2">
+          {review && (
+            <span className="shrink-0 rounded-sm bg-(--dash-wash) px-1.5 py-px text-[0.625rem] font-bold uppercase tracking-wider text-(--dash-blue)">Review</span>
           )}
-        >
-          {task.priority || "Med"}
-        </span>
-      </td>
-      <td
-        className={cn(
-          "px-5 py-4",
-          isOverdue ? "text-red-600 font-medium" : "text-text-main",
-        )}
-      >
-        {formatDueDate(task.dueDate, isOverdue)}
-      </td>
-      <td className="px-5 py-4">
-        {assignee ? (
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-full bg-primary text-white text-[10px] font-medium flex items-center justify-center">
-              {getInitials(assignee.name || assignee.email)}
-            </div>
-            <span className="text-text-secondary">
-              {assignee.name || assignee.email?.split("@")[0] || "Unknown"}
-            </span>
-          </div>
-        ) : (
-          <span className="text-text-muted text-xs">Unassigned</span>
-        )}
-      </td>
-      <td className="px-5 py-4">
-        {task.deal ? (
-          <Link
-            href={`/deals/${task.deal.id}`}
-            className="text-primary font-medium hover:underline"
-          >
+          <span className="truncate font-medium text-(--dash-ink)" title={title}>{title}</span>
+        </div>
+        {task.deal && (
+          <Link href={`/deals/${task.deal.id}`} className="mt-0.5 block truncate text-xs text-(--dash-ink-3) hover:text-(--dash-blue) hover:underline" title={task.deal.name}>
             {task.deal.name}
           </Link>
-        ) : (
-          <span className="text-text-muted text-xs">—</span>
         )}
       </td>
-      <td className="px-5 py-4">
-        <div className="relative inline-block">
+      <td className={TD}><PriorityTag priority={task.priority} /></td>
+      <td className={cn(TD, "whitespace-nowrap text-[0.8125rem]", TONE[due.tone])}>{due.text}</td>
+      <td className={TD}>
+        {who ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <Avatar name={task.assignee?.name || task.assignee?.email || "?"} size={24} />
+            <span className="truncate text-(--dash-ink-2)">{who}</span>
+          </span>
+        ) : (
+          <span className="text-xs font-medium text-(--dash-blue)">Unassigned</span>
+        )}
+      </td>
+      <td className={TD}>
+        <Menu
+          align="right"
+          heading="Set status"
+          triggerLabel={`Change status of ${title}`}
+          triggerClassName="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-(--dash-wash)"
+          trigger={<><StatusBadge status={task.status} /><span aria-hidden className="material-symbols-outlined text-[16px] text-(--dash-ink-3)">expand_more</span></>}
+          items={STATUS_OPTIONS.filter((s) => s !== task.status).map((s) => ({
+            key: s,
+            label: <StatusBadge status={s} />,
+            onSelect: () => onUpdateStatus(task, s),
+          }))}
+        />
+      </td>
+      <td className={cn(TD, "text-right")}>
+        {confirming ? (
+          <span className="flex items-center justify-end gap-1 whitespace-nowrap">
+            <button type="button" onClick={() => { setConfirming(false); onDelete(task); }} className="rounded-md bg-(--dash-red) px-2 py-1 text-xs font-semibold text-(--dash-panel)">
+              Delete
+            </button>
+            <button type="button" onClick={() => setConfirming(false)} className="rounded-md px-2 py-1 text-xs font-medium text-(--dash-ink-2) hover:bg-(--dash-wash)">
+              Keep
+            </button>
+          </span>
+        ) : (
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleStatusMenu(openStatusFor === task.id ? null : task.id);
-            }}
-            className="cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={() => setConfirming(true)}
+            aria-label={`Delete ${title}`}
+            className="grid size-8 place-items-center rounded-md text-(--dash-ink-3) transition-opacity hover:bg-(--dash-red-wash) hover:text-(--dash-red) pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100"
           >
-            {renderStatusBadge(task.status, isOverdue)}
+            <span aria-hidden className="material-symbols-outlined text-[18px]">delete</span>
           </button>
-          {openStatusFor === task.id && (
-            <div
-              className="absolute right-0 top-full mt-1 w-40 bg-white rounded-lg border border-border-subtle shadow-lg z-50 py-1"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {STATUS_OPTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => onUpdateStatus(task.id, s)}
-                  className={cn(
-                    "w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors",
-                    task.status === s
-                      ? "text-primary font-medium bg-primary-light/30"
-                      : "text-text-main",
-                  )}
-                >
-                  {renderStatusBadge(s, false)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </td>
-      <td className="px-5 py-4">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onAskDelete(task.id, task.title);
-          }}
-          className="p-1.5 text-text-muted hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-          title="Delete task"
-        >
-          <span className="material-symbols-outlined text-[18px]">delete</span>
-        </button>
+        )}
       </td>
     </tr>
   );

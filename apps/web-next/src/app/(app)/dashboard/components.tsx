@@ -1,10 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/cn";
-import { formatCurrency, formatRelativeTime } from "@/lib/formatters";
-import { STAGE_STYLES, STAGE_LABELS } from "@/lib/constants";
-import { Skeleton } from "@/components/ui/Skeleton";
-import Link from "next/link";
+import { STAGE_LABELS } from "@/lib/constants";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,6 +13,7 @@ export interface Deal {
   dealSize?: number;
   currency?: string;
   updatedAt: string;
+  createdAt?: string;
   nextAction?: string;
   industry?: string;
   priority?: string;
@@ -34,50 +31,28 @@ export interface Task {
   category?: string;
   dealId?: string;
   dealName?: string;
+  assignedTo?: string | null;
   deal?: { id?: string; name?: string };
-}
-
-export interface MarketSentiment {
-  headline: string;
-  analysis: string;
-  sentiment: "BULLISH" | "NEUTRAL" | "BEARISH";
-  confidenceScore: number;
-  recommendation: string;
-  indicators: { name: string; trend: "up" | "down" | "stable"; detail: string }[];
-  topSector: string;
-  riskFactor: string;
 }
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-export const SOURCING_STAGES = ["INITIAL_REVIEW"];
-export const DD_STAGES = ["DUE_DILIGENCE"];
-export const LOI_STAGES = ["IOI_SUBMITTED", "LOI_SUBMITTED"];
-export const CLOSED_STAGES = ["NEGOTIATION", "CLOSING", "CLOSED_WON"];
-
-export const SECTOR_COLORS = ["#003366", "#059669", "#F59E0B", "#8B5CF6", "#9CA3AF"];
-
-export const SENTIMENT_STYLES: Record<MarketSentiment["sentiment"], { label: string; tone: string }> = {
-  BULLISH: { label: "Bullish trend", tone: "text-secondary font-semibold" },
-  NEUTRAL: { label: "Neutral outlook", tone: "text-text-main font-semibold" },
-  BEARISH: { label: "Bearish signal", tone: "text-red-600 font-semibold" },
+// Position of each stage along the deal lifecycle (1–5), drawn as the tick
+// scale in the priorities table. Unknown stages render no ticks.
+const STAGE_STEP: Record<string, number> = {
+  SOURCING: 1,
+  INITIAL_REVIEW: 1,
+  DUE_DILIGENCE: 2,
+  IOI_SUBMITTED: 3,
+  LOI_SUBMITTED: 3,
+  LOI_OFFER: 3,
+  NEGOTIATION: 4,
+  CLOSING: 4,
+  CLOSED_WON: 5,
 };
-
-export const TREND_ICONS: Record<"up" | "down" | "stable", { icon: string; tone: string }> = {
-  up: { icon: "trending_up", tone: "bg-secondary-light text-secondary border-secondary/10" },
-  down: { icon: "trending_down", tone: "bg-red-50 text-red-600 border-red-100" },
-  stable: { icon: "show_chart", tone: "bg-blue-50 text-blue-600 border-blue-100" },
-};
-
-export const AVATAR_COLORS = [
-  "bg-blue-100 border-blue-200 text-primary",
-  "bg-purple-100 border-purple-200 text-purple-700",
-  "bg-green-100 border-green-200 text-green-700",
-  "bg-orange-100 border-orange-200 text-orange-700",
-  "bg-pink-100 border-pink-200 text-pink-700",
-];
+export const STAGE_STEP_COUNT = 5;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,276 +60,24 @@ export const AVATAR_COLORS = [
 
 export function getGreeting() {
   const hour = new Date().getHours();
-  if (hour < 12) return "Good Morning";
-  if (hour < 17) return "Good Afternoon";
-  return "Good Evening";
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
 }
 
-// ---------------------------------------------------------------------------
-// StatCards
-// ---------------------------------------------------------------------------
-
-interface StatCardsProps {
-  loading: boolean;
-  sourcingCount: number;
-  ddCount: number;
-  loiCount: number;
-  closedCount: number;
-  closedTotal: number;
-  pct: (n: number) => number;
-  onStageClick: (modal: { label: string; stages: string[] }) => void;
+/** Human label for a stage, falling back to "Loi Offer"-style casing for
+ *  legacy enum values missing from STAGE_LABELS. */
+export function stageLabel(stage: string): string {
+  if (STAGE_LABELS[stage]) return STAGE_LABELS[stage];
+  return stage
+    .toLowerCase()
+    .split("_")
+    .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
 }
 
-export function StatCards({ loading, sourcingCount, ddCount, loiCount, closedCount, closedTotal, pct, onStageClick }: StatCardsProps) {
-  if (loading) {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="relative flex flex-col gap-1 rounded-lg border border-border-subtle bg-surface-card p-5 shadow-card">
-            <div className="flex items-center justify-between">
-              <Skeleton.Line width={70} height={11} />
-              <Skeleton width={20} height={20} rounded="sm" />
-            </div>
-            <div className="flex items-end justify-between mt-3">
-              <div className="flex items-end gap-2">
-                <Skeleton width={48} height={28} />
-                <Skeleton.Line width={40} height={10} className="mb-1.5" />
-              </div>
-            </div>
-            <Skeleton width="100%" height={6} rounded="full" className="mt-4" />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-      {/* Sourcing */}
-      <button onClick={() => onStageClick({ label: "Sourcing", stages: SOURCING_STAGES })} className="text-left relative flex flex-col gap-1 rounded-lg border border-border-subtle bg-surface-card p-5 shadow-card hover:shadow-card-hover hover:border-primary/30 transition-all cursor-pointer group">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">Sourcing</span>
-          <span className="material-symbols-outlined text-text-muted group-hover:text-primary transition-colors text-[20px]">travel_explore</span>
-        </div>
-        <div className="flex items-end justify-between mt-3">
-          <div className="flex items-end gap-2">
-            <span className={cn("text-3xl font-bold tracking-tight", sourcingCount > 0 ? "text-text-main" : "text-text-muted")}>{loading ? "\u2014" : sourcingCount}</span>
-            <span className="text-xs font-medium text-text-secondary mb-1.5">{sourcingCount === 1 ? "deal" : "deals"}</span>
-          </div>
-          {!loading && sourcingCount > 0 && (
-            <span className="text-xs font-bold mb-1.5 px-1.5 py-0.5 rounded" style={{ color: "#059669", background: "#ECFDF5" }}>{pct(sourcingCount)}%</span>
-          )}
-        </div>
-        <div className="w-full bg-gray-100 h-1.5 mt-4 rounded-full overflow-hidden">
-          <div className="bg-blue-400 h-1.5 rounded-full transition-all" style={{ width: `${pct(sourcingCount)}%` }} />
-        </div>
-      </button>
-
-      {/* Due Diligence */}
-      <button onClick={() => onStageClick({ label: "Due Diligence", stages: DD_STAGES })} className={cn("text-left relative flex flex-col gap-1 rounded-lg bg-surface-card p-5 transition-all cursor-pointer group", ddCount > 0 ? "border border-primary shadow-glow" : "border border-border-subtle shadow-card hover:shadow-card-hover hover:border-primary/30")}>
-        <div className="flex items-center justify-between">
-          <span className={cn("text-xs font-bold uppercase tracking-wider", ddCount > 0 ? "text-primary" : "text-text-secondary")}>Due Diligence</span>
-          <span className={cn("material-symbols-outlined text-[20px] transition-colors", ddCount > 0 ? "text-primary" : "text-text-muted group-hover:text-primary")}>saved_search</span>
-        </div>
-        <div className="flex items-end justify-between mt-3">
-          <div className="flex items-end gap-2">
-            <span className={cn("text-3xl font-bold tracking-tight", ddCount > 0 ? "text-text-main" : "text-text-muted")}>{loading ? "\u2014" : ddCount}</span>
-            <span className="text-xs font-medium text-text-secondary mb-1.5">{ddCount === 1 ? "deal" : "deals"}</span>
-          </div>
-          {!loading && ddCount > 0 && (
-            <span className="text-xs font-bold mb-1.5 px-1.5 py-0.5 rounded" style={{ color: "#003366", background: "#E6EEF5" }}>{pct(ddCount)}%</span>
-          )}
-        </div>
-        <div className="w-full bg-gray-100 h-1.5 mt-4 rounded-full overflow-hidden">
-          <div className="bg-primary h-1.5 rounded-full transition-all" style={{ width: `${pct(ddCount)}%` }} />
-        </div>
-      </button>
-
-      {/* LOI / Offer */}
-      <button onClick={() => onStageClick({ label: "LOI / Offer", stages: LOI_STAGES })} className="text-left relative flex flex-col gap-1 rounded-lg border border-border-subtle bg-surface-card p-5 shadow-card hover:shadow-card-hover hover:border-primary/30 transition-all cursor-pointer group">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">LOI / Offer</span>
-          <span className="material-symbols-outlined text-text-muted group-hover:text-primary transition-colors text-[20px]">description</span>
-        </div>
-        <div className="flex items-end justify-between mt-3">
-          <div className="flex items-end gap-2">
-            <span className={cn("text-3xl font-bold tracking-tight", loiCount > 0 ? "text-text-main" : "text-text-muted")}>{loading ? "\u2014" : loiCount}</span>
-            <span className="text-xs font-medium text-text-secondary mb-1.5">{loiCount === 1 ? "deal" : "deals"}</span>
-          </div>
-          {!loading && loiCount > 0 && (
-            <span className="text-xs font-bold mb-1.5 px-1.5 py-0.5 rounded" style={{ color: "#059669", background: "#ECFDF5" }}>{pct(loiCount)}%</span>
-          )}
-        </div>
-        <div className="w-full bg-gray-100 h-1.5 mt-4 rounded-full overflow-hidden">
-          <div className="bg-orange-400 h-1.5 rounded-full transition-all" style={{ width: `${pct(loiCount)}%` }} />
-        </div>
-      </button>
-
-      {/* Closed */}
-      <button onClick={() => onStageClick({ label: "Closed", stages: CLOSED_STAGES })} className="text-left relative flex flex-col gap-1 rounded-lg border border-border-subtle bg-surface-card p-5 shadow-card hover:shadow-card-hover hover:border-primary/30 transition-all cursor-pointer group">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">Closed</span>
-          <span className="material-symbols-outlined text-text-muted group-hover:text-primary transition-colors text-[20px]">verified</span>
-        </div>
-        <div className="flex items-end justify-between mt-3">
-          <div className="flex items-end gap-2">
-            <span className={cn("text-3xl font-bold tracking-tight", closedCount > 0 ? "text-text-main" : "text-text-muted")}>
-              {loading ? "\u2014" : closedTotal > 0 ? formatCurrency(closedTotal) : closedCount}
-            </span>
-            <span className="text-xs font-medium text-text-secondary mb-1.5">
-              {closedTotal > 0 ? `${closedCount} ${closedCount === 1 ? "deal" : "deals"}` : closedCount === 1 ? "deal" : "deals"}
-            </span>
-          </div>
-          {!loading && closedCount > 0 && (
-            <span className="text-xs font-bold mb-1.5 px-1.5 py-0.5 rounded" style={{ color: "#059669", background: "#ECFDF5" }}>{pct(closedCount)}%</span>
-          )}
-        </div>
-        <div className="w-full bg-gray-100 h-1.5 mt-4 rounded-full overflow-hidden">
-          <div className="bg-secondary h-1.5 rounded-full transition-all" style={{ width: `${pct(closedCount)}%` }} />
-        </div>
-      </button>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// MarketSentimentCard
-// ---------------------------------------------------------------------------
-
-interface MarketSentimentCardProps {
-  sentiment: MarketSentiment | null;
-  sentimentLoading: boolean;
-  sentimentError: boolean;
-}
-
-export function MarketSentimentCard({ sentiment, sentimentLoading, sentimentError }: MarketSentimentCardProps) {
-  return (
-    <div className="flex flex-col rounded-lg border border-border-subtle bg-surface-card shadow-card overflow-hidden group">
-      <div className="p-5 border-b border-border-subtle flex items-start justify-between gap-4 bg-gradient-to-r from-white to-gray-50/50">
-        <div className="flex flex-col gap-2 min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-secondary-light rounded text-secondary border border-secondary/20">
-              <span className="material-symbols-outlined text-[20px] block">psychology</span>
-            </div>
-            <h2 className="text-base font-bold text-primary">AI Market Sentiment</h2>
-          </div>
-          {sentimentLoading ? (
-            <p className="text-text-muted text-sm flex items-center gap-2">
-              <span className="material-symbols-outlined text-[16px] animate-spin">sync</span>
-              Generating market analysis…
-            </p>
-          ) : sentimentError || !sentiment ? (
-            <p className="text-text-muted text-sm max-w-2xl leading-relaxed">
-              Market analysis is unavailable right now. Add more active deals or try again later.
-            </p>
-          ) : (
-            <>
-              {sentiment.headline && (
-                <p className="text-sm font-semibold text-text-main leading-snug">{sentiment.headline}</p>
-              )}
-              <p className="text-text-secondary text-sm max-w-2xl leading-relaxed">
-                <span className="text-text-main font-semibold">Analysis:</span> {sentiment.analysis}{" "}
-                <span className={SENTIMENT_STYLES[sentiment.sentiment].tone}>
-                  ({SENTIMENT_STYLES[sentiment.sentiment].label})
-                </span>
-                {sentiment.recommendation && (
-                  <>
-                    <br />
-                    <Link href="/deals" className="text-primary font-medium mt-2 inline-flex items-center gap-1 hover:underline">
-                      Recommended Action: {sentiment.recommendation}
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </Link>
-                  </>
-                )}
-              </p>
-            </>
-          )}
-        </div>
-        {sentiment && !sentimentError && (
-          <div className="hidden sm:flex flex-col items-end border-l border-border-subtle pl-6 py-1">
-            <div
-              className={cn(
-                "text-3xl font-bold tracking-tight",
-                sentiment.sentiment === "BULLISH" ? "text-secondary"
-                  : sentiment.sentiment === "BEARISH" ? "text-red-600"
-                    : "text-primary",
-              )}
-            >
-              {sentiment.confidenceScore}
-            </div>
-            <div className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Confidence</div>
-          </div>
-        )}
-      </div>
-      {sentiment && !sentimentError && sentiment.indicators?.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-border-subtle bg-gray-50/30">
-          {sentiment.indicators.slice(0, 3).map((item) => {
-            const style = TREND_ICONS[item.trend] || TREND_ICONS.stable;
-            return (
-              <div key={item.name} className="p-4 flex items-center gap-3 hover:bg-white transition-colors">
-                <div className={cn("p-2 rounded-md border", style.tone)}>
-                  <span className="material-symbols-outlined">{style.icon}</span>
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-bold text-text-main truncate">{item.name}</div>
-                  <div className="text-xs text-text-secondary font-medium truncate">{item.detail}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// StageDetailModal
-// ---------------------------------------------------------------------------
-
-interface StageDetailModalProps {
-  stageModal: { label: string; stages: string[] };
-  deals: Deal[];
-  onClose: () => void;
-}
-
-export function StageDetailModal({ stageModal, deals, onClose }: StageDetailModalProps) {
-  const filtered = deals.filter((d) => stageModal.stages.includes(d.stage));
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-md z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-border-subtle">
-          <h3 className="text-lg font-bold text-text-main">{stageModal.label} Deals</h3>
-          <button onClick={onClose} className="text-text-muted hover:text-text-main">
-            <span className="material-symbols-outlined">close</span>
-          </button>
-        </div>
-        <div className="overflow-y-auto max-h-[60vh] divide-y divide-border-subtle">
-          {filtered.length === 0 ? (
-            <div className="p-8 text-center text-text-muted text-sm">No deals in this stage</div>
-          ) : filtered.map((deal) => (
-            <Link
-              key={deal.id}
-              href={`/deals/${deal.id}`}
-              onClick={onClose}
-              className="flex items-center justify-between p-4 hover:bg-primary-light/30 transition-colors"
-            >
-              <div>
-                <p className="text-sm font-semibold text-text-main">{deal.name}</p>
-                <p className="text-xs text-text-muted">{deal.industry || "No industry"} · {formatRelativeTime(deal.updatedAt)}</p>
-              </div>
-              {deal.dealSize != null && (
-                <span className="text-sm font-medium text-text-main font-mono">{formatCurrency(deal.dealSize, deal.currency)}</span>
-              )}
-            </Link>
-          ))}
-        </div>
-        <div className="p-4 border-t border-border-subtle bg-gray-50 text-center">
-          <Link href="/deals" onClick={onClose} className="text-sm font-medium text-primary hover:underline">View all deals &rarr;</Link>
-        </div>
-      </div>
-    </div>
-  );
+export function stageStep(stage: string): number {
+  return STAGE_STEP[stage] ?? 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -380,96 +103,4 @@ export function fmtNextAction(stage: string): string {
     default:
       return "Review deal";
   }
-}
-
-// ---------------------------------------------------------------------------
-// PortfolioAllocation — donut chart + legend
-// Matches legacy dashboard.html portfolio-widget
-// ---------------------------------------------------------------------------
-
-interface AllocationItem {
-  label: string;
-  count: number;
-  pct: number;
-  color: string;
-}
-
-interface PortfolioAllocationProps {
-  loading: boolean;
-  allocation: AllocationItem[];
-  gradientParts: string[];
-}
-
-export function PortfolioAllocation({ loading, allocation, gradientParts }: PortfolioAllocationProps) {
-  // Cap display to top 5 items; group the rest as "Others"
-  const displayItems: AllocationItem[] = (() => {
-    if (allocation.length <= 5) return allocation;
-    const top = allocation.slice(0, 4);
-    const othersCount = allocation.slice(4).reduce((s, a) => s + a.count, 0);
-    const othersTotal = allocation.reduce((s, a) => s + a.count, 0);
-    return [
-      ...top,
-      {
-        label: "Others",
-        count: othersCount,
-        pct: othersTotal > 0 ? Math.round((othersCount / othersTotal) * 100) : 0,
-        color: SECTOR_COLORS[SECTOR_COLORS.length - 1],
-      },
-    ];
-  })();
-
-  return (
-    <div className="flex flex-col rounded-lg border border-border-subtle bg-surface-card shadow-card overflow-hidden p-6 gap-5 group">
-      {/* Header — matches legacy portfolio-widget header (no border-b, just flex row in p-6 card) */}
-      <div className="flex items-center justify-between">
-        <h3 className="font-bold text-text-main">Portfolio Allocation</h3>
-        <span className="material-symbols-outlined text-text-muted">pie_chart</span>
-      </div>
-
-      {/* Body */}
-      <div>
-        {loading ? (
-          <div className="flex items-center gap-6">
-            <Skeleton width={112} height={112} rounded="full" className="shrink-0" />
-            <div className="flex flex-col gap-3 flex-1 min-w-0">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <Skeleton width={10} height={10} rounded="sm" />
-                  <Skeleton.Line width={`${70 - i * 10}%`} height={12} className="flex-1" />
-                  <Skeleton.Line width={28} height={12} />
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : allocation.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-6 text-text-muted">
-            <span className="material-symbols-outlined text-2xl mb-1 opacity-40">pie_chart</span>
-            <p className="text-xs">No deals yet</p>
-          </div>
-        ) : (
-          <div className="flex items-center gap-6">
-            {/* Donut chart — 112px (size-28 = 7rem) matching legacy */}
-            <div
-              className="size-28 rounded-full shrink-0 shadow-inner"
-              style={{
-                background: `conic-gradient(${gradientParts.join(", ")})`,
-                mask: "radial-gradient(circle at center, transparent 40%, black 41%)",
-                WebkitMask: "radial-gradient(circle at center, transparent 40%, black 41%)",
-              }}
-            />
-            {/* Legend */}
-            <div className="flex flex-col gap-3 flex-1 min-w-0">
-              {displayItems.map((item) => (
-                <div key={item.label} className="flex items-start gap-2 text-xs">
-                  <div className="size-2.5 rounded-sm shadow-sm shrink-0 mt-0.5" style={{ background: item.color }} />
-                  <span className="text-text-secondary font-medium flex-1">{item.label}</span>
-                  <span className="text-text-main font-bold shrink-0">{item.pct}%</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }

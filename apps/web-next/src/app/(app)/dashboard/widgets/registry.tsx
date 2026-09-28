@@ -13,7 +13,7 @@ import { TeamPerformanceWidget } from "./team-performance";
 import { DocumentAlertsWidget } from "./document-alerts";
 import { WatchlistWidget } from "./watchlist";
 import { DealReactivationsWidget } from "./deal-reactivations";
-import { PortfolioSignalsWidget } from "../dashboard-widgets";
+import { PortfolioSignalsWidget } from "./portfolio-signals";
 
 // ---------------------------------------------------------------------------
 // Core widget IDs — rendered inline in page.tsx, not via the optional grid.
@@ -200,4 +200,6 @@ export const WIDGETS: WidgetMeta[] = [
 // portfolio-signals ships visible: it is a headline capability (scans every
 // active deal for leadership/financial/market shifts) that was invisible by
 // default AND broken by a GET/POST mismatch, so nobody had ever seen it work.
-export const DEFAULT_VISIBLE: WidgetId[] = ["quick-actions", "deal-funnel", "upcoming-deadlines", "portfolio-signals"];
+// Deal funnel + upcoming deadlines are now covered by the core Pipeline funnel
+// and My Tasks groups, so they are opt-in rather than on by default.
+export const DEFAULT_VISIBLE: WidgetId[] = ["quick-actions", "portfolio-signals"];

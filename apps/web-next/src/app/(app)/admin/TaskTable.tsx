@@ -1,254 +1,135 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { api } from "@/lib/api";
 import type { AdminTask, AdminTaskStatus } from "./types";
-import {
-  FILTER_OPTIONS, FilterValue, SORT_OPTIONS, SortField, TASK_PAGE_SIZE,
-} from "./TaskTable.helpers";
+import { FILTER_TABS, TASK_PAGE_SIZE, type FilterValue } from "./TaskTable.helpers";
 import { TaskTableRow } from "./TaskTable.row";
-import { buildHeaderLabel, filterAndSortTasks } from "./TaskTable.filter";
+import { filterTasks, tabCounts } from "./TaskTable.filter";
 
-// ─── Component ───────────────────────────────────────────────────────
+const TH = "dash-label whitespace-nowrap px-4 py-2.5 text-left font-semibold first:pl-6 last:pr-6";
 
 interface Props {
   tasks: AdminTask[];
-  /** Filter preset applied by external click (e.g., Overdue stats card). */
-  externalFilter?: FilterValue;
+  now: number;
+  /** Tab preset applied from outside (e.g. the masthead's "1 overdue" link). */
+  externalFilter?: { value: FilterValue; nonce: number };
   onTasksChanged: () => void;
-  onToast: (msg: string, type: "success" | "error") => void;
+  onNotice: (message: string, tone?: "neutral" | "error", undo?: () => void) => void;
 }
 
-export function TaskTable({ tasks, externalFilter, onTasksChanged, onToast }: Props) {
-  const [filter, setFilter] = useState<FilterValue>("ALL");
-  const [sortField, setSortField] = useState<SortField>("createdAt");
-  const [sortAsc, setSortAsc] = useState(false);
+export function TaskTable({ tasks, now, externalFilter, onTasksChanged, onNotice }: Props) {
+  const [filter, setFilter] = useState<FilterValue>("OPEN");
   const [showAll, setShowAll] = useState(false);
-  const [filterOpen, setFilterOpen] = useState(false);
-  const [sortOpen, setSortOpen] = useState(false);
-  const [openStatusFor, setOpenStatusFor] = useState<string | null>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Sync external filter (e.g., user clicked Overdue stats card).
-  // We deliberately only sync when externalFilter changes — local filter
-  // edits are preserved until the parent re-asserts a value.
+  // Re-applied every time the parent asks (nonce), not just on first change.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (externalFilter && externalFilter !== filter) setFilter(externalFilter);
-  }, [externalFilter, filter]);
+    if (externalFilter) setFilter(externalFilter.value);
+  }, [externalFilter]);
 
-  // Close dropdowns on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setFilterOpen(false);
-        setSortOpen(false);
-      }
-      setOpenStatusFor(null);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  // Stable reference — only recalculated when tasks change, not every render
-  const now = useMemo(() => new Date(), [tasks]);
-
-  const filtered = useMemo(
-    () => filterAndSortTasks({ tasks, filter, sortField, sortAsc, now }),
-    [tasks, filter, sortField, sortAsc, now],
-  );
-
+  const filtered = filterTasks(tasks, filter, now);
+  const counts = tabCounts(tasks, now);
   const display = showAll ? filtered : filtered.slice(0, TASK_PAGE_SIZE);
 
-  const headerLabel = buildHeaderLabel(tasks, filter, filtered.length);
-
-  const updateStatus = async (taskId: string, newStatus: AdminTaskStatus) => {
-    setOpenStatusFor(null);
-    const current = tasks.find((t) => t.id === taskId);
-    if (!current) return;
-    // Optimistic update: mutate parent by calling onTasksChanged after API returns.
-    // Here we surface the in-flight intent by calling the API and letting the
-    // parent reload on success.
+  const updateStatus = async (task: AdminTask, status: AdminTaskStatus) => {
+    const previous = task.status;
     try {
-      await api.patch(`/tasks/${taskId}`, { status: newStatus });
+      await api.patch(`/tasks/${task.id}`, { status });
       onTasksChanged();
-      onToast(`Task marked as ${newStatus.replace("_", " ").toLowerCase()}`, "success");
+      onNotice(
+        status === "COMPLETED" ? `Done: ${task.title}` : `Status updated: ${task.title}`,
+        "neutral",
+        async () => {
+          try {
+            await api.patch(`/tasks/${task.id}`, { status: previous });
+            onTasksChanged();
+          } catch (err) {
+            console.warn("[admin] undo status failed:", err);
+          }
+        },
+      );
     } catch (err) {
       console.warn("[admin] updateStatus failed:", err);
-      onToast("Failed to update task status", "error");
+      onNotice("Couldn't update that task. Please try again.", "error");
     }
   };
 
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
-
-  const deleteTask = async (taskId: string) => {
-    setConfirmDelete(null);
+  const deleteTask = async (task: AdminTask) => {
     try {
-      await api.delete(`/tasks/${taskId}`);
+      await api.delete(`/tasks/${task.id}`);
       onTasksChanged();
-      onToast("Task deleted", "success");
+      onNotice(`Deleted: ${task.title}`);
     } catch (err) {
-      onToast(err instanceof Error ? err.message : "Failed to delete task", "error");
+      console.warn("[admin] delete task failed:", err);
+      onNotice(err instanceof Error ? err.message : "Couldn't delete that task.", "error");
     }
   };
 
   return (
-    <div
-      id="task-table-body"
-      className="bg-surface-card rounded-xl border border-border-subtle shadow-card overflow-hidden scroll-mt-6"
-    >
-      <div className="p-5 border-b border-border-subtle flex justify-between items-center bg-gray-50/50">
-        <div className="flex items-center gap-3">
-          <h2 className="text-base font-semibold text-text-main flex items-center gap-2">
-            <span className="material-symbols-outlined text-text-muted text-[20px]">task_alt</span>
-            Global Task Management
-          </h2>
-          <span className="bg-gray-200 text-text-secondary text-xs px-2 py-0.5 rounded-full font-medium">
-            {headerLabel}
-          </span>
+    <section id="tasks" aria-labelledby="tasks-heading" className="dash-panel scroll-mt-6">
+      <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 px-6 pt-5">
+        <h2 id="tasks-heading" className="dash-display pb-3 text-xl text-(--dash-ink)">Tasks</h2>
+        <div role="tablist" aria-label="Filter tasks" className="-mb-px flex flex-wrap gap-x-5">
+          {FILTER_TABS.map((t) => {
+            const selected = filter === t.value;
+            const n = counts[t.value];
+            return (
+              <button
+                key={t.value}
+                role="tab"
+                type="button"
+                aria-selected={selected}
+                onClick={() => { setFilter(t.value); setShowAll(false); }}
+                className={cn(
+                  "flex items-center gap-1.5 border-b-2 pb-3 text-[0.8125rem] font-medium transition-colors",
+                  selected ? "border-(--dash-blue) text-(--dash-ink)" : "border-transparent text-(--dash-ink-3) hover:text-(--dash-ink)",
+                )}
+              >
+                {t.label}
+                {n > 0 && (
+                  <span className={cn(
+                    "dash-num rounded-full px-1.5 text-[0.6875rem] font-semibold",
+                    t.value === "OVERDUE" ? "bg-(--dash-red-wash) text-(--dash-red)" : "bg-(--dash-wash) text-(--dash-ink-2)",
+                  )}>
+                    {n}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-        <div className="flex gap-2 relative" ref={dropdownRef}>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setFilterOpen((v) => !v);
-              setSortOpen(false);
-            }}
-            className={cn(
-              "p-1.5 rounded transition-colors",
-              filter !== "ALL"
-                ? "text-primary bg-primary-light/30"
-                : "text-text-muted hover:text-primary hover:bg-gray-100",
-            )}
-            title="Filter tasks"
-          >
-            <span className="material-symbols-outlined text-[20px]">filter_list</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setSortOpen((v) => !v);
-              setFilterOpen(false);
-            }}
-            className="p-1.5 text-text-muted hover:text-primary hover:bg-gray-100 rounded transition-colors"
-            title="Sort tasks"
-          >
-            <span className="material-symbols-outlined text-[20px]">sort</span>
-          </button>
-          {filterOpen && (
-            <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg border border-border-subtle shadow-lg z-50 py-1">
-              {FILTER_OPTIONS.map((f) => (
-                <button
-                  key={f.value}
-                  type="button"
-                  onClick={() => {
-                    setFilter(f.value);
-                    setFilterOpen(false);
-                  }}
-                  className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 transition-colors",
-                    filter === f.value
-                      ? "text-primary font-medium bg-primary-light/30"
-                      : "text-text-main",
-                  )}
-                >
-                  <span className="material-symbols-outlined text-[16px]">{f.icon}</span>
-                  {f.label}
-                  {filter === f.value && (
-                    <span className="material-symbols-outlined text-[14px] ml-auto">check</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-          {sortOpen && (
-            <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg border border-border-subtle shadow-lg z-50 py-1">
-              {SORT_OPTIONS.map((s) => (
-                <button
-                  key={s.value}
-                  type="button"
-                  onClick={() => {
-                    setSortField(s.value);
-                    setSortOpen(false);
-                  }}
-                  className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 transition-colors",
-                    sortField === s.value
-                      ? "text-primary font-medium bg-primary-light/30"
-                      : "text-text-main",
-                  )}
-                >
-                  {s.label}
-                  {sortField === s.value && (
-                    <span className="material-symbols-outlined text-[14px] ml-auto">
-                      {sortAsc ? "arrow_upward" : "arrow_downward"}
-                    </span>
-                  )}
-                </button>
-              ))}
-              <div className="border-t border-border-subtle mt-1 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSortAsc((v) => !v);
-                    setSortOpen(false);
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 transition-colors text-text-main"
-                >
-                  <span className="material-symbols-outlined text-[16px]">swap_vert</span>
-                  {sortAsc ? "Ascending" : "Descending"}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      </header>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-50 text-text-muted font-medium border-b border-border-subtle">
-            <tr>
-              <th className="px-5 py-3">Task Name</th>
-              <th className="px-5 py-3">Priority</th>
-              <th className="px-5 py-3">Due Date</th>
-              <th className="px-5 py-3">Analyst</th>
-              <th className="px-5 py-3">Linked Deal</th>
-              <th className="px-5 py-3">Status</th>
-              <th className="px-5 py-3 w-16" />
+      <div role="tabpanel" className="border-t border-(--dash-rule) max-md:overflow-x-auto">
+        <table className="w-full min-w-[700px] table-fixed text-sm">
+          <thead>
+            <tr className="border-b border-(--dash-rule) bg-(--dash-paper)">
+              <th className={TH}>Task</th>
+              <th className={cn(TH, "w-[9%]")}>Priority</th>
+              <th className={cn(TH, "w-[16%]")}>Due</th>
+              <th className={cn(TH, "w-[19%]")}>Owner</th>
+              <th className={cn(TH, "w-[15%]")}>Status</th>
+              <th className={cn(TH, "w-14")}><span className="sr-only">Delete</span></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border-subtle">
+          <tbody className="divide-y divide-(--dash-rule)">
             {display.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-5 py-12 text-center text-text-muted">
-                  <span className="material-symbols-outlined text-[32px] mb-2 block">
-                    {tasks.length === 0 ? "task_alt" : "filter_list_off"}
-                  </span>
-                  <p className="text-sm font-medium">
-                    {tasks.length === 0
-                      ? "No tasks yet"
-                      : "No tasks match this filter"}
-                  </p>
-                  {tasks.length === 0 && (
-                    <p className="text-xs mt-1">Create your first task to start tracking work</p>
-                  )}
+                <td colSpan={6} className="px-6 py-8 text-sm text-(--dash-ink-2)">
+                  {tasks.length === 0
+                    ? "No tasks yet. Use New ▾ → Create task to assign the first one."
+                    : filter === "OVERDUE"
+                      ? "Nothing overdue. Every open task is on schedule."
+                      : filter === "WEEK"
+                        ? "Nothing due in the next seven days."
+                        : "No tasks in this view."}
                 </td>
               </tr>
             ) : (
               display.map((task) => (
-                <TaskTableRow
-                  key={task.id}
-                  task={task}
-                  now={now}
-                  openStatusFor={openStatusFor}
-                  onToggleStatusMenu={setOpenStatusFor}
-                  onUpdateStatus={updateStatus}
-                  onAskDelete={(id, title) => setConfirmDelete({ id, title })}
-                />
+                <TaskTableRow key={task.id} task={task} now={now} onUpdateStatus={updateStatus} onDelete={deleteTask} />
               ))
             )}
           </tbody>
@@ -256,35 +137,14 @@ export function TaskTable({ tasks, externalFilter, onTasksChanged, onToast }: Pr
       </div>
 
       {filtered.length > TASK_PAGE_SIZE && (
-        <div className="p-4 border-t border-border-subtle flex justify-center bg-gray-50/30">
-          <button
-            type="button"
-            onClick={() => setShowAll((v) => !v)}
-            className="text-sm font-medium text-text-secondary hover:text-primary flex items-center gap-1 transition-colors"
-          >
-            {showAll ? (
-              <>
-                Show recent
-                <span className="material-symbols-outlined text-[16px]">expand_less</span>
-              </>
-            ) : (
-              <>
-                View all {filtered.length} tasks
-                <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-              </>
-            )}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="w-full rounded-b-[7px] border-t border-(--dash-rule) px-6 py-2.5 text-left text-sm font-medium text-(--dash-blue) hover:bg-(--dash-paper)"
+        >
+          {showAll ? "Show fewer" : `Show all ${filtered.length}`}
+        </button>
       )}
-      <ConfirmDialog
-        open={!!confirmDelete}
-        title="Delete Task"
-        message={confirmDelete ? `Delete task "${confirmDelete.title}"? This cannot be undone.` : ""}
-        confirmLabel="Delete"
-        variant="danger"
-        onConfirm={() => confirmDelete && deleteTask(confirmDelete.id)}
-        onCancel={() => setConfirmDelete(null)}
-      />
-    </div>
+    </section>
   );
 }

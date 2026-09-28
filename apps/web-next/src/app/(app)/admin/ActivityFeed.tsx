@@ -169,24 +169,21 @@ export function ActivityFeed() {
 
   return (
     <div
-      className="bg-surface-card rounded-xl border border-border-subtle shadow-card flex flex-col"
-      style={{ height: 420 }}
+      className="dash-panel flex flex-col"
+      style={{ height: 460 }}
     >
-      <div className="p-5 border-b border-border-subtle space-y-3">
+      <div className="space-y-3 border-b border-(--dash-rule) px-5 pt-4 pb-3">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-text-main flex items-center gap-2">
-            <span className="material-symbols-outlined text-text-muted text-[20px]">rss_feed</span>
-            Team Activity
-          </h2>
+          <h3 className="dash-display text-lg text-(--dash-ink)">Team activity</h3>
           <button
             type="button"
             onClick={exportCsv}
             disabled={exporting}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border border-border-subtle bg-white text-text-main hover:bg-gray-50 transition-colors disabled:opacity-50"
+            className="dash-btn-ghost inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold"
             title="Export filtered audit log as CSV"
           >
             <span className="material-symbols-outlined text-[16px]">download</span>
-            {exporting ? "Exporting..." : "Export CSV"}
+            {exporting ? "Exporting…" : "CSV"}
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -195,7 +192,7 @@ export function ActivityFeed() {
             onChange={(e) =>
               setFilters((f) => ({ ...f, range: e.target.value as DateRange }))
             }
-            className="text-xs rounded-md border border-border-subtle bg-white px-2 py-1.5 font-medium text-text-main focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+            className="rounded-md border border-(--dash-rule-strong) bg-(--dash-panel) px-2 py-1 text-xs font-medium text-(--dash-ink-2) outline-none focus:border-(--dash-blue-2)"
           >
             <option value="all">All time</option>
             <option value="7d">Last 7 days</option>
@@ -207,7 +204,7 @@ export function ActivityFeed() {
             onChange={(e) =>
               setFilters((f) => ({ ...f, action: e.target.value }))
             }
-            className="text-xs rounded-md border border-border-subtle bg-white px-2 py-1.5 font-medium text-text-main focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+            className="rounded-md border border-(--dash-rule-strong) bg-(--dash-panel) px-2 py-1 text-xs font-medium text-(--dash-ink-2) outline-none focus:border-(--dash-blue-2)"
           >
             {COMMON_ACTIONS.map((a) => (
               <option key={a.value} value={a.value}>
@@ -220,7 +217,7 @@ export function ActivityFeed() {
             onChange={(e) =>
               setFilters((f) => ({ ...f, resourceType: e.target.value }))
             }
-            className="text-xs rounded-md border border-border-subtle bg-white px-2 py-1.5 font-medium text-text-main focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+            className="rounded-md border border-(--dash-rule-strong) bg-(--dash-panel) px-2 py-1 text-xs font-medium text-(--dash-ink-2) outline-none focus:border-(--dash-blue-2)"
           >
             {RESOURCE_TYPES.map((r) => (
               <option key={r.value} value={r.value}>
@@ -234,54 +231,40 @@ export function ActivityFeed() {
             <button
               type="button"
               onClick={() => setFilters(DEFAULT_FILTERS)}
-              className="text-xs text-text-muted hover:text-primary font-medium transition-colors"
+              className="text-xs font-medium text-(--dash-blue) hover:underline"
             >
               Clear
             </button>
           )}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-5 relative custom-scrollbar">
+      <div className="custom-scrollbar relative flex-1 overflow-y-auto px-5 py-4">
         {/* Vertical timeline rail — matches admin-dashboard.html .activity-timeline::before:
             2px wide, gray, 24px inset from top/bottom of the scroll container, at left:17px
             (sits just inside the 20px container padding, against the left edge of the avatar column). */}
         {!loading && !error && logs.length > 0 && (
           <div
             aria-hidden
-            className="absolute w-0.5 bg-border-subtle pointer-events-none"
-            style={{ left: 17, top: 24, bottom: 24 }}
+            className="pointer-events-none absolute w-px bg-(--dash-rule)"
+            style={{ left: 35, top: 28, bottom: 24 }}
           />
         )}
         {loading ? (
-          <div className="text-center py-8 text-text-muted">
-            <span className="material-symbols-outlined text-[24px] mb-2 block animate-spin">
-              progress_activity
-            </span>
-            <p className="text-sm">Loading activity...</p>
-          </div>
+          <p className="py-6 text-sm text-(--dash-ink-3)">Loading activity…</p>
         ) : error ? (
-          <div className="text-center py-8 text-text-muted">
-            <span className="material-symbols-outlined text-[32px] mb-2 block">cloud_off</span>
-            <p className="text-sm font-medium">Could not load activity</p>
-            <button
-              type="button"
-              onClick={() => load(false, filters)}
-              className="mt-3 text-sm text-primary font-medium hover:text-primary-hover transition-colors"
-            >
-              Retry
-            </button>
-          </div>
+          <p className="py-6 text-sm">
+            <span className="text-(--dash-red)">Couldn&apos;t load activity.</span>{" "}
+            <button type="button" onClick={() => load(false, filters)} className="dash-link">Retry</button>
+          </p>
         ) : logs.length === 0 ? (
-          <div className="text-center py-8 text-text-muted">
-            <span className="material-symbols-outlined text-[32px] mb-2 block">rss_feed</span>
-            <p className="text-sm font-medium">No activity yet</p>
-            <p className="text-xs mt-1">Actions across your org will appear here</p>
-          </div>
+          <p className="py-6 text-sm text-(--dash-ink-2)">
+            No activity for these filters. Views, edits, uploads and admin changes across the team appear here as they happen.
+          </p>
         ) : (
           <div className="relative">
             {grouped.map(({ label, logs: dayLogs }) => (
               <div key={label}>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted mt-2 mb-2 first:mt-0">
+                <p className="dash-label relative z-10 mt-3 mb-2 w-fit bg-(--dash-panel) pr-2 first:mt-0">
                   {label}
                 </p>
                 {dayLogs.map((log) => (
@@ -293,14 +276,14 @@ export function ActivityFeed() {
         )}
       </div>
       {logs.length > 0 && hasMore && (
-        <div className="p-3 border-t border-border-subtle text-center">
+        <div className="border-t border-(--dash-rule) px-5 py-2.5">
           <button
             type="button"
             onClick={() => load(true, filters)}
             disabled={loadingMore}
-            className="text-xs text-text-muted hover:text-primary font-medium uppercase tracking-wide transition-colors disabled:opacity-50"
+            className="text-sm font-medium text-(--dash-blue) hover:underline disabled:opacity-50"
           >
-            {loadingMore ? "Loading..." : "View Full History"}
+            {loadingMore ? "Loading…" : "Load older activity"}
           </button>
         </div>
       )}
@@ -317,11 +300,10 @@ function ActivityItem({ log }: { log: AuditLog }) {
   const { prefix, entity, suffix, icon } = formatAuditAction(log);
 
   return (
-    <div className="flex gap-3 relative z-10 mb-4">
+    <div className="relative z-10 mb-3.5 flex gap-3">
       <div className="relative flex-shrink-0">
         <div
-          className="w-9 h-9 rounded-full text-white text-xs font-medium flex items-center justify-center"
-          style={{ backgroundColor: "#003366" }}
+          className="flex size-8 items-center justify-center rounded-full bg-(--dash-wash) text-[0.6875rem] font-bold text-(--dash-blue) ring-2 ring-(--dash-panel)"
         >
           {ai ? (
             <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
@@ -330,8 +312,7 @@ function ActivityItem({ log }: { log: AuditLog }) {
           )}
         </div>
         <div
-          className="absolute -bottom-0.5 -right-0.5 rounded-full w-[18px] h-[18px] flex items-center justify-center border-2 border-white overflow-hidden"
-          style={{ backgroundColor: "#003366" }}
+          className="absolute -right-1 -bottom-1 flex size-[18px] items-center justify-center overflow-hidden rounded-full border-2 border-(--dash-panel) bg-(--dash-blue)"
         >
           {/* opsz 20 is the lowest Material Symbols optical-size variant — pair with 12px font-size so glyphs render at their designed metrics. */}
           <span
@@ -347,13 +328,13 @@ function ActivityItem({ log }: { log: AuditLog }) {
         </div>
       </div>
       <div className="flex-1 pt-0.5">
-        <p className="text-sm text-text-main">
-          <span className={cn("font-semibold", ai && "text-primary")}>{actor}</span>{" "}
+        <p className="text-[0.8125rem] leading-snug text-(--dash-ink-2)">
+          <span className={cn("font-semibold text-(--dash-ink)", ai && "text-(--dash-blue)")}>{actor}</span>{" "}
           {prefix}
-          {entity && <span className="text-primary font-medium">{entity}</span>}
+          {entity && <span className="font-medium text-(--dash-blue)">{entity}</span>}
           {suffix}
         </p>
-        <p className="text-xs text-text-muted mt-1">{formatRelativeTime(log.createdAt)}</p>
+        <p className="mt-0.5 text-xs text-(--dash-ink-3)">{formatRelativeTime(log.createdAt)}</p>
       </div>
     </div>
   );
