@@ -311,6 +311,30 @@ describe('trackedClaudeStream', () => {
     expect(toolRunnerOptions[0]?.signal).toBe(controller.signal);
   });
 
+  it('passes a block-form system prompt through unchanged and enables request-level caching when asked', async () => {
+    const { trackedClaudeStream } = await getClient();
+    const system = [
+      { type: 'text', text: 'stable instructions', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: 'deal context', cache_control: { type: 'ephemeral' } },
+    ];
+    trackedClaudeStream({
+      operation: 'deal_chat',
+      role: 'chat',
+      system: system as any,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      autoCache: true,
+    });
+    expect(toolRunnerCalls[0].system).toEqual(system);
+    expect(toolRunnerCalls[0].cache_control).toEqual({ type: 'ephemeral' });
+  });
+
+  it('does not add request-level caching unless the caller asks for it', async () => {
+    const { trackedClaudeStream } = await getClient();
+    trackedClaudeStream({ operation: 'x', role: 'chat', messages: [{ role: 'user', content: 'hi' }], tools: [] });
+    expect('cache_control' in toolRunnerCalls[0]).toBe(false);
+  });
+
   it('keeps stream: true and omits signal options when no signal given', async () => {
     const { trackedClaudeStream } = await getClient();
     trackedClaudeStream({

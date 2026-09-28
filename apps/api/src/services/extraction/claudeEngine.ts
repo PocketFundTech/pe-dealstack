@@ -353,7 +353,7 @@ async function runExtraction(
       failedStatementTypes: [...failedTypes],
     });
     const previousJson = JSON.stringify(first.statements);
-    const repaired = await callEngine(buildRepairInstruction(firstFailures, previousJson));
+    const repaired = await callEngine(buildRepairInstruction(firstFailures, previousJson, [...failedTypes]));
 
     if (repaired && repaired.statements.length > 0) {
       const merged = mergeRepairedStatements(first, repaired, failedTypes);
