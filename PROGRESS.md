@@ -5,6 +5,29 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 77 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 03:46 IST
+
+#### Goal: fix very slow uploads (ingest modal, data room, bulk import).
+
+#### 1. What was actually wrong (measured, not guessed)
+- **Uploads over 4.5 MB were rejected outright.** Vercel caps a function's request body at 4.5 MB; a 5.5 MB test upload to `/api/ingest` returned `413 FUNCTION_PAYLOAD_TOO_LARGE` before reaching the app, while the UI advertised 50 MB and showed a misleading "Maximum upload size is 50MB".
+- **Ingest waited on everything before responding.** Measured from the usage ledger: the Fable 5 document read (`deal_ingest`) takes ~30 s; on top of that the request waited on teaser generation (one Sonnet call per investment profile), ~8 sequential DB writes, and — for bulk imports — one blocking teaser call per row (lists of 40–60+ rows could exceed the 300 s limit).
+- Ruled out: LlamaParse (its key is not set in prod, so PDFs parse locally in ~1 s).
+
+#### 2. Fixes (PR `perf/fast-large-uploads`)
+- **Direct-to-storage uploads:** the browser gets a signed URL from new `POST /api/uploads/sign` and uploads straight to Supabase Storage; the API receives only the storage path (strictly validated per org; traversal rejected). Removes the 4.5 MB cap and one full transfer of the file.
+- **Founder's choice: keep waiting for the AI read** (the modal still shows extracted results before the deal is created), but nothing else blocks: teasers, activity/audit/embeddings and the multi-doc analyzer run after the response; bulk runs one background teaser job (3 at a time) and batches its inserts; email attachments process 3 at a time; updating an existing deal uploads to storage alongside the AI read.
+- Web: per-file progress text, "Data Room only" uploads 3 at a time, teasers fetched by polling, accurate size errors.
+- Tests: API 2041 passing (29 new), web 407 passing (22 new); review added strict storage-path validation (6 traversal cases seen failing first).
+
+#### 3. Notes
+- Data-room files between 50 and 100 MB also need the Supabase project's global file-size limit raised (bucket has no own limit; default project limit is 50 MB).
+- The remaining wait is the ~30 s Fable read itself. Lowering its effort or using a faster model for the ingest summary would cut it further but needs an extraction eval first.
+
+---
+
 ### Session 76 — September 29, 2026
 
 #### Timestamp: September 29, 2026 — 02:46 IST
