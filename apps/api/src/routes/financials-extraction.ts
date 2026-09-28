@@ -16,7 +16,7 @@ import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents
 import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
 import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { maybeReactivateAfterExtraction } from '../services/agents/dealReactivation/index.js';
-import { isFinancialDoc } from './financials-extraction-utils.js';
+import { isFinancialDoc, buildResultWarnings } from './financials-extraction-utils.js';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -99,6 +99,8 @@ interface PerDocResult {
   extractionMethod?: string;
   agent?: any;
   error?: string;
+  /** Agent-level warnings (e.g. "no CASH_FLOW statement found") — always present. */
+  warnings: string[];
 }
 
 async function processOneDoc(
@@ -108,7 +110,7 @@ async function processOneDoc(
 ): Promise<PerDocResult> {
   const baseName = doc.name ?? 'document';
   const fail = (status: 'failed' | 'skipped_no_slot', error: string): PerDocResult => ({
-    id: doc.id, name: baseName, status, statementsStored: 0, periodsStored: 0, overallConfidence: null, hasConflicts: false, error,
+    id: doc.id, name: baseName, status, statementsStored: 0, periodsStored: 0, overallConfidence: null, hasConflicts: false, error, warnings: [],
   });
 
   const fileBuffer = await fetchBuffer(doc.fileUrl);
@@ -142,6 +144,7 @@ async function processOneDoc(
         crossVerifyResult: agentResult.crossVerifyResult || null,
       },
       error: agentResult.error ?? undefined,
+      warnings: agentResult.warnings ?? [],
     };
   } catch (err: any) {
     log.error('processOneDoc failed', { dealId, docId: doc.id, err: err?.message });
@@ -328,6 +331,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
             overallConfidence: null,
             hasConflicts: false,
             error: `Extraction exceeded ${PER_DOC_BUDGET_MS / 1000}s per-doc budget`,
+            warnings: [],
           });
         }, PER_DOC_BUDGET_MS);
       });
@@ -371,6 +375,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
             statementsStored: 0, periodsStored: 0,
             overallConfidence: null, hasConflicts: false,
             error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+            warnings: [],
           });
           log.error('Per-doc extraction rejected', { dealId, docId: doc.id, err: s.reason });
         }
@@ -390,6 +395,14 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
     );
 
     const aggregateSuccess = perDoc.some((r) => r.status === 'completed');
+    // Prod incident (2026-09-28): every doc failed (timeout / provider
+    // credit exhaustion) but the response still looked like a benign
+    // "0 periods found" — `allFailed` lets the frontend distinguish "no
+    // financial data in otherwise-successful docs" from "extraction itself
+    // never worked". HTTP status stays 200 (BC — callers already branch on
+    // `success` / `periodsStored`, not status code).
+    const allFailed = perDoc.length > 0 && !aggregateSuccess;
+    const resultWarnings = buildResultWarnings(perDoc);
 
     // Single-doc back-compat: flat fields alongside the new aggregate.
     const first = perDoc[0];
@@ -428,6 +441,8 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         documentsFailed: totals.documentsFailed,
         overallConfidence: first?.overallConfidence ?? null,
         hasConflicts: totals.hasConflicts,
+        warnings: resultWarnings,
+        allFailed,
       },
       hasConflicts: totals.hasConflicts,
     });

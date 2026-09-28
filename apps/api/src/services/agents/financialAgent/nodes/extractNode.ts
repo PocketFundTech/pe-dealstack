@@ -61,6 +61,7 @@ function step(node: string, message: string, detail?: string): AgentStep {
  */
 export async function extractNode(
   state: FinancialAgentStateType,
+  config?: { signal?: AbortSignal },
 ): Promise<Partial<FinancialAgentStateType>> {
   const steps: AgentStep[] = [];
   const { fileBuffer, fileName, fileType, forceExtraction } = state;
@@ -134,7 +135,11 @@ export async function extractNode(
     if (useClaudeEngine) {
       steps.push(step('extract', 'EXTRACTION_ENGINE=claude — using structured-output engine'));
       const { extractWithClaude } = await import('../../../extraction/claudeEngine.js');
-      const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType });
+      // Forward the graph-level AbortSignal (set by runWithAgentBounds in
+      // index.ts) so a run abandoned on timeout actually cancels the
+      // in-flight Anthropic call instead of continuing to bill/run in the
+      // background after the route has already given up on this document.
+      const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType }, config?.signal);
 
       if (!engineResult) {
         return {
