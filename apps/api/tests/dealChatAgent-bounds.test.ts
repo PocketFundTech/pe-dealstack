@@ -36,6 +36,16 @@ vi.mock('../src/services/agents/dealChatAgent/tools.js', () => ({
   getDealChatToolsLegacy: () => [],
 }));
 
+// Firm context — real getFirmContextBlock() hits Supabase (Organization
+// .settings). Unmocked, that's a live network call against a fake test host
+// that fails DNS (ENOTFOUND) and takes ~7s to give up, blowing past the
+// 150ms/2s windows these tests assert on. readSettings() swallows the error
+// and resolves to '' either way, so mocking it only removes the real-network
+// wait — it doesn't change what the SUT sees.
+vi.mock('../src/services/firmContextService.js', () => ({
+  getFirmContextBlock: async () => '',
+}));
+
 // Logger — silence.
 vi.mock('../src/utils/logger.js', () => ({
   log: {

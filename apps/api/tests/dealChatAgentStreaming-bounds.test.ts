@@ -26,6 +26,14 @@ vi.mock('../src/services/llm.js', () => ({ isLLMAvailable: () => true, getChatMo
 vi.mock('../src/services/agents/dealChatAgent/tools.js', () => ({ getDealChatTools: () => [] }));
 vi.mock('../src/services/ai/models.js', () => ({ getModelConfig: () => ({ model: 'claude-sonnet-5', maxTokens: 16000, betas: [] }) }));
 vi.mock('../src/utils/sentryHelpers.js', () => ({ captureAgentError: vi.fn() }));
+// Real getFirmContextBlock() hits Supabase; unmocked it's a live network
+// call against a fake test host that fails DNS (ENOTFOUND) and takes ~7s
+// to give up, blowing past the timeout windows these tests assert on. The
+// SUT already does `.catch(() => '')` around it, so mocking only removes
+// the real-network wait — it doesn't change what the SUT sees.
+vi.mock('../src/services/firmContextService.js', () => ({
+  getFirmContextBlock: async () => '',
+}));
 
 beforeEach(() => {
   process.env.DEAL_CHAT_AGENT_TIMEOUT_MS = '150';
