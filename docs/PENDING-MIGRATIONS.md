@@ -1,4 +1,30 @@
-# ✅ SUPABASE MIGRATIONS — ALL RUN AND VERIFIED (2026-08-18)
+# 🔴 ONE MIGRATION PENDING — `model-prices-anthropic-direct-seed.sql` (found 2026-09-28)
+
+While double-checking a reported Anthropic cost figure, found that
+`apps/api/model-prices-anthropic-direct-seed.sql` (already written and
+committed, author/date unclear) has never been run. Without it,
+`ModelPrice` has no row for `claude-sonnet-4-6` (the served-model id
+Anthropic actually returns for direct-Anthropic Sonnet calls — the app's
+static role map only ever requests `claude-sonnet-5`), so every deal-chat
+call is logged in `UsageEvent` at **$0 cost** instead of its real cost.
+Confirmed live: 19 calls / 172K tokens this week alone tracked as $0.
+Idempotent (`ON CONFLICT ... DO UPDATE`), so it's safe to run any time —
+run it in the Supabase SQL editor, then tick the box below.
+
+| # | Migration file | Fixes | Run? |
+|---|---|---|---|
+| 1 | `apps/api/model-prices-anthropic-direct-seed.sql` | Deal-chat cost tracking undercounts to $0 | ☐ |
+
+Verify after running:
+```sql
+select model, provider, "inputPricePer1M", "outputPricePer1M"
+  from public."ModelPrice" where model like 'claude-%';
+-- expect claude-sonnet-4-6 and claude-haiku-4-5 present
+```
+
+---
+
+# ✅ 2026-08-18 BATCH — ALL RUN AND VERIFIED
 
 > **HARD GATE.** Vercel does **not** run `apps/api/*.sql`. Code can ship green,
 > pass every test, and still 500 in production because the tables don't exist.
