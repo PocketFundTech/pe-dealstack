@@ -10,48 +10,48 @@ How to work this list: one batch = one PR, failing test first, tick the box when
 
 ---
 
-## Batch 1 — Quick high-impact fixes (≈1 day, mostly 1–10 lines each)
+## Batch 1 — Quick high-impact fixes ✅ done 2026-09-30 (PR `fix/flows-batch-1`)
 
-- [ ] **"New Deal" buttons open intake in "Update Existing Deal" mode.** Callers pass `openDealIntake` straight as `onClick`, so it receives the click event as a "deal".
+- [x] **"New Deal" buttons open intake in "Update Existing Deal" mode.** Callers pass `openDealIntake` straight as `onClick`, so it receives the click event as a "deal".
   - Where: `W/providers/IngestDealModalProvider.tsx:35-38`; callers `W/app/(app)/dashboard/page.tsx:236`, `dashboard/widgets/quick-actions.tsx:32`, `deals/page.tsx:388`, `:405`.
   - Fix: wrap callers as `() => openDealIntake()`, and have the provider ignore anything without a string `id`.
-- [ ] **Bulk import "View All Deals" → 404.**
+- [x] **Bulk import "View All Deals" → 404.**
   - Where: `W/app/(app)/deal-intake/components.tsx:408` (links to `/crm`, which doesn't exist).
   - Fix: link to `/deals` via `router.push` + `onClose()`.
-- [ ] **Stage-change note is thrown away.**
+- [x] **Stage-change note is thrown away.**
   - Where: textarea `W/app/(app)/deals/[id]/components.tsx:256-265`; PATCH sends only `{ stage }` at `deal-page-handlers.ts:84-86`; no note field in `A/routes/deals-mutate.ts` or `deals-schemas.ts`.
   - Fix: send `note` and write it into the stage-change activity (or remove the textarea).
-- [ ] **Data-room files vanish after one failed poll.** `fetchDocuments` swallows errors and returns `[]`, and the poll replaces the folder with it.
+- [x] **Data-room files vanish after one failed poll.** `fetchDocuments` swallows errors and returns `[]`, and the poll replaces the folder with it.
   - Where: `W/app/(app)/data-room/[dealId]/data-loaders.ts:193-201`, `W/lib/vdr/api.ts:60-73`.
   - Fix: return `null` on error and skip the merge when the fetch failed.
-- [ ] **Cancel at Google OAuth → raw "Missing code or state" page.**
+- [x] **Cancel at Google OAuth → raw "Missing code or state" page.**
   - Where: `A/routes/integrations-public.ts:30`.
   - Fix: if `req.query.error` is set or `code` is missing, redirect to `/settings?integrations=error&provider=…&reason=cancelled#section-integrations` and toast "Connection cancelled".
-- [ ] **"Reconnect needed" has no Reconnect button; sync error never shown.**
+- [x] **"Reconnect needed" has no Reconnect button; sync error never shown.**
   - Where: `W/app/(app)/settings/IntegrationsSection.tsx:47` (badge), `:35` (`lastSyncError` in type, never rendered), `:523-600` (card actions).
   - Fix: for `token_expired`/`error`, make the primary button "Reconnect" (`onConnect()`) and show `lastSyncError`.
-- [ ] **Contact "Summarize emails" always says "No summary available".** Route doesn't exist; the 404 is treated as empty.
+- [x] **Contact "Summarize emails" always says "No summary available".** Route doesn't exist; the 404 is treated as empty.
   - Where: `W/app/(app)/contacts/ContactEmailSummary.tsx:27-32, :104`; service exists at `A/services/gmailContactsService.ts:470`.
   - Fix: add `GET /contacts/:id/email-summary` in `A/routes/contacts.ts` calling `getContactEmailSummary`. Mount in the right bundle (see bundle-parity gotcha).
-- [ ] **Raw JSON shown as error messages.** Express error handler returns `{error:{code,message}}`; `api.ts` `JSON.stringify`s the object.
+- [x] **Raw JSON shown as error messages.** Express error handler returns `{error:{code,message}}`; `api.ts` `JSON.stringify`s the object.
   - Where: `A/middleware/errorHandler.ts:104-106` → `W/lib/api.ts:90-99` (affects 12 routes using `next(error)`).
   - Fix: in `api.ts`, when `error` is an object, use `error.message` and `error.code`.
-- [ ] **Data rooms created from the Data Room page never appear on the kanban** (created with stage `SCREENING`, not a kanban stage).
+- [x] **Data rooms created from the Data Room page never appear on the kanban** (created with stage `SCREENING`, not a kanban stage).
   - Where: `W/app/(app)/data-room/page.tsx:261` (and the dead `msg.includes("403")` check at `:266`); schema `A/routes/deals-schemas.ts:11`; stages `W/lib/constants.ts:54`.
   - Fix: send `INITIAL_REVIEW`, make the schema stage a `z.enum`, check `err.status === 403`.
-- [ ] **Silent failures in the data room.** Delete / rename / new folder close the dialog and do nothing on failure.
+- [x] **Silent failures in the data room.** Delete / rename / new folder close the dialog and do nothing on failure.
   - Where: `W/app/(app)/data-room/[dealId]/file-handlers.ts:58, 94, 108, 137, 153` (`if (!ok) return;`).
   - Fix: `showToast("Couldn't …", "error")` in each branch.
-- [ ] **Missing-document "Request" and "Generate insights" give no feedback.**
+- [x] **Missing-document "Request" and "Generate insights" give no feedback.**
   - Where: `file-handlers.ts:374-387`, `:291`; `W/components/vdr/InsightsPanel.tsx:270-276`.
   - Fix: success/error toast + disabled state while in flight.
-- [ ] **Failed pipeline drag snaps back with no message.**
+- [x] **Failed pipeline drag snaps back with no message.**
   - Where: `W/app/(app)/deals/page.tsx:280-298`.
   - Fix: `showToast(err.message, "error")` in the catch.
-- [ ] **Extraction errors mislabelled as "document may be encrypted or unsupported"** (includes 404 "no document" and 429 "too many extractions").
+- [x] **Extraction errors mislabelled as "document may be encrypted or unsupported"** (includes 404 "no document" and 429 "too many extractions").
   - Where: `W/app/(app)/deals/[id]/deal-financials.tsx:248-253`.
   - Fix: show `err.message`; for 404 show an "Upload a document" call to action.
-- [ ] **Old "PEOS" brand on the login page.**
+- [x] **Old "PEOS" brand on the login page.**
   - Where: `W/app/(auth)/login/page.tsx:225`.
 
 ---
@@ -187,12 +187,12 @@ How to work this list: one batch = one PR, failing test first, tick the box when
 ## Tier 3 — Polish
 
 - [ ] Share modal: existing links have no Copy button; Revoke has no confirmation; clipboard failure silent. `W/components/deal-actions/ShareDealModal.tsx:176-195, 91-100`.
-- [ ] Toasts implemented three ways; settings/data-room timers dismiss newer toasts early. `settings/page.tsx:114`, `templates/page.tsx:80`, `data-room/[dealId]/page.tsx:99`, memo-builder. Move all to global `useToast`.
+- [ ] Toasts implemented three ways; settings/data-room timers dismiss newer toasts early. ~~`settings/page.tsx:114`~~ (Settings moved to the global toast in Batch 1), `templates/page.tsx:80`, `data-room/[dealId]/page.tsx:99`, memo-builder. Move all to global `useToast`.
 - [ ] Dashboard duplicate requests: `/deals` under 3 keys, `/tasks` under 3. `dashboard/use-dashboard-data.ts:61`, `widgets/deal-funnel.tsx:27`, `widgets/upcoming-deadlines.tsx:36`.
 - [ ] Pages still showing a full spinner on every visit: `data-room/page.tsx:49`, `memo-builder/data-loaders.ts:25, 66` → move to `useApiQuery`.
 - [ ] Fit popup can appear up to 40s later over the follow-up questions; "reject" resets the form. `W/lib/teaserPoll.ts`; `IngestDealForm.tsx:249-257, 477-480`. Show fit inline instead.
-- [ ] Navigation to a new deal does a full app reload (`window.location.href`). `IngestDealForm.tsx:308, 462, 475`; `deal-intake/components.tsx:398`.
-- [ ] Integrations: list load failure shows every provider as "Not connected"; OAuth query param never cleared (toast repeats on refresh); "Sync started" shown after a finished sync. `IntegrationsSection.tsx:96-102, 113, 172`.
+- [ ] Navigation to a new deal does a full app reload (`window.location.href`). `IngestDealForm.tsx:308, 462, 475`; `deal-intake/components.tsx:398`. *(Batch 1: the result card's View Deal / View All Deals links are fixed; the `window.location.href` calls in IngestDealForm remain.)*
+- [ ] Integrations: list load failure shows every provider as "Not connected"; ~~OAuth query param never cleared~~ (fixed in Batch 1); "Sync started" shown after a finished sync. `IntegrationsSection.tsx:96-102, 113, 172`.
 - [ ] Portal Download on an expired share shows raw JSON. `W/app/portal/portal-view.tsx:192-197`; `A/routes/portal.ts:225`.
 - [ ] "Connect Gmail to summarize emails" isn't a link. `ContactEmailSummary.tsx:74`.
 

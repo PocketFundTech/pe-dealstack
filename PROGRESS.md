@@ -5,6 +5,51 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 81 — September 30, 2026
+
+#### Timestamp: September 30, 2026 — 00:31 IST
+
+#### Goal: Smooth Flows, Batch 1 — the 14 quick high-impact fixes (PR `fix/flows-batch-1`).
+
+Every fix started with a failing test, except the two toast and brand one-liners, which were checked by eye.
+
+**Getting deals in**
+- **"New Deal" opened the wrong mode.** Most New Deal buttons (dashboard masthead, quick actions, Deals empty states) passed the click event into `openDealIntake`, which treated it as a deal. The upload modal opened as "Update Existing Deal" with a blank deal selected. The provider now only pre-selects a real deal.
+- **Bulk import's "View All Deals" went to a 404** (`/crm`). It now goes to `/deals`. A new test checks that every hard-coded internal link points at a real route; that test found only this one.
+
+**Working a deal**
+- **The stage-change note was thrown away.** It is now sent with the stage change and saved on the stage-change activity.
+- **Extraction errors blamed the document.** "Document may be encrypted or unsupported" was shown for every failure. The message now matches the cause:
+  - No document on the deal: "upload one first".
+  - Too many extractions (429) and other failures: the server's own reason.
+  - Network failure: "couldn't reach the server".
+  - Timeout: the existing 5-minute explanation.
+- **Deals disappeared from the pipeline.**
+  - **Root cause:** stage was accepted as any string. The Data Room page created deals as `SCREENING`, and the deal chat and AI assistant stage tools offered `LOI_NEGOTIATION`, a stage that doesn't exist (they also lacked `LOI_SUBMITTED` and `NEGOTIATION`). Neither value has a pipeline column, so those deals never showed on the kanban.
+  - **Fix:** one shared stage list (`services/dealStages.ts`) is now used by the API schema and all three chat tools.
+  - **Existing deals:** `apps/api/deal-stage-cleanup.sql` moves them onto real stages. **Founder must run it**; it is listed in `docs/PENDING-MIGRATIONS.md`.
+- **A failed pipeline drag snapped back silently.** It now shows why. Removing the sample deal also reports failure.
+
+**Documents and integrations**
+- **Data-room files vanished.** One failed background refresh (the 5-second processing poll, or the refresh on returning to the tab) replaced the file list with nothing until a reload. `fetchDocuments` now reports the failure, so the screen keeps its files.
+- **Data-room actions failed silently.** Delete, rename and new folder/file, Generate insights and the missing-document "Request" now say when they fail. Request also confirms success.
+- **Cancelling Google sign-in stranded the user.** It showed a raw "Missing code or state" page. The callback now always returns to Settings, with a "connection cancelled" or "could not connect" message.
+- **Expired integrations had no way back.** They now show a **Reconnect** button and the actual sync error. Also:
+  - Settings now uses the app-wide toasts.
+  - The OAuth result is cleared from the URL, so refreshing the page no longer repeats the toast.
+  - `ProviderCard` was split into its own file to keep the section under 500 lines.
+- **Contact "Summarize emails" never worked.** The API route it called didn't exist. Added `GET /contacts/:id/email-summary`, which loads the Gmail service only when called.
+
+**App-wide**
+- **Errors appeared as raw JSON.** The API error handler returns `{ error: { code, message } }`, and the web client printed that object as `{"code":"INTERNAL_ERROR",…}`. The code was also lost. One parser now reads the message and code on all three request paths.
+- **The login page showed the old "PEOS" mark.** It now shows the Avise mark.
+
+**Verification:** API 2063 tests passing (+11 new), web 437 passing (+30 new), tsc clean in both apps. Web lint shows 0 errors and the same 81 warnings as `main`.
+
+**Pending (founder):** run `apps/api/deal-stage-cleanup.sql` in Supabase so existing hidden deals appear on the kanban.
+
+---
+
 ### Session 80 — September 29, 2026
 
 #### Timestamp: September 29, 2026 — 16:26 IST
