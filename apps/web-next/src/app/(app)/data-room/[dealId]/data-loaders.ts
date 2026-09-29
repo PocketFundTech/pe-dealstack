@@ -76,6 +76,8 @@ export function useInitialLoad({
         const docs = await fetchDocuments(dealId);
         if (cancelled) return;
         setAllFiles(docs.map(transformDocument));
+      } catch (err) {
+        console.warn("[data-room] initial load failed:", err);
       } finally {
         if (!cancelled) setLoading(false);
       }

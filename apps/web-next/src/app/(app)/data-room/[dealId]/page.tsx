@@ -222,6 +222,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
     setCreatingFolder,
     setAllFiles,
     setPendingDelete,
+    showToast,
   };
   const handleCreateFolder = createCreateFolder(folderDeps);
   const handleDeleteFolder = createDeleteFolder(folderDeps);
@@ -299,6 +300,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
     setInsights,
     setFolders,
     setGenerating,
+    showToast,
   };
   // activeFolder/activeFolderInsights are derived above this line. Re-attach
   // them before constructing the handlers so the factories have current refs.

@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SideSheet } from "@/components/dash/side-sheet";
@@ -258,12 +258,13 @@ function CreateRoomSheet({ open, onClose, onCreated, onError }: {
     if (!clean || creating) return;
     setCreating(true);
     try {
-      const deal = await api.post<RoomDeal>("/deals", { name: clean, companyName: clean, status: "ACTIVE", stage: "SCREENING" });
+      // First pipeline stage, so the new deal shows on the Deals kanban.
+      const deal = await api.post<RoomDeal>("/deals", { name: clean, companyName: clean, status: "ACTIVE", stage: "INITIAL_REVIEW" });
       if (deal?.id) onCreated(deal.id);
       close();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Couldn't create the data room.";
-      onError(msg.includes("403") ? "You need Associate role or higher to create data rooms. Ask your admin." : msg);
+      onError(err instanceof ApiError && err.status === 403 ? "You need Associate role or higher to create data rooms. Ask your admin." : msg);
     } finally {
       setCreating(false);
     }

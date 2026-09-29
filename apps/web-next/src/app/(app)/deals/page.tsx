@@ -31,8 +31,10 @@ import { KanbanView } from "./deals-page-kanban-view";
 import { KanbanSkeleton, ListSkeleton } from "./deals-page-skeletons";
 import { ErrorState, NoMatchingDealsState, WelcomeEmptyState } from "./deals-page-empty-states";
 import { exportDealsToCSV } from "./deals-csv-export";
+import { useToast } from "@/providers/ToastProvider";
 
 export default function DealsPage() {
+  const { showToast } = useToast();
   const { openDealIntake } = useIngestDealModal();
   const [view, setView] = useState<"list" | "kanban">("list");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -273,6 +275,7 @@ export default function DealsPage() {
       dealsQuery.mutate((prev) => (prev ?? []).filter((d) => d.id !== id));
     } catch (err) {
       console.warn("[deals] removeSample failed:", err);
+      showToast("Couldn't remove the sample deal. Please try again.", "error");
     }
   };
 
@@ -293,10 +296,11 @@ export default function DealsPage() {
       await api.patch(`/deals/${dealId}`, { stage: newStage });
     } catch (err) {
       console.warn("[deals] kanban drop failed, reverting:", err);
-      // Revert on error
+      // Revert on error, and say why — otherwise the card just snaps back.
       dealsQuery.mutate((prev) =>
         (prev ?? []).map((d) => (d.id === dealId ? { ...d, stage: oldStage } : d)),
       );
+      showToast(`Couldn't move "${deal.name}": ${err instanceof Error ? err.message : "please try again."}`, "error");
     }
   };
 

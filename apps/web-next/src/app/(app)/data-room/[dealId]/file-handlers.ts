@@ -43,12 +43,13 @@ interface FolderDeps {
   setCreatingFolder: Dispatch<SetStateAction<boolean>>;
   setAllFiles: Dispatch<SetStateAction<VDRFile[]>>;
   setPendingDelete: Dispatch<SetStateAction<PendingDelete>>;
+  showToast: ToastFn;
 }
 
 export function createCreateFolder(deps: FolderDeps) {
   const {
     dealId, newFolderName, creatingFolder,
-    setFolders, setActiveFolderId, setShowCreateFolder, setNewFolderName, setCreatingFolder,
+    setFolders, setActiveFolderId, setShowCreateFolder, setNewFolderName, setCreatingFolder, showToast,
   } = deps;
   return async () => {
     const name = newFolderName.trim();
@@ -62,6 +63,8 @@ export function createCreateFolder(deps: FolderDeps) {
         setActiveFolderId(folder.id);
         setShowCreateFolder(false);
         setNewFolderName("");
+      } else {
+        showToast(`Couldn't create folder "${name}". Please try again.`, "error");
       }
     } finally {
       setCreatingFolder(false);
@@ -85,13 +88,16 @@ export function createDeleteFolder(deps: FolderDeps) {
 }
 
 export function createConfirmDeleteFolder(deps: FolderDeps) {
-  const { folders, activeFolderId, setFolders, setAllFiles, setActiveFolderId } = deps;
+  const { folders, activeFolderId, setFolders, setAllFiles, setActiveFolderId, showToast } = deps;
   return async (folderId: string) => {
     const folder = folders.find((f) => f.id === folderId);
 
     const cascade = (folder?.fileCount || 0) > 0;
     const ok = await deleteFolder(folderId, cascade);
-    if (!ok) return;
+    if (!ok) {
+      showToast(`Couldn't delete folder "${folder?.name ?? "folder"}". Please try again.`, "error");
+      return;
+    }
     setFolders((prev) => prev.filter((f) => f.id !== folderId));
     setAllFiles((prev) => prev.filter((f) => f.folderId !== folderId));
     if (activeFolderId === folderId) {
@@ -101,11 +107,14 @@ export function createConfirmDeleteFolder(deps: FolderDeps) {
   };
 }
 
-export function createRenameFolder(deps: Pick<FolderDeps, "setFolders">) {
-  const { setFolders } = deps;
+export function createRenameFolder(deps: Pick<FolderDeps, "setFolders" | "showToast">) {
+  const { setFolders, showToast } = deps;
   return async (folderId: string, newName: string) => {
     const ok = await renameFolder(folderId, newName);
-    if (!ok) return;
+    if (!ok) {
+      showToast(`Couldn't rename the folder to "${newName}". Please try again.`, "error");
+      return;
+    }
     setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, name: newName } : f)));
   };
 }
@@ -130,11 +139,14 @@ export function createDeleteFile(deps: FileDeps) {
 }
 
 export function createConfirmDeleteFile(deps: FileDeps) {
-  const { allFiles, setAllFiles, setFolders } = deps;
+  const { allFiles, setAllFiles, setFolders, showToast } = deps;
   return async (fileId: string) => {
     const file = allFiles.find((f) => f.id === fileId);
     const ok = await deleteDocument(fileId);
-    if (!ok) return;
+    if (!ok) {
+      showToast(`Couldn't delete "${file?.name ?? "file"}". Please try again.`, "error");
+      return;
+    }
     setAllFiles((prev) => prev.filter((f) => f.id !== fileId));
     if (file?.folderId) {
       setFolders((prev) =>
@@ -146,11 +158,14 @@ export function createConfirmDeleteFile(deps: FileDeps) {
   };
 }
 
-export function createRenameFile(deps: Pick<FileDeps, "setAllFiles">) {
-  const { setAllFiles } = deps;
+export function createRenameFile(deps: Pick<FileDeps, "setAllFiles" | "showToast">) {
+  const { setAllFiles, showToast } = deps;
   return async (fileId: string, newName: string) => {
     const ok = await renameDocument(fileId, newName);
-    if (!ok) return;
+    if (!ok) {
+      showToast(`Couldn't rename the file to "${newName}". Please try again.`, "error");
+      return;
+    }
     setAllFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, name: newName } : f)));
   };
 }
@@ -259,10 +274,11 @@ interface InsightsDeps {
   setInsights: Dispatch<SetStateAction<Record<string, FolderInsights>>>;
   setFolders: Dispatch<SetStateAction<Folder[]>>;
   setGenerating: Dispatch<SetStateAction<boolean>>;
+  showToast: ToastFn;
 }
 
 export function createGenerateInsights(deps: InsightsDeps) {
-  const { activeFolderId, generating, setInsights, setFolders, setGenerating } = deps;
+  const { activeFolderId, generating, setInsights, setFolders, setGenerating, showToast } = deps;
   return async () => {
     if (!activeFolderId || generating) return;
     setGenerating(true);
@@ -289,6 +305,7 @@ export function createGenerateInsights(deps: InsightsDeps) {
       }
     } catch (err) {
       console.warn("[vdr] generateInsights failed:", err);
+      showToast(`Couldn't generate insights: ${err instanceof Error ? err.message : "please try again."}`, "error");
     } finally {
       setGenerating(false);
     }
@@ -372,7 +389,7 @@ export function createConfirmUpload(deps: UploadDeps) {
 }
 
 export function createRequestDocument(deps: InsightsDeps) {
-  const { dealId, activeFolderId, activeFolder, activeFolderInsights } = deps;
+  const { dealId, activeFolderId, activeFolder, activeFolderInsights, showToast } = deps;
   return async (docId: string) => {
     const doc = activeFolderInsights?.missingDocuments.find((d) => d.id === docId);
     if (!doc) return;
@@ -381,8 +398,10 @@ export function createRequestDocument(deps: InsightsDeps) {
         folderId: activeFolderId || undefined,
         folderName: activeFolder?.name,
       });
+      showToast(`Request sent for "${doc.name}"`, "success");
     } catch (err) {
       console.warn("[vdr] requestDocument failed:", err);
+      showToast(`Couldn't request "${doc.name}": ${err instanceof Error ? err.message : "please try again."}`, "error");
     }
   };
 }

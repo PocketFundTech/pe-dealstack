@@ -2,13 +2,14 @@
 // Shared by deals-list.ts and deals-mutate.ts.
 
 import { z } from 'zod';
+import { DEAL_STAGES } from '../services/dealStages.js';
 
 // Validation schemas
 export const createDealSchema = z.object({
   name: z.string().min(1),
   companyId: z.string().optional(),
   companyName: z.string().optional(),
-  stage: z.string().default('INITIAL_REVIEW'),
+  stage: z.enum(DEAL_STAGES).default('INITIAL_REVIEW'),
   status: z.string().default('ACTIVE'),
   irrProjected: z.number().nullable().optional(),
   mom: z.number().nullable().optional(),

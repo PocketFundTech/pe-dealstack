@@ -222,11 +222,14 @@ router.patch('/:id', async (req, res) => {
 
     // Log stage change
     if (data.stage && data.stage !== existingDeal.stage) {
+      // Optional "reason for stage change" from the stage modal. Read outside
+      // the schema on purpose: it belongs on the activity, not the Deal row.
+      const stageNote = typeof req.body.stageNote === 'string' ? req.body.stageNote.trim().slice(0, 2000) : '';
       await supabase.from('Activity').insert({
         dealId: deal.id,
         type: 'STAGE_CHANGED',
         title: `Stage changed to ${data.stage}`,
-        description: `Deal stage changed from ${existingDeal.stage} to ${data.stage}`,
+        description: `Deal stage changed from ${existingDeal.stage} to ${data.stage}${stageNote ? `\n\nNote: ${stageNote}` : ''}`,
       });
     }
 

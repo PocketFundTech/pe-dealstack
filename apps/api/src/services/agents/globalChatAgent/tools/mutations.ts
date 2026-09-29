@@ -18,11 +18,9 @@ import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
+import { DEAL_STAGES } from '../../../dealStages.js';
 
-const STAGES = [
-  'INITIAL_REVIEW', 'DUE_DILIGENCE', 'IOI_SUBMITTED',
-  'LOI_NEGOTIATION', 'CLOSING', 'CLOSED_WON', 'CLOSED_LOST', 'PASSED',
-] as const;
+const STAGES = DEAL_STAGES;
 
 /** Resolve a deal name → { id, name } within the org. Longest/exact wins. */
 async function resolveDeal(orgId: string, name: string): Promise<{ id: string; name: string } | null> {
@@ -101,7 +99,7 @@ export function makeChangeDealStageTool(orgId: string) {
     },
     {
       name: 'change_deal_stage',
-      description: 'PROPOSE changing a deal\'s pipeline stage (does NOT change it — the user must confirm). Stages: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_NEGOTIATION → CLOSING → CLOSED_WON. Terminal: CLOSED_LOST, PASSED.',
+      description: 'PROPOSE changing a deal\'s pipeline stage (does NOT change it — the user must confirm). Stages: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_SUBMITTED → NEGOTIATION → CLOSING → CLOSED_WON. Terminal: CLOSED_LOST, PASSED.',
       schema: z.object({
         dealName: z.string().describe('Name of the deal to move.'),
         stage: z.enum(STAGES).describe('Target stage.'),
