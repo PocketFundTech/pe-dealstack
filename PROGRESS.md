@@ -5,6 +5,42 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 80 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 16:26 IST
+
+#### Goal: token savings (PRs #154–#156, merged) and a full user-flow audit (PR #157).
+
+**1. Nightly signal scan skipped idle orgs (#154)**
+- **Problem:** `/api/cron/signal-scan` started a paid Managed Agents session for every active org, including orgs with no deals to monitor.
+- **Fix:** Before the scan, count the org's active deals, using the same filter as the agent's `list_deals_for_org` (not PASSED, not CLOSED_LOST). Orgs with no active deals are skipped. If the count query fails, the org is scanned anyway. The response is now `{ scanned, skipped, failed }`.
+
+**2. PASSED deals scored once after extraction, not twice (#155)**
+- **Problem:** After an extraction, both `maybeScoreAfterExtraction` and `maybeReactivateAfterExtraction` called `scoreDeal` for a passed deal: two identical Sonnet calls.
+- **Root cause of the worse bug:** the two calls raced. If the plain score landed first, the reactivation check compared the new card against itself, so a real improvement could read as "no change" and the deal was never flagged for reactivation.
+- **Fix:** the plain post-extraction score now skips PASSED deals. The reactivation hook scores them once, against the card from before the extraction.
+
+**3. Memo generation caches the deal context (#156)**
+- **Problem:** each of a memo's ~12 sections sent its section prompt first and the full deal context (up to ~40K chars) after it. With the order switched between calls, nothing could be cached, and every section re-billed the whole context.
+- **Fix:** the deal context now comes first, as a cached block that is identical for every section, followed by that section's instructions. The first batch of three sections writes the cache, and the remaining ~9 sections and the critique read it at 0.1×. That cuts roughly 60% of the context input cost per memo. The model sees the same text in a different order.
+
+**4. Skipped: trimming the deal chat context.** Since #150 the chat context is cached, so trimming would save about $0.0004 per message. It would also remove the user list the assign tool needs and the source quotes used for citations.
+
+**5. User-flow audit → "Smooth Flows" fix list (#157)**
+- Five parallel code reviews covered auth and onboarding, deal intake, working a deal, documents and integrations, and app-wide patterns. Every finding was re-verified against `main`.
+- The result is `docs/USERFLOW-SMOOTHING-TODO.md`: 68 checklist items with file:line references and fixes, grouped into 4 batches.
+- Worst findings:
+  - The onboarding "Invite your team" step invites nobody.
+  - Most "New Deal" buttons open intake in "Update Existing Deal" mode.
+  - Memo "Generate all" saves nothing until the very end.
+  - A chat reply that fails midway freezes, shows no error and isn't saved.
+  - There is no mobile navigation.
+- **Process lesson:** the main checkout was on a stale branch 98 commits behind `main`, and the first pass read it. All audit and review work must run against a fresh `origin/main` worktree.
+
+**Verification:** #154 and #155 each added 2 tests and #156 added 1. The API suite passed (2042–2044 tests) and tsc was clean on each branch.
+
+---
+
 ### Session 79 — September 29, 2026
 
 #### Timestamp: September 29, 2026 — 15:40 IST
