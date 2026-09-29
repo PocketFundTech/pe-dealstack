@@ -163,6 +163,17 @@ export async function maybeScoreAfterExtraction(dealId: string, orgId: string): 
   try {
     const criteria = await loadCriteria(orgId);
     if (!criteria) return;
+    // PASSED deals are re-scored by dealReactivation's post-extraction hook,
+    // which needs the card from BEFORE this extraction to detect a
+    // reactivation. Scoring here too was a duplicate call that could
+    // overwrite that card first.
+    const { data: deal } = await supabase
+      .from('Deal')
+      .select('stage')
+      .eq('id', dealId)
+      .eq('organizationId', orgId)
+      .single();
+    if (deal?.stage === 'PASSED') return;
     await scoreDeal(dealId, orgId);
   } catch (err: any) {
     log.warn(`[dealScorecard] post-extraction scoring skipped: ${err?.message}`);
