@@ -5,6 +5,28 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 79 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 15:40 IST
+
+#### Goal: cut the 4MB icon font that loads on every cold page load (PR `perf/icon-font-subset`).
+
+**Problem:** The root layout loaded the whole Material Symbols variable font, 4.0MB covering all ~4,300 icons and every axis, on every cold load. The product uses 365 of those icons.
+
+**Fix:**
+- The font request now passes Google Fonts' `icon_names=` with only the icons we use. It downloads **364KB instead of 4.0MB (−91%)**.
+- All axes (fill, weight, grade, optical size) are kept, so every icon looks exactly the same.
+- Added `preconnect` to Google Fonts so the font request starts sooner.
+- Switched `font-display` from `swap` to `block`. Icon names no longer flash as plain text ("dashboard", "search") while the font loads. Google recommends `block` for icon fonts.
+- The list lives in `apps/web-next/src/lib/iconFont.ts`. A guard test (`iconFont.test.ts`) scans the source for icon names and fails if one is missing from the list. Without the guard, a missing icon would render as its name in plain text. The guard found 7 icons that a first scan had missed.
+- **Side fix:** the verify-email loading spinner used `material-symbols-rounded`, a font the app never loads, so it rendered as the text "progress_activity". It now uses the outlined font.
+
+**Known limit:** A deal's `icon` column is free text. An icon name stored in the database that the code never uses would render as text. All code paths that set it use `business_center`, which is in the list.
+
+**Verification:** The live Google Fonts URL returns 200 and a 364KB font file. Web: 410 tests passing (3 new), lint clean.
+
+---
+
 ### Session 78 — September 29, 2026
 
 #### Timestamp: September 29, 2026 — 15:12 IST

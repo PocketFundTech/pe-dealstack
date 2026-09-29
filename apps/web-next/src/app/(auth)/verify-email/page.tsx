@@ -13,7 +13,7 @@ type PageState = "loading" | "code-entry" | "success" | "error";
 
 export default function VerifyEmailPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><span className="material-symbols-rounded animate-spin text-3xl text-primary">progress_activity</span></div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><span className="material-symbols-outlined animate-spin text-3xl text-primary">progress_activity</span></div>}>
       <VerifyEmailContent />
     </Suspense>
   );
