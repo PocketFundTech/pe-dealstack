@@ -5,6 +5,37 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 82 — September 30, 2026
+
+#### Timestamp: September 30, 2026 — 02:25 IST
+
+#### Goal: live browser QA of production (founder asked for "every button and feature").
+
+**Setup**
+- **Test account:** a production QA login, `qa.tester@example.com` (ADMIN), created through the Supabase admin API with email already confirmed. The app provisioned its own org, "Avise QA Test Org", on first sign-in. `@example.com` never delivers mail, so invites triggered by the tests reach nobody.
+- **Test files:** a fictional test CIM (PDF) and a P&L (Excel).
+- **Testers:** four parallel `playwright-cli` browser testers covered navigation and dashboard, intake and the deal page, documents, and settings/team/contacts. They recorded console errors and failed requests and took screenshots.
+
+**Results**
+- About 30 new findings, all added to `docs/USERFLOW-SMOOTHING-TODO.md` → "Live QA findings", including a new **Batch 0** for demo blockers.
+- Worst:
+  - Excel-derived financial statements are wrong (EBITDA 0), and they appear on the client portal.
+  - Valid modern PDFs are rejected at ingest.
+  - "Mark all as read" 403s for every user.
+  - The dashboard shows "0 live deals" for new deals.
+  - The NDA template never appears after saving.
+  - Firm Profile shows "Saved" but doesn't save.
+- Batch 1 fixes confirmed working live: stage-change note, the contact email-summary message, and new data rooms appearing on the kanban.
+
+**Root causes confirmed this session**
+- **PDF ingest.** Production logs show `pdf-parse` 1.1.4 (pdf.js v1.10, 2017) throwing "Invalid PDF structure" on the test PDF, which macOS PDFKit reads fine. Ingest stops before Claude's native PDF read.
+- **Mark all as read.** The route compares the Supabase auth id against `User.id` without the auth→internal translation that the `GET` route performs.
+- **Portal download 404 on app.avise.io.** Not reproducible: re-tested with the same token, and both domains serve the portal and download.
+
+**Test data left in the QA org:** deal "Northwind Cold Chain", data room "QA-Room", contact "Priya Sharma", NDA template "QA NDA template", memo, invitee account `qa.invitee1@example.com`. Kept for re-testing fixes.
+
+---
+
 ### Session 81 — September 30, 2026
 
 #### Timestamp: September 30, 2026 — 00:31 IST

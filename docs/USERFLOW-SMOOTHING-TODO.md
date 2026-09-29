@@ -198,6 +198,80 @@ How to work this list: one batch = one PR, failing test first, tick the box when
 
 ---
 
+## Live QA findings — 2026-09-30 (browser click-through on production)
+
+Four `playwright-cli` testers clicked through deals.avise.io as `qa.tester@example.com`
+(ADMIN, own "Avise QA Test Org"). Items below are **new** — not in the code audit above.
+Each was observed live; evidence screenshots were taken during the run.
+
+### Batch 0 — fix before the next demo (wrong data, silent failures)
+
+- [ ] **Financial statements from an Excel upload are wrong, including on the client portal.**
+  - Seen: Excel P&L with Revenue 182.4 / 214.9 / 251.3 and EBITDA 29.1 / 36.5 / 44.2. The deal headline was correct, but the Financial Statements table, the model panel, the deal chat's key metrics and the **public portal** showed Revenue 200/200/300 and **EBITDA 0 for every year**.
+  - The deal chat noticed it by itself: the numeric rows were 0 and only the `_source` cells carried the figures.
+  - Where to look: the deep-pass Excel extraction in `A/services/ingestDeepPass.ts` → Excel container extraction → statement storage. Check unit scale and the merge of `_source` rows into numeric rows.
+- [ ] **Valid PDFs can be rejected at ingest and never analysed.**
+  - `pdf-parse` 1.1.4 (bundles pdf.js from 2017) throws "Invalid PDF structure" on PDFs that use modern object streams. Ingest then returns 422 "may be encrypted…", even though macOS PDFKit reads the same file fine.
+  - Claude can read PDFs natively (`INGEST_ENGINE=claude`), but ingest stops at the text-extraction step before Claude is tried.
+  - The same PDF sits in the data room as "Pending Analysis" indefinitely.
+  - Fix: when text extraction fails, still send the PDF to Claude's native read. Upgrade or replace `pdf-parse`.
+  - Where: `A/routes/ingest-upload.ts` Step 1 ("LlamaParse → pdf-parse").
+- [ ] **"Mark all as read" returns 403 for every user.**
+  - The panel sends the Supabase *auth* id. `GET /notifications` translates auth id → internal id, but `mark-all-read` looks up `User.id = <auth id>`, finds nothing, and answers "outside your organization".
+  - The UI hides it: the badge clears, then the notifications come back unread on the next refresh.
+  - Fix: resolve the id the same way `GET` does, or better, ignore the client's `userId` and use `req.user`.
+  - Where: `A/routes/notifications.ts:274-302`; callers `W/components/layout/NotificationsDropdown.tsx:117`, `NotificationPanel.tsx:132`.
+- [ ] **The dashboard says "0 live deals" while deals exist.**
+  - The Pipeline widget buckets (Sourcing / Diligence / IOI-LOI / Negotiation / Closed) have no slot for `INITIAL_REVIEW`, the default stage of every new deal. `/deals` and `/admin` show the correct count.
+- [ ] **Data-room insights fail silently.**
+  - `POST /folders/:id/generate-insights` → 503 "Check that OPENAI_API_KEY is configured". This feature still runs on OpenAI, which has no working key or credit in prod.
+  - The panel quietly resets to "No insights yet" (Batch 1 added a toast; confirm it shows).
+  - Decide: move this feature to Claude, or configure OpenAI.
+- [ ] **NDA template saves but never appears.**
+  - `POST /legal-document-templates` → 201, but the gallery keeps showing "0 saved" and "No NDA templates yet". `GET` returns 200 without it, even after a reload.
+  - Result: the whole create-NDA → edit → send-for-signature flow is blocked.
+- [ ] **Firm Profile says "Saved" but the website and LinkedIn fields don't persist.** `POST /onboarding/firm-inputs` → 200; after a reload both fields are empty.
+- [ ] **Multi-file data-room upload silently drops unsupported files.**
+  - Picking a PDF, an XLSX and 2 .txt files → the confirm dialog lists only the PDF and XLSX, with no message about the other two.
+  - The error toast only fires when every file is invalid.
+
+### Needs the founder (config, not code)
+- [ ] **Gmail / Google "Connect" returns 500** before reaching Google (`POST /integrations/gmail/connect`, `/google_calendar/connect`). This matches the known missing Google OAuth client id/secret pair in Vercel prod env. Granola (API key) works.
+- [ ] **Invite emails don't send** ("Invitation created but email could not be sent"). This may only be because `@example.com` bounces. Check the email provider logs with one real address.
+- [ ] **NDA "Review their NDA" timed out** (504 after ~108s; the UI did show the error). Likely AI credit or latency; re-test after credits are topped up.
+
+### Also found live (MEDIUM / LOW)
+- [ ] Deal header "Change Stage" opens the **Close Deal** (Won/Lost/Passed) modal, even for a deal in Initial Review. Only clicking a pipeline node gives the normal stage picker with its note field.
+- [ ] Share links: once the Share modal closes, there's no way to list, copy or revoke existing links. (The code audit expected rows in `ShareDealModal`; the live UI showed none, so check whether the list renders.)
+- [ ] Data-room folder file count goes stale (said 3 files while the folder held 1, including in the delete-confirm text). A same-name re-upload returned 200 instead of 201, which suggests leftover orphan rows.
+- [ ] Contact detail panel doesn't refresh after editing a field or adding a note (server returned 200/201; the panel updates only after a full reload).
+- [ ] Team invite stays **PENDING** after the invitee has accepted and signed in.
+- [ ] React hydration error #418 in the console on every `/dashboard`, `/settings` and `/data-room` load. Probably time-based text rendered on the server.
+- [ ] Old branding still live:
+  - Settings → Security says "Pocket Fund staff access log", links `/assets/pocket-fund-security-overview.pdf` and uses `security@pocket-fund.com`.
+  - The Help & Support modal lists `tech@pocketfund.org` and `hello@pocketfund.org`.
+  - Sidebar "Feedback" opens an external Google Form titled "PE OS Beta Feedback Form".
+- [ ] Clicking a data-room file row downloads it immediately, with no preview and no on-page feedback.
+- [ ] The forgot-password page's browser tab title is "Sign In | Avise".
+- [ ] LOW:
+  - User menu "Profile" and "Settings" both go to `/settings`.
+  - Quick Actions "Create Task" linked to `/admin`.
+  - `GET /folders/:id/insights` returns 404 for new folders (expected-empty state modelled as an error).
+  - The upload dialog shows small files as "0.0 MB".
+  - Invite role: "Associate" at invite time shows as "MEMBER" afterwards.
+  - Many near-duplicate `GET /notifications?limit=1` calls.
+
+### Seen once, not reproducible
+- Portal document download returned 404 "This link is not valid." on `app.avise.io` during the run. Re-tested afterwards with the same token: portal and download work on both `app.avise.io` and `deals.avise.io`.
+
+### Confirmed live — already on this list
+Mobile has no navigation · SSO button does nothing · CSV contact import fails the whole batch with no reason · no unsaved-changes guard · invites have no Resend/Revoke · accept-invite lands on bare /login · memo "Generate all" timed out (~85s, `ERR_TIMED_OUT`) and **lost every generated section on reload**.
+
+### Worked well (live)
+Excel ingest → deal in ~10s · deal chat (~5s, citations, history persists) · stage change with note (Batch 1 fix confirmed) · data-room create/rename/upload/download/delete · kanban drag persists · Cmd+K search · Investment Criteria save · invite accept end-to-end · "Summarize emails" now says to connect Gmail (Batch 1 fix confirmed) · new data rooms appear on the kanban (Batch 1 fix confirmed) · scorecard shows a clear "set criteria first" message.
+
+---
+
 ## Not verified by the audit
 
 - Supabase project settings (email confirmation on/off, PKCE on cross-device reset links) — affects the accept-invite and signup items.
