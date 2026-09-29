@@ -232,6 +232,66 @@ describe('trackedClaudeMessage', () => {
     });
   });
 
+  // Server-side refusal fallback: top-level usage covers ONLY the attempt
+  // that produced the returned message. A Fable attempt the classifier cut
+  // off mid-output is still billed (at Fable rates) and appears only in
+  // usage.iterations — it was missing from the ledger entirely.
+  it('records a declined attempt that produced output as its own blocked row at its own model', async () => {
+    nextFinalMessage = {
+      model: 'claude-opus-4-8',
+      stop_reason: 'end_turn',
+      stop_details: null,
+      content: [{ type: 'fallback', from: { model: 'claude-fable-5' }, to: { model: 'claude-opus-4-8' } }, { type: 'text', text: 'ok' }],
+      usage: {
+        input_tokens: 900,
+        output_tokens: 200,
+        iterations: [
+          { type: 'message', model: 'claude-fable-5', input_tokens: 800, output_tokens: 150, cache_read_input_tokens: 5_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } },
+          { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 900, output_tokens: 200 },
+        ],
+      },
+    };
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    });
+    expect(recorded).toHaveLength(2);
+    expect(recorded).toContainEqual(expect.objectContaining({
+      status: 'blocked', model: 'claude-fable-5', promptTokens: 800, completionTokens: 150, cacheReadTokens: 5_000,
+    }));
+    // The served hop is still recorded exactly once, from top-level usage.
+    expect(recorded).toContainEqual(expect.objectContaining({
+      status: 'success', model: 'claude-opus-4-8', promptTokens: 900, completionTokens: 200,
+    }));
+  });
+
+  it('does not record a declined-before-output attempt (Anthropic does not bill it)', async () => {
+    nextFinalMessage = {
+      model: 'claude-opus-4-8',
+      stop_reason: 'end_turn',
+      stop_details: null,
+      content: [{ type: 'text', text: 'ok' }],
+      usage: {
+        input_tokens: 900,
+        output_tokens: 200,
+        iterations: [
+          { type: 'message', model: 'claude-fable-5', input_tokens: 800, output_tokens: 0 },
+          { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 900, output_tokens: 200 },
+        ],
+      },
+    };
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    });
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ status: 'success', model: 'claude-opus-4-8' });
+  });
+
   // Prod incident risk: an aborted/errored call still bills whatever the
   // stream had already received (Anthropic charges for tokens processed
   // regardless of how the request ended). Recording 0/0 silently under-bills
