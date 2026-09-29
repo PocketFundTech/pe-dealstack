@@ -20,9 +20,10 @@ vi.mock('../src/utils/logger.js', () => ({
 
 const download = vi.fn();
 const remove = vi.fn(async () => ({ data: null, error: null }));
-vi.mock('../src/supabase.js', () => ({
-  supabase: { storage: { from: () => ({ download, remove }) } },
-}));
+// The one supabase mock for this file is further down (it needs `from` for
+// the route-level tests). A second vi.mock of the same path here made the
+// route tests flaky: whichever factory won, the route sometimes got a client
+// with no `from` and 500'd ("supabase.from is not a function").
 
 vi.mock('../src/middleware/orgScope.js', () => ({
   getOrgId: (req: any) => {
