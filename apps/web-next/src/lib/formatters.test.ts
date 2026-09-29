@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   formatCurrency,
   formatFileSize,
@@ -165,10 +165,18 @@ describe("formatRelativeTime", () => {
   });
 
   it("formats future timestamps as 'in X' instead of silently saying 'Just now'", () => {
-    expect(formatRelativeTime(new Date(Date.now() + 9 * 60 * 1000).toISOString())).toBe("in 9 mins");
-    expect(formatRelativeTime(new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString())).toBe("in 3 hours");
-    expect(formatRelativeTime(new Date(Date.now() + 9 * 24 * 60 * 60 * 1000).toISOString())).toBe("in 9 days");
-    expect(formatRelativeTime(new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString())).toBe("in 1 day");
+    // Freeze the clock: otherwise a millisecond passes between building the
+    // timestamp and formatting it, and "in 9 mins" floors to "in 8 mins".
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-29T12:00:00Z"));
+    try {
+      expect(formatRelativeTime(new Date(Date.now() + 9 * 60 * 1000).toISOString())).toBe("in 9 mins");
+      expect(formatRelativeTime(new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString())).toBe("in 3 hours");
+      expect(formatRelativeTime(new Date(Date.now() + 9 * 24 * 60 * 60 * 1000).toISOString())).toBe("in 9 days");
+      expect(formatRelativeTime(new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString())).toBe("in 1 day");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("formats far-future dates as an absolute date, same as far-past", () => {

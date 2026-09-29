@@ -132,6 +132,14 @@ function getClientInfo(req?: Request): { ipAddress?: string; userAgent?: string;
 /**
  * Log an audit event
  */
+const USER_ACTIONS = new Set<string>(['LOGIN', 'LOGIN_FAILED', 'LOGOUT']);
+
+function defaultEntityType(action: string): string {
+  if (USER_ACTIONS.has(action)) return RESOURCE_TYPES.USER;
+  log.warn('Audit event logged without a resourceType — defaulting to SETTINGS', { action });
+  return RESOURCE_TYPES.SETTINGS;
+}
+
 export async function logAuditEvent(entry: AuditLogEntry, req?: Request): Promise<void> {
   try {
     const clientInfo = getClientInfo(req);
@@ -145,7 +153,10 @@ export async function logAuditEvent(entry: AuditLogEntry, req?: Request): Promis
       userRole: entry.userRole,
       organizationId: entry.organizationId,
       action: entry.action,
-      entityType: entry.resourceType,
+      // AuditLog.entityType is NOT NULL. An event without a resource type
+      // used to be rejected by the DB and silently lost (every deal-chat
+      // entry since August). Default it instead, and warn so the caller gets fixed.
+      entityType: entry.resourceType ?? defaultEntityType(entry.action),
       entityId: entry.resourceId,
       entityName: entry.resourceName,
       description: entry.description,
@@ -305,18 +316,25 @@ export async function getAuditSummary(days: number = 30, organizationId?: string
 export const AuditLog = {
   // Authentication
   loginSuccess: (req: Request, userId: string, email: string) =>
-    logAuditEvent({ userId, userEmail: email, action: AUDIT_ACTIONS.LOGIN }, req),
+    logAuditEvent({
+      userId,
+      userEmail: email,
+      action: AUDIT_ACTIONS.LOGIN,
+      resourceType: RESOURCE_TYPES.USER,
+      resourceId: userId,
+    }, req),
 
   loginFailed: (req: Request, email: string, reason?: string) =>
     logAuditEvent({
       userEmail: email,
       action: AUDIT_ACTIONS.LOGIN_FAILED,
+      resourceType: RESOURCE_TYPES.USER,
       severity: SEVERITY.WARNING,
       metadata: { reason },
     }, req),
 
   logout: (req: Request) =>
-    logFromRequest(req, AUDIT_ACTIONS.LOGOUT),
+    logFromRequest(req, AUDIT_ACTIONS.LOGOUT, { resourceType: RESOURCE_TYPES.USER, resourceId: req.user?.id }),
 
   // Deals
   dealCreated: (req: Request, dealId: string, dealName: string) =>
@@ -416,8 +434,10 @@ export const AuditLog = {
     }),
 
   // AI operations
-  aiChat: (req: Request, context?: string) =>
+  aiChat: (req: Request, context?: string, dealId?: string) =>
     logFromRequest(req, AUDIT_ACTIONS.AI_CHAT, {
+      resourceType: RESOURCE_TYPES.DEAL,
+      resourceId: dealId,
       metadata: { context },
     }),
 

@@ -379,7 +379,7 @@ router.post('/:dealId/chat', async (req, res) => {
           },
         });
 
-        await AuditLog.aiChat(req, `Deal: ${deal.name} (streaming)`);
+        await AuditLog.aiChat(req, `Deal: ${deal.name} (streaming)`, dealId);
       } catch (streamErr) {
         log.error('Deal chat streaming failed after headers sent', streamErr);
         // PROD REGRESSION (2026-08-17): an exception thrown before the
@@ -433,7 +433,7 @@ router.post('/:dealId/chat', async (req, res) => {
       },
     });
 
-    await AuditLog.aiChat(req, `Deal: ${deal.name} (ReAct agent)`);
+    await AuditLog.aiChat(req, `Deal: ${deal.name} (ReAct agent)`, dealId);
 
     res.json(result);
   } catch (error) {

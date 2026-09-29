@@ -104,6 +104,23 @@ function extractCacheTokens(
   };
 }
 
+interface AttemptUsage {
+  type: string;
+  model: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } | null;
+}
+
+/** Billed attempts in usage.iterations other than the one that served the message (the last). */
+function declinedAttempts(usage: unknown): AttemptUsage[] {
+  const iterations = (usage as { iterations?: AttemptUsage[] | null } | undefined)?.iterations;
+  if (!Array.isArray(iterations)) return [];
+  const attempts = iterations.filter((it) => it.type === 'message' || it.type === 'fallback_message');
+  return attempts.slice(0, -1).filter((it) => (it.output_tokens ?? 0) > 0);
+}
+
 export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<ClaudeCallResult> {
   const cfg = getModelConfig(opts.role);
   const client = getAnthropicClient();
@@ -178,6 +195,14 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     const inTok = message.usage?.input_tokens ?? 0;
     const outTok = message.usage?.output_tokens ?? 0;
     const cache = extractCacheTokens(message.usage);
+
+    // Server-side fallback: top-level usage covers only the attempt that
+    // produced this message. Earlier attempts live in usage.iterations —
+    // one declined mid-output is billed at its own model's rates, one
+    // declined before any output is not billed at all.
+    for (const hop of declinedAttempts(message.usage)) {
+      await record('blocked', hop.model, hop.input_tokens ?? 0, hop.output_tokens ?? 0, extractCacheTokens(hop));
+    }
 
     if (message.stop_reason === 'refusal') {
       await record('blocked', message.model, inTok, outTok, cache);
