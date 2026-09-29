@@ -63,6 +63,11 @@ describe('cron-signal-scan binds an org-system usage context per org', () => {
         };
         return chain;
       }
+      if (table === 'Deal') {
+        // Idle-org check: this org has active deals, so it is scanned.
+        const q: any = { select: () => q, eq: () => q, neq: () => q, then: (r: (v: unknown) => void) => r({ count: 3, error: null }) };
+        return q;
+      }
       throw new Error(`Unexpected table: ${table}`);
     });
 
