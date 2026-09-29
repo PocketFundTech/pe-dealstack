@@ -196,4 +196,10 @@ describe('POST /api/cron/weekly-digest', () => {
     expect(res.body.emailsSent).toBe(1);
     expect(res.body.orgsProcessed).toBe(2);
   });
+
+  it('also responds to GET, matching how Vercel Cron actually invokes it', async () => {
+    const app = await buildApp();
+    const res = await request(app).get('/api/cron/weekly-digest');
+    expect(res.status).toBe(401);
+  });
 });

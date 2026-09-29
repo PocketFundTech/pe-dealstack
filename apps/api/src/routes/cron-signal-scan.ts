@@ -8,7 +8,8 @@ import { runAsOrgSystem } from '../middleware/usageContext.js';
 const router = Router();
 const BATCH_SIZE = 5;
 
-router.post('/', async (req: Request, res: Response) => {
+// Vercel Cron Jobs always invoke via GET; POST is kept for manual/test triggering.
+const handler = async (req: Request, res: Response) => {
   const auth = req.headers.authorization || '';
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -36,6 +37,9 @@ router.post('/', async (req: Request, res: Response) => {
 
   log.info('Nightly signal scan complete', { scanned: orgs.length, failed });
   res.json({ scanned: orgs.length, failed });
-});
+};
+
+router.get('/', handler);
+router.post('/', handler);
 
 export default router;

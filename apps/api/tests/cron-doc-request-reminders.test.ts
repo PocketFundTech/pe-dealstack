@@ -175,4 +175,14 @@ describe('POST /api/cron/doc-request-reminders', () => {
     expect(res.body.reminded).toBe(1);
     expect(res.body.failed).toBe(1);
   });
+
+  it('also responds to GET, matching how Vercel Cron actually invokes it', async () => {
+    const app = await buildApp();
+    const res = await request(app)
+      .get('/api/cron/doc-request-reminders')
+      .set('Authorization', 'Bearer test-secret');
+
+    expect(res.status).toBe(200);
+    expect(res.body.reminded).toBe(1);
+  });
 });
