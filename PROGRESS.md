@@ -5,6 +5,30 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 78 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 15:12 IST
+
+#### Goal: three small bugs found during the token/upload work (PR `fix/small-bugs`).
+
+**1. Deal-chat audit entries were silently lost**
+- **Problem:** Zero `AI_CHAT` rows in the audit trail since August.
+- **Root cause:** `AuditLog.aiChat` passed no resource type. The `AuditLog.entityType` column is NOT NULL, so every insert was rejected, and the audit logger swallows errors. The login, failed-login and logout helpers had the same gap.
+- **Fix:** Deal chat is now recorded against the deal (`entityType: DEAL`, `entityId: dealId`). Login and logout events are recorded against the user. Any caller that still omits a type falls back to a non-null default and logs a warning.
+- **Note:** the login/logout helpers have no callers, so auth events are not audited at all. This is flagged for a later decision.
+
+**2. Notification polling hammered an unreachable API**
+- **Problem:** When the API was unreachable (the ERR_TIMED_OUT reports), the bell badge re-polled every 15s and logged a console error each time.
+- **Fix:** Polling now backs off exponentially, from 15s up to a 5-minute cap. It logs once per outage, resets on the first success, and polls immediately when the tab becomes visible again. Hidden tabs skip the request.
+
+**3. Refusal-fallback attempts missing from the cost ledger**
+- **Problem:** Fable 5 extraction uses server-side fallback to Opus 4.8. When the classifier declines Fable mid-output, Anthropic bills that Fable attempt at Fable rates. Our ledger only recorded the top-level usage, which covers only the Opus attempt that served the message.
+- **Fix:** `trackedClaudeMessage` now reads `usage.iterations`. Each attempt that was replaced and had produced output is recorded as its own `blocked` row, priced at its own model. Attempts declined before any output are not billed by Anthropic and stay unrecorded.
+
+**Verification:** Every fix started with a failing test. API: 219 files, 2046 tests passing, tsc clean. Web: NotificationCountProvider tests 4/4.
+
+---
+
 ### Session 77 — September 29, 2026
 
 #### Timestamp: September 29, 2026 — 03:46 IST
