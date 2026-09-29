@@ -13,6 +13,7 @@ import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
+import { runAfterResponse } from '../utils/afterResponse.js';
 
 const subRouter = Router();
 
@@ -258,14 +259,18 @@ subRouter.post('/text', async (req, res) => {
 
     await AuditLog.aiIngest(req, docName, deal.id);
 
-    // Auto-generate firm-teaser blurbs for newly-created deals (blocking,
-    // best-effort — never fail ingest on teaser error).
+    // Auto-generate firm-teaser blurbs for newly-created deals. Never blocks
+    // the response — deferred via runAfterResponse (awaited inline when no
+    // post-response hook is present, e.g. local dev/tests). Best-effort: a
+    // teaser failure must never fail ingest.
     if (!isUpdate) {
-      try {
-        await generateTeasersForDeal({ dealId: deal.id, orgId });
-      } catch (teaserErr) {
-        log.error('Text ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
-      }
+      await runAfterResponse(req, async () => {
+        try {
+          await generateTeasersForDeal({ dealId: deal.id, orgId });
+        } catch (teaserErr) {
+          log.error('Text ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+        }
+      });
     }
 
     log.info('Text ingest complete', { dealId: deal.id, isUpdate });

@@ -13,6 +13,7 @@ import { extractTextFromPDF } from '../services/pdfExtractor.js';
 import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { runAfterResponse, type RequestWithAfterResponse } from '../utils/afterResponse.js';
+import { resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
 import { getProviderAccessToken } from '../integrations/_platform/tokenStore.js';
 import {
   getDriveFileMetadata,
@@ -76,7 +77,18 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       return res.status(404).json({ error: 'Deal not found' });
     }
 
-    const file = req.file;
+    // Accepts either multipart/form-data (legacy — multer populates
+    // req.file) or a JSON body `{ storagePath, fileName, mimeType, size }`
+    // pointing at a file already staged in Supabase Storage via
+    // POST /api/uploads/sign — see ingest-shared.ts#resolveUploadedFile.
+    // A file is optional here (a Document row can be metadata-only), so
+    // `file` staying null is not itself an error.
+    const resolvedUpload = await resolveUploadedFile(req);
+    if (resolvedUpload.error) {
+      return res.status(resolvedUpload.error.status).json(resolvedUpload.error.body);
+    }
+    const file = resolvedUpload.file;
+    const stagingPathToClean = resolvedUpload.cleanupStoragePath;
 
     // verifyDealAccess() above already confirmed the Deal row exists (and is
     // in this org) — a second SELECT here was redundant.
@@ -669,6 +681,12 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       // behavior so the response reflects the final state.
       await runPostProcessing();
       res.status(201).json({ ...document, dealUpdated, updatedFields });
+    }
+
+    // Delete the staging object after the response — best-effort, never
+    // blocks or fails the upload.
+    if (stagingPathToClean) {
+      await runAfterResponse(req, () => cleanupStagingObject(stagingPathToClean));
     }
   } catch (error) {
     if (error instanceof z.ZodError) {

@@ -3,6 +3,7 @@
 import { cn } from "@/lib/cn";
 import { formatCurrency } from "@/lib/formatters";
 import { createClient } from "@/lib/supabase/client";
+import { INGEST_MAX_FILE_SIZE } from "@/lib/storageUpload";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -59,7 +60,10 @@ export interface IngestResponse {
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+// Re-exported from storageUpload.ts (the single source of truth shared with
+// the sign-and-upload helper) so the client-side validation and the "too
+// large" warning message never drift from the actual limit enforced there.
+export const MAX_FILE_SIZE = INGEST_MAX_FILE_SIZE;
 
 export const TABS = [
   { key: "file", label: "Upload File", icon: "upload_file" },

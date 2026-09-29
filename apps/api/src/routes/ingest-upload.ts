@@ -12,12 +12,13 @@ import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { AIProviderUnavailableError } from '../utils/aiErrors.js';
-import { extractTextFromPDF, upload } from './ingest-shared.js';
+import { extractTextFromPDF, upload, resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { runInBackground } from '../utils/background.js';
 import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
+import { runAfterResponse } from '../utils/afterResponse.js';
 
 const router = Router();
 
@@ -57,8 +58,17 @@ function transformDeepResultToExtractedDealData(result: DeepExtractionResult): E
 }
 
 // POST /api/ingest - Upload document and auto-create deal
+//
+// Accepts either a multipart/form-data body (legacy — multer populates
+// req.file) or a JSON body `{ storagePath, fileName, mimeType, size, ... }`
+// pointing at a file the client already uploaded directly to Supabase
+// Storage via POST /api/uploads/sign. See ingest-shared.ts#resolveUploadedFile.
 router.post('/', upload.single('file'), async (req, res) => {
-  const uploaded = req.file;
+  const resolved = await resolveUploadedFile(req);
+  if (resolved.error) {
+    return res.status(resolved.error.status).json(resolved.error.body);
+  }
+  const uploaded = resolved.file;
   if (!uploaded) {
     return res.status(400).json({ error: 'No file provided' });
   }
@@ -69,6 +79,10 @@ router.post('/', upload.single('file'), async (req, res) => {
     fileSize: uploaded.size,
     req,
   });
+  if (resolved.cleanupStoragePath) {
+    const storagePath = resolved.cleanupStoragePath;
+    await runAfterResponse(req, () => cleanupStagingObject(storagePath));
+  }
   res.status(result.status).json(result.body);
 });
 
@@ -91,6 +105,32 @@ export interface IngestBufferInput {
   req: Request;
 }
 
+/** Uploads a document buffer to the `documents` storage bucket under `${dealId}/...`. */
+async function uploadDocumentToStorage(
+  dealId: string,
+  documentName: string,
+  buffer: Buffer,
+  mimeType: string,
+): Promise<{ filePath: string | null }> {
+  const timestamp = Date.now();
+  const sanitizedName = documentName.replace(/[^a-zA-Z0-9.-]/g, '_');
+  const filePath = `${dealId}/${timestamp}_${sanitizedName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('documents')
+    .upload(filePath, buffer, {
+      contentType: mimeType,
+      upsert: false,
+    });
+
+  if (uploadError) {
+    log.warn('Storage upload warning', { error: uploadError.message });
+    return { filePath: null };
+  }
+  log.debug('File uploaded to storage', { storagePath: filePath });
+  return { filePath };
+}
+
 export async function runIngestFromBuffer(
   input: IngestBufferInput,
 ): Promise<{ status: number; body: unknown }> {
@@ -99,6 +139,21 @@ export async function runIngestFromBuffer(
     const orgId = getOrgId(req);
 
     log.info('Ingest starting', { documentName });
+
+    // Check if updating an existing deal or creating a new one. The
+    // existing-deal path knows its deal id up front (before any AI work
+    // runs), so we can verify access now and kick off the storage upload
+    // CONCURRENTLY with the AI read below — neither depends on the other's
+    // result. Resolved once `deal` exists (right after the merge call).
+    const targetDealId = req.body.dealId;
+    let concurrentUploadPromise: Promise<{ filePath: string | null }> | null = null;
+    if (targetDealId) {
+      const dealAccess = await verifyDealAccess(targetDealId, orgId);
+      if (!dealAccess) {
+        return { status: 404, body: { error: 'Deal not found' } };
+      }
+      concurrentUploadPromise = uploadDocumentToStorage(targetDealId, documentName, buffer, mimeType);
+    }
 
     // Step 1: Extract text from document
     let extractedText: string | null = null;
@@ -266,27 +321,30 @@ export async function runIngestFromBuffer(
       aiData.reviewReasons = [...(aiData.reviewReasons || []), ...financialCheck.warnings];
     }
 
-    // Check if updating an existing deal or creating a new one
-    const targetDealId = req.body.dealId;
+    // Deal id: known up front for the update path (verified + upload kicked
+    // off at the top of this function), created fresh below otherwise.
     let deal: any;
     let company: any;
     let isUpdate = false;
+    // Resolved from the concurrent upload (update path) or the sequential
+    // Step 5 upload below (new-deal path).
+    let fileUrl: string | null = null;
 
     if (targetDealId) {
       // ─── Update Existing Deal path ───
-      // Verify the caller's org owns this deal before merging extracted data
-      // into it (and dropping a Document row pointing at it). Without this,
-      // a client could ingest a CIM into any tenant's deal.
-      const dealAccess = await verifyDealAccess(targetDealId, orgId);
-      if (!dealAccess) {
-        return { status: 404, body: { error: 'Deal not found' } };
-      }
-
+      // Access was already verified above, before the AI read, so the
+      // storage upload could run concurrently with it.
       log.info('Ingest into existing deal', { dealId: targetDealId });
       const result = await mergeIntoExistingDeal(targetDealId, aiData, req.user?.id, documentName);
       deal = result.deal;
       company = deal.company;
       isUpdate = true;
+
+      // Resolve the upload that's been running concurrently with the AI read.
+      if (concurrentUploadPromise) {
+        const uploadResult = await concurrentUploadPromise;
+        fileUrl = uploadResult.filePath;
+      }
     } else {
       // ─── Create New Deal path (original flow) ───
       log.debug('Step 3: Creating/finding company');
@@ -394,29 +452,12 @@ export async function runIngestFromBuffer(
       }
       deal = newDeal;
       log.info('Deal created', { name: deal.name, id: deal.id, status: dealStatus });
-    }
 
-    // Step 5: Upload file to storage
-    log.debug('Step 5: Uploading file to storage');
-    let fileUrl = null;
-
-    const timestamp = Date.now();
-    const sanitizedName = documentName.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const filePath = `${deal.id}/${timestamp}_${sanitizedName}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from('documents')
-      .upload(filePath, buffer, {
-        contentType: mimeType,
-        upsert: false,
-      });
-
-    if (uploadError) {
-      log.warn('Storage upload warning', { error: uploadError.message });
-    } else {
-      // Store the storage path (not full URL) — signed URLs generated on demand
-      fileUrl = filePath;
-      log.debug('File uploaded to storage', { storagePath: filePath });
+      // Step 5: Upload file to storage. Sequential here — the new deal's id
+      // (used in the storage path) doesn't exist until just now.
+      log.debug('Step 5: Uploading file to storage');
+      const uploadResult = await uploadDocumentToStorage(deal.id, documentName, buffer, mimeType);
+      fileUrl = uploadResult.filePath;
     }
 
     // Step 6: Create document record with confidence data
@@ -545,86 +586,102 @@ export async function runIngestFromBuffer(
       log.debug('Created document', { name: document.name, id: document.id });
     }
 
-    // Step 7: Trigger RAG embedding in background
-    if (extractedText && extractedText.length > 0) {
-      log.debug('Step 7: Triggering RAG embedding');
-      embedDocument(document.id, deal.id, extractedText)
-        .then(result => {
-          if (result.success) {
-            log.debug('RAG embedding complete', { chunkCount: result.chunkCount });
-          } else {
-            log.error('RAG embedding failed', result.error);
-          }
-        })
-        .catch(err => {
-          log.error('RAG embedding error', err);
-        });
-    }
-
-    // Step 8: Log activity (only for new deals — merge already logs)
-    if (!isUpdate) {
-      await supabase.from('Activity').insert({
-        dealId: deal.id,
-        type: 'DEAL_CREATED',
-        title: `Deal created from ${docType}`,
-        description: aiData.needsReview
-          ? `New deal "${deal.name}" created with ${aiData.overallConfidence}% confidence - NEEDS REVIEW`
-          : `New deal "${deal.name}" auto-created with ${aiData.overallConfidence}% confidence`,
-        metadata: {
-          documentId: document.id,
-          documentType: docType,
-          overallConfidence: aiData.overallConfidence,
-          needsReview: aiData.needsReview,
-          reviewReasons: aiData.reviewReasons,
-        },
-      });
-
-      // Auto-assign creator as analyst (only for new deals)
-      if (req.user?.id) {
-        const internalUserId = await resolveUserId(req.user.id);
-        if (internalUserId) {
-          await supabase.from('DealTeamMember').insert({
-            dealId: deal.id,
-            userId: internalUserId,
-            role: 'MEMBER',
-          }).then(({ error }) => { if (error) log.warn('Auto-assign analyst failed', error); });
-        }
+    // Step 8: Auto-assign creator as analyst (only for new deals). Kept
+    // inline (not deferred) — the response depends on the creator being able
+    // to immediately open the deal as a team member.
+    if (!isUpdate && req.user?.id) {
+      const internalUserId = await resolveUserId(req.user.id);
+      if (internalUserId) {
+        await supabase.from('DealTeamMember').insert({
+          dealId: deal.id,
+          userId: internalUserId,
+          role: 'MEMBER',
+        }).then(({ error }) => { if (error) log.warn('Auto-assign analyst failed', error); });
       }
     }
 
-    // Audit log
-    await AuditLog.aiIngest(req, documentName, deal.id);
+    // Everything below is independent of the response body — RAG embedding,
+    // the Activity/audit log rows, the multi-doc-analysis trigger, and (for
+    // new deals) firm-teaser generation. Deferred via runAfterResponse so
+    // none of it adds latency to the client-visible response; on platforms
+    // without a post-response hook (local dev, tests, non-Vercel deploys)
+    // runAfterResponse awaits it inline, preserving the original fully
+    // synchronous behavior.
+    await runAfterResponse(req, async () => {
+      const tasks: Promise<unknown>[] = [];
 
-    // Auto-trigger multi-doc analysis if 2+ documents exist
-    const { count: docCount } = await supabase
-      .from('Document')
-      .select('id', { count: 'exact', head: true })
-      .eq('dealId', deal.id);
+      if (extractedText && extractedText.length > 0) {
+        tasks.push(
+          embedDocument(document.id, deal.id, extractedText)
+            .then(result => {
+              if (result.success) {
+                log.debug('RAG embedding complete', { chunkCount: result.chunkCount });
+              } else {
+                log.error('RAG embedding failed', result.error);
+              }
+            })
+            .catch(err => {
+              log.error('RAG embedding error', err);
+            }),
+        );
+      }
 
-    if (docCount && docCount >= 2) {
-      import('../services/multiDocAnalyzer.js')
-        .then(({ analyzeMultipleDocuments }) =>
-          analyzeMultipleDocuments(deal.id)
-        )
-        .then(result => {
+      if (!isUpdate) {
+        tasks.push(
+          (async () => {
+            const { error } = await supabase.from('Activity').insert({
+              dealId: deal.id,
+              type: 'DEAL_CREATED',
+              title: `Deal created from ${docType}`,
+              description: aiData.needsReview
+                ? `New deal "${deal.name}" created with ${aiData.overallConfidence}% confidence - NEEDS REVIEW`
+                : `New deal "${deal.name}" auto-created with ${aiData.overallConfidence}% confidence`,
+              metadata: {
+                documentId: document.id,
+                documentType: docType,
+                overallConfidence: aiData.overallConfidence,
+                needsReview: aiData.needsReview,
+                reviewReasons: aiData.reviewReasons,
+              },
+            });
+            if (error) log.warn('Activity insert failed', error);
+          })(),
+        );
+      }
+
+      tasks.push(
+        AuditLog.aiIngest(req, documentName, deal.id).catch(err => log.error('Audit log failed', err)),
+      );
+
+      await Promise.all(tasks);
+
+      // Auto-trigger multi-doc analysis if 2+ documents exist
+      const { count: docCount } = await supabase
+        .from('Document')
+        .select('id', { count: 'exact', head: true })
+        .eq('dealId', deal.id);
+
+      if (docCount && docCount >= 2) {
+        try {
+          const { analyzeMultipleDocuments } = await import('../services/multiDocAnalyzer.js');
+          const result = await analyzeMultipleDocuments(deal.id);
           if (result) log.info('Auto multi-doc analysis complete', { dealId: deal.id, conflicts: result.conflicts.length });
-        })
-        .catch(err => {
+        } catch (err) {
           log.error('Auto multi-doc analysis failed', err);
           captureAgentError(err, { context: 'multi_doc_analysis:background' });
-        });
-    }
-
-    // Auto-generate firm-teaser blurbs for newly-created deals. BLOCKS the
-    // response so the teasers are ready when the client renders the deal.
-    // Best-effort: a teaser failure must never fail ingest.
-    if (!isUpdate) {
-      try {
-        await generateTeasersForDeal({ dealId: deal.id, orgId });
-      } catch (teaserErr) {
-        log.error('Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+        }
       }
-    }
+
+      // Auto-generate firm-teaser blurbs for newly-created deals. Best-effort
+      // — never fail ingest on teaser error.
+      if (!isUpdate) {
+        try {
+          await generateTeasersForDeal({ dealId: deal.id, orgId });
+        } catch (teaserErr) {
+          log.error('Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+        }
+      }
+    });
 
     // Background deep pass: financial-statement extraction + auto-score, so
     // the deal page fills in (financials, red flags, scorecard) without a

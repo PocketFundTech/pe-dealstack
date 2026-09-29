@@ -86,6 +86,11 @@ vi.mock('../src/routes/ingest-shared.js', async () => {
       sparse: false,
     }),
     upload: multer({ storage: multer.memoryStorage() }),
+    resolveUploadedFile: async (req: any) =>
+      req.file
+        ? { file: { buffer: req.file.buffer, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size } }
+        : { file: null },
+    cleanupStagingObject: async () => {},
   };
 });
 
