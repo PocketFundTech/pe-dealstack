@@ -60,6 +60,21 @@ function triggerMfaLockout(message: string): never {
   throw new ApiError(message, 403, "MFA_REQUIRED");
 }
 
+/**
+ * Read { message, code } from an error response body. Handles both the flat
+ * { error: "msg", code } shape and the Express error handler's nested
+ * { error: { code, message } } — which used to reach users as raw JSON.
+ */
+function parseErrorBody(body: unknown, res: Response): { message: string; code?: string } {
+  const b = (body ?? {}) as { error?: unknown; message?: unknown; code?: unknown };
+  const nested = b.error && typeof b.error === "object" ? (b.error as { message?: unknown; code?: unknown }) : null;
+  const raw = nested ? nested.message : (b.error ?? b.message);
+  const message =
+    typeof raw === "string" && raw ? raw : res.statusText || `API error ${res.status}`;
+  const code = nested?.code ?? b.code;
+  return { message, code: typeof code === "string" ? code : undefined };
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (mfaLockoutActive) {
     triggerMfaLockout("Two-factor authentication is required by your organization");
@@ -86,17 +101,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({} as Record<string, unknown>));
-    const errField =
-      (body as { error?: unknown; message?: unknown }).error ??
-      (body as { message?: unknown }).message;
-    const message =
-      typeof errField === "string" && errField
-        ? errField
-        : errField != null
-          ? JSON.stringify(errField)
-          : res.statusText || `API error ${res.status}`;
-    const code = (body as { code?: string }).code;
+    const body = await res.json().catch(() => ({}));
+    const { message, code } = parseErrorBody(body, res);
 
     // Org has enforced 2FA but the user hasn't enrolled. Surface a full-page
     // lockout via MfaLockoutGate instead of letting individual sections fail
@@ -149,9 +155,9 @@ async function postStream(
 ): Promise<void> {
   const res = await requestRaw(path, { method: "POST", body: JSON.stringify(body) });
   if (!res.ok || !res.body) {
-    const errBody = await res.json().catch(() => ({}) as Record<string, unknown>);
-    const msg = (errBody as { error?: string }).error || res.statusText || `API error ${res.status}`;
-    throw new ApiError(msg, res.status, (errBody as { code?: string }).code);
+    const errBody = await res.json().catch(() => ({}));
+    const { message, code } = parseErrorBody(errBody, res);
+    throw new ApiError(message, res.status, code);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -207,13 +213,8 @@ async function requestStream(path: string, body: unknown, onEvent: StreamEventHa
   }
 
   if (!res.ok) {
-    const errBody = await res.json().catch(() => ({} as Record<string, unknown>));
-    const message =
-      (errBody as { error?: string; message?: string }).error ||
-      (errBody as { message?: string }).message ||
-      res.statusText ||
-      `API error ${res.status}`;
-    const code = (errBody as { code?: string }).code;
+    const errBody = await res.json().catch(() => ({}));
+    const { message, code } = parseErrorBody(errBody, res);
 
     if (res.status === 403 && code === "MFA_REQUIRED") {
       triggerMfaLockout(message);

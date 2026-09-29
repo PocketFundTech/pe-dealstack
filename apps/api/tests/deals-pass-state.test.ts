@@ -30,6 +30,7 @@ vi.mock('../src/routes/notifications.js', () => ({
 
 let existingDeal: any;
 let dealPatch: any = null;
+const activities: any[] = [];
 
 function tableMock() {
   return (table: string) => {
@@ -51,7 +52,7 @@ function tableMock() {
       return chain;
     }
     if (table === 'Activity') {
-      return { insert: async () => ({ error: null }) };
+      return { insert: async (row: any) => { activities.push(row); return { error: null }; } };
     }
     if (table === 'DealTeamMember') {
       return { select: () => ({ eq: async () => ({ data: [], error: null }) }) };
@@ -75,6 +76,7 @@ async function buildApp() {
 beforeEach(() => {
   vi.clearAllMocks();
   dealPatch = null;
+  activities.length = 0;
   existingDeal = {
     id: 'deal-1', name: 'Meridian Logistics', organizationId: 'org-1',
     stage: 'DUE_DILIGENCE', updatedAt: '2026-08-01T00:00:00Z',
@@ -143,5 +145,41 @@ describe('PATCH /api/deals/:id — passing a deal', () => {
     await request(app).patch('/api/deals/deal-1').send({ name: 'Meridian Logistics II' });
 
     expect(dealPatch.passedAt).toBeUndefined();
+  });
+});
+
+// The stage-change modal asks "Add a note (optional)", but the note was never
+// sent: the PATCH carried only { stage }, so what the user typed vanished.
+describe('PATCH /api/deals/:id — stage change note', () => {
+  it('records the note on the stage-change activity', async () => {
+    const app = await buildApp();
+    const res = await request(app)
+      .patch('/api/deals/deal-1')
+      .send({ stage: 'LOI_SUBMITTED', stageNote: '  Mgmt call went well, moving to LOI  ' });
+
+    expect(res.status).toBe(200);
+    const stageActivity = activities.find((a) => a.type === 'STAGE_CHANGED');
+    expect(stageActivity.description).toContain('Note: Mgmt call went well, moving to LOI');
+    // The note is activity context, never a Deal column.
+    expect(dealPatch).not.toHaveProperty('stageNote');
+  });
+
+  it('keeps the plain description when no note is given', async () => {
+    const app = await buildApp();
+    await request(app).patch('/api/deals/deal-1').send({ stage: 'LOI_SUBMITTED' });
+    const stageActivity = activities.find((a) => a.type === 'STAGE_CHANGED');
+    expect(stageActivity.description).toBe('Deal stage changed from DUE_DILIGENCE to LOI_SUBMITTED');
+  });
+});
+
+// Stage used to accept any string. The Data Room page created deals with
+// stage "SCREENING", which no pipeline column shows, so those deals never
+// appeared on the kanban. Only real stages are accepted now.
+describe('deal stage validation', () => {
+  it('rejects a stage the pipeline does not know', async () => {
+    const app = await buildApp();
+    const res = await request(app).patch('/api/deals/deal-1').send({ stage: 'SCREENING' });
+    expect(res.status).toBe(400);
+    expect(dealPatch).toBeNull();
   });
 });

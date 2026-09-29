@@ -8,11 +8,9 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import type { ToolEmit } from '../types.js';
+import { DEAL_STAGES } from '../../../dealStages.js';
 
-const STAGES = [
-  'INITIAL_REVIEW', 'DUE_DILIGENCE', 'IOI_SUBMITTED',
-  'LOI_NEGOTIATION', 'CLOSING', 'CLOSED_WON', 'CLOSED_LOST', 'PASSED',
-] as const;
+const STAGES = DEAL_STAGES;
 
 export const inputSchema = z.object({
   stage: z.enum(STAGES),
@@ -23,7 +21,7 @@ export function makeChangeDealStageTool(dealId: string, _orgId: string, emit: To
   return {
     type: 'custom' as const,
     name: 'change_deal_stage',
-    description: 'Change the deal pipeline stage. Use when the user asks to advance, move back, or close a deal. Stages flow: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_NEGOTIATION → CLOSING → CLOSED_WON. Terminal stages: CLOSED_WON, CLOSED_LOST, PASSED.',
+    description: 'Change the deal pipeline stage. Use when the user asks to advance, move back, or close a deal. Stages flow: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_SUBMITTED → NEGOTIATION → CLOSING → CLOSED_WON. Terminal stages: CLOSED_WON, CLOSED_LOST, PASSED.',
     input_schema: {
       type: 'object',
       properties: {

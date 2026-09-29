@@ -58,6 +58,8 @@ export function openTerminalModal(deps: OpenTerminalModalDeps): void {
 export interface ConfirmStageChangeDeps {
   dealId: string;
   stageModal: { from: string; to: string } | null;
+  /** Optional "reason for stage change" typed in the stage modal. */
+  stageNote: string;
   deal: DealDetail | null;
   setStageChanging: Dispatch<SetStateAction<boolean>>;
   setStageError: Dispatch<SetStateAction<string>>;
@@ -70,6 +72,7 @@ export async function confirmStageChange(deps: ConfirmStageChangeDeps): Promise<
   const {
     dealId,
     stageModal,
+    stageNote,
     deal,
     setStageChanging,
     setStageError,
@@ -81,8 +84,10 @@ export async function confirmStageChange(deps: ConfirmStageChangeDeps): Promise<
   setStageChanging(true);
   setStageError("");
   try {
+    const note = stageNote.trim();
     const updated = await api.patch<DealDetail>(`/deals/${dealId}`, {
       stage: stageModal.to,
+      ...(note && { stageNote: note }),
     });
     setDeal(updated);
     setStageModal(null);

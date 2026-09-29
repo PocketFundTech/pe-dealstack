@@ -170,6 +170,35 @@ describe("api wrapper", () => {
     await expect(api.stream("/deals/d1/chat", { message: "hi" }, () => {})).rejects.toThrow("boom");
   });
 
+  // The Express error handler answers { error: { code, message } }. The
+  // wrapper used to JSON.stringify that object, so users saw toasts like
+  // {"code":"INTERNAL_ERROR","message":"..."} and the code was lost.
+  describe("nested { error: { code, message } } bodies", () => {
+    const nested = () =>
+      new Response(JSON.stringify({ success: false, error: { code: "VALIDATION_ERROR", message: "Name is required" } }), { status: 400 });
+
+    it("api.get surfaces the message and code, not raw JSON", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(nested()) as unknown as typeof fetch;
+      const err = await api.get("/deals").catch((e) => e);
+      expect(err.message).toBe("Name is required");
+      expect(err.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("api.stream surfaces the message and code", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(nested()) as unknown as typeof fetch;
+      const err = await api.stream("/deals/d1/chat", { message: "hi" }, () => {}).catch((e) => e);
+      expect(err.message).toBe("Name is required");
+      expect(err.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("api.postStream surfaces the message and code", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(nested()) as unknown as typeof fetch;
+      const err = await api.postStream("/memos/m1/generate", {}, () => {}).catch((e) => e);
+      expect(err.message).toBe("Name is required");
+      expect(err.code).toBe("VALIDATION_ERROR");
+    });
+  });
+
   it("api.stream throws NotFoundError on 404, same contract as api.get/post", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response("", { status: 404 })) as unknown as typeof fetch;
     await expect(api.stream("/deals/d1/chat", { message: "hi" }, () => {})).rejects.toBeInstanceOf(NotFoundError);

@@ -11,11 +11,9 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import { formatFinancialValue } from '../../../../utils/financialFormat.js';
+import { DEAL_STAGES } from '../../../dealStages.js';
 
-const STAGES = [
-  'INITIAL_REVIEW', 'DUE_DILIGENCE', 'IOI_SUBMITTED',
-  'LOI_NEGOTIATION', 'CLOSING', 'CLOSED_WON', 'CLOSED_LOST', 'PASSED',
-] as const;
+const STAGES = DEAL_STAGES;
 
 export function makeSearchDealsTool(orgId: string) {
   return tool(

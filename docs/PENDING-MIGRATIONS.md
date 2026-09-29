@@ -1,6 +1,8 @@
-# 🔴 ONE MIGRATION PENDING — `usage-cost-accuracy-migration.sql` (2026-09-29)
+# 🔴 TWO MIGRATIONS PENDING (2026-09-29 / 2026-09-30)
 
-Run **only this one**. It supersedes `model-prices-anthropic-direct-seed.sql`
+## 1. `usage-cost-accuracy-migration.sql` (2026-09-29)
+
+Run this one first. It supersedes `model-prices-anthropic-direct-seed.sql`
 (flagged 2026-09-28 — do not run that one separately; everything it did is
 included here, with corrected prices).
 
@@ -28,6 +30,21 @@ select model, "inputPricePer1M", "outputPricePer1M", "cacheReadPricePer1M"
 -- claude-sonnet-5 = 2 / 10; claude-sonnet-4-6 = 3 / 15
 select to_regclass('public."UsageReconciliation"');  -- not null
 ```
+
+## 2. `deal-stage-cleanup.sql` (2026-09-30) — data fix
+
+Deals created from **Data Rooms → New data room** were saved with stage
+`SCREENING`, and deals moved by the **deal chat / AI assistant** could be saved
+as `LOI_NEGOTIATION`. Neither is a pipeline stage, so those deals are
+**invisible on the Deals kanban**. The code now rejects unknown stages; this
+moves existing deals onto real ones (`SCREENING` → Initial Review,
+`LOI_NEGOTIATION` → LOI Submitted). Data only, idempotent.
+
+| # | File | Fixes | Run? |
+|---|---|---|---|
+| 2 | `apps/api/deal-stage-cleanup.sql` | Makes hidden deals show on the kanban | ☐ |
+
+Verify: the `SELECT` at the bottom of the file returns no rows.
 
 ---
 

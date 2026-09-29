@@ -57,20 +57,17 @@ export async function renameFolder(folderId: string, newName: string): Promise<b
   }
 }
 
+/** Throws on failure: callers replace the visible file list with the result,
+ *  so returning [] on a failed request would wipe the list off screen. */
 export async function fetchDocuments(
   dealId: string,
   folderId?: string,
 ): Promise<APIDocument[]> {
-  try {
-    const path = folderId
-      ? `/folders/${folderId}/documents`
-      : `/deals/${dealId}/documents`;
-    const data = await api.get<APIDocument[] | { documents: APIDocument[] }>(path);
-    return Array.isArray(data) ? data : data.documents || [];
-  } catch (err) {
-    console.warn("[vdr] fetchDocuments failed:", err);
-    return [];
-  }
+  const path = folderId
+    ? `/folders/${folderId}/documents`
+    : `/deals/${dealId}/documents`;
+  const data = await api.get<APIDocument[] | { documents: APIDocument[] }>(path);
+  return Array.isArray(data) ? data : data.documents || [];
 }
 
 export async function uploadDocument(

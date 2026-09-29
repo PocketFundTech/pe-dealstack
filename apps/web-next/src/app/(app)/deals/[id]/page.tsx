@@ -253,6 +253,7 @@ export default function DealDetailPage() {
     confirmStageChangeFn({
       dealId,
       stageModal,
+      stageNote,
       deal,
       setStageChanging,
       setStageError,

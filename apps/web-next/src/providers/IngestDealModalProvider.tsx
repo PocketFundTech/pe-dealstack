@@ -33,7 +33,9 @@ export function IngestDealModalProvider({ children }: { children: ReactNode }) {
   const [preselectedDeal, setPreselectedDeal] = useState<DealOption | null>(null);
 
   const openDealIntake = useCallback((deal?: DealOption) => {
-    setPreselectedDeal(deal ?? null);
+    // Callers often pass this straight to onClick, so it receives the click
+    // event. Only a real deal (string id) opens in "Update Existing Deal" mode.
+    setPreselectedDeal(deal && typeof deal.id === "string" ? deal : null);
     setOpen(true);
   }, []);
   const closeDealIntake = useCallback(() => {

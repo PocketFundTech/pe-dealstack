@@ -96,7 +96,7 @@ TOOL USAGE:
 - compare_deals — for benchmarks, portfolio comparisons; pass targetDealName if comparing to a specific deal
 - get_deal_activity — for timeline of deal changes
 - update_deal_field — when asked to change deal properties: name, currency, revenue, ebitda, dealSize, irrProjected, mom, grossMargin, targetCloseDate, priority, industry, description, source, leadPartner, analyst. For numeric fields pass value in millions. For targetCloseDate use YYYY-MM-DD.
-- change_deal_stage — when asked to advance, move back, or close a deal. Stages: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_NEGOTIATION → CLOSING → CLOSED_WON. Terminal: CLOSED_LOST, PASSED.
+- change_deal_stage — when asked to advance, move back, or close a deal. Stages: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_SUBMITTED → NEGOTIATION → CLOSING → CLOSED_WON. Terminal: CLOSED_LOST, PASSED.
 - add_note — when asked to log a note, call, email, or meeting on the deal
 - trigger_financial_extraction — when asked to extract or analyze financials from documents
 - generate_meeting_prep — when asked to prepare for a meeting, create a brief, or get talking points

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "@/providers/ToastProvider";
 import { useUser } from "@/providers/UserProvider";
 import { api } from "@/lib/api";
 import { useApiQuery, mutateApiCache } from "@/lib/useApiQuery";
@@ -99,7 +100,6 @@ export default function SettingsPage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [activeSection, setActiveSection] = useState<string>("general");
 
   const [name, setName] = useState("");
@@ -109,10 +109,9 @@ export default function SettingsPage() {
     DEFAULT_NOTIFICATION_PREFS,
   );
 
-  const showToast = useCallback((message: string, type: "success" | "error") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  }, []);
+  // App-wide toasts: supports info, and a newer toast is never dismissed by an
+  // older toast's timer (the page's own toast state had both problems).
+  const { showToast } = useToast();
 
   const markChanged = () => setHasChanges(true);
 
@@ -236,23 +235,6 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-[1400px] w-full p-4 md:p-6">
-      {/* Toast */}
-      {toast && (
-        <div
-          className={cn(
-            "fixed top-4 right-4 z-[60] flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-all border",
-            toast.type === "success"
-              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-              : "bg-red-50 text-red-700 border-red-200",
-          )}
-        >
-          <span className="material-symbols-outlined text-[18px]">
-            {toast.type === "success" ? "check_circle" : "error"}
-          </span>
-          {toast.message}
-        </div>
-      )}
-
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
         <div className="flex flex-col gap-1">

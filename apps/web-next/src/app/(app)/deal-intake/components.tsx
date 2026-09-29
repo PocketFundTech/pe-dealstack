@@ -405,7 +405,7 @@ export function ResultDisplay({ result, onReset }: ResultDisplayProps) {
           </a>
         ) : result.summary ? (
           <a
-            href="/crm"
+            href="/deals"
             className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
             style={{ backgroundColor: "#003366" }}
           >
