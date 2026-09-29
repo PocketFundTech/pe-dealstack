@@ -93,14 +93,15 @@ interface ResultWithFollowUpProps {
   onAnswer: (questionId: string, answer: string) => void;
   onSaveAndGoToDeal: () => void;
   onSkip: () => void;
+  onNavigate?: () => void;
 }
 
 export function ResultWithFollowUp({
-  result, onReset, followUpQuestions, followUpAnswers, followUpLoading, onAnswer, onSaveAndGoToDeal, onSkip,
+  result, onReset, followUpQuestions, followUpAnswers, followUpLoading, onAnswer, onSaveAndGoToDeal, onSkip, onNavigate,
 }: ResultWithFollowUpProps) {
   return (
     <div>
-      <ResultDisplay result={result} onReset={onReset} />
+      <ResultDisplay result={result} onReset={onReset} onNavigate={onNavigate} />
       {result.deal && (followUpLoading || followUpQuestions.length > 0) && (
         <div className="bg-surface-card rounded-lg border border-border-subtle shadow-card p-5 mt-4">
           <FollowUpQuestions

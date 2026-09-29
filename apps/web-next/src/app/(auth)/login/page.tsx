@@ -219,10 +219,10 @@ export default function LoginPage() {
 
         <div className="w-full max-w-[440px] z-10">
           <div className="flex items-center gap-2 mb-10">
-            <div className="w-8 h-8 rounded flex items-center justify-center text-white" style={{ backgroundColor: "#003366" }}>
-              <span className="material-symbols-outlined text-[20px]">candlestick_chart</span>
-            </div>
-            <span className="text-xl font-bold tracking-tight" style={{ color: "#003366" }}>PE<span className="font-light opacity-80">OS</span></span>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 2L2 12L12 22L22 12L12 2Z" fill="#003366" />
+            </svg>
+            <span className="text-xl font-bold tracking-tight" style={{ color: "#003366" }}>Avise</span>
           </div>
 
           {!showMfa ? (

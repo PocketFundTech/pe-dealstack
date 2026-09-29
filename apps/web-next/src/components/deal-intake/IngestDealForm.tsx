@@ -451,6 +451,7 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
         <ResultWithFollowUp
           result={result}
           onReset={resetForm}
+          onNavigate={onClose}
           followUpQuestions={followUpQuestions}
           followUpAnswers={followUpAnswers}
           followUpLoading={followUpLoading}

@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { api, NotFoundError } from "@/lib/api";
 import { mutateApiCache } from "@/lib/useApiQuery";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
+import { extractionErrorMessage } from "./deal-financials-errors";
 import { useToast } from "@/providers/ToastProvider";
 import { type FinancialStatement } from "./deal-financials-charts";
 
@@ -246,11 +247,7 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
         setExtractionModalResult(result);
       }
     } catch (err) {
-      const msg =
-        err instanceof Error && err.name === "AbortError"
-          ? "Extraction is taking longer than 5 minutes and was stopped on this end. The documents may be too large — try again, or extract one document at a time."
-          : "Could not extract financial data — document may be encrypted or unsupported";
-      showToast(msg, "error", { title: "Extraction Failed" });
+      showToast(extractionErrorMessage(err), "error", { title: "Extraction Failed" });
     } finally {
       clearInterval(progressTimer);
       clearTimeout(abortTimer);
