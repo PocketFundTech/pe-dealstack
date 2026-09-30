@@ -6,7 +6,7 @@ import { periodHygieneGuidanceIfEnabled } from './extraction-evals/fewshot.js';
 import { MAX_TEXT_LENGTH } from './agents/financialAgent/config.js';
 import { validateLineItems } from './financialSchema.js';
 import { wrapDocumentContent } from './agents/guardrails.js';
-import { computeDerivedFields } from './financialDerivations.js';
+import { computeDerivedFields, normalizeCashFlowSigns } from './financialDerivations.js';
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -303,6 +303,9 @@ export function normalizeClassificationResult(raw: any): ClassificationResult {
         // Auto-calculate derived fields if missing
         if (statementType === 'INCOME_STATEMENT') {
           computeDerivedFields(validatedItems);
+        }
+        if (statementType === 'CASH_FLOW') {
+          warnings.push(...normalizeCashFlowSigns(validatedItems, String(p.period)));
         }
         const confidence = clamp(Number(p.confidence) || 0, 0, 100);
 

@@ -220,7 +220,8 @@ export function computeQoEFlags(data: PreparedData): QoEFlag[] {
   // 5. Leverage Check
   const latestBal = balance.get(periods[periods.length - 1]);
   if (latestBal && latestEbitda != null && latestEbitda > 0) {
-    const totalDebt = (li(latestBal, 'short_term_debt') ?? 0) + (li(latestBal, 'long_term_debt') ?? 0);
+    const totalDebt = (li(latestBal, 'short_term_debt') ?? 0) + (li(latestBal, 'long_term_debt') ?? 0)
+      || (li(latestBal, 'total_debt') ?? 0);
     const cash = li(latestBal, 'cash') ?? 0;
     const netDebt = totalDebt - cash;
     const leverage = netDebt / latestEbitda;

@@ -347,6 +347,18 @@ function checkBalanceSheet(
     });
   }
 
+  // Completeness: a real balance sheet has totals. A 4-line valuation
+  // summary (the SRM case) has none and shouldn't pass silently.
+  if (totalAssets === null || (totalLiabilities === null && totalEquity === null)) {
+    checks.push({
+      check: 'bs_has_totals',
+      passed: false,
+      severity: 'warning',
+      message: `Balance sheet has no ${totalAssets === null ? 'total assets' : 'total liabilities / equity'} — may be a summary or model rather than the reported statement`,
+      period,
+    });
+  }
+
   // Current assets ≤ total assets
   if (totalCurrentAssets !== null && totalAssets !== null && totalCurrentAssets > totalAssets) {
     checks.push({
@@ -397,6 +409,25 @@ function checkCashFlow(
       message: withinTolerance(calc, fcf)
         ? `FCF checks out: Operating CF ${fmtVal(operatingCf, unitScale)} - CapEx ${fmtVal(capexAbs, unitScale)} ≈ FCF ${fmtVal(fcf, unitScale)}`
         : `FCF mismatch: ${fmtVal(operatingCf, unitScale)} - ${fmtVal(capexAbs, unitScale)} = ${fmtVal(calc, unitScale)}, but extracted FCF ${fmtVal(fcf, unitScale)}`,
+      period,
+    });
+  }
+
+  // CFO + CFI + CFF = net change in cash (the three sections sum by definition,
+  // so a miss means a wrong sign or a wrong line — error, triggers repair).
+  const cfi = li('investing_activities');
+  const cff = li('financing_activities');
+  const netChange = li('net_change_cash');
+  if (operatingCf !== null && cfi !== null && cff !== null && netChange !== null) {
+    const calc = operatingCf + cfi + cff;
+    const ok = withinTolerance(calc, netChange) || Math.abs(calc - netChange) < 0.001;
+    checks.push({
+      check: 'cf_sections_sum',
+      passed: ok,
+      severity: 'error',
+      message: ok
+        ? `Cash flow sections sum: CFO + CFI + CFF ≈ net change in cash (${fmtVal(netChange, unitScale)})`
+        : `Cash flow sections don't sum: ${fmtVal(operatingCf, unitScale)} + ${fmtVal(cfi, unitScale)} + ${fmtVal(cff, unitScale)} = ${fmtVal(calc, unitScale)}, but net change in cash is ${fmtVal(netChange, unitScale)} — check outflow signs`,
       period,
     });
   }

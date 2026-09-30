@@ -222,9 +222,10 @@ WORKED EXAMPLE — source page reads:
     Growth CapEx                         3.4
     Total CapEx                          4.6
 Emit:
-    "capex": 4.6,
-    "capex_maintenance": 1.2,
-    "capex_growth": 3.4
+    "capex": -4.6,
+    "capex_maintenance": -1.2,
+    "capex_growth": -3.4
+(Cash outflows — capex, acquisitions, debt repayment, dividends, owner distributions, buybacks — are always NEGATIVE.)
 
 DO NOT emit children for line items already broken out as their own canonical keys (e.g. don't emit "total_opex_sga" because "sga" is already canonical). Only use the convention when the source's sub-buckets have NO canonical home.
 
@@ -243,7 +244,7 @@ Before returning, check these relationships:
 2. ebitda / revenue * 100 ≈ ebitda_margin_pct (within 1 percentage point)
 3. ebitda - da = ebit (within 1%)
 4. total_assets ≈ total_liabilities + total_equity (within 1%)
-5. operating_cf - capex = fcf (within 1%)
+5. operating_cf + capex = fcf (within 1%; capex is negative)
 If any check fails, re-examine your extraction and fix the error.
 If the source document itself has inconsistent numbers, set confidence to 60-70 and add a warning.
 

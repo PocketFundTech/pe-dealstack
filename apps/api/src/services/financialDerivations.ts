@@ -10,6 +10,8 @@
  * Each derived EBITDA is tagged `ebitda_source: "derived: <formula>"` so the
  * UI can mark it and source-match scoring can skip it (it's not a quote).
  * Assumes costs are positive (the extraction sign convention).
+ *
+ * Also holds the cash-flow sign pass (normalizeCashFlowSigns) — outflows ≤ 0.
  */
 
 export const DERIVED_SOURCE_PREFIX = 'derived:';
@@ -63,4 +65,32 @@ export function computeDerivedFields(li: Items): void {
   if (v('ebitda_margin_pct') === null && v('ebitda') !== null && v('revenue')) {
     li.ebitda_margin_pct = Math.round((v('ebitda')! / v('revenue')!) * 10000) / 100;
   }
+}
+
+// ─── Cash-flow sign convention ──────────────────────────────
+// Cash outflows are stored ≤ 0. Documents (and valuation models) print them
+// either way — "Owner distributions 1,300" vs "(1,300)" — and nothing used
+// to normalise them, so the SRM deal showed +$1.3M distributions. Consumers
+// that need a magnitude (capex vs D&A, FCF) already take Math.abs.
+
+const OUTFLOW_KEY_RE =
+  /^(capex|capital_expenditures?|acquisitions?|debt_repayments?|repayments?_of_(debt|borrowings|loans?)|principal_repayments?|dividends?(_paid)?|(owner|shareholder|member|partner)?_?distributions?|share_repurchases?|stock_buybacks?|purchases?_of_(property|equipment|ppe|fixed_assets|investments))(_|$)/;
+
+/** True for a cash-flow line that is by definition a use of cash. */
+export function isCashOutflowKey(key: string): boolean {
+  if (key.endsWith('_source') || key.endsWith('_pct') || key.endsWith('_ratio') || key.endsWith('_multiple')) return false;
+  if (/proceeds|net_|_net$|received/.test(key)) return false;
+  return OUTFLOW_KEY_RE.test(key);
+}
+
+/** Flip positive outflows to negative in place; returns one warning per flip. */
+export function normalizeCashFlowSigns(li: Items, periodLabel: string): string[] {
+  const warnings: string[] = [];
+  for (const [key, value] of Object.entries(li)) {
+    if (typeof value === 'number' && value > 0 && isCashOutflowKey(key)) {
+      li[key] = -value;
+      warnings.push(`CASH_FLOW ${periodLabel}: ${key} stored as an outflow (${value} → ${-value})`);
+    }
+  }
+  return warnings;
 }

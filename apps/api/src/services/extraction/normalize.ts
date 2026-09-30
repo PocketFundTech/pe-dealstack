@@ -29,7 +29,7 @@ import type {
   ClassifiedStatement,
 } from '../financialClassifier.js';
 import { validateLineItems, LINE_ITEM_ALIASES } from '../financialSchema.js';
-import { computeDerivedFields } from '../financialDerivations.js';
+import { computeDerivedFields, normalizeCashFlowSigns } from '../financialDerivations.js';
 import type { ExtractionResponse, RawStatement } from './extractionSchema.js';
 
 const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
@@ -112,6 +112,8 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
       // Derive EBITDA / EBIT / GP / margins the statement doesn't print —
       // same rules as the legacy engine (financialDerivations.ts).
       if (stmt.statementType === 'INCOME_STATEMENT') computeDerivedFields(normalized);
+      // Cash outflows (capex, repayments, distributions…) stored ≤ 0.
+      if (stmt.statementType === 'CASH_FLOW') warnings.push(...normalizeCashFlowSigns(normalized, p.period));
       return {
         period: p.period,
         periodType: p.periodType,

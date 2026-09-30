@@ -24,7 +24,7 @@ export function computeDebtCapacity(data: PreparedData): DebtCapacity | undefine
   const stDebt = li(bal, 'short_term_debt') ?? 0;
   const ltDebt = li(bal, 'long_term_debt') ?? 0;
   const cash = li(bal, 'cash') ?? 0;
-  const totalDebt = stDebt + ltDebt;
+  const totalDebt = stDebt + ltDebt || (li(bal, 'total_debt') ?? 0);
   const netDebt = totalDebt - cash;
 
   if (ebitda == null || ebitda <= 0) return undefined;
