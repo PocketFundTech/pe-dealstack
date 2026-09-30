@@ -27,6 +27,7 @@ import {
   type HistoricalRow,
 } from '../services/dealModel/assumptions.js';
 import { buildModelWorkbook } from '../services/dealModel/workbook.js';
+import { selectBasePeriod } from '../services/dealModel/basePeriod.js';
 
 const router = Router();
 
@@ -57,6 +58,16 @@ function impliedEvMultiple(dealSize: unknown, ebitda: unknown): number | null {
 }
 
 /**
+ * Deal.ebitda is stored in millions (AGENTS.md), but hand-entered deals
+ * sometimes hold whole dollars — anything above 100,000 "millions" is
+ * clearly that, so convert rather than seed a trillion-dollar entry EV.
+ */
+function dealEbitdaMillions(ebitda: unknown): number | null {
+  if (typeof ebitda !== 'number' || !Number.isFinite(ebitda) || ebitda <= 0) return null;
+  return ebitda > 100_000 ? ebitda / 1_000_000 : ebitda;
+}
+
+/**
  * Cross-field rules the plain schema can't express. Both of these would
  * otherwise produce a workbook that references an assumption cell which
  * doesn't exist — a silent #REF! rather than a clear 400.
@@ -76,7 +87,11 @@ const coherentAssumptions = assumptionsSchema
   });
 
 interface LoadedDeal {
-  deal: { id: string; name: string; companyName: string | null; currency: string | null; evMultiple: number | null };
+  deal: {
+    id: string; name: string; companyName: string | null; currency: string | null; evMultiple: number | null;
+    /** Deal.ebitda in millions — the model's entry-EBITDA fallback. */
+    ebitdaMillions: number | null;
+  };
   history: HistoricalRow[];
   currency: string;
   documentNames: string[];
@@ -116,6 +131,7 @@ async function loadModelInputs(dealId: string, orgId: string): Promise<LoadedDea
       companyName: extractCompanyName(row.company),
       currency: (row.currency as string | null) ?? null,
       evMultiple: impliedEvMultiple(row.dealSize, row.ebitda),
+      ebitdaMillions: dealEbitdaMillions(row.ebitda),
     },
     history: rows,
     currency,
@@ -164,6 +180,14 @@ router.get('/:dealId/model', async (req, res) => {
       assumptions,
       isDerived: !saved,
       history: inputs.history,
+      // The column the workbook projects from (LTM or last full year) — the
+      // panel preview reads this rather than guessing from history.
+      base: (() => {
+        const base = selectBasePeriod(inputs.history);
+        if (!base) return null;
+        const ebitda = typeof base.row.ebitda === 'number' ? base.row.ebitda : inputs.deal.ebitdaMillions;
+        return { label: base.label, basis: base.basis, revenue: base.row.revenue ?? null, ebitda: ebitda ?? null };
+      })(),
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -249,6 +273,7 @@ router.post('/:dealId/model/export', async (req, res) => {
         unitScale: 'MILLIONS',
         sourceDocuments: inputs.documentNames,
         generatedAt: new Date().toISOString(),
+        fallbackEntryEbitda: inputs.deal.ebitdaMillions,
         notes: inputs.history.length < 2
           ? ['Only one historical period was available — growth assumptions are defaults, not derived.']
           : [],
