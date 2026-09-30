@@ -145,16 +145,23 @@ export function prepareData(rows: any[]): PreparedData {
  * full fiscal years when there are at least two, otherwise the largest group
  * of same-length periods (e.g. a monthly P&L). Never mixes a YTD with a year.
  */
-export function comparablePeriods(data: PreparedData): string[] {
-  if (data.annualPeriods.length >= 2) return data.annualPeriods;
+export function comparablePeriods(
+  data: PreparedData,
+  statement?: 'income' | 'balance' | 'cashflow',
+): string[] {
+  // Restricting to one statement stops e.g. a balance-sheet-only "2025" from
+  // a valuation file showing up as an empty year in the revenue series.
+  const has = (p: string) => !statement || data[statement].has(p);
+  const annual = data.annualPeriods.filter(has);
+  if (annual.length >= 2) return annual;
   const groups = new Map<string, string[]>();
-  for (const p of data.periods) {
+  for (const p of data.periods.filter(has)) {
     const info = data.periodInfo.get(p);
     if (!info || info.kind === 'EST') continue;
     const g = `${info.kind}:${info.months ?? '?'}`;
     groups.set(g, [...(groups.get(g) ?? []), p]);
   }
-  let best: string[] = data.annualPeriods;
+  let best: string[] = annual;
   for (const g of groups.values()) if (g.length > best.length) best = g;
   return best;
 }

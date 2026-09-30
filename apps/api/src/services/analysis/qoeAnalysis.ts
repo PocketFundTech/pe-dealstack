@@ -24,7 +24,7 @@ export function computeQoEFlags(data: PreparedData): QoEFlag[] {
 
   // Flows (revenue, EBITDA, cash) are only compared across like periods —
   // full years when available — so a partial YTD never reads as a decline.
-  const periods = comparablePeriods(data);
+  const periods = comparablePeriods(data, 'income');
 
   // 1. Revenue Quality Checks
   const revenues = periods.map(p => li(income.get(p) ?? {}, 'revenue'));

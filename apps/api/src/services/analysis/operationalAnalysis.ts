@@ -55,7 +55,7 @@ export function computeRevenueQuality(data: PreparedData): RevenueQuality | unde
   const { income, periodInfo } = data;
   // Growth, CAGR and consistency compare like with like — full years only
   // (a 9-month YTD against a full year is not a decline).
-  const series = comparablePeriods(data);
+  const series = comparablePeriods(data, 'income');
   const ytd = computeYtdGrowth(data);
   if (series.length < 2 && !ytd) return undefined;
 
@@ -112,7 +112,8 @@ export function computeYtdGrowth(data: PreparedData): YtdGrowth | undefined {
   if (!latest) return undefined;
   const info = periodInfo.get(latest)!;
   // Only meaningful when the YTD is the newest period, not an old partial.
-  const lastFy = annualPeriods[annualPeriods.length - 1];
+  const incomeYears = annualPeriods.filter(p => income.has(p));
+  const lastFy = incomeYears[incomeYears.length - 1];
   if (lastFy && periodInfo.get(lastFy)!.endDate >= info.endDate) return undefined;
   const revenue = li(income.get(latest) ?? {}, 'revenue');
   if (revenue == null) return undefined;

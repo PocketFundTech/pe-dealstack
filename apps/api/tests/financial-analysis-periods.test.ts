@@ -54,3 +54,24 @@ describe('analysis period handling (SRM regression)', () => {
     expect(byPeriod['YTD Sep 2025']).toBeCloseTo((4.0 / 29.0) * 100, 1);
   });
 });
+
+describe('balance-sheet-only years (real SRM shape)', () => {
+  // The valuation summary contributes BS/CF rows labelled "2024" / "2025" but
+  // no income statement. "2025" must not appear as an empty revenue year.
+  const rows = [
+    is('2021', { revenue: 12.4954 }),
+    is('FY2023 (Jan - Dec 2023)', { revenue: 20.9597 }),
+    is('FY2024 (Jan - Dec 2024)', { revenue: 27.3214 }),
+    is('2025 YTD (Jan - Sep 2025)', { revenue: 28.9823 }),
+    { statementType: 'BALANCE_SHEET', periodType: 'HISTORICAL', period: '2025', lineItems: { cash: 1 } },
+    { statementType: 'CASH_FLOW', periodType: 'HISTORICAL', period: '2025', lineItems: { capex: -1 } },
+  ];
+
+  it('keeps the revenue series to income-statement years and still reports the YTD', async () => {
+    const rq = (await analyzeFinancials('deal-srm', rows)).revenueQuality!;
+    expect(rq.organicGrowthRates.map(g => g.period)).toEqual(['2023', '2024']);
+    expect(rq.revenueCAGR).toBeCloseTo(29.79, 1);
+    expect(rq.ytd).toMatchObject({ period: 'YTD Sep 2025', comparedTo: '2024', basis: 'annualised_estimate' });
+    expect(rq.ytd!.growthPct).toBeCloseTo(41.44, 1);
+  });
+});
