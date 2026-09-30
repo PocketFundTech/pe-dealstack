@@ -36,7 +36,7 @@ export function humanizeExtractionError(rawError: string): string {
 /** Minimal per-doc shape buildResultWarnings needs — matches PerDocResult. */
 export interface WarningSourceDoc {
   name: string;
-  status: 'completed' | 'failed' | 'skipped_no_slot';
+  status: 'completed' | 'failed' | 'skipped_no_slot' | 'pending';
   error?: string;
   warnings?: string[];
 }

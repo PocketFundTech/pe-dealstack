@@ -56,3 +56,32 @@ export function financialSourceAuthorityRank(doc: DocAuthorityMeta | null | unde
 
   return SOURCE_AUTHORITY.OTHER;
 }
+
+/**
+ * File-name signals for a DERIVED model — a valuation / returns / DCF /
+ * sensitivity output built on top of the statements rather than the
+ * statements themselves (SRM_Valuation_Summary.xlsx on the SRM deal).
+ * "model" alone is NOT a signal: LBO workbooks often carry the reported
+ * statements on their own tabs.
+ */
+const DERIVED_MODEL_NAME_RE =
+  /\b(valuation|returns?|dcf|sensitivit(y|ies)|irr|model[\s_-]*output|summary|scenario[s]?)\b/i;
+
+export function isDerivedModelName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return DERIVED_MODEL_NAME_RE.test(name.replace(/[_.]/g, ' '));
+}
+
+/**
+ * Processing order for multi-document extraction (lower first): reported
+ * statement files, then narrative docs, then derived models. Merge decisions
+ * never depend on this order (see runDeepPass) — it only decides which
+ * documents are reached first when the request budget runs out.
+ */
+export function extractionOrder(doc: DocAuthorityMeta | null | undefined): number {
+  if (isDerivedModelName(doc?.name)) return 3;
+  const rank = financialSourceAuthorityRank(doc);
+  if (rank === SOURCE_AUTHORITY.FINANCIAL_SHEET) return 0;
+  if (rank === SOURCE_AUTHORITY.NARRATIVE) return 1;
+  return 2;
+}

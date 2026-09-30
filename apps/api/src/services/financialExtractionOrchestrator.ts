@@ -75,9 +75,40 @@ export async function runFastPass(text: string): Promise<FastPassResult | null> 
  * Designed so the extraction layer can be swapped for Azure later —
  * only this function and classifyFinancials() need to change.
  */
+// Per-deal write lock. The cross-document conflict check (read the active
+// row, then upsert) is not atomic, so two documents of the same deal
+// finishing together could both see "no active row" and both go active —
+// or the outcome depended on which finished first. "Extract all" runs its
+// documents inside one function instance, so serialising runDeepPass per
+// deal in-process closes that race without a migration. (Cross-instance
+// writers — a data-room upload racing an Extract-all — would need a DB
+// advisory lock; see FINANCIALS-FIX-PLAN B3.)
+const dealWriteLocks = new Map<string, Promise<unknown>>();
+
+export async function withDealWriteLock<T>(dealId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = dealWriteLocks.get(dealId) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(fn);
+  const tail = run.catch(() => undefined);
+  dealWriteLocks.set(dealId, tail);
+  try {
+    return await run;
+  } finally {
+    if (dealWriteLocks.get(dealId) === tail) dealWriteLocks.delete(dealId);
+  }
+}
+
 export async function runDeepPass(input: OrchestrationInput): Promise<DeepPassResult | null> {
-  // Use pre-computed classification (vision path) or run text classifier
+  // Classify (an LLM call when no classification is passed) OUTSIDE the
+  // lock — only the DB merge needs serialising.
   const classification = input.classification ?? await classifyFinancials(input.text);
+  return withDealWriteLock(input.dealId, () => runDeepPassUnlocked(input, classification));
+}
+
+async function runDeepPassUnlocked(
+  input: OrchestrationInput,
+  // Pre-computed (vision path) or text-classified by runDeepPass above.
+  classification: Awaited<ReturnType<typeof classifyFinancials>> | NonNullable<OrchestrationInput['classification']> | null,
+): Promise<DeepPassResult | null> {
   const source = input.extractionSource ?? 'gpt4o';
 
   if (!classification || classification.statements.length === 0) {

@@ -11,6 +11,8 @@ const acquireExtractionSlot = vi.fn(() => true);
 const releaseExtractionSlot = vi.fn();
 vi.mock('../src/services/agents/financialAgent/concurrency.js', () => ({
   acquireExtractionSlot: (...a: any[]) => acquireExtractionSlot(...a),
+  // The waiting variant resolves with the same answer (no real wait in tests).
+  acquireExtractionSlotBy: async (orgId: string) => acquireExtractionSlot(orgId),
   releaseExtractionSlot: (...a: any[]) => releaseExtractionSlot(...a),
 }));
 
