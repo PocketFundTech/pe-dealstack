@@ -5,6 +5,52 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 83 — September 30, 2026
+
+#### Timestamp: September 30, 2026 — 13:53 IST
+
+#### Goal: Smooth Flows **Batch 0**, the demo blockers from the live QA run (PR `fix/flows-batch-0`).
+
+Four tracks ran in parallel on separate branches (Excel financials, PDF ingest, NDA templates, Firm Profile + insights), plus two small fixes done directly. Every change was reviewed, then cherry-picked onto one branch. Two reported bugs were re-tested live first and did not reproduce.
+
+**1. Wrong financials from Excel uploads (EBITDA 0), also shown on the client portal**
+- **Root cause, part 1:** the extraction schema only offered UNITS / THOUSANDS / MILLIONS / BILLIONS. An "INR crore" sheet had no accurate option, so the model tagged it UNITS.
+- **Root cause, part 2:** conversion to millions then rounded to 4 decimals, which acts as a $100 floor: 182.4 → 0.0002 (shown as 200) and EBITDA 29.1–44.2 → 0. That exactly matches the 15 wrong values seen live.
+- **Fix:**
+  - Added LAKHS (×0.1) and CRORES (×10) to the schema, both prompts and the conversion table.
+  - Replaced the rounding with 12-significant-digit cleanup.
+  - Added a schema version (`v2`) to the extraction cache key, so **Re-extract** recomputes instead of replaying the old cached output.
+- **Existing deals:** rows already stored are wrong. After deploy, click **Re-extract** on affected documents. INR/crore deals are the likely ones; the Northwind QA deal is one.
+
+**2. Valid PDFs rejected at upload**
+- **Root cause:** `pdf-parse` 1.1.4 (2017 pdf.js) can't read modern object-stream PDFs. Ingest returned 422 before Claude's native PDF read ever ran.
+- **Fix:** with `INGEST_ENGINE=claude`, a text-extraction failure now falls through to the Claude read. Only if that also fails does the user get a plain "We couldn't read this PDF" message.
+- **Data room:** the "Pending Analysis forever" state was really a `failed` status the UI didn't map. It now shows "Extraction Failed".
+
+**3. "Mark all as read" returned 403 for every user**
+- **Root cause:** the panel sends the Supabase auth id, but the route compared it to `User.id`.
+- **Fix:** one org-scoped resolver accepts either id, used by the list, mark-all-read and bulk delete (bulk delete had the same bug).
+
+**4. Firm Profile "Saved" but the fields came back empty**
+- **Root cause:** the save always worked. `findOrCreateUser`'s Organization join (which serves `/users/me`) never selected `settings` or `website`, so the page reloaded blanks.
+- **Fix:** added both columns to the join. `settings` holds only firm profile, criteria, research and playbook data, which members already see.
+
+**5. Data-room "Generate insights" required OpenAI**
+- **Fix:** moved to Claude (`trackedClaudeMessage`, structured output) with the same prompt and output shape. The 503 message no longer mentions OpenAI.
+
+**6. Multi-file upload silently dropped unsupported files**
+- **Fix:** the confirm dialog now lists each skipped file and why. Validation moved to a tested `splitUploadFiles` helper, which also brought `page.tsx` back under 500 lines.
+
+**Not reproducible on re-test (no code change)**
+- **Dashboard "0 live deals":** a new Initial Review deal counted immediately.
+- **NDA template "never listed":** the saved template appears and New NDA works. The "0 saved" the tester saw counts NDA *documents*, not templates.
+
+**Hardening found along the way:** `orgMiddleware`'s lazy org creation had a read-then-write race that could create orphan orgs when several requests arrived together. It now claims the org with a conditional update. This was not the cause of the NDA report.
+
+**Verification:** API 2085 tests passing (+18 new), web 439 passing (+2 new), tsc clean in both apps, web lint 0 errors (81 warnings, unchanged from `main`), `package-lock.json` unchanged.
+
+---
+
 ### Session 82 — September 30, 2026
 
 #### Timestamp: September 30, 2026 — 02:25 IST

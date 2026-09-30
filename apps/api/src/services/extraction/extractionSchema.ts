@@ -12,7 +12,24 @@
 import { z } from 'zod';
 import { getTodayIso } from '../../utils/dates.js';
 
-export const RAW_UNIT_SCALES = ['UNITS', 'THOUSANDS', 'MILLIONS', 'BILLIONS'] as const;
+// LAKHS (1e5) and CRORES (1e7) are the Indian numbering scales. Without
+// them the model has no honest way to describe an "INR crore" table and
+// falls back to UNITS ("as printed"), which normalize.ts then shrinks by
+// 1e6 — the Northwind-Model-QA.xlsx production bug (2026-09-30).
+/**
+ * Bump whenever a change to the schema, prompts or scale handling changes what
+ * a stored extraction means. It is part of the extraction cache key, so a
+ * bump makes every cached result re-extract instead of replaying old output.
+ * v2 (2026-09-30): LAKHS/CRORES scales + no rounding of small scaled values.
+ */
+export const EXTRACTION_SCHEMA_VERSION = 'v2';
+
+/** Extraction-cache tier for the Claude engine: the model plus the schema version. */
+export function claudeExtractionCacheTier(model: string): string {
+  return `${model}@${EXTRACTION_SCHEMA_VERSION}`;
+}
+
+export const RAW_UNIT_SCALES = ['UNITS', 'THOUSANDS', 'LAKHS', 'MILLIONS', 'CRORES', 'BILLIONS'] as const;
 
 // ── Zod mirror (validates the parsed model output) ────────────────────
 const rawLineItem = z.object({
@@ -118,7 +135,7 @@ export function buildExtractionSystemPrompt(todayIso: string = getTodayIso()): s
 DATE CONTEXT — TODAY IS ${todayIso}. Use THIS date as the boundary for HISTORICAL vs PROJECTED period classification, NOT your training cutoff. Any period whose end date is on or before ${todayIso} is HISTORICAL; any period whose end date is after ${todayIso} is PROJECTED. Do NOT label a recent-looking past period as PROJECTED just because it looks recent — check it against ${todayIso}.
 
 Rules:
-- Report every value EXACTLY as printed in the document. Do NOT convert units or currencies — instead set unitScale (UNITS/THOUSANDS/MILLIONS/BILLIONS) and currency per statement to describe how the document prints them.
+- Report every value EXACTLY as printed in the document. Do NOT convert units or currencies — instead set unitScale (UNITS/THOUSANDS/LAKHS/MILLIONS/CRORES/BILLIONS) and currency per statement to describe how the document prints them. Indian-scale tables use LAKHS (lakh / lac / L = 100,000) or CRORES (crore / cr = 10,000,000) — e.g. a table headed "INR crore" or "₹ Cr" is CRORES, never UNITS. UNITS means the printed numbers are whole currency units (e.g. 1,824,000,000).
 - Use these canonical snake_case names when a line represents the same concept, even if the document's label differs (e.g. "Turnover"/"Net Sales" → revenue):
   income statement: revenue, cogs, gross_profit, gross_margin_pct, sga, rd, other_opex, total_opex, ebitda, ebitda_margin_pct, da, ebit, interest_expense, ebt, tax, net_income, sde
   balance sheet: cash, accounts_receivable, inventory, other_current_assets, total_current_assets, ppe_net, goodwill, intangibles, total_assets, accounts_payable, short_term_debt, other_current_liabilities, total_current_liabilities, long_term_debt, total_liabilities, total_equity
@@ -154,7 +171,7 @@ Read the ACTUAL cells with Python (pandas / openpyxl) — never work from a summ
 1. List every sheet in the workbook (for CSV, treat the file as one sheet).
 2. For each sheet, print the used cell range INCLUDING header rows, unit/scale rows (e.g. "$ in thousands", "EUR m"), and label columns, exactly as stored. For very large sheets, print the header region plus every row that carries a financial line item.
 3. Identify which sheets/ranges contain financial statements (income statement, balance sheet, cash flow) versus assumptions, schedules, or other content.
-4. Determine unit scale and currency from cells you actually printed — never assume them.
+4. Determine unit scale and currency from cells you actually printed (titles and header rows included) — never assume them. A sheet titled or headed in crore ("INR crore", "₹ Cr") is unitScale CRORES; in lakh ("₹ lakh", "Rs. lacs") is LAKHS. Use UNITS only when the cells hold whole currency units.
 
 Then extract all income statement, balance sheet, and cash flow data into the required JSON structure. Every value must come from a cell you printed. For sourceQuote use the sheet name + cell reference + printed value (e.g. "IS!B7: 36,286"); for sourcePage use the 1-based sheet index.`;
 }

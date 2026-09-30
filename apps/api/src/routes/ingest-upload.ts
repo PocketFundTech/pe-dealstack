@@ -158,54 +158,75 @@ export async function runIngestFromBuffer(
     // Step 1: Extract text from document
     let extractedText: string | null = null;
     let numPages: number | null = null;
+    // True when pdf-parse (and LlamaParse, if enabled) hard-failed to parse
+    // the PDF at all — e.g. modern object-stream PDFs that pdf-parse 1.1.4's
+    // bundled 2017 pdf.js can't read. Distinct from "sparse" (parsed fine,
+    // just little/no text — scanned PDFs). Only matters for INGEST_ENGINE=claude:
+    // if the native Claude read ALSO fails to recover data, Step 2 uses this
+    // to give an accurate error instead of falling through to the legacy
+    // text-based extractor with an empty string.
+    let pdfTextExtractionFailed = false;
 
     if (mimeType === 'application/pdf') {
       log.info('Step 1: Extracting text from PDF (LlamaParse → pdf-parse)', { documentName });
       const extraction = await extractTextFromPDF(buffer, documentName);
       if (!extraction) {
-        // Both layers hard-failed (encrypted / malformed). Don't 500 — give the user a hint.
-        log.error('PDF extraction failed in both layers', undefined, { documentName });
-        return {
-          status: 422,
-          body: {
-            error:
-              "Couldn't extract data from this document. The PDF may be encrypted, password-protected, or malformed — try uploading a different copy.",
-          },
-        };
-      }
-      extractedText = extraction.text.replace(/\u0000/g, '');
-      numPages = extraction.numPages;
-      log.info('PDF extracted', {
-        layer: extraction.source,
-        numPages,
-        charCount: extractedText.length,
-        sparse: extraction.sparse,
-      });
-      // Image-only one-pagers (scanned PDFs) yield ~0 chars from pdf-parse.
-      // Surface a useful 422 instead of letting the AI extractor return null.
-      if (extraction.sparse && extractedText.trim().length < 100) {
         if (!isClaudeIngestEnabled()) {
-          log.warn('PDF text too sparse for AI extraction', {
-            documentName,
-            chars: extractedText.trim().length,
-            layer: extraction.source,
-          });
+          // Legacy engine has no other way to read the document — both text
+          // layers hard-failed (encrypted / malformed). Don't 500 — give the
+          // user a hint.
+          log.error('PDF extraction failed in both layers', undefined, { documentName });
           return {
             status: 422,
             body: {
               error:
-                "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
+                "Couldn't extract data from this document. The PDF may be encrypted, password-protected, or malformed — try uploading a different copy.",
             },
           };
         }
-        // INGEST_ENGINE=claude: scanned/image-only PDFs proceed — the native
-        // reader sees the complete file regardless of text layer. Only the
-        // downstream "AI couldn't identify deal information" 422 fires if the
-        // native read ALSO fails.
-        log.info('Sparse/scanned PDF — deferring to native Claude read', {
-          documentName,
-          chars: extractedText.trim().length,
+        // INGEST_ENGINE=claude: the native reader (readDealDocument, below)
+        // reads the whole PDF via the Files API independently of our local
+        // text layer, so a pdf-parse failure alone shouldn't block the
+        // upload. Defer to it — only 422 if IT also fails to recover data.
+        pdfTextExtractionFailed = true;
+        extractedText = '';
+        numPages = null;
+        log.warn('PDF text extraction failed — deferring to native Claude read', { documentName });
+      } else {
+        extractedText = extraction.text.replace(/\u0000/g, '');
+        numPages = extraction.numPages;
+        log.info('PDF extracted', {
+          layer: extraction.source,
+          numPages,
+          charCount: extractedText.length,
+          sparse: extraction.sparse,
         });
+        // Image-only one-pagers (scanned PDFs) yield ~0 chars from pdf-parse.
+        // Surface a useful 422 instead of letting the AI extractor return null.
+        if (extraction.sparse && extractedText.trim().length < 100) {
+          if (!isClaudeIngestEnabled()) {
+            log.warn('PDF text too sparse for AI extraction', {
+              documentName,
+              chars: extractedText.trim().length,
+              layer: extraction.source,
+            });
+            return {
+              status: 422,
+              body: {
+                error:
+                  "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
+              },
+            };
+          }
+          // INGEST_ENGINE=claude: scanned/image-only PDFs proceed — the native
+          // reader sees the complete file regardless of text layer. Only the
+          // downstream "AI couldn't identify deal information" 422 fires if the
+          // native read ALSO fails.
+          log.info('Sparse/scanned PDF — deferring to native Claude read', {
+            documentName,
+            chars: extractedText.trim().length,
+          });
+        }
       }
     } else if (
       mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -259,6 +280,24 @@ export async function runIngestFromBuffer(
       if (!aiData) {
         log.warn('INGEST_ENGINE=claude deal read failed — falling back to legacy extractor', { documentName });
       }
+    }
+
+    // If the local PDF text layer hard-failed (pdf-parse couldn't parse the
+    // file at all) AND the native Claude read also failed to recover any
+    // data, there's no text left to hand the legacy extractor — bail out
+    // with an accurate message instead of claiming the file is malformed
+    // (pdf-parse failing doesn't mean the PDF itself is broken; this exact
+    // file may open fine elsewhere) or falling through to extractDealDataFromText('').
+    if (pdfTextExtractionFailed && !aiData) {
+      log.error('PDF text extraction failed and native Claude read did not recover data', undefined, {
+        documentName,
+      });
+      return {
+        status: 422,
+        body: {
+          error: "We couldn't read this PDF. If it's password-protected, remove the password and try again.",
+        },
+      };
     }
 
     // Legacy chain (also the fallback when the claude read returns null).

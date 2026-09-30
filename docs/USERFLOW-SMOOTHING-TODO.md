@@ -204,34 +204,34 @@ Four `playwright-cli` testers clicked through deals.avise.io as `qa.tester@examp
 (ADMIN, own "Avise QA Test Org"). Items below are **new** — not in the code audit above.
 Each was observed live; evidence screenshots were taken during the run.
 
-### Batch 0 — fix before the next demo (wrong data, silent failures)
+### Batch 0 — fix before the next demo ✅ done 2026-09-30 (PR `fix/flows-batch-0`)
 
-- [ ] **Financial statements from an Excel upload are wrong, including on the client portal.**
+- [x] **Financial statements from an Excel upload are wrong, including on the client portal.** ✅ *Fixed in batch 0: crore/lakh scales added and the lossy rounding removed; cache versioned so Re-extract recomputes.*
   - Seen: Excel P&L with Revenue 182.4 / 214.9 / 251.3 and EBITDA 29.1 / 36.5 / 44.2. The deal headline was correct, but the Financial Statements table, the model panel, the deal chat's key metrics and the **public portal** showed Revenue 200/200/300 and **EBITDA 0 for every year**.
   - The deal chat noticed it by itself: the numeric rows were 0 and only the `_source` cells carried the figures.
   - Where to look: the deep-pass Excel extraction in `A/services/ingestDeepPass.ts` → Excel container extraction → statement storage. Check unit scale and the merge of `_source` rows into numeric rows.
-- [ ] **Valid PDFs can be rejected at ingest and never analysed.**
+- [x] **Valid PDFs can be rejected at ingest and never analysed.** ✅ *Fixed in batch 0: failed text extraction now falls through to Claude's native PDF read; the data room shows "Extraction Failed" instead of pending forever.*
   - `pdf-parse` 1.1.4 (bundles pdf.js from 2017) throws "Invalid PDF structure" on PDFs that use modern object streams. Ingest then returns 422 "may be encrypted…", even though macOS PDFKit reads the same file fine.
   - Claude can read PDFs natively (`INGEST_ENGINE=claude`), but ingest stops at the text-extraction step before Claude is tried.
   - The same PDF sits in the data room as "Pending Analysis" indefinitely.
   - Fix: when text extraction fails, still send the PDF to Claude's native read. Upgrade or replace `pdf-parse`.
   - Where: `A/routes/ingest-upload.ts` Step 1 ("LlamaParse → pdf-parse").
-- [ ] **"Mark all as read" returns 403 for every user.**
+- [x] **"Mark all as read" returns 403 for every user.** ✅ *Fixed in batch 0 (bulk delete had the same bug).*
   - The panel sends the Supabase *auth* id. `GET /notifications` translates auth id → internal id, but `mark-all-read` looks up `User.id = <auth id>`, finds nothing, and answers "outside your organization".
   - The UI hides it: the badge clears, then the notifications come back unread on the next refresh.
   - Fix: resolve the id the same way `GET` does, or better, ignore the client's `userId` and use `req.user`.
   - Where: `A/routes/notifications.ts:274-302`; callers `W/components/layout/NotificationsDropdown.tsx:117`, `NotificationPanel.tsx:132`.
-- [ ] **The dashboard says "0 live deals" while deals exist.**
+- [x] **The dashboard says "0 live deals" while deals exist.** ⚪ *Not reproducible on re-test: a new Initial Review deal counted at once (3 live, 1 in Sourcing). The tester's dashboard was probably loaded before the other testers created deals.*
   - The Pipeline widget buckets (Sourcing / Diligence / IOI-LOI / Negotiation / Closed) have no slot for `INITIAL_REVIEW`, the default stage of every new deal. `/deals` and `/admin` show the correct count.
-- [ ] **Data-room insights fail silently.**
+- [x] **Data-room insights fail silently.** ✅ *Fixed in batch 0: moved to Claude (same prompt and output shape).*
   - `POST /folders/:id/generate-insights` → 503 "Check that OPENAI_API_KEY is configured". This feature still runs on OpenAI, which has no working key or credit in prod.
   - The panel quietly resets to "No insights yet" (Batch 1 added a toast; confirm it shows).
   - Decide: move this feature to Claude, or configure OpenAI.
-- [ ] **NDA template saves but never appears.**
+- [x] **NDA template saves but never appears.** ⚪ *Not reproducible on re-test: the saved template is listed and New NDA works. "0 saved" counts NDA documents, not templates. A related org-creation race was hardened in batch 0.*
   - `POST /legal-document-templates` → 201, but the gallery keeps showing "0 saved" and "No NDA templates yet". `GET` returns 200 without it, even after a reload.
   - Result: the whole create-NDA → edit → send-for-signature flow is blocked.
-- [ ] **Firm Profile says "Saved" but the website and LinkedIn fields don't persist.** `POST /onboarding/firm-inputs` → 200; after a reload both fields are empty.
-- [ ] **Multi-file data-room upload silently drops unsupported files.**
+- [x] **Firm Profile says "Saved" but the website and LinkedIn fields don't persist.** `POST /onboarding/firm-inputs` → 200; after a reload both fields are empty. ✅ *Fixed in batch 0: the save always worked; `/users/me` never selected `Organization.settings`, so the page reloaded blanks.*
+- [x] **Multi-file data-room upload silently drops unsupported files.** ✅ *Fixed in batch 0: the confirm dialog lists each skipped file and why.*
   - Picking a PDF, an XLSX and 2 .txt files → the confirm dialog lists only the PDF and XLSX, with no message about the other two.
   - The error toast only fires when every file is invalid.
 

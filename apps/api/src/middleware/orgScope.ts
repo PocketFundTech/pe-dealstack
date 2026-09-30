@@ -99,30 +99,62 @@ export async function orgMiddleware(
           .single();
 
         if (newOrg) {
-          // Race guard: re-fetch User by authId — a parallel request may have
-          // already set organizationId. If so, prefer the existing org and
-          // discard the one we just created (it will be orphaned).
-          const { data: refetched } = await supabase
+          // Race guard: claim organizationId with a CONDITIONAL update —
+          // `.is('organizationId', null)` makes the write atomic at the DB
+          // row level, so with N concurrent requests racing here, at most
+          // one UPDATE can match the WHERE clause and actually flip the
+          // column. Everyone else's UPDATE matches zero rows.
+          //
+          // A prior version of this guard did a plain SELECT-then-UPDATE:
+          // it re-fetched User, and only skipped its own UPDATE if that
+          // read already showed someone else's org. That has a TOCTOU gap
+          // — with 2+ requests racing, ALL of them can perform the re-fetch
+          // (each sees organizationId still null) before ANY of them has
+          // written, so every racer falls into the "I'm first" branch and
+          // unconditionally overwrites organizationId. The last UPDATE to
+          // land silently wins in the DB while every other racer's request
+          // (already returned) proceeded — and any row it inserted, e.g. an
+          // NDA template — under its own now-orphaned organizationId. That
+          // row becomes permanently invisible to every future request,
+          // which now reads the single winning organizationId from Postgres
+          // every time, including after a full page reload.
+          const { data: claimed, error: claimErr } = await supabase
             .from('User')
-            .select('id, organizationId')
-            .eq('authId', req.user.id)
-            .single();
+            .update({ organizationId: newOrg.id })
+            .eq('id', userRecord.id)
+            .is('organizationId', null)
+            .select('organizationId')
+            .maybeSingle();
 
-          if (refetched?.organizationId && refetched.organizationId !== newOrg.id) {
-            log.warn('Org middleware: race detected — parallel request set organizationId, using existing', {
+          if (claimErr) {
+            log.error('Org middleware: failed to claim organizationId', claimErr);
+          }
+
+          if (claimed?.organizationId) {
+            // We won the race — our new org is now canonical.
+            req.user.organizationId = claimed.organizationId;
+            log.info('Org middleware: auto-created org for user without one', {
               userId: userRecord.id,
-              parallelOrgId: refetched.organizationId,
-              discardedOrgId: newOrg.id,
+              orgId: claimed.organizationId,
             });
-            req.user.organizationId = refetched.organizationId;
           } else {
-            await supabase
+            // Lost the race (or the row already had an org by the time our
+            // conditional update ran) — re-read the now-authoritative value
+            // rather than trusting our local newOrg, which may be orphaned.
+            const { data: refetched } = await supabase
               .from('User')
-              .update({ organizationId: newOrg.id })
-              .eq('id', userRecord.id);
+              .select('id, organizationId')
+              .eq('authId', req.user.id)
+              .single();
 
-            req.user.organizationId = newOrg.id;
-            log.info('Org middleware: auto-created org for user without one', { userId: userRecord.id, orgId: newOrg.id });
+            if (refetched?.organizationId) {
+              log.warn('Org middleware: race detected — parallel request set organizationId, using existing', {
+                userId: userRecord.id,
+                parallelOrgId: refetched.organizationId,
+                discardedOrgId: newOrg.id,
+              });
+              req.user.organizationId = refetched.organizationId;
+            }
           }
         }
       } catch (createErr) {

@@ -155,7 +155,7 @@ router.post('/folders/:id/generate-insights', async (req: Request, res: Response
     );
 
     if (!insights) {
-      return res.status(503).json({ error: 'AI insights generation unavailable. Check that OPENAI_API_KEY is configured.' });
+      return res.status(503).json({ error: 'AI insights generation unavailable. Check that ANTHROPIC_API_KEY is configured.' });
     }
 
     // 6. Save to FolderInsight table (upsert: delete old, insert new)
