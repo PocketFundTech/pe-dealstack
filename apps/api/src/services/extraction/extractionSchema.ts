@@ -16,6 +16,19 @@ import { getTodayIso } from '../../utils/dates.js';
 // them the model has no honest way to describe an "INR crore" table and
 // falls back to UNITS ("as printed"), which normalize.ts then shrinks by
 // 1e6 — the Northwind-Model-QA.xlsx production bug (2026-09-30).
+/**
+ * Bump whenever a change to the schema, prompts or scale handling changes what
+ * a stored extraction means. It is part of the extraction cache key, so a
+ * bump makes every cached result re-extract instead of replaying old output.
+ * v2 (2026-09-30): LAKHS/CRORES scales + no rounding of small scaled values.
+ */
+export const EXTRACTION_SCHEMA_VERSION = 'v2';
+
+/** Extraction-cache tier for the Claude engine: the model plus the schema version. */
+export function claudeExtractionCacheTier(model: string): string {
+  return `${model}@${EXTRACTION_SCHEMA_VERSION}`;
+}
+
 export const RAW_UNIT_SCALES = ['UNITS', 'THOUSANDS', 'LAKHS', 'MILLIONS', 'CRORES', 'BILLIONS'] as const;
 
 // ── Zod mirror (validates the parsed model output) ────────────────────

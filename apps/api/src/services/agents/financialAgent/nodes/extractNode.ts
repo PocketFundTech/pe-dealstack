@@ -13,6 +13,7 @@
  * Wraps existing service functions — no extraction logic is duplicated.
  */
 
+import { claudeExtractionCacheTier } from '../../../extraction/extractionSchema.js';
 import { createRequire } from 'module';
 import { classifyFinancialsCrossVerified as classifyFinancials } from '../../../financialCrossVerify.js';
 import { classifyFinancialsVision } from '../../../visionExtractor.js';
@@ -100,7 +101,9 @@ export async function extractNode(
   // model for up to the cache's 30-day TTL. Legacy path keeps the existing
   // default ('tier1') — unaffected, since modelTier is only overridden here
   // when the claude engine is active.
-  const modelTier = useClaudeEngine ? getModelConfig('extraction').model : undefined;
+  // ...and on the extraction schema version, so a fix to prompts/scale
+  // handling re-extracts instead of replaying results cached before it.
+  const modelTier = useClaudeEngine ? claudeExtractionCacheTier(getModelConfig('extraction').model) : undefined;
 
   if (!forceExtraction) {
     const cached = await getCachedExtraction({ contentHash, extractionMode: engineMode, modelTier });
