@@ -623,6 +623,24 @@ function writeSensitivity(sheet: ExcelJS.Worksheet, a: ModelAssumptions) {
   });
 }
 
+/**
+ * The deal record's EBITDA (often adjusted, from the CIM or a valuation) can
+ * differ a lot from the statements' — on SRM 6.1 vs a derived 2.21. Say so
+ * rather than silently picking one: it moves entry EV and every return.
+ */
+function ebitdaGapNote(base: BasePeriod | null, ctx: WorkbookContext): string[] {
+  const own = base?.row.ebitda;
+  const deal = ctx.fallbackEntryEbitda;
+  if (typeof own !== 'number' || typeof deal !== 'number' || own <= 0 || deal <= 0) return [];
+  const gap = Math.abs(deal - own) / own;
+  if (gap < 0.25) return [];
+  return [
+    `CHECK: base-period EBITDA from the statements is ${own.toFixed(2)}${base?.row.ebitdaDerived ? ' (derived)' : ''}, ` +
+    `but the deal record says ${deal.toFixed(2)} — a ${Math.round(gap * 100)}% difference (e.g. adjusted vs reported EBITDA). ` +
+    'The model uses the statements figure; change Projections!B7 if the adjusted figure is the right entry basis.',
+  ];
+}
+
 function writeNotes(sheet: ExcelJS.Worksheet, ctx: WorkbookContext, history: HistoricalRow[], base: BasePeriod | null) {
   sheet.columns = [{ width: 100 }];
   sheet.getCell('A1').value = 'Notes & caveats';
@@ -635,6 +653,7 @@ function writeNotes(sheet: ExcelJS.Worksheet, ctx: WorkbookContext, history: His
     'The debt structure is a single senior tranche: straight-line amortisation plus a cash sweep of unlevered free cash flow. Multi-tranche structures are not modelled.',
     ...(base ? [base.note] : []),
     ...(base?.row.ebitdaDerived ? ['Base-period EBITDA was not printed in the source; it was derived (EBIT + D&A, or equivalent).'] : []),
+    ...(ebitdaGapNote(base, ctx)),
     ...(entryEbitda(base, ctx).source === 'deal' ? ["The base period has no EBITDA — entry EBITDA uses the deal's recorded EBITDA instead. Verify it."] : []),
     ...(entryEbitda(base, ctx).source === 'missing' ? ['WARNING: no entry EBITDA could be found or derived, so entry EV, debt and equity are 0 and returns are not meaningful. Enter it on the Projections sheet (cell B7) or extract a P&L with EBITDA.'] : []),
     ...(history.some((h) => h.ebitdaDerived) ? ['Where a period\'s EBITDA was not printed, Historicals shows a derived figure (EBIT + D&A, or equivalent).'] : []),

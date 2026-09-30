@@ -73,14 +73,18 @@ export const UNCLASSIFIED_KEY = "__unclassified";
  * so the specific rules sit above the broad ones.
  */
 const INCOME_KEYWORD_RULES: Array<[RegExp, string]> = [
+  // Subtotals QuickBooks prints under its own names.
+  [/(^|_)(net_)?operating_(income|profit|loss)(_|$)/, "ebit"],
   [/(^|_)(other_income|interest_income|net_other_income|gain|gains)(_|$)/, "other_income"],
+  // "Taxes & Licenses" is an operating expense (payroll / property / permits), not income tax.
+  [/(^|_)taxes?_(and_)?licen[cs]es?(_|$)|payroll_tax/, "total_opex"],
   [/(^|_)(discounts?|refunds?|allowances?|returns?|returned|rebates?)(_|$)/, "revenue"],
   [/(amortization|amortisation|depreciation)/, "da"],
   [/(^|_)(cos|cogs|cost_of|costs?_of_(goods|sales|revenue))(_|$)|_cos$|_costs?$|(^|_)(materials?|freight|cement|sand|gravel|fly_ash|aggregates?|additives?|direct_labou?r|subcontract\w*)(_|$)/, "cogs"],
-  [/(^|_)(gross_sales|sales|revenues?|income|fees_earned|services)(_|$)/, "revenue"],
   [/(^|_)interest(_|$)/, "interest_expense"],
   [/(^|_)(tax|taxes|income_tax)(_|$)/, "tax"],
-  [/(insurance|rent|bad_debts?|salar|wages?|payroll|utilit|office|professional|legal|accounting|advertis|marketing|repairs?|maintenance|travel|fuel|telephone|phone|dues|licen[cs]e|supplies|bank_(charges?|fees)|meals|vehicle|auto|software|subscriptions?|training|postage|expenses?|opex|admin)/, "total_opex"],
+  [/(^|_)(gross_sales|sales|revenues?|income|fees_earned|services)(_|$)/, "revenue"],
+  [/(insurance|rent|bad_debts?|salar|wages?|payroll|utilit|office|professional|legal|accounting|advertis|marketing|repairs?|maintenance|travel|fuel|telephone|phone|dues|licen[cs]e|supplies|bank_(charges?|fees)|meals|vehicle|auto|software|subscriptions?|training|postage|expenses?|opex|admin|disposal|(^|_)fees?(_|$))/, "total_opex"],
 ];
 
 /** Parents a child may attach to on each statement (layout keys only). */

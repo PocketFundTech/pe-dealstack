@@ -41,6 +41,19 @@ describe("P&L layout (SRM regression)", () => {
   });
 });
 
+describe("QuickBooks names seen on SRM", () => {
+  it.each([
+    ["net_operating_income", "ebit"],
+    ["total_taxes_licenses", "total_opex"],
+    ["disposal_fees", "total_opex"],
+    ["other_ordinary_income", "revenue"],
+    ["gain_loss_on_sale_of_asset", "other_income"],
+    ["income_tax", "tax"],
+  ])("%s → %s", (key, parent) => {
+    expect(classifyAccount("INCOME_STATEMENT", key)).toBe(parent);
+  });
+});
+
 describe("other statements", () => {
   it("keeps prefixed children on the balance sheet and groups unknowns", () => {
     const rows = buildStatementRows("BALANCE_SHEET", new Set(["cash", "total_assets", "cash_restricted", "weird_line"]));

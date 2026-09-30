@@ -107,6 +107,15 @@ describe('workbook entry values (D2)', () => {
     expect(JSON.stringify(none.getWorksheet(SHEETS.notes)!.getSheetValues())).toContain('WARNING: no entry EBITDA');
   });
 
+  it('flags a large gap between the statements EBITDA and the deal record (SRM: 2.21 vs 6.1)', async () => {
+    const rows = [{ period: '2024', revenue: 27.3, ebitda: 2.21, ebitdaDerived: true }];
+    const wb = await load(await buildModelWorkbook({
+      assumptions: deriveDefaults(rows), history: rows, context: { ...CONTEXT, fallbackEntryEbitda: 6.1 },
+    }));
+    expect(wb.getWorksheet(SHEETS.projections)!.getRow(PL_ROWS.ebitda).getCell(2).value).toBe(2.21);
+    expect(JSON.stringify(wb.getWorksheet(SHEETS.notes)!.getSheetValues())).toContain('the deal record says 6.10');
+  });
+
   it('honours entryBasis REVENUE and debtQuantumMode ABSOLUTE', async () => {
     const { rows } = normaliseStatements(SRM);
     const a = { ...deriveDefaults(rows), entryBasis: 'REVENUE' as const, entryMultiple: 1.2, debtQuantumMode: 'ABSOLUTE' as const, debtQuantum: 10 };
