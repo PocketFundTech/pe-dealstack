@@ -33,11 +33,7 @@ import {
   applyDataRoomFilters,
   type DataRoomFilterState,
 } from "./data-room-filters";
-import {
-  ALLOWED_UPLOAD_MIME_TYPES,
-  MAX_UPLOAD_FILE_SIZE,
-  hasHighValueDoc,
-} from "./upload-helpers";
+import { hasHighValueDoc, splitUploadFiles, type SkippedUpload } from "./upload-helpers";
 import {
   createCreateFolder,
   createDeleteFolder,
@@ -85,6 +81,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
   const [showTeamModal, setShowTeamModal] = useState(false);
   // Upload confirmation modal state (two-stage upload like legacy)
   const [pendingUploadFiles, setPendingUploadFiles] = useState<File[] | null>(null);
+  const [skippedUploads, setSkippedUploads] = useState<SkippedUpload[]>([]);
   const [autoUpdateDeal, setAutoUpdateDeal] = useState(false);
   // Link-to-deal modal state
   const [linkModalFile, setLinkModalFile] = useState<VDRFile | null>(null);
@@ -170,24 +167,16 @@ export default function DataRoomDealPage({ params }: PageProps) {
     e.target.value = ""; // allow re-selecting the same file
     if (!files.length || !activeFolderId) return;
 
-    const validFiles: File[] = [];
-    for (const file of files) {
-      if (file.size > MAX_UPLOAD_FILE_SIZE) {
-        showToast(`File "${file.name}" exceeds maximum size of 50MB`, "error");
-        continue;
-      }
-      if (!ALLOWED_UPLOAD_MIME_TYPES.includes(file.type)) {
-        showToast(`File "${file.name}" has an unsupported file type`, "error");
-        continue;
-      }
-      validFiles.push(file);
+    const { valid: validFiles, skipped } = splitUploadFiles(files);
+    setSkippedUploads(skipped);
+    if (validFiles.length === 0) {
+      // Nothing to confirm, so say why here (the dialog would list it otherwise).
+      skipped.forEach((f) => showToast(`"${f.name}" can't be uploaded: ${f.reason}`, "error"));
+      return;
     }
-
-    if (validFiles.length > 0) {
-      // Smart default: auto-check toggle for CIM/financials/teaser documents
-      setAutoUpdateDeal(hasHighValueDoc(validFiles));
-      setPendingUploadFiles(validFiles);
-    }
+    // Smart default: auto-check toggle for CIM/financials/teaser documents
+    setAutoUpdateDeal(hasHighValueDoc(validFiles));
+    setPendingUploadFiles(validFiles);
   };
 
   // Stage 2: User confirms upload
@@ -430,6 +419,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
       {pendingUploadFiles && (
         <UploadConfirmModal
           files={pendingUploadFiles}
+          skipped={skippedUploads}
           autoUpdateDeal={autoUpdateDeal}
           uploading={uploading}
           onAutoUpdateChange={setAutoUpdateDeal}
