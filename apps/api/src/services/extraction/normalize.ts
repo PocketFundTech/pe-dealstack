@@ -5,8 +5,9 @@
  *
  * - Scale conversion to canonical MILLIONS happens HERE (deterministic code),
  *   not in prompts — the top source of legacy scale errors (spec §3.2).
- *   Converted values are rounded to 4 decimals to kill reciprocal-multiply
- *   float noise (mirrors financialClassifier.ts's own rounding convention).
+ *   Converted values are cleaned to 12 significant digits to kill
+ *   reciprocal-multiply float noise — never a fixed decimal cutoff, which
+ *   would zero out small values (see cleanFloat).
  * - Ratio-like fields (name ends `_pct`, `_ratio`, or `_multiple`) are never
  *   scaled — matches the suffix convention the prompt requires for any
  *   invented ratio/rate/multiple name (extractionSchema.ts).
@@ -30,13 +31,22 @@ import type { ExtractionResponse, RawStatement } from './extractionSchema.js';
 const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
   UNITS: 1 / 1_000_000,
   THOUSANDS: 1 / 1_000,
+  LAKHS: 1 / 10, // 1 lakh = 100,000
   MILLIONS: 1,
+  CRORES: 10, // 1 crore = 10,000,000
   BILLIONS: 1_000,
 };
 
-/** Round to 4 decimals — kills float noise from the reciprocal scale factors above. */
-function round4(n: number): number {
-  return Math.round(n * 10000) / 10000;
+/**
+ * Kill float noise from the reciprocal scale factors above (99999 × 1e-6 =
+ * 0.09999899999999999) WITHOUT a fixed decimal cutoff. The previous
+ * round-to-4-decimals rule was a $100 floor in MILLIONS: any value below
+ * 0.00005M became 0 and everything else snapped to the nearest $100 — which
+ * is how an INR-crore P&L tagged UNITS came out as 200/200/300 revenue and
+ * 0 EBITDA. 12 significant digits is far beyond any printed precision.
+ */
+function cleanFloat(n: number): number {
+  return Number(n.toPrecision(12));
 }
 
 /**
@@ -68,7 +78,7 @@ function foldPeriodLineItems(
     // real value reported under the same name later in the array.
     if (name in record && record[name] !== null) continue;
     const isUnscaled = name.endsWith('_pct') || name.endsWith('_ratio') || name.endsWith('_multiple');
-    record[name] = item.value === null ? null : isUnscaled ? item.value : round4(item.value * factor);
+    record[name] = item.value === null ? null : isUnscaled ? item.value : cleanFloat(item.value * factor);
     if (item.sourcePage !== null || item.sourceQuote !== null) {
       const page = item.sourcePage !== null ? `p${item.sourcePage}` : 'p?';
       record[`${name}_source`] = item.sourceQuote !== null ? item.sourceQuote : page;
