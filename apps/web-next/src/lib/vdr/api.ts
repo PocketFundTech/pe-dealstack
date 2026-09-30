@@ -390,6 +390,17 @@ export function transformDocument(apiDoc: APIDocument): VDRFile {
     analysisLabel = "Processing...";
     analysisDescription = "Document is being analyzed.";
     analysisColor = "slate";
+  } else if (apiDoc.status === "failed") {
+    // Text extraction hard-failed (e.g. an encrypted/malformed PDF, or one
+    // pdf-parse's bundled pdf.js can't parse). Without this branch, status
+    // 'failed' fell through to the default below and rendered as "Pending
+    // Analysis" forever — indistinguishable from a file still queued to
+    // process. Surface it via the existing "warning" presentation instead
+    // of inventing a new one.
+    analysisType = "warning";
+    analysisLabel = "Extraction Failed";
+    analysisDescription = "We couldn't extract text from this document. Try re-uploading, or a different copy.";
+    analysisColor = "orange";
   }
 
   return {
