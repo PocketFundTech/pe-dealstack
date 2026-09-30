@@ -4,10 +4,12 @@
  */
 
 import { PreparedData, DebtCapacity, LBOScreen } from './types.js';
-import { li, safeDiv, round2 } from './helpers.js';
+import { li, safeDiv, round2, comparablePeriods, ebitdaOf } from './helpers.js';
 
 export function computeDebtCapacity(data: PreparedData): DebtCapacity | undefined {
-  const { income, balance, cashflow, periods } = data;
+  const { income, balance, cashflow } = data;
+  // Leverage and coverage need a full year's EBITDA, never a partial YTD.
+  const periods = comparablePeriods(data);
   if (periods.length === 0) return undefined;
 
   const latestP = periods[periods.length - 1];
@@ -15,7 +17,7 @@ export function computeDebtCapacity(data: PreparedData): DebtCapacity | undefine
   const bal = balance.get(latestP) ?? {};
   const cf = cashflow.get(latestP) ?? {};
 
-  const ebitda = li(inc, 'ebitda');
+  const ebitda = ebitdaOf(inc);
   const ebit = li(inc, 'ebit');
   const interest = li(inc, 'interest_expense');
   const capex = li(cf, 'capex');
@@ -45,16 +47,17 @@ export function computeDebtCapacity(data: PreparedData): DebtCapacity | undefine
 }
 
 export function computeLBOScreen(data: PreparedData): LBOScreen | undefined {
-  const { income, periods } = data;
+  const { income } = data;
+  const periods = comparablePeriods(data);
   if (periods.length < 2) return undefined;
 
   const latestP = periods[periods.length - 1];
   const latestInc = income.get(latestP) ?? {};
-  const entryEbitda = li(latestInc, 'ebitda');
+  const entryEbitda = ebitdaOf(latestInc);
 
   if (entryEbitda == null || entryEbitda <= 0) return undefined;
 
-  const ebitdas = periods.map(p => li(income.get(p) ?? {}, 'ebitda')).filter((e): e is number => e != null);
+  const ebitdas = periods.map(p => ebitdaOf(income.get(p) ?? {})).filter((e): e is number => e != null);
   const histGrowth = ebitdas.length >= 2
     ? ((ebitdas[ebitdas.length - 1] / ebitdas[0]) ** (1 / (ebitdas.length - 1)) - 1)
     : 0.08;

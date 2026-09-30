@@ -21,8 +21,9 @@ import { getTodayIso } from '../../utils/dates.js';
  * a stored extraction means. It is part of the extraction cache key, so a
  * bump makes every cached result re-extract instead of replaying old output.
  * v2 (2026-09-30): LAKHS/CRORES scales + no rounding of small scaled values.
+ * v3 (2026-09-30): EBITDA / EBIT / GP / margins derived on the Claude path.
  */
-export const EXTRACTION_SCHEMA_VERSION = 'v2';
+export const EXTRACTION_SCHEMA_VERSION = 'v3';
 
 /** Extraction-cache tier for the Claude engine: the model plus the schema version. */
 export function claudeExtractionCacheTier(model: string): string {

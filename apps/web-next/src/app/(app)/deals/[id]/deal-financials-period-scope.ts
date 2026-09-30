@@ -12,6 +12,7 @@
 // +14079%). This module classifies labels into scope buckets and groups
 // periods so growth deltas only compare like-for-like.
 
+import { parsePeriod, comparePeriods } from "@ai-crm/shared";
 import type { FinancialStatement } from "./deal-financials-charts-shared";
 
 export type PeriodScope =
@@ -63,6 +64,15 @@ export function inferPeriodScope(period: string | null | undefined): PeriodScope
   if (/\bARR\b/.test(upper) || /\bANNUAL(IZED|ISED)?\b/.test(upper)) return "annual";
   // Annual: bare "2025", "FY2025", "FY25" (no other qualifiers)
   if (/^FY\s?\d{2,4}$/.test(upper) || /^\d{4}$/.test(p)) return "annual";
+  // Date-range labels ("FY2023 (Jan - Dec 2023)", "(Jan - Sep 2025)"): the
+  // shared parser reads the span. Without this, "JAN" matched the monthly
+  // regex below and a full year was classified monthly.
+  if (/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)[A-Z]*\b.*[-–—].*\d{4}/.test(upper)) {
+    const parsed = parsePeriod(p);
+    if (parsed?.kind === "FY") return "annual";
+    if (parsed?.kind === "YTD") return "ytd";
+    if (parsed?.kind === "Q") return "quarterly";
+  }
   // Quarterly: "Q1 2025", "Q4-24", "1Q25", or bare "Quarterly"
   if (/\bQ[1-4]\b/.test(upper) || /^[1-4]Q\d{2,4}$/.test(upper) || /\bQUARTERLY\b/.test(upper)) return "quarterly";
   // Monthly single-month: "Jan-25", "Feb 2026", "Mar-26", "March 2026"
@@ -134,6 +144,11 @@ export function comparePeriodChronologically(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
+  // Shared canonical ordering (end date, then kind) — the same comparator the
+  // API uses (@ai-crm/shared). Local key only for labels it can't date.
+  const pa = parsePeriod(a);
+  const pb = parsePeriod(b);
+  if (pa && pb) return comparePeriods(pa, pb);
   const [ay, asub] = periodChronoKey(a);
   const [by, bsub] = periodChronoKey(b);
   if (ay !== by) return ay - by;

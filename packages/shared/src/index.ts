@@ -74,3 +74,6 @@ export const formatDate = (date: string | Date): string => {
     day: 'numeric',
   }).format(new Date(date));
 };
+
+// Canonical financial periods — parse + chronological ordering
+export * from './periods.js';

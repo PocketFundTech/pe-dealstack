@@ -6,6 +6,7 @@ import { api, NotFoundError } from "@/lib/api";
 import { mutateApiCache } from "@/lib/useApiQuery";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { extractionErrorMessage } from "./deal-financials-errors";
+import { inferPeriodScope } from "./deal-financials-period-scope";
 import { useToast } from "@/providers/ToastProvider";
 import { type FinancialStatement } from "./deal-financials-charts";
 
@@ -371,14 +372,16 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
   const availableTabs = TAB_CONFIG.filter((t) => statements.some((s) => s.statementType === t.key));
   const resolvedTab = availableTabs.find((t) => t.key === activeTab) ? activeTab : (availableTabs[0]?.key ?? "INCOME_STATEMENT");
 
+  // "FY2023 (Jan - Dec 2023)" is annual too — /^FY\b/ never matched it.
+  const isAnnualPeriod = (period: string) => inferPeriodScope(period) === "annual";
   const filteredStatements = statements.filter((s) => {
     if (periodFilter === "all") return true;
-    const isFY = /^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period);
+    const isFY = isAnnualPeriod(s.period);
     return periodFilter === "annual" ? isFY : !isFY;
   });
 
-  const hasAnnual = statements.some((s) => /^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period));
-  const hasQuarterly = statements.some((s) => !(/^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period)));
+  const hasAnnual = statements.some((s) => isAnnualPeriod(s.period));
+  const hasQuarterly = statements.some((s) => !isAnnualPeriod(s.period));
   const showPeriodToggle = hasAnnual && hasQuarterly;
   const detectedCurrency = statements.find((s) => s.currency)?.currency ?? "USD";
   const confidences = statements.map((s) => s.extractionConfidence).filter((c): c is number => c != null);

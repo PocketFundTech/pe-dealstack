@@ -5,11 +5,13 @@
  */
 
 import { PreparedData, RedFlag } from './types.js';
-import { li, pctChange, round2 } from './helpers.js';
+import { li, pctChange, round2, comparablePeriods, ebitdaOf } from './helpers.js';
 
 export function computeRedFlags(data: PreparedData): RedFlag[] {
   const flags: RedFlag[] = [];
-  const { income, balance, cashflow, periods } = data;
+  const { income, balance, cashflow } = data;
+  // Pairwise checks compare like periods only (never a YTD against a year).
+  const periods = comparablePeriods(data);
 
   if (periods.length < 2) return flags;
 
@@ -120,7 +122,7 @@ export function computeRedFlags(data: PreparedData): RedFlag[] {
   if (periods.length >= 3) {
     const margins = periods.map(p => {
       const rev = li(income.get(p) ?? {}, 'revenue');
-      const ebitda = li(income.get(p) ?? {}, 'ebitda');
+      const ebitda = ebitdaOf(income.get(p) ?? {});
       return rev && ebitda && rev > 0 ? (ebitda / rev) * 100 : null;
     });
 

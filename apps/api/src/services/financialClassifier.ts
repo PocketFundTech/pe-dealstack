@@ -6,6 +6,7 @@ import { periodHygieneGuidanceIfEnabled } from './extraction-evals/fewshot.js';
 import { MAX_TEXT_LENGTH } from './agents/financialAgent/config.js';
 import { validateLineItems } from './financialSchema.js';
 import { wrapDocumentContent } from './agents/guardrails.js';
+import { computeDerivedFields } from './financialDerivations.js';
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -733,46 +734,6 @@ function normalizeLineItems(raw: Record<string, any>): Record<string, number | n
     }
   }
   return result;
-}
-
-/**
- * Auto-calculate derived income statement fields when missing.
- * E.g., EBITDA = revenue - cogs - total_opex (or = ebit + da),
- * gross_profit = revenue - cogs, margins from base values.
- */
-function computeDerivedFields(li: Record<string, number | null>): void {
-  const v = (k: string) => (li[k] !== null && li[k] !== undefined ? li[k]! : null);
-
-  // gross_profit = revenue - cogs
-  if (v('gross_profit') === null && v('revenue') !== null && v('cogs') !== null) {
-    li.gross_profit = Math.round((v('revenue')! - v('cogs')!) * 10000) / 10000;
-  }
-
-  // ebitda = ebit + da  OR  revenue - cogs - total_opex
-  if (v('ebitda') === null) {
-    if (v('ebit') !== null && v('da') !== null) {
-      li.ebitda = Math.round((v('ebit')! + v('da')!) * 10000) / 10000;
-    } else if (v('revenue') !== null && v('cogs') !== null && v('total_opex') !== null) {
-      li.ebitda = Math.round((v('revenue')! - v('cogs')! - v('total_opex')!) * 10000) / 10000;
-    } else if (v('gross_profit') !== null && v('total_opex') !== null) {
-      li.ebitda = Math.round((v('gross_profit')! - v('total_opex')!) * 10000) / 10000;
-    }
-  }
-
-  // ebit = ebitda - da
-  if (v('ebit') === null && v('ebitda') !== null && v('da') !== null) {
-    li.ebit = Math.round((v('ebitda')! - v('da')!) * 10000) / 10000;
-  }
-
-  // gross_margin_pct = gross_profit / revenue * 100
-  if (v('gross_margin_pct') === null && v('gross_profit') !== null && v('revenue') !== null && v('revenue')! !== 0) {
-    li.gross_margin_pct = Math.round((v('gross_profit')! / v('revenue')!) * 10000) / 100;
-  }
-
-  // ebitda_margin_pct = ebitda / revenue * 100
-  if (v('ebitda_margin_pct') === null && v('ebitda') !== null && v('revenue') !== null && v('revenue')! !== 0) {
-    li.ebitda_margin_pct = Math.round((v('ebitda')! / v('revenue')!) * 10000) / 100;
-  }
 }
 
 /**
