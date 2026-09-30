@@ -5,6 +5,9 @@ a QuickBooks P&L Jan 2023 – Sep 2025, an LBO workbook with "CFS Source" tabs, 
 `SRM_Valuation_Summary.xlsx`). Investigated 2026-09-30 against production `main` (76ac195, after
 PR #160). **No code has been changed yet.** Paths: `A/` = `apps/api/src/`, `W/` = `apps/web-next/src/`.
 
+**Developers:** start with [`FINANCIALS-INVESTIGATION-NOTES.md`](FINANCIALS-INVESTIGATION-NOTES.md) — how each part works today,
+exact code paths, proposed designs, and the working checklist (§8). Tick boxes here as PRs merge.
+
 ---
 
 ## What the team saw → why it happens
