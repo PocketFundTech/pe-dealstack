@@ -5,6 +5,9 @@ import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { friendlyAuthError } from "@/lib/authErrors";
+import { passwordError } from "@/lib/passwordRules";
+import { CheckEmailPanel } from "./CheckEmailPanel";
 
 const STRENGTH_COLORS = ["bg-red-500", "bg-orange-500", "bg-yellow-500", "bg-green-500"];
 const STRENGTH_LABELS = ["Weak", "Fair", "Good", "Strong"];
@@ -32,6 +35,9 @@ export default function SignupPage() {
   const [firmName, setFirmName] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  // Email the confirmation was sent to (shows the resend / enter-code panel).
+  const [awaitingEmail, setAwaitingEmail] = useState<string | null>(null);
+  const [accountExists, setAccountExists] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
@@ -43,22 +49,16 @@ export default function SignupPage() {
     e.preventDefault();
     setError("");
     setSuccess("");
+    setAwaitingEmail(null);
+    setAccountExists(false);
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
       return;
     }
-    if (password.length < 10) {
-      setError("Password must be at least 10 characters.");
-      return;
-    }
-    if (
-      !/[A-Z]/.test(password) ||
-      !/[a-z]/.test(password) ||
-      !/[0-9]/.test(password) ||
-      !/[^A-Za-z0-9]/.test(password)
-    ) {
-      setError("Password needs uppercase, lowercase, number, and special character.");
+    const pwError = passwordError(password);
+    if (pwError) {
+      setError(pwError);
       return;
     }
 
@@ -76,13 +76,21 @@ export default function SignupPage() {
     });
 
     if (authError) {
-      let msg = "An error occurred. Please try again.";
-      if (authError.message.includes("already registered")) {
-        msg = "An account with this email already exists. Please log in.";
+      if (/already registered|already exists/i.test(authError.message)) {
+        setAccountExists(true);
       } else {
-        msg = authError.message;
+        setError(friendlyAuthError(authError.message));
       }
-      setError(msg);
+      setLoading(false);
+      return;
+    }
+
+    // With email confirmation on, Supabase doesn't error for an existing
+    // address (to avoid leaking which emails exist) — it returns a user with
+    // no identities and sends nothing. Tell the user instead of "check your
+    // email" for a message that will never arrive.
+    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      setAccountExists(true);
       setLoading(false);
       return;
     }
@@ -100,8 +108,8 @@ export default function SignupPage() {
       setSuccess("Account created! Redirecting to setup...");
       setTimeout(() => router.push("/onboarding"), 1200);
     } else {
-      setSuccess("Check your email to verify your account, then log in.");
-      setLoading(true); // keep button disabled
+      setAwaitingEmail(email.trim());
+      setLoading(false);
     }
   };
 
@@ -297,11 +305,19 @@ export default function SignupPage() {
                   {error}
                 </div>
               )}
+              {accountExists && (
+                <div className="text-[13px] text-red-700 bg-red-50 p-3 rounded-lg text-center">
+                  An account with this email already exists —{" "}
+                  <Link href="/login" className="font-semibold underline">log in</Link> or{" "}
+                  <Link href="/forgot-password" className="font-semibold underline">reset your password</Link>.
+                </div>
+              )}
               {success && (
                 <div className="text-[13px] text-secondary bg-secondary-light p-3 rounded-lg text-center">
                   {success}
                 </div>
               )}
+              {awaitingEmail && <CheckEmailPanel email={awaitingEmail} />}
 
               {/* Submit */}
               <button

@@ -5,6 +5,8 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
+import { friendlyAuthError } from "@/lib/authErrors";
+import { passwordError } from "@/lib/passwordRules";
 
 /* ---------- Strength helpers (match legacy bars logic) ---------- */
 
@@ -65,19 +67,9 @@ export default function ResetPasswordPage() {
       setError("Passwords do not match.");
       return;
     }
-    if (password.length < 10) {
-      setError("Password must be at least 10 characters.");
-      return;
-    }
-    if (
-      !/[A-Z]/.test(password) ||
-      !/[a-z]/.test(password) ||
-      !/[0-9]/.test(password) ||
-      !/[^A-Za-z0-9]/.test(password)
-    ) {
-      setError(
-        "Password must contain at least one uppercase letter and one number."
-      );
+    const pwError = passwordError(password);
+    if (pwError) {
+      setError(pwError);
       return;
     }
 
@@ -86,15 +78,11 @@ export default function ResetPasswordPage() {
     const { error: authError } = await supabase.auth.updateUser({ password });
 
     if (authError) {
-      let message = "Failed to update password. Please try again.";
-      if (authError.message) {
-        if (authError.message.includes("same as the old password")) {
-          message = "New password must be different from your old password.";
-        } else {
-          message = authError.message;
-        }
-      }
-      setError(message);
+      setError(
+        authError.message
+          ? friendlyAuthError(authError.message)
+          : "Failed to update password. Please try again."
+      );
       setLoading(false);
       return;
     }
@@ -250,8 +238,19 @@ export default function ResetPasswordPage() {
                   {error}
                 </div>
               )}
+              {tokenExpired && (
+                <Link
+                  href="/forgot-password"
+                  className="w-full h-12 rounded-lg text-white font-medium text-sm flex items-center justify-center gap-2 hover:opacity-90 transition-all"
+                  style={{ backgroundColor: "#003366" }}
+                >
+                  <span className="material-symbols-outlined text-[18px]">forward_to_inbox</span>
+                  Request a new link
+                </Link>
+              )}
 
-              {/* Submit */}
+              {/* Submit (hidden once the link is known to be expired) */}
+              {!tokenExpired && (
               <button
                 type="submit"
                 disabled={loading || tokenExpired}
@@ -282,6 +281,7 @@ export default function ResetPasswordPage() {
                   </svg>
                 )}
               </button>
+              )}
             </form>
           )}
 
