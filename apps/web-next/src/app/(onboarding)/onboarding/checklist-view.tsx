@@ -2,44 +2,47 @@
 
 import { cn } from "@/lib/cn";
 import { CompletionFindings } from "./completion-findings";
-import { TaskId, TASKS } from "./types";
+import { TaskDef, TaskId, TASKS } from "./types";
 
 // Checklist view — the 3-task list with progress bar. Ported from
 // onboarding.html #view-checklist + renderChecklist/updateProgress
 // in onboarding-flow.js.
 export function ChecklistView({
+  tasks = TASKS,
   completed,
   onOpenTask,
   allDone,
   onOpenWorkspace,
   onDealId,
 }: {
+  tasks?: TaskDef[];
   completed: Set<TaskId>;
   onOpenTask: (id: TaskId) => void;
   allDone: boolean;
   onOpenWorkspace: () => void;
   onDealId?: (id: string) => void;
 }) {
-  const doneCount = TASKS.filter((t) => completed.has(t.id)).length;
-  const pct = Math.round((doneCount / TASKS.length) * 100);
-  const firstIncomplete = TASKS.find((t) => !completed.has(t.id));
+  const doneCount = tasks.filter((t) => completed.has(t.id)).length;
+  const pct = Math.round((doneCount / tasks.length) * 100);
+  const firstIncomplete = tasks.find((t) => !completed.has(t.id));
+  const left = tasks.length - doneCount;
 
   const heading = allDone
     ? "You're all set."
     : doneCount === 0
-      ? "Three steps to your first deal."
+      ? `${tasks.length === 2 ? "Two" : "Three"} steps to your first deal.`
       : "You're making progress.";
   const sub = allDone
     ? "Your AI analyst already found things on your deal."
     : doneCount === 0
       ? "Do them in order, top to bottom. Under 3 minutes."
-      : `${TASKS.length - doneCount} ${TASKS.length - doneCount === 1 ? "step" : "steps"} left. Your AI analyst is working in the background.`;
+      : `${left} ${left === 1 ? "step" : "steps"} left. Your AI analyst is working in the background.`;
 
   return (
     <main className="max-w-6xl mx-auto px-6 py-10 pb-10 overflow-y-auto">
       <div className="mb-6">
         <div className="text-[11px] uppercase tracking-widest text-text-muted font-medium mb-2">
-          Getting started · {doneCount} of {TASKS.length} complete
+          Getting started · {doneCount} of {tasks.length} complete
         </div>
         <h2 className="font-display text-[32px] leading-[1.15] font-bold tracking-tight text-text-main">{heading}</h2>
         <p className="mt-2 text-[14px] text-text-secondary max-w-2xl">{sub}</p>
@@ -53,7 +56,7 @@ export function ChecklistView({
 
       <div className="bg-white border border-border-subtle rounded-xl shadow-card overflow-hidden">
         <ul className="divide-y divide-border-subtle">
-          {TASKS.map((t, i) => {
+          {tasks.map((t, i) => {
             const isDone = completed.has(t.id);
             const isActive = !isDone && firstIncomplete?.id === t.id;
             return (

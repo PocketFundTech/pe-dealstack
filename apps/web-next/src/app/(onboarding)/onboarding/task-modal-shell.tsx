@@ -13,6 +13,7 @@ export function TaskModalShell({
   busyLabel = "Working...",
   canComplete = true,
   busy = false,
+  secondaryAction,
   children,
 }: {
   icon: string;
@@ -23,6 +24,8 @@ export function TaskModalShell({
   busyLabel?: string;
   canComplete?: boolean;
   busy?: boolean;
+  /** Optional extra footer action (e.g. "Skip for now"), left of the primary button. */
+  secondaryAction?: { label: string; onClick: () => void };
   children: ReactNode;
 }) {
   useEffect(() => {
@@ -76,6 +79,17 @@ export function TaskModalShell({
           >
             Cancel
           </button>
+          <div className="flex items-center gap-3">
+          {secondaryAction && (
+            <button
+              type="button"
+              onClick={secondaryAction.onClick}
+              disabled={busy}
+              className="text-[13px] text-text-secondary hover:text-text-main transition-colors disabled:opacity-50"
+            >
+              {secondaryAction.label}
+            </button>
+          )}
           <button
             type="button"
             onClick={onComplete}
@@ -86,6 +100,7 @@ export function TaskModalShell({
             {busy ? busyLabel : completeLabel}
             {!busy && <span className="material-symbols-outlined text-[16px]">check</span>}
           </button>
+          </div>
         </div>
       </div>
     </div>
