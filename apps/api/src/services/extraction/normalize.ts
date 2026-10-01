@@ -127,6 +127,8 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
       unitScale: 'MILLIONS', // post-conversion canonical scale
       currency: stmt.currency || 'USD',
       periods,
+      sheetName: stmt.sheetName ?? null,
+      sourceKind: stmt.sourceKind ?? null,
     });
   }
 

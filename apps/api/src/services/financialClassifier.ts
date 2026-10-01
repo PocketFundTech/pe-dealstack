@@ -23,11 +23,17 @@ export interface FinancialPeriod {
 }
 
 /** One statement type (e.g. Income Statement) with all its periods */
+/** Reported statement vs a valuation / analysis model built on top of it (fix plan B1). */
+export type SourceKind = 'source_statement' | 'model_derived';
+
 export interface ClassifiedStatement {
   statementType: StatementType;
   unitScale: UnitScale;
   currency: string;
   periods: FinancialPeriod[];
+  /** Sheet / tab the statement was read from (spreadsheets). */
+  sheetName?: string | null;
+  sourceKind?: SourceKind | null;
 }
 
 /** Full result from classifyFinancials() */

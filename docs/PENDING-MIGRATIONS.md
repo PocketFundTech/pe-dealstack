@@ -1,4 +1,4 @@
-# 🔴 TWO MIGRATIONS PENDING (2026-09-29 / 2026-09-30)
+# 🔴 THREE MIGRATIONS PENDING (2026-09-29 / 2026-09-30 / 2026-10-01)
 
 ## 1. `usage-cost-accuracy-migration.sql` (2026-09-29)
 
@@ -45,6 +45,29 @@ moves existing deals onto real ones (`SCREENING` → Initial Review,
 | 2 | `apps/api/deal-stage-cleanup.sql` | Makes hidden deals show on the kanban | ☐ |
 
 Verify: the `SELECT` at the bottom of the file returns no rows.
+
+## 3. `financials-source-period-migration.sql` (2026-10-01)
+
+Fix plan A4 + B1 ([`FINANCIALS-FIX-PLAN.md`](FINANCIALS-FIX-PLAN.md)). Adds to
+`FinancialStatement`: `periodKey`, `periodKind`, `periodMonths`, `periodEndDate`
+(canonical period — "FY2024 (Jan - Dec 2024)" and "2024" share key `2024`) and
+`sourceKind`, `sheetName` (reported statement vs valuation model, and which tab).
+
+The code works before and after this runs: until it does, extraction writes
+without the columns (one warning in the API log) and matches periods by
+parsing labels. Idempotent — safe to re-run. Then run the backfill (fills NULL
+columns only, never changes which row is active):
+
+```bash
+cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts --dry-run
+cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts
+```
+
+| # | File | Fixes | Run? |
+|---|---|---|---|
+| 3 | `apps/api/financials-source-period-migration.sql` + backfill script | Canonical periods, source provenance | ☐ |
+
+Verify: the queries at the bottom of the file — 6 columns, then 0 rows missing `periodKey` after the backfill.
 
 ---
 

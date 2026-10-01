@@ -50,6 +50,13 @@ Filled in as each feature ships. Each row references the PR + feature.
 
 ---
 
+## Financials fix plan (2026-10-01)
+
+- [ ] **OPS-FIN-1 — Run `apps/api/financials-source-period-migration.sql`, then the backfill**
+  - Where: Supabase Dashboard → SQL Editor; then `cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts` (try `--dry-run` first)
+  - Without it: works, but periods are matched by parsing labels on every write, and reported-vs-model provenance isn't stored (it's re-derived from file names).
+  - Then: **Re-extract** the Strong Ready Mix deal so its balance sheet / cash flow move off `SRM_Valuation_Summary_.xlsx`.
+
 ## How to use this doc
 
 When the dev says **"feature N shipped"**, do not consider that feature complete until:

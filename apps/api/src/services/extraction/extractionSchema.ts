@@ -23,8 +23,9 @@ import { getTodayIso } from '../../utils/dates.js';
  * v2 (2026-09-30): LAKHS/CRORES scales + no rounding of small scaled values.
  * v3 (2026-09-30): EBITDA / EBIT / GP / margins derived on the Claude path;
  *   cash outflows stored negative; total_debt its own key; prefer source tabs.
+ * v4 (2026-10-01): per-statement sheetName + sourceKind (source vs model).
  */
-export const EXTRACTION_SCHEMA_VERSION = 'v3';
+export const EXTRACTION_SCHEMA_VERSION = 'v4';
 
 /** Extraction-cache tier for the Claude engine: the model plus the schema version. */
 export function claudeExtractionCacheTier(model: string): string {
@@ -52,6 +53,9 @@ const rawStatement = z.object({
   statementType: z.enum(['INCOME_STATEMENT', 'BALANCE_SHEET', 'CASH_FLOW']),
   unitScale: z.enum(RAW_UNIT_SCALES),
   currency: z.string(),
+  // Optional in zod so pre-v4 cached results and repair outputs still parse.
+  sheetName: z.string().nullable().optional(),
+  sourceKind: z.enum(['source_statement', 'model_derived']).nullable().optional(),
   periods: z.array(rawPeriod),
 });
 
@@ -79,6 +83,12 @@ export const EXTRACTION_JSON_SCHEMA = {
           statementType: { type: 'string', enum: ['INCOME_STATEMENT', 'BALANCE_SHEET', 'CASH_FLOW'] },
           unitScale: { type: 'string', enum: [...RAW_UNIT_SCALES] },
           currency: { type: 'string', description: 'ISO code as printed, e.g. USD, EUR' },
+          sheetName: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Spreadsheet tab this statement was read from; null for PDFs' },
+          sourceKind: {
+            type: 'string',
+            enum: ['source_statement', 'model_derived'],
+            description: 'source_statement = the company\'s reported statement (P&L / balance sheet / cash flow as kept by the company or its accountant); model_derived = a valuation, LBO, DCF, returns, sensitivity or summary/analysis built from it',
+          },
           periods: {
             type: 'array',
             items: {
@@ -109,7 +119,7 @@ export const EXTRACTION_JSON_SCHEMA = {
             },
           },
         },
-        required: ['statementType', 'unitScale', 'currency', 'periods'],
+        required: ['statementType', 'unitScale', 'currency', 'sheetName', 'sourceKind', 'periods'],
         additionalProperties: false,
       },
     },
@@ -147,7 +157,8 @@ Rules:
 - Percentages (names ending _pct) are reported as percent numbers (e.g. 42.5), never fractions — the one exception to "exactly as printed": convert a printed decimal fraction (0.425) to its percent equivalent (42.5).
 - Every line item needs sourcePage (1-based) and a short verbatim sourceQuote when the value is visible in the document; use null only when genuinely unavailable.
 - One period entry per fiscal period column. Projected periods keep their suffix (e.g. "2025E").
-- If a statement type is absent, omit it and add a warning.`;
+- If a statement type is absent, omit it and add a warning.
+- For every statement set sourceKind: "source_statement" when it is the company's reported statement, "model_derived" when it comes from a valuation, LBO, DCF, returns, sensitivity or summary/analysis output. Set sheetName to the spreadsheet tab it came from (null for PDFs). When the document has both for the same statement type, return only the source_statement version.`;
 }
 
 export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balance sheet, and cash flow data from the attached document into the required JSON structure.`;

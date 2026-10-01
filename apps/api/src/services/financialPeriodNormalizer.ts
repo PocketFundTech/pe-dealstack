@@ -766,6 +766,13 @@ export function mergeStatementsBySameType(
       unitScale: group[0].unitScale,
       currency: group[0].currency,
       periods: dedupedPeriods,
+      // Provenance (fix plan B1): all sheets merged, and "reported" if any
+      // part was — selectSourceStatements already dropped model-derived
+      // siblings when a reported version exists.
+      sheetName: [...new Set(group.map((g) => g.sheetName).filter(Boolean))].join(', ') || null,
+      sourceKind: group.some((g) => g.sourceKind === 'source_statement')
+        ? 'source_statement'
+        : group.find((g) => g.sourceKind)?.sourceKind ?? null,
     });
   }
 
