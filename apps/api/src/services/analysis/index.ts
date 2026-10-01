@@ -15,6 +15,9 @@ import {
 import { computeDebtCapacity, computeLBOScreen } from './debtAndLBO.js';
 import { computeRedFlags } from './redFlags.js';
 import { computeCashFlowRedFlags, computeCashFlowQoEFlags } from './cashFlowFlags.js';
+import {
+  computeConcentrationRedFlags, computeConcentrationQoEFlags, type ConcentrationFacts,
+} from './customerConcentrationFlags.js';
 
 // Re-export all types
 export type {
@@ -22,8 +25,18 @@ export type {
   CashFlowAnalysis, WorkingCapital, CostStructure, DebtCapacity,
   LBOScreen, RedFlag, WorkforceMetrics, AnalysisResult, DuPontDecomposition,
 } from './types.js';
+export type { ConcentrationFacts } from './customerConcentrationFlags.js';
 
-export async function analyzeFinancials(dealId: string, rows: any[]): Promise<AnalysisResult> {
+export interface AnalyzeOptions {
+  /**
+   * Customer concentration / related-party facts read from the deal's
+   * documents (customerConcentrationReader.ts — fix plan F1 part 2).
+   * Omitted or null → no document-derived flags.
+   */
+  concentration?: ConcentrationFacts | null;
+}
+
+export async function analyzeFinancials(dealId: string, rows: any[], options: AnalyzeOptions = {}): Promise<AnalysisResult> {
   if (!rows || rows.length === 0) {
     return { hasData: false, dealId, periods: [], qoe: { score: 0, flags: [], summary: 'No financial data available.' }, ratios: [], analyzedAt: new Date().toISOString() } as any;
   }
@@ -46,7 +59,10 @@ export async function analyzeFinancials(dealId: string, rows: any[]): Promise<An
     // Group A
     Promise.all([
       // Cash-flow findings (negative FCF, debt-funded capex — fix plan F1) feed QoE too.
-      Promise.resolve([...computeQoEFlags(data), ...computeCashFlowQoEFlags(data)]),
+      // Customer concentration / related parties (F1 part 2) come from the documents.
+      Promise.resolve([
+        ...computeQoEFlags(data), ...computeCashFlowQoEFlags(data), ...computeConcentrationQoEFlags(options.concentration),
+      ]),
       Promise.resolve(computeRatios(data)),
       Promise.resolve(computeDuPont(data)),
     ]),
@@ -66,7 +82,9 @@ export async function analyzeFinancials(dealId: string, rows: any[]): Promise<An
       Promise.resolve(computeDebtCapacity(data)),
       Promise.resolve(computeLBOScreen(data)),
       Promise.resolve(computeWorkforceMetrics(data)),
-      Promise.resolve([...computeRedFlags(data), ...computeCashFlowRedFlags(data)]),
+      Promise.resolve([
+        ...computeRedFlags(data), ...computeCashFlowRedFlags(data), ...computeConcentrationRedFlags(options.concentration),
+      ]),
     ]),
   ]);
 

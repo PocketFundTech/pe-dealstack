@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import { analyzeFinancials } from '../../../analysis/index.js';
+import { getConcentrationFacts } from '../../../analysis/customerConcentrationReader.js';
 
 export const inputSchema = z.object({});
 
@@ -31,7 +32,7 @@ export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
           return 'No financial statements available for analysis. Extract financials first.';
         }
 
-        const analysis = await analyzeFinancials(dealId, statements);
+        const analysis = await analyzeFinancials(dealId, statements, { concentration: await getConcentrationFacts(dealId) });
         const parts: string[] = [];
 
         // QoE Score
