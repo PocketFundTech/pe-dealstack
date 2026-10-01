@@ -5,6 +5,39 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 85 — October 1, 2026
+
+#### Timestamp: October 1, 2026 — 23:06 IST
+
+#### Goal: User-flow smoothing **Batch 2** — onboarding, team invites and auth pages (branch `fix/flows-batch-2`, cut from `origin/main`).
+
+**Onboarding**
+- **"Invite your team" invited nobody.** *Root cause:* `completeTask` had no team branch; the Analyst/VP/Partner/Admin labels were never sent. *Fix:* each filled row is POSTed to `/invitations` with an API role from one shared map (`lib/roles.ts`: Analyst = VIEWER, Associate = MEMBER, Admin = ADMIN — same as the Settings invite dialog). Each failure toasts and stays in the modal; the task completes only when sent or on an explicit "Skip for now". Admin is offered only to admins (the API 403s otherwise).
+- **"Use a sample deal" created no deal.** *Root cause:* it only ticked the box client-side. *Fix:* calls `/onboarding/create-demo-deal` (busy state, error toast, stays on welcome on failure), then marks the upload step server-side. Loaded progress now merges instead of overwriting an in-flight completion.
+- **Invited teammates ran the founder flow and could overwrite the firm profile.** *Fix:* `services/firmProfileAccess.ts` — only org ADMINs or the founding user (`Organization.createdBy`) may overwrite an existing firm profile (anyone may set it while empty); enforced on `/onboarding/firm-profile` and `/onboarding/enrich-firm` (403 `FIRM_PROFILE_LOCKED`). `GET /onboarding/status` returns a `context`; invitees skip the welcome pitch and get a 2-task checklist without the firm task.
+
+**Invitations**
+- **Existing accounts couldn't accept.** *Fix:* `/verify` returns `accountExists`; the page shows "Sign in to accept" (inline sign-in, one-click join if already signed in, sign-out if signed in as someone else). New authenticated `POST /invitations/join/:token` (web calls `/api/public/invitations/join/:token`, auth inline — same router, so app-lite / app.ts / pickBundle need no change). Rules: valid PENDING unexpired token; signed-in email must equal the invite email (case-insensitive, else 403); a user in another org is **never silently moved** — only out of an empty personal workspace (no other members, no deals), otherwise 409 `INVITE_USER_IN_OTHER_ORG`; ACCEPTED only after the user is attached; org cache invalidated; audit-logged against the joined org with `previousOrganizationId`.
+- **Failed User insert burned the link.** *Fix:* `/accept` now returns 500 before touching the invitation and deletes the just-created auth user, so the link can be retried.
+- **Accepted invitees bounced to /login.** *Fix:* the user is created already confirmed (`admin.createUser`, `email_confirm: true` — the emailed token proves the address; existing emails → 409 `ACCOUNT_EXISTS`), a session is minted on a throwaway anon client (signing in on the shared service-role client would pin the user's JWT onto it), and the page applies it with `setSession` and opens `/dashboard`.
+- **Expired invites stuck; accepted ones showed PENDING.** *Root cause:* expiry is only written lazily, the duplicate check treated expired PENDING rows as live (and the unique pending index would reject the re-invite), and nothing reconciled a PENDING row whose teammate had joined. *Fix:* the list derives EXPIRED and ACCEPTED (repairing stale rows of org members); create / bulk expire stale rows instead of blocking; resend reopens EXPIRED invites; revoke / resend refuse ACCEPTED ones. Settings → Team has Resend and Revoke (confirm dialog), friendly status / role labels, and an error + Retry state.
+- `invitations.ts` ↔ `invitations-accept.ts` import cycle broken (`services/invitationEmail.ts`).
+
+**Auth pages**
+- Signup with an existing email (`identities = []`) → "An account with this email already exists — log in or reset your password"; "check your email" now has Resend (60s cooldown) and "Enter code instead"; the button is never left disabled.
+- Verify-email success → straight to `/onboarding` ("Continue to setup"), no 5-second wait.
+- Login: "verify your email" offers Resend + Enter code; raw Supabase errors mapped (`lib/authErrors.ts`); SSO button hidden (no IdP wired); Remember me removed; MFA is a form (Enter submits, 6th digit auto-submits).
+- Expired reset link → "Request a new link". One password rule text (`lib/passwordRules.ts`). Forgot-password unlocks after a 60s cooldown. Auth pages have their own tab titles.
+- Notifications: no new `/notifications` callers since #160; the new admin "joined" notifications use `User.id`. Nothing to change.
+
+**No migration.**
+
+**Decisions for the founder:** (1) moving a user out of a non-empty org on invite is refused (409) — support has to move them; (2) Analyst = view-only (kept from the invite dialog) — onboarding now uses the same labels instead of VP/Partner; (3) founders who are not ADMIN still can't invite Admins (unchanged API rule; Admin is hidden for them in onboarding).
+
+**Verification:** API 2320 tests passing (+29: join security, accept rollback, list / resend / re-invite, firm-profile access), web 509 passing (+35: onboarding, team section, accept-invite, auth pages, helpers), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
+---
+
 ### Session 84 — October 1, 2026
 
 #### Timestamp: October 1, 2026 — 22:27 IST

@@ -56,45 +56,45 @@ How to work this list: one batch = one PR, failing test first, tick the box when
 
 ---
 
-## Batch 2 — Onboarding and team invites (first thing a new customer's team touches)
+## Batch 2 — Onboarding and team invites ✅ done 2026-10-01 (branch `fix/flows-batch-2`)
 
-- [ ] **Onboarding "Invite your team" invites nobody.**
+- [x] **Onboarding "Invite your team" invites nobody.**
   - Where: `W/app/(onboarding)/onboarding/team-task.tsx:6-12, 38`; `onboarding/page.tsx:159-208` (`completeTask` has no team branch).
   - Fix: POST each row to `/invitations` (map Analyst/VP/Partner/Admin → MEMBER/ADMIN), toast failures.
-- [ ] **"Use a sample deal" creates no deal**; completion screen then says "still processing".
+- [x] **"Use a sample deal" creates no deal**; completion screen then says "still processing".
   - Where: `onboarding/page.tsx:247-256`; `completion-findings.tsx:103-106, 180-185`.
   - Fix: call `/onboarding/create-demo-deal` + `markServerStep("cim")` in `startChecklist`, with busy state and error toast.
-- [ ] **Accept-invite fails for anyone with an existing account** ("User already registered").
+- [x] **Accept-invite fails for anyone with an existing account** ("User already registered"). *Decision: a user already in another org is only moved out of an empty personal workspace (no other members, no deals); otherwise 409 `INVITE_USER_IN_OTHER_ORG`.*
   - Where: `A/routes/invitations-accept.ts:99-115`; `W/app/(auth)/accept-invite/page.tsx:96, 104`.
   - Fix: detect an existing auth user in `/verify`, show "Sign in to accept", add an authenticated accept endpoint that attaches the user to the org.
-- [ ] **Accept-invite can leave a login with no firm, and burns the link.** User-row insert failure is swallowed, invite still marked ACCEPTED.
+- [x] **Accept-invite can leave a login with no firm, and burns the link.** User-row insert failure is swallowed, invite still marked ACCEPTED.
   - Where: `A/routes/invitations-accept.ts:132-144`.
   - Fix: return 500 before updating status; roll back the auth user so the link can be retried.
-- [ ] **After accepting an invite the user bounces to /login.** The returned session is never applied.
+- [x] **After accepting an invite the user bounces to /login.** The returned session is never applied.
   - Where: `W/app/(auth)/accept-invite/page.tsx:98-102, 344`.
   - Fix: `supabase.auth.setSession(data.session)` then go to `/dashboard`; if no session, say "check your email to confirm". Consider `admin.createUser({ email_confirm: true })` since the invite link proves the email.
-- [ ] **Expired invites can't be resent or revoked; re-inviting is blocked as "already pending".**
+- [x] **Expired invites can't be resent or revoked; re-inviting is blocked as "already pending".**
   - Where: `W/app/(app)/settings/TeamSection.tsx:126-165`; `A/routes/invitations.ts:262-277` (duplicate check ignores `expiresAt`), `:161-167` (list); endpoints exist at `invitations-accept.ts:191, 232`.
   - Fix: Resend + Revoke buttons per row, compute EXPIRED from `expiresAt`, ignore expired rows in the duplicate check.
-- [ ] **Invited teammates go through the founder onboarding** and can overwrite the org's firm profile.
+- [x] **Invited teammates go through the founder onboarding** and can overwrite the org's firm profile.
   - Where: `W/components/onboarding/WelcomeModal.tsx:43`; `onboarding/page.tsx` (no role/invite check); `A/routes/onboarding-firm.ts:18`.
   - Fix: skip or shorten onboarding when `user_metadata.invited` is set or the org already has a firm profile.
-- [ ] **Signup with an existing email shows "check your email" and nothing arrives**; button then stays disabled with no resend.
+- [x] **Signup with an existing email shows "check your email" and nothing arrives**; button then stays disabled with no resend.
   - Where: `W/app/(auth)/signup/page.tsx:78-105`.
   - Fix: check `data.user?.identities?.length === 0` → "Account exists — log in or reset password"; add Resend + "Enter code" actions.
-- [ ] **Email verification: "You can now sign in" + 5s wait + three redirects.**
+- [x] **Email verification: "You can now sign in" + 5s wait + three redirects.**
   - Where: `W/app/(auth)/verify-email/page.tsx:118-132, 241-257`.
   - Fix: user is already signed in — go straight to `/onboarding` with "Continue to setup".
-- [ ] **Login "Please verify your email" has no way forward.**
+- [x] **Login "Please verify your email" has no way forward.**
   - Where: `W/app/(auth)/login/page.tsx:428-432`.
   - Fix: "Resend verification" (`auth.resend`) or link to `/verify-email`.
-- [ ] **Expired reset link: disabled form, no way to request a new one.**
+- [x] **Expired reset link: disabled form, no way to request a new one.**
   - Where: `W/app/(auth)/reset-password/page.tsx:45-57, 168-257`.
   - Fix: "Request a new link" button to `/forgot-password`.
-- [ ] **SSO button does nothing.**
+- [x] **SSO button does nothing.**
   - Where: `W/app/(auth)/login/page.tsx:144-147, 328-335`.
   - Fix: hide it, or toast "SSO available on request — contact us".
-- [ ] Polish (auth):
+- [x] Polish (auth):
   - Password error text omits the special-character rule (`reset-password/page.tsx:79`).
   - Raw role enum "MEMBER" on accept-invite (`accept-invite/page.tsx:204`) vs Analyst/VP/Partner/Admin in onboarding (`onboarding/types.ts:47`) — one shared role-label map.
   - "Remember me" is never read (`login/page.tsx:34, 276-284`) — wire or remove.
@@ -245,20 +245,20 @@ Each was observed live; evidence screenshots were taken during the run.
 - [ ] Share links: once the Share modal closes, there's no way to list, copy or revoke existing links. (The code audit expected rows in `ShareDealModal`; the live UI showed none, so check whether the list renders.)
 - [ ] Data-room folder file count goes stale (said 3 files while the folder held 1, including in the delete-confirm text). A same-name re-upload returned 200 instead of 201, which suggests leftover orphan rows.
 - [ ] Contact detail panel doesn't refresh after editing a field or adding a note (server returned 200/201; the panel updates only after a full reload).
-- [ ] Team invite stays **PENDING** after the invitee has accepted and signed in.
+- [x] Team invite stays **PENDING** after the invitee has accepted and signed in. ✅ *Batch 2: list derives ACCEPTED for org members (and repairs the row); existing accounts can now actually accept.*
 - [ ] React hydration error #418 in the console on every `/dashboard`, `/settings` and `/data-room` load. Probably time-based text rendered on the server.
 - [ ] Old branding still live:
   - Settings → Security says "Pocket Fund staff access log", links `/assets/pocket-fund-security-overview.pdf` and uses `security@pocket-fund.com`.
   - The Help & Support modal lists `tech@pocketfund.org` and `hello@pocketfund.org`.
   - Sidebar "Feedback" opens an external Google Form titled "PE OS Beta Feedback Form".
 - [ ] Clicking a data-room file row downloads it immediately, with no preview and no on-page feedback.
-- [ ] The forgot-password page's browser tab title is "Sign In | Avise".
+- [x] The forgot-password page's browser tab title is "Sign In | Avise". ✅ *Batch 2.*
 - [ ] LOW:
   - User menu "Profile" and "Settings" both go to `/settings`.
   - Quick Actions "Create Task" linked to `/admin`.
   - `GET /folders/:id/insights` returns 404 for new folders (expected-empty state modelled as an error).
   - The upload dialog shows small files as "0.0 MB".
-  - Invite role: "Associate" at invite time shows as "MEMBER" afterwards.
+  - ~~Invite role: "Associate" at invite time shows as "MEMBER" afterwards.~~ ✅ *Batch 2: shared role labels.*
   - Many near-duplicate `GET /notifications?limit=1` calls.
 
 ### Seen once, not reproducible
