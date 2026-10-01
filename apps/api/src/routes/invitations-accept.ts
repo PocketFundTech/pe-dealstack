@@ -2,11 +2,46 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
-import { createNotification } from './notifications.js';
 import { getOrgId } from '../middleware/orgScope.js';
-import { sendInvitationEmail, getExpirationDate } from './invitations.js';
+import { sendInvitationEmail, getExpirationDate } from '../services/invitationEmail.js';
+import { createInviteeSession } from '../services/inviteSession.js';
+import {
+  loadAcceptableInvitation,
+  markInvitationAccepted,
+  notifyAdminsOfJoin,
+  escapeLike,
+  passwordProblem,
+} from '../services/invitationAccept.js';
+import invitationsJoinRouter from './invitations-join.js';
 
 const router = Router();
+
+// POST /join/:token — accept with an EXISTING (signed-in) account.
+router.use('/', invitationsJoinRouter);
+
+// Does this email already have an Avise account? Drives "Sign in to accept"
+// on the accept-invite page. Only answers for the holder of a valid token for
+// that exact email. Best-effort: false on lookup failure (the accept route
+// still returns 409 ACCOUNT_EXISTS if it turns out the account exists).
+async function emailHasAccount(email: string): Promise<boolean> {
+  try {
+    const { data } = await supabase
+      .from('User')
+      .select('id')
+      .ilike('email', escapeLike(email.trim().toLowerCase()))
+      .limit(1);
+    return Array.isArray(data) && data.length > 0;
+  } catch (err) {
+    log.warn('Invite verify: account lookup failed', { error: err instanceof Error ? err.message : String(err) });
+    return false;
+  }
+}
+
+function isEmailExistsError(err: { message?: string; code?: string; status?: number } | null): boolean {
+  if (!err) return false;
+  if (err.code === 'email_exists' || err.code === 'user_already_exists') return true;
+  return /already (been )?registered|already exists/i.test(err.message ?? '');
+}
 
 // GET /api/invitations/verify/:token - Verify invitation token (public endpoint)
 router.get('/verify/:token', async (req: Request, res: Response, next: NextFunction) => {
@@ -51,76 +86,68 @@ router.get('/verify/:token', async (req: Request, res: Response, next: NextFunct
       organizationLogo: org?.logo || null,
       role: invitation.role,
       inviter: invitation.inviter,
+      accountExists: await emailHasAccount(invitation.email),
     });
   } catch (error) {
     next(error);
   }
 });
 
-// POST /api/invitations/accept/:token - Accept invitation (creates user account)
+// POST /api/invitations/accept/:token - Accept invitation with a NEW account.
+//
+// The emailed token proves the invitee controls the address, so the auth user
+// is created already-confirmed (admin.createUser, email_confirm: true) and a
+// session is returned for the client to apply — no confirmation email, no
+// bounce to /login. Ordering matters: the invitation is only marked ACCEPTED
+// after the User row exists; if that insert fails the auth user is deleted so
+// the same link can be retried.
 router.post('/accept/:token', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { token } = req.params;
-    const { password, fullName } = req.body;
+    const { password, fullName } = req.body ?? {};
 
-    if (!password || password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    const pwProblem = passwordProblem(password);
+    if (pwProblem) {
+      return res.status(400).json({ error: pwProblem });
     }
 
-    // Get invitation with organization data
-    const { data: invitation, error: invError } = await supabase
-      .from('Invitation')
-      .select('*, organization:Organization!organizationId(id, name)')
-      .eq('token', token)
-      .single();
+    const check = await loadAcceptableInvitation(token);
+    if (!check.ok) return res.status(check.status).json(check.body);
+    const invitation = check.invitation;
 
-    if (invError || !invitation) {
-      return res.status(404).json({ error: 'Invalid invitation' });
-    }
+    const orgName = invitation.organization?.name || invitation.firmName;
+    const name = (typeof fullName === 'string' && fullName.trim()) || invitation.email.split('@')[0];
 
-    // Check if expired
-    if (new Date(invitation.expiresAt) < new Date()) {
-      await supabase
-        .from('Invitation')
-        .update({ status: 'EXPIRED' })
-        .eq('id', invitation.id);
-      return res.status(410).json({ error: 'Invitation has expired' });
-    }
-
-    // Check status
-    if (invitation.status !== 'PENDING') {
-      return res.status(410).json({ error: `Invitation has already been ${invitation.status.toLowerCase()}` });
-    }
-
-    const org = invitation.organization as any;
-    const orgName = org?.name || invitation.firmName;
-
-    // Create auth user via Supabase
-    const { data: authData, error: authError } = await supabase.auth.signUp({
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email: invitation.email,
       password,
-      options: {
-        data: {
-          full_name: fullName || invitation.email.split('@')[0],
-          firm_name: orgName,
-          role: invitation.role,
-          invited: true,
-        },
+      email_confirm: true,
+      user_metadata: {
+        full_name: name,
+        firm_name: orgName,
+        role: invitation.role,
+        invited: true,
       },
     });
 
-    if (authError) {
-      log.error('Auth signup error', authError);
-      return res.status(400).json({ error: authError.message });
+    if (authError || !authData?.user) {
+      if (isEmailExistsError(authError)) {
+        return res.status(409).json({
+          error: 'An account with this email already exists. Sign in to accept the invitation.',
+          code: 'ACCOUNT_EXISTS',
+        });
+      }
+      log.error('Invite accept: auth user creation failed', authError);
+      return res.status(400).json({ error: authError?.message || 'Could not create account' });
     }
+    const authUserId = authData.user.id;
 
-    // Create User record with organizationId from the invitation
     const { data: newUser, error: userError } = await supabase
       .from('User')
       .insert({
-        authId: authData.user?.id,
+        authId: authUserId,
         email: invitation.email,
-        name: fullName || invitation.email.split('@')[0],
+        name,
         firmName: orgName,
         organizationId: invitation.organizationId,
         role: invitation.role,
@@ -129,58 +156,35 @@ router.post('/accept/:token', async (req: Request, res: Response, next: NextFunc
       .select()
       .single();
 
-    if (userError) {
-      log.error('User creation error', userError);
-      // Don't fail completely - auth user was created
+    if (userError || !newUser) {
+      log.error('Invite accept: User row insert failed — rolling back auth user', userError);
+      const { error: deleteError } = await supabase.auth.admin.deleteUser(authUserId);
+      if (deleteError) log.error('Invite accept: auth user rollback failed', { authUserId, deleteError });
+      return res.status(500).json({
+        error: "We couldn't finish setting up your account. Please try the invitation link again.",
+        code: 'INVITE_ACCEPT_FAILED',
+      });
     }
 
-    // Update invitation status
-    await supabase
-      .from('Invitation')
-      .update({
-        status: 'ACCEPTED',
-        acceptedAt: new Date().toISOString(),
-      })
-      .eq('id', invitation.id);
+    await markInvitationAccepted(invitation.id);
 
-    // Audit log
     await AuditLog.log(req, {
       action: 'INVITATION_ACCEPTED',
       resourceType: 'Invitation',
       resourceId: invitation.id,
-      userId: newUser?.id,
+      userId: newUser.id,
       metadata: { email: invitation.email, organizationId: invitation.organizationId },
     });
 
-    // Notify org admins: new member joined (fire-and-forget)
-    const memberName = fullName || invitation.email.split('@')[0];
-    (async () => {
-      try {
-        const { data: admins } = await supabase
-          .from('User')
-          .select('id')
-          .eq('organizationId', invitation.organizationId)
-          .eq('role', 'ADMIN');
-        if (admins) {
-          for (const admin of admins) {
-            await createNotification({
-              userId: admin.id,
-              type: 'SYSTEM',
-              title: `${memberName} joined your workspace`,
-              message: `Accepted invitation as ${invitation.role}`,
-            });
-          }
-        }
-      } catch (err) {
-        log.error('Notification error (invite accept)', err);
-      }
-    })();
+    notifyAdminsOfJoin(invitation.organizationId, name, invitation.role);
+
+    const session = await createInviteeSession(invitation.email, password);
 
     res.json({
       success: true,
       message: 'Account created successfully',
       user: newUser,
-      session: authData.session,
+      session,
     });
   } catch (error) {
     next(error);
@@ -203,6 +207,10 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
 
     if (getError || !invitation) {
       return res.status(404).json({ error: 'Invitation not found' });
+    }
+
+    if (invitation.status === 'ACCEPTED') {
+      return res.status(400).json({ error: 'This invitation was already accepted — remove the member instead.' });
     }
 
     // Update status to revoked
@@ -251,8 +259,10 @@ router.post('/:id/resend', async (req: Request, res: Response, next: NextFunctio
       return res.status(404).json({ error: 'Invitation not found' });
     }
 
-    if (invitation.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Can only resend pending invitations' });
+    // PENDING (incl. past expiresAt) and EXPIRED invites can be resent: the
+    // resend re-opens the link with a fresh 7-day expiry.
+    if (invitation.status !== 'PENDING' && invitation.status !== 'EXPIRED') {
+      return res.status(400).json({ error: 'Can only resend pending or expired invitations' });
     }
 
     const { data: currentUser } = await supabase
@@ -270,12 +280,20 @@ router.post('/:id/resend', async (req: Request, res: Response, next: NextFunctio
 
     const orgName = org?.name || invitation.firmName;
 
-    // Extend expiration
+    // Extend expiration (and re-open an EXPIRED invite)
     const newExpiry = getExpirationDate();
-    await supabase
+    const { error: updateError } = await supabase
       .from('Invitation')
-      .update({ expiresAt: newExpiry.toISOString() })
-      .eq('id', id);
+      .update({ status: 'PENDING', expiresAt: newExpiry.toISOString() })
+      .eq('id', id)
+      .eq('organizationId', orgId);
+    if (updateError) {
+      // 23505: a newer pending invite exists for this email (unique pending index).
+      if ((updateError as { code?: string }).code === '23505') {
+        return res.status(409).json({ error: `${invitation.email} already has a newer pending invitation.` });
+      }
+      throw updateError;
+    }
 
     // Resend email
     const emailResult = await sendInvitationEmail(

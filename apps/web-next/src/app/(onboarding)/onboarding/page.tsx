@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
@@ -13,15 +13,20 @@ import { FirmTaskModal } from "./firm-task";
 import { CimTaskModal } from "./cim-task";
 import { TeamTaskModal } from "./team-task";
 import { SkipConfirmModal } from "./skip-modal";
+import { sendTeamInvites } from "./send-team-invites";
+import { DEFAULT_INVITE_ROLE } from "@/lib/roles";
 import {
   FirmData,
   LEGACY_STEP_TO_TASK,
+  OnboardingContext,
   OnboardingStatus,
   TASK_TO_LEGACY_STEP,
-  TASKS,
   TaskId,
   TeamInvite,
+  visibleTasks,
 } from "./types";
+
+const SAMPLE_DEAL_ID = "luktara";
 
 // Lenient URL normalization — backend Zod expects z.string().url() (must have
 // scheme). Form lets users type "yourfirm.com" so prepend https:// if missing.
@@ -48,9 +53,14 @@ export default function OnboardingPage() {
   const [cimFile, setCimFile] = useState<File | null>(null);
   // Legacy starts with 2 team invite rows (onboarding-tasks.js team hydrator calls addRow() twice).
   const [teamInvites, setTeamInvites] = useState<TeamInvite[]>([
-    { email: "", role: "Analyst" },
-    { email: "", role: "Analyst" },
+    { email: "", role: DEFAULT_INVITE_ROLE },
+    { email: "", role: DEFAULT_INVITE_ROLE },
   ]);
+  // Who is onboarding (from /onboarding/status). Invited teammates get the
+  // shortened checklist without the firm-profile task.
+  const [context, setContext] = useState<OnboardingContext | null>(null);
+  const tasks = useMemo(() => visibleTasks(context), [context]);
+  const [sampleBusy, setSampleBusy] = useState(false);
   const [createdDealId, setCreatedDealId] = useState<string | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
   const confettiFiredRef = useRef(false);
@@ -72,9 +82,19 @@ export default function OnboardingPage() {
             if (taskId) done.add(taskId);
           }
         }
-        setCompleted(done);
+        // Merge, don't replace — a task finished while this request was in
+        // flight (e.g. the sample deal) must not be un-ticked.
+        setCompleted((prev) => new Set([...prev, ...done]));
+        setContext(data.context ?? null);
+        const shown = visibleTasks(data.context);
         // If user already finished onboarding, skip straight to dashboard.
-        if (done.size >= TASKS.length) router.push("/dashboard");
+        if (shown.every((t) => done.has(t.id))) {
+          router.push("/dashboard");
+          return;
+        }
+        // Invited teammates skip the founder welcome pitch and go straight
+        // to their (shorter) checklist.
+        if (data.context?.invited) setView("checklist");
       } catch (err) {
         // Fresh user or API down — proceed with empty state. Don't toast;
         // an empty checklist is the expected first-load state.
@@ -156,6 +176,26 @@ export default function OnboardingPage() {
     [showToast],
   );
 
+  // Marks a task done in the UI and on the server. Shared by completeTask,
+  // the team task's explicit "Skip for now" and the welcome sample-deal path.
+  const completeLocally = useCallback(
+    (taskId: TaskId) => {
+      setCompleted((prev) => {
+        const next = new Set(prev);
+        next.add(taskId);
+        // Fire confetti when all tasks are done (legacy: fireConfetti in onboarding-flow.js)
+        if (tasks.every((t) => next.has(t.id)) && !confettiFiredRef.current) {
+          confettiFiredRef.current = true;
+          setShowConfetti(true);
+        }
+        return next;
+      });
+      setActiveTask(null);
+      void markServerStep(taskId);
+    },
+    [markServerStep, tasks],
+  );
+
   const completeTask = useCallback(
     async (taskId: TaskId) => {
       // CIM step: prefer sample-deal demo path; otherwise upload a real file.
@@ -193,24 +233,38 @@ export default function OnboardingPage() {
         if (!ok) return;
       }
 
-      setCompleted((prev) => {
-        const next = new Set(prev);
-        next.add(taskId);
-        // Fire confetti when all tasks are done (legacy: fireConfetti in onboarding-flow.js)
-        if (next.size >= TASKS.length && !confettiFiredRef.current) {
-          confettiFiredRef.current = true;
-          setShowConfetti(true);
+      // Team step: actually send the invitations. Failed rows stay in the
+      // modal (one toast each) so the user can fix them or skip explicitly.
+      if (taskId === "team") {
+        setBusyTask(taskId);
+        const result = await sendTeamInvites(teamInvites);
+        setBusyTask(null);
+        for (const f of result.failed) {
+          showToast(f.message, "error", { title: "Invite not sent" });
         }
-        return next;
-      });
-      setActiveTask(null);
-      void markServerStep(taskId);
+        if (result.emailNotSent > 0) {
+          showToast(
+            "Invitation created but the email couldn't be sent. Copy the invite link from Settings → Team.",
+            "warning",
+          );
+        }
+        if (result.failed.length > 0) {
+          setTeamInvites(result.failed.map((f) => f.row));
+          return;
+        }
+        const total = result.sent + result.alreadyCovered.length;
+        if (total > 0) {
+          showToast(`${total} teammate${total === 1 ? "" : "s"} invited`, "success");
+        }
+      }
+
+      completeLocally(taskId);
     },
-    [cimFile, firmData, markServerStep, sampleDealId, saveFirmProfile, showToast, uploadCimFile],
+    [cimFile, completeLocally, firmData, sampleDealId, saveFirmProfile, showToast, teamInvites, uploadCimFile],
   );
 
-  const doneCount = completed.size;
-  const allDone = doneCount >= TASKS.length;
+  const doneCount = tasks.filter((t) => completed.has(t.id)).length;
+  const allDone = doneCount >= tasks.length;
 
   const openWorkspace = () => {
     if (createdDealId) router.push(`/deals/${createdDealId}`);
@@ -246,12 +300,25 @@ export default function OnboardingPage() {
 
   const startChecklist = async (useSample: boolean) => {
     if (useSample) {
-      setSampleDealId("luktara");
-      setCompleted((prev) => {
-        const next = new Set(prev);
-        next.add("cim");
-        return next;
-      });
+      // Actually create the sample deal (it used to only tick the box, and
+      // the completion screen then found no deal). Stay on the welcome view
+      // with an error toast if it fails.
+      if (sampleBusy) return;
+      setSampleBusy(true);
+      try {
+        const res = await api.post<{ dealId?: string }>("/onboarding/create-demo-deal", {
+          sampleId: SAMPLE_DEAL_ID,
+        });
+        if (res?.dealId) setCreatedDealId((prev) => prev ?? res.dealId!);
+        setSampleDealId(SAMPLE_DEAL_ID);
+        completeLocally("cim");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Couldn't create the sample deal";
+        showToast(msg, "error", { title: "Sample deal failed" });
+        return;
+      } finally {
+        setSampleBusy(false);
+      }
     }
     setView("checklist");
     markSeen();
@@ -267,12 +334,17 @@ export default function OnboardingPage() {
   return (
     <>
       <Confetti active={showConfetti} />
-      <TopNav doneCount={doneCount} onSkip={() => setShowSkip(true)} />
+      <TopNav doneCount={doneCount} total={tasks.length} onSkip={() => setShowSkip(true)} />
 
       {view === "welcome" ? (
-        <WelcomeView onStart={() => startChecklist(false)} onSample={() => startChecklist(true)} />
+        <WelcomeView
+          onStart={() => startChecklist(false)}
+          onSample={() => startChecklist(true)}
+          sampleBusy={sampleBusy}
+        />
       ) : (
         <ChecklistView
+          tasks={tasks}
           completed={completed}
           onOpenTask={setActiveTask}
           allDone={allDone}
@@ -307,6 +379,9 @@ export default function OnboardingPage() {
           onChange={setTeamInvites}
           onClose={() => setActiveTask(null)}
           onComplete={() => completeTask("team")}
+          onSkip={() => completeLocally("team")}
+          busy={busyTask === "team"}
+          canInviteAdmins={!!context?.isAdmin}
         />
       )}
 
@@ -315,7 +390,7 @@ export default function OnboardingPage() {
   );
 }
 
-function TopNav({ doneCount, onSkip }: { doneCount: number; onSkip: () => void }) {
+function TopNav({ doneCount, total, onSkip }: { doneCount: number; total: number; onSkip: () => void }) {
   return (
     <header className="bg-white border-b border-border-subtle">
       <div className="max-w-6xl mx-auto px-6 py-3.5 flex items-center justify-between">
@@ -327,9 +402,9 @@ function TopNav({ doneCount, onSkip }: { doneCount: number; onSkip: () => void }
           </span>
         </div>
         <div className="flex items-center gap-4">
-          {doneCount > 0 && doneCount < TASKS.length && (
+          {doneCount > 0 && doneCount < total && (
             <span className="text-[12px] text-text-muted hidden md:inline">
-              {doneCount}/{TASKS.length} done
+              {doneCount}/{total} done
             </span>
           )}
           <button

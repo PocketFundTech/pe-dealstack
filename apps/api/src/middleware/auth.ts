@@ -12,6 +12,8 @@ export interface AuthUser {
   organizationId?: string;
   role: string;
   user_metadata?: Record<string, unknown>;
+  /** True when Supabase has confirmed the user owns `email`. */
+  emailConfirmed?: boolean;
 }
 
 // Extend Express Request to include user
@@ -91,6 +93,7 @@ export async function authMiddleware(
       firmName: user.user_metadata?.firm_name as string | undefined,
       role: (user.user_metadata?.role as string) || 'MEMBER',
       user_metadata: user.user_metadata as Record<string, unknown> | undefined,
+      emailConfirmed: Boolean(user.email_confirmed_at),
     };
 
     next();
@@ -129,6 +132,7 @@ export async function optionalAuthMiddleware(
             firmName: user.user_metadata?.firm_name as string | undefined,
             role: (user.user_metadata?.role as string) || 'MEMBER',
             user_metadata: user.user_metadata as Record<string, unknown> | undefined,
+            emailConfirmed: Boolean(user.email_confirmed_at),
           };
         }
       }

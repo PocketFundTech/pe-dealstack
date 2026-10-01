@@ -1,3 +1,5 @@
+import type { ApiRole } from "@/lib/roles";
+
 // Shared types for the onboarding flow. Ported from *.
 
 export type TaskId = "firm" | "cim" | "team";
@@ -38,13 +40,8 @@ export const DEFAULT_SECTORS = [
 
 export interface TeamInvite {
   email: string;
-  role: string;
+  role: ApiRole;
 }
-
-// Visual role labels only — these do NOT submit to the API during
-// onboarding (matches legacy behavior). Matches the <select> options
-// in onboarding-tasks.js team hydrator.
-export const TEAM_ROLES = ["Analyst", "VP", "Partner", "Admin"];
 
 // API response shape — matches DEFAULT_STATUS in
 // apps/api/src/routes/onboarding.ts exactly. Fields I previously
@@ -54,6 +51,25 @@ export interface OnboardingStatus {
   welcomeShown?: boolean;
   checklistDismissed?: boolean;
   steps?: Record<string, boolean>;
+  context?: OnboardingContext | null;
+}
+
+// Who is onboarding — from GET /onboarding/status. Invited teammates skip the
+// firm-profile task (the org already has one / it's the admin's to set).
+export interface OnboardingContext {
+  invited?: boolean;
+  isAdmin?: boolean;
+  isFounder?: boolean;
+  firmProfileSet?: boolean;
+  canEditFirmProfile?: boolean;
+}
+
+/** Tasks to show: invited teammates get the shortened (no firm task) list. */
+export function visibleTasks(context: OnboardingContext | null | undefined): TaskDef[] {
+  if (context && (context.invited || context.canEditFirmProfile === false)) {
+    return TASKS.filter((t) => t.id !== "firm");
+  }
+  return TASKS;
 }
 
 // Legacy step IDs stored on the backend ↔ current 3-task flow.

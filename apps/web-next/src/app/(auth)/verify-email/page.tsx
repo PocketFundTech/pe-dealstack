@@ -4,10 +4,13 @@ import { useState, useEffect, useCallback, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Logo } from "@/components/layout/Logo";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import OtpCodeEntry from "./OtpCodeEntry";
+import { friendlyAuthError } from "@/lib/authErrors";
 
 const RESEND_COOLDOWN = 60;
+// Verifying signs the user in, so a fresh signup goes straight to setup.
+const AFTER_VERIFY_PATH = "/onboarding";
 
 type PageState = "loading" | "code-entry" | "success" | "error";
 
@@ -21,6 +24,7 @@ export default function VerifyEmailPage() {
 
 function VerifyEmailContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [pageState, setPageState] = useState<PageState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
@@ -35,9 +39,6 @@ function VerifyEmailContent() {
   const [resendMessage, setResendMessage] = useState("");
   const [resendMessageType, setResendMessageType] = useState<"success" | "error">("error");
   const [resendLoading, setResendLoading] = useState(false);
-
-  // Success countdown
-  const [countdown, setCountdown] = useState(5);
 
   /* ---- URL-based auto-verify on mount ---- */
   useEffect(() => {
@@ -71,7 +72,9 @@ function VerifyEmailContent() {
 
         if (verifyError) {
           setErrorMessage(
-            verifyError.message || "Email verification failed. The link may have expired."
+            verifyError.message
+              ? friendlyAuthError(verifyError.message)
+              : "Email verification failed. The link may have expired."
           );
           setPageState("error");
           return;
@@ -99,9 +102,11 @@ function VerifyEmailContent() {
         setErrorMessage("This verification link is invalid or has expired.");
         setPageState("error");
       } else {
-        // No token in URL -- show code-entry form for manual OTP
-        if (user?.email) {
-          setCodeEmail(user.email);
+        // No token in URL -- show code-entry form for manual OTP. The signup
+        // page's "Enter code instead" link passes ?email= to prefill it.
+        const prefill = user?.email || searchParams.get("email") || "";
+        if (prefill) {
+          setCodeEmail(prefill);
           setHasPrefilledEmail(true);
         }
         setPageState("code-entry");
@@ -115,21 +120,10 @@ function VerifyEmailContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---- Success countdown redirect ---- */
+  /* ---- Success: the user is signed in — go straight to setup ---- */
   useEffect(() => {
-    if (pageState !== "success") return;
-    const id = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(id);
-          window.location.href = "/login";
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [pageState]);
+    if (pageState === "success") router.replace(AFTER_VERIFY_PATH);
+  }, [pageState, router]);
 
   /* ---- Error-state resend cooldown ticker ---- */
   useEffect(() => {
@@ -162,7 +156,7 @@ function VerifyEmailContent() {
       const { error } = await supabase.auth.resend({ type: "signup", email });
 
       if (error) {
-        setResendMessage(error.message || "Failed to send verification email.");
+        setResendMessage(error.message ? friendlyAuthError(error.message) : "Failed to send verification email.");
         setResendMessageType("error");
       } else {
         setResendMessage("Verification email sent! Check your inbox.");
@@ -240,21 +234,17 @@ function VerifyEmailContent() {
 
             <h1 className="text-2xl font-bold text-text-main mb-2">Email Verified!</h1>
             <p className="text-gray-500 text-sm mb-6">
-              Your email has been successfully verified. You can now sign in to your account.
+              Your email is verified and you&apos;re signed in. Let&apos;s set up your workspace.
             </p>
 
             <Link
-              href="/login"
+              href={AFTER_VERIFY_PATH}
               className="inline-flex items-center justify-center gap-2 w-full text-white font-medium rounded-lg h-12 transition-all duration-200 hover:opacity-90"
               style={{ backgroundColor: "#003366" }}
             >
-              <span>Continue to Login</span>
+              <span>Continue to setup</span>
               <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
             </Link>
-
-            <p className="text-xs text-text-muted mt-4">
-              Redirecting to login in <span className="font-medium">{countdown}</span> seconds...
-            </p>
           </div>
         )}
 

@@ -140,6 +140,8 @@ describe('Auth Middleware', () => {
         firmName: 'Test Firm',
         role: 'ADMIN',
         user_metadata: mockUser.user_metadata,
+        // The mock user has no email_confirmed_at.
+        emailConfirmed: false,
       });
       expect(next).toHaveBeenCalled();
     });

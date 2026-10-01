@@ -9,6 +9,7 @@ import { extractNameFromDomain } from '../utils/urlHelpers.js';
 import { runWithUsageContext, resolveInternalUserId } from '../middleware/usageContext.js';
 import { runFirmResearchViaManagedAgents } from '../services/managedAgents/firmResearchOrchestrator.js';
 import firmProfileRouter from './onboarding-firm.js';
+import { getFirmProfileAccess, FIRM_PROFILE_LOCKED } from '../services/firmProfileAccess.js';
 
 const router = Router();
 
@@ -138,12 +139,33 @@ async function backfillStepsFromActivity(userId: string, status: any): Promise<{
   return { status, changed };
 }
 
+// Who is going through onboarding? Lets the web app shorten the flow for
+// invited teammates (no firm-profile task; they joined an org that already
+// has one) and hide options the caller can't use. Best-effort: null on error,
+// which the client treats as the full founder flow.
+async function getOnboardingContext(req: Request, orgId: string) {
+  try {
+    const access = await getFirmProfileAccess(req.user!, orgId);
+    return {
+      invited: access.invited,
+      isAdmin: access.role === 'ADMIN',
+      isFounder: access.isFounder,
+      firmProfileSet: access.firmProfileSet,
+      canEditFirmProfile: access.canEditFirmProfile,
+    };
+  } catch (err) {
+    log.warn('onboarding: context lookup failed', { error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
 // GET /api/onboarding/status
 router.get('/status', async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
     if (!userId) return res.json(DEFAULT_STATUS);
     const orgId = getOrgId(req);
+    const context = await getOnboardingContext(req, orgId);
     const { data, error } = await supabase
       .from('User')
       .select('onboardingStatus')
@@ -164,7 +186,7 @@ router.get('/status', async (req: Request, res: Response) => {
           .from('User')
           .update({ onboardingStatus: COMPLETED_STATUS })
           .eq('authId', userId);
-        return res.json(COMPLETED_STATUS);
+        return res.json({ ...COMPLETED_STATUS, context });
       }
     }
 
@@ -181,7 +203,7 @@ router.get('/status', async (req: Request, res: Response) => {
       }
     }
 
-    res.json(status);
+    res.json({ ...status, context });
   } catch (error: any) {
     log.error('Onboarding: failed to get status', { error: error.message });
     res.json(DEFAULT_STATUS);
@@ -358,6 +380,12 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
         orgId = userData?.organizationId || '';
       }
       if (orgId) {
+        // The research agent saves onto the org's firm profile — same
+        // invited-teammate guard as POST /firm-profile.
+        const access = await getFirmProfileAccess(req.user!, orgId);
+        if (!access.canEditFirmProfile) {
+          return res.status(403).json(FIRM_PROFILE_LOCKED);
+        }
         const { data: org } = await supabase
           .from('Organization')
           .select('id, name, website, settings')

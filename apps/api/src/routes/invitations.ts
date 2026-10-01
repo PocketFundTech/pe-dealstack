@@ -1,19 +1,17 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
-import { Resend } from 'resend';
 import { supabase } from '../supabase.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
 
+import { sendInvitationEmail, getExpirationDate, resolveBaseUrl } from '../services/invitationEmail.js';
+
 // Sub-routers
 import invitationsAcceptRouter from './invitations-accept.js';
 
 const router = Router();
-
-// Initialize Resend
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 // Validation schemas
 const createInvitationSchema = z.object({
@@ -31,98 +29,54 @@ function generateToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
-// Helper: Get expiration date (7 days from now)
-export function getExpirationDate(): Date {
-  const date = new Date();
-  date.setDate(date.getDate() + 7);
-  return date;
-}
+// Mount sub-routers
+router.use('/', invitationsAcceptRouter);
 
-// Resolve the public base URL the invite link should point to. Prefers the
-// caller's Origin header (so a preview-deployment admin gets links back to
-// THEIR preview, and a prod admin gets prod links) over the static APP_URL
-// env var. Falls back to APP_URL, then localhost for dev.
-function resolveBaseUrl(req?: Request): string {
-  const origin = req?.headers?.origin;
-  if (origin && /^https?:\/\//.test(origin)) return origin.replace(/\/$/, '');
-  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, '');
-  return 'http://localhost:3000';
-}
-
-// Helper: Send invitation email via Resend
-export async function sendInvitationEmail(
-  email: string,
-  inviterName: string,
-  firmName: string,
-  token: string,
-  role: string,
-  req?: Request
-): Promise<{ success: boolean; error?: string }> {
+// Lower-cased emails of everyone in the org. Best-effort: an empty set just
+// means no PENDING → ACCEPTED reconciliation on this request.
+async function loadMemberEmails(orgId: string): Promise<Set<string>> {
   try {
-    const baseUrl = resolveBaseUrl(req);
-    const inviteUrl = `${baseUrl}/accept-invite?token=${token}`;
-
-    log.info('Sending invitation email', { email, inviterName, firmName, role, inviteUrl });
-
-    if (!resend) {
-      log.warn('Resend not configured — RESEND_API_KEY missing. Invitation URL logged above.');
-      return { success: false, error: 'Email service not configured (RESEND_API_KEY missing)' };
-    }
-
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
-
-    const { data, error } = await resend.emails.send({
-      from: `Avise <${fromEmail}>`,
-      to: [email],
-      subject: `You're invited to join ${firmName} on Avise`,
-      html: `
-        <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff;">
-          <div style="background: linear-gradient(135deg, #003366, #0055aa); padding: 32px; text-align: center; border-radius: 8px 8px 0 0;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">Avise</h1>
-            <p style="color: #b3d1ff; margin: 8px 0 0; font-size: 14px;">AI-Powered Private Equity CRM</p>
-          </div>
-          <div style="padding: 32px;">
-            <h2 style="color: #003366; margin: 0 0 16px; font-size: 20px;">You're Invited! 🎉</h2>
-            <p style="color: #333; font-size: 16px; line-height: 1.6;">
-              <strong>${inviterName}</strong> has invited you to join <strong>${firmName}</strong> on Avise.
-            </p>
-            <p style="color: #555; font-size: 15px; line-height: 1.6;">
-              You've been assigned the role of <strong>${role}</strong>. Click the button below to create your account and get started.
-            </p>
-            <div style="text-align: center; margin: 32px 0;">
-              <a href="${inviteUrl}"
-                 style="background: linear-gradient(135deg, #003366, #0055aa); color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; display: inline-block; font-size: 16px; font-weight: 600; letter-spacing: 0.5px;">
-                Accept Invitation
-              </a>
-            </div>
-            <p style="color: #888; font-size: 13px; text-align: center;">This invitation expires in 7 days.</p>
-          </div>
-          <hr style="border: none; border-top: 1px solid #eef2f7; margin: 0;" />
-          <div style="padding: 20px 32px; text-align: center;">
-            <p style="color: #aaa; font-size: 12px; margin: 0;">
-              Avise — AI-Powered Private Equity CRM<br/>
-              If you didn't expect this invitation, you can safely ignore this email.
-            </p>
-          </div>
-        </div>
-      `,
-    });
-
-    if (error) {
-      log.error('Resend email error', error);
-      return { success: false, error: error.message || 'Failed to send email' };
-    }
-
-    log.info('Invitation email sent successfully', { email, messageId: data?.id });
-    return { success: true };
-  } catch (error) {
-    log.error('Email send error', error);
-    return { success: false, error: 'Failed to send invitation email' };
+    const { data } = await supabase.from('User').select('email').eq('organizationId', orgId);
+    return new Set(
+      (Array.isArray(data) ? data : [])
+        .map((u: { email?: string | null }) => (u.email || '').toLowerCase())
+        .filter(Boolean),
+    );
+  } catch (err) {
+    log.warn('Invitation list: member lookup failed', { error: err instanceof Error ? err.message : String(err) });
+    return new Set();
   }
 }
 
-// Mount sub-routers
-router.use('/', invitationsAcceptRouter);
+/**
+ * Is there a live (PENDING and unexpired) invitation for this email? A PENDING
+ * row past its expiry is flipped to EXPIRED here — it must not block a
+ * re-invite, and the unique "one pending invite per email" index would
+ * otherwise reject the new row.
+ */
+async function hasLivePendingInvite(email: string, orgId: string): Promise<boolean> {
+  const { data: existing } = await supabase
+    .from('Invitation')
+    .select('id, expiresAt')
+    .eq('email', email)
+    .eq('organizationId', orgId)
+    .eq('status', 'PENDING')
+    .maybeSingle();
+  if (!existing) return false;
+  if (existing.expiresAt && new Date(existing.expiresAt).getTime() < Date.now()) {
+    const { error } = await supabase
+      .from('Invitation')
+      .update({ status: 'EXPIRED' })
+      .eq('id', existing.id)
+      .eq('status', 'PENDING');
+    if (error) {
+      log.warn('Invitation: could not expire stale pending invite', { id: existing.id, error });
+      return true;
+    }
+    return false;
+  }
+  return true;
+}
 
 // GET /api/invitations - List invitations for current user's organization
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -157,9 +111,40 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     if (error) throw error;
 
+    const rows = (invitations || []) as any[];
+
+    // Effective status. Expiry is only written lazily (on an accept attempt),
+    // so a PENDING row past expiresAt is shown as EXPIRED. A PENDING row whose
+    // email is already a member of the org (joined through another path, or
+    // the ACCEPTED write was lost) is shown — and repaired — as ACCEPTED; QA
+    // saw accepted teammates stuck on PENDING.
+    const memberEmails = await loadMemberEmails(orgId);
+    const now = Date.now();
+    const repairIds: string[] = [];
+    const effective = rows.map((inv) => {
+      if (inv.status !== 'PENDING') return inv;
+      if (memberEmails.has(String(inv.email).toLowerCase())) {
+        repairIds.push(inv.id);
+        return { ...inv, status: 'ACCEPTED' };
+      }
+      if (inv.expiresAt && new Date(inv.expiresAt).getTime() < now) {
+        return { ...inv, status: 'EXPIRED' };
+      }
+      return inv;
+    });
+    if (repairIds.length > 0) {
+      const { error: repairError } = await supabase
+        .from('Invitation')
+        .update({ status: 'ACCEPTED' })
+        .in('id', repairIds)
+        .eq('organizationId', orgId)
+        .eq('status', 'PENDING');
+      if (repairError) log.warn('Invitation list: stale PENDING repair failed', { repairError });
+    }
+
     // Decorate with full invite URL for pending invites; strip token from accepted/expired
     const baseUrl = resolveBaseUrl(req);
-    const decorated = (invitations || []).map((inv: any) => {
+    const decorated = effective.map((inv: any) => {
       const isPending = inv.status === 'PENDING';
       const url = isPending && inv.token ? `${baseUrl}/accept-invite?token=${inv.token}` : null;
       // Don't leak the raw token for non-pending invites
@@ -259,18 +244,8 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       });
     }
 
-    // Check for existing pending invitation
-    const { data: existingInvite, error: existingInviteErr } = await supabase
-      .from('Invitation')
-      .select('id')
-      .eq('email', email)
-      .eq('organizationId', orgId)
-      .eq('status', 'PENDING')
-      .maybeSingle();
-
-    log.info('Existing invite check', { existingInvite, error: existingInviteErr?.message });
-
-    if (existingInvite) {
+    // Check for an existing live (unexpired) pending invitation
+    if (await hasLivePendingInvite(email, orgId)) {
       return res.status(400).json({
         error: `${email} already has a pending invitation.`,
         code: 'INVITE_ALREADY_PENDING',
@@ -410,16 +385,8 @@ router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => 
           continue;
         }
 
-        // Check for pending invitation
-        const { data: existingInvite } = await supabase
-          .from('Invitation')
-          .select('id')
-          .eq('email', email)
-          .eq('organizationId', orgId)
-          .eq('status', 'PENDING')
-          .maybeSingle();
-
-        if (existingInvite) {
+        // Check for a live (unexpired) pending invitation
+        if (await hasLivePendingInvite(email, orgId)) {
           results.push({ email, status: 'pending' });
           continue;
         }
