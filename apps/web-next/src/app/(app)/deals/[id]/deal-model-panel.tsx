@@ -2,103 +2,23 @@
 
 // "Build model" — the assumptions a partner edits, and the .xlsx download.
 //
-// The live preview (entry EV, equity cheque, implied MoM/IRR) exists so the
-// user gets feedback before downloading. It is a convenience echo of what
-// the workbook computes, NOT the source of truth: the file itself is fully
-// formula-driven, and these figures are recomputed there from the same
-// inputs. If they ever disagree, the workbook is right.
+// The live preview (entry EV, equity cheque, implied MoM/IRR, every line's
+// projection) exists so the user gets feedback before downloading. It runs
+// the same arithmetic as the workbook's formulas (projectModel in
+// @ai-crm/shared: costs as % of revenue, EBITDA = revenue − costs, the debt
+// schedule and exit), but the file itself is the source of truth: if they
+// ever disagree, the workbook is right.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { projectModel, type DriverMethod } from "@ai-crm/shared";
 import { api } from "@/lib/api";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { useToast } from "@/providers/ToastProvider";
-
-interface Assumptions {
-  entryMultiple: number;
-  entryBasis: "EBITDA" | "REVENUE";
-  transactionFeesPct: number;
-  debtQuantumMode: "MULTIPLE" | "ABSOLUTE";
-  debtQuantum: number;
-  interestRate: number;
-  amortPctPerYear: number;
-  cashSweepPct: number;
-  projectionYears: number;
-  revenueGrowthPct: number[];
-  ebitdaMarginPct: number[];
-  capexPctRevenue: number;
-  nwcPctRevenue: number;
-  taxRate: number;
-  daPctRevenue: number;
-  exitMultiple: number;
-  exitYear: number;
-  wacc: number;
-  dscrTarget: number;
-  unitScale: "MILLIONS" | "THOUSANDS";
-  currency: string;
-}
-
-interface HistoryRow {
-  period: string;
-  revenue?: number;
-  ebitda?: number;
-}
-
-interface ModelResponse {
-  assumptions: Assumptions;
-  isDerived: boolean;
-  history: HistoryRow[];
-  /** Base / entry column the workbook projects from (LTM or last full year). */
-  base?: { label: string; basis: string; revenue: number | null; ebitda: number | null } | null;
-  currency: string;
-  unitScale: string;
-}
-
-type NumericKey =
-  | "entryMultiple" | "transactionFeesPct" | "debtQuantum" | "interestRate"
-  | "amortPctPerYear" | "cashSweepPct" | "capexPctRevenue" | "nwcPctRevenue"
-  | "taxRate" | "daPctRevenue" | "exitMultiple" | "exitYear" | "wacc" | "dscrTarget";
-
-const GROUPS: Array<{ title: string; fields: Array<{ key: NumericKey; label: string; suffix: string; step?: number }> }> = [
-  {
-    title: "Entry",
-    fields: [
-      { key: "entryMultiple", label: "Entry multiple", suffix: "x", step: 0.25 },
-      { key: "transactionFeesPct", label: "Transaction fees", suffix: "%", step: 0.5 },
-    ],
-  },
-  {
-    title: "Capital structure",
-    fields: [
-      { key: "debtQuantum", label: "Debt", suffix: "x EBITDA", step: 0.25 },
-      { key: "interestRate", label: "Interest rate", suffix: "%", step: 0.25 },
-      { key: "amortPctPerYear", label: "Amortisation", suffix: "% / yr", step: 1 },
-      { key: "cashSweepPct", label: "Cash sweep", suffix: "% of FCF", step: 5 },
-      { key: "dscrTarget", label: "DSCR target", suffix: "x", step: 0.05 },
-    ],
-  },
-  {
-    title: "Operating",
-    fields: [
-      { key: "capexPctRevenue", label: "Capex", suffix: "% of revenue", step: 0.5 },
-      { key: "nwcPctRevenue", label: "NWC", suffix: "% of revenue", step: 1 },
-      { key: "daPctRevenue", label: "D&A", suffix: "% of revenue", step: 0.5 },
-      { key: "taxRate", label: "Tax rate", suffix: "%", step: 1 },
-    ],
-  },
-  {
-    title: "Exit",
-    fields: [
-      { key: "exitMultiple", label: "Exit multiple", suffix: "x", step: 0.25 },
-      { key: "exitYear", label: "Exit year", suffix: "", step: 1 },
-      { key: "wacc", label: "WACC", suffix: "%", step: 0.5 },
-    ],
-  },
-];
-
-function fmtMoney(value: number, currency: string): string {
-  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : "";
-  return `${symbol}${value.toFixed(1)}m`;
-}
+import { DriverTable } from "./deal-model-driver-table";
+import {
+  SCALAR_GROUPS, convertDriver, fmtMoney,
+  type Assumptions, type ModelResponse, type ScalarKey,
+} from "./deal-model-types";
 
 export function DealModelPanel({ dealId }: { dealId: string }) {
   const { showToast } = useToast();
@@ -125,49 +45,33 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
     })();
   }, [dealId]);
 
-  const set = useCallback((key: NumericKey, raw: string) => {
+  const projection = useMemo(() => {
+    if (!assumptions || !model?.lines?.length) return null;
+    return projectModel(model.lines, model.baseValues ?? {}, assumptions);
+  }, [assumptions, model]);
+
+  const set = useCallback((key: ScalarKey, raw: string) => {
     const value = Number(raw);
     if (!Number.isFinite(value)) return;
     setAssumptions((a) => (a ? { ...a, [key]: value } : a));
   }, []);
 
-  const setSeries = useCallback((key: "revenueGrowthPct" | "ebitdaMarginPct", raw: string) => {
-    const value = Number(raw);
-    if (!Number.isFinite(value)) return;
-    setAssumptions((a) => (a ? { ...a, [key]: a[key].map(() => value) } : a));
+  const setDriverValue = useCallback((key: string, year: number, value: number) => {
+    setAssumptions((a) => {
+      if (!a) return a;
+      const d = a.lineDrivers[key];
+      const values = d.values.map((v, y) => (y === year ? value : v));
+      return { ...a, lineDrivers: { ...a.lineDrivers, [key]: { ...d, values } } };
+    });
   }, []);
 
-  // Echo of the workbook's own arithmetic — see the note at the top.
-  const preview = useMemo(() => {
-    if (!assumptions || !model) return null;
-    // Same inputs as the workbook: the base period's revenue and EBITDA.
-    const baseRevenue = model.base?.revenue ?? null;
-    const baseEbitda = model.base?.ebitda ?? null;
-    if (typeof baseEbitda !== "number") return null;
-
-    const entryMetric = assumptions.entryBasis === "REVENUE" ? baseRevenue : baseEbitda;
-    if (typeof entryMetric !== "number") return null;
-    const entryEv = entryMetric * assumptions.entryMultiple;
-    const debt = assumptions.debtQuantumMode === "ABSOLUTE" ? assumptions.debtQuantum : baseEbitda * assumptions.debtQuantum;
-    const equity = entryEv * (1 + assumptions.transactionFeesPct / 100) - debt;
-
-    // Exit EBITDA = projected revenue × that year's margin (as the workbook
-    // does), not base EBITDA grown at the revenue rate.
-    let ebitda = baseEbitda;
-    if (typeof baseRevenue === "number") {
-      let revenue = baseRevenue;
-      for (let y = 0; y < assumptions.exitYear; y++) {
-        revenue = revenue * (1 + (assumptions.revenueGrowthPct[y] ?? 0) / 100);
-      }
-      ebitda = revenue * ((assumptions.ebitdaMarginPct[assumptions.exitYear - 1] ?? 0) / 100);
-    }
-    const exitEv = ebitda * assumptions.exitMultiple;
-    const proceeds = exitEv - Math.max(0, debt * (1 - (assumptions.amortPctPerYear / 100) * assumptions.exitYear));
-    const mom = equity > 0 ? proceeds / equity : null;
-    const irr = mom && mom > 0 ? Math.pow(mom, 1 / assumptions.exitYear) - 1 : null;
-
-    return { entryEv, equity, mom, irr };
-  }, [assumptions, model]);
+  const setDriverMethod = useCallback((key: string, method: DriverMethod) => {
+    setAssumptions((a) => {
+      if (!a || !projection) return a;
+      const converted = convertDriver(method, projection.values[key] ?? [], projection.revenue, projection.base[key] ?? 0);
+      return { ...a, lineDrivers: { ...a.lineDrivers, [key]: converted } };
+    });
+  }, [projection]);
 
   const save = useCallback(async () => {
     if (!assumptions) return;
@@ -228,6 +132,8 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
     );
   }
 
+  const hasEntry = projection && model.base?.entrySource !== "missing";
+
   return (
     <div className="rounded-xl border border-border-subtle bg-white">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle px-5 py-4">
@@ -236,6 +142,7 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
           <p className="mt-0.5 text-xs text-text-muted">
             {model.history.length} historical period{model.history.length === 1 ? "" : "s"} ·{" "}
             {model.currency} in millions
+            {model.base && ` · base ${model.base.label}`}
             {model.isDerived && " · starting from derived defaults"}
           </p>
         </div>
@@ -259,13 +166,13 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
         </div>
       </div>
 
-      {preview && (
+      {hasEntry && (
         <div className="grid grid-cols-2 gap-px border-b border-border-subtle bg-border-subtle sm:grid-cols-4">
           {[
-            { label: "Entry EV", value: fmtMoney(preview.entryEv, model.currency) },
-            { label: "Equity cheque", value: fmtMoney(preview.equity, model.currency) },
-            { label: "MoM", value: preview.mom ? `${preview.mom.toFixed(1)}x` : "—" },
-            { label: "IRR", value: preview.irr ? `${(preview.irr * 100).toFixed(0)}%` : "—" },
+            { label: "Entry EV", value: fmtMoney(projection.entryEv, model.currency) },
+            { label: "Equity cheque", value: fmtMoney(projection.equity, model.currency) },
+            { label: "MoM", value: projection.mom ? `${projection.mom.toFixed(1)}x` : "—" },
+            { label: "IRR", value: projection.irr !== null ? `${(projection.irr * 100).toFixed(0)}%` : "—" },
           ].map((m) => (
             <div key={m.label} className="bg-white px-4 py-3">
               <p className="text-xs text-text-muted">{m.label}</p>
@@ -276,7 +183,7 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
       )}
 
       <div className="grid grid-cols-1 gap-5 px-5 py-5 md:grid-cols-2">
-        {GROUPS.map((group) => (
+        {SCALAR_GROUPS.map((group) => (
           <div key={group.title}>
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
               {group.title}
@@ -303,36 +210,19 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
 
         <div className="md:col-span-2">
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
-            Projection ({assumptions.projectionYears} years)
+            P&amp;L drivers by line ({assumptions.projectionYears} years)
           </h4>
-          <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2">
-              <span className="text-sm text-text-secondary">Revenue growth</span>
-              <input
-                type="number"
-                step={0.5}
-                value={assumptions.revenueGrowthPct[0] ?? 0}
-                onChange={(e) => setSeries("revenueGrowthPct", e.target.value)}
-                className="w-24 rounded-lg border border-border-subtle px-2 py-1.5 text-right text-sm tabular-nums focus:border-[#003366] focus:outline-none"
-              />
-              <span className="text-xs text-text-muted">% / yr</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="text-sm text-text-secondary">EBITDA margin</span>
-              <input
-                type="number"
-                step={0.5}
-                value={assumptions.ebitdaMarginPct[0] ?? 0}
-                onChange={(e) => setSeries("ebitdaMarginPct", e.target.value)}
-                className="w-24 rounded-lg border border-border-subtle px-2 py-1.5 text-right text-sm tabular-nums focus:border-[#003366] focus:outline-none"
-              />
-              <span className="text-xs text-text-muted">%</span>
-            </label>
-          </div>
+          <DriverTable
+            lines={model.lines ?? []}
+            drivers={assumptions.lineDrivers ?? {}}
+            projection={projection}
+            years={assumptions.projectionYears}
+            onValue={setDriverValue}
+            onMethod={setDriverMethod}
+          />
           <p className="mt-3 text-xs text-text-muted">
-            These set every projected year at once. Per-year overrides live on the Assumptions sheet
-            of the downloaded file — every figure in the workbook is a live formula, so editing there
-            recalculates the whole model.
+            Every line is projected from its own driver; parents add up their accounts and subtotals
+            are formulas. The downloaded workbook carries the same drivers as live Excel inputs.
           </p>
         </div>
       </div>

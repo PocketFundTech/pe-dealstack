@@ -18,7 +18,9 @@ import { z } from 'zod';
 import { parsePeriod, comparePeriods, type PeriodKind } from '@ai-crm/shared';
 import { comparePeriodChronologically } from '../../utils/periodChrono.js';
 import { computeDerivedFields } from '../financialDerivations.js';
-import { selectBasePeriod, isFullYearRow, withPeriodMeta } from './basePeriod.js';
+import type { LineDriver } from '@ai-crm/shared';
+import { buildLineCatalogue, type LineCatalogue } from './lineCatalogue.js';
+import { seedLineDrivers, resolveLineDrivers } from './drivers.js';
 
 export class UnitMismatchError extends Error {
   code = 'UNIT_MISMATCH';
@@ -40,6 +42,13 @@ const TO_MILLIONS: Record<UnitScale, number> = {
 
 export interface HistoricalRow {
   period: string;
+  /**
+   * Every income-statement line on the statement (standard keys and
+   * `<parent>_<label>` accounts), in millions. The flat fields below are
+   * kept as a summary for callers and older fixtures; the model reads
+   * `lines` (lineCatalogue.rowLines falls back to the flat fields).
+   */
+  lines?: Record<string, number>;
   revenue?: number;
   cogs?: number;
   grossProfit?: number;
@@ -160,6 +169,14 @@ export function normaliseStatements(statements: StatementLike[]): NormalisedFina
       const da = scaled(li.depreciation_amortization) ?? scaled(li.d_and_a) ?? scaled(li.da);
       if (da !== undefined) row.da = da;
 
+      // Every line, scaled — ratios stay out (they aren't amounts).
+      const lines: Record<string, number> = {};
+      for (const [k, v] of Object.entries(li)) {
+        const n = scaled(v);
+        if (n !== undefined && !/(_pct|_ratio|_multiple)$/.test(k)) lines[k] = n;
+      }
+      row.lines = lines;
+
       row._count = Object.values(li).filter((v) => typeof v === 'number').length;
       return row;
     });
@@ -176,6 +193,7 @@ export function normaliseStatements(statements: StatementLike[]): NormalisedFina
     for (const [k, v] of Object.entries(extra)) {
       if (target[k] === undefined && v !== undefined) target[k] = v;
     }
+    if (base.lines && extra.lines) base.lines = { ...extra.lines, ...base.lines };
     byKey.set(r._key, base);
   }
 
@@ -196,6 +214,13 @@ export function normaliseStatements(statements: StatementLike[]): NormalisedFina
 
 const pctArray = z.array(z.number().min(-100).max(500));
 
+export const DRIVER_METHODS = ['PCT_REVENUE', 'GROWTH', 'FIXED', 'SUBTOTAL'] as const;
+const lineDriverSchema = z.object({
+  method: z.enum(DRIVER_METHODS),
+  // Percent for GROWTH / PCT_REVENUE (bounded in the route), millions for FIXED.
+  values: z.array(z.number().min(-1e7).max(1e7)).max(10),
+});
+
 export const assumptionsSchema = z.object({
   // Entry
   entryMultiple: z.number().positive().max(100),
@@ -209,12 +234,15 @@ export const assumptionsSchema = z.object({
   cashSweepPct: z.number().min(0).max(100),
   // Operating
   projectionYears: z.number().int().min(1).max(10),
-  revenueGrowthPct: pctArray,
-  ebitdaMarginPct: pctArray,
+  /** Per P&L line (fix plan E1) — see drivers.ts. Optional: rows saved before E1 have none. */
+  lineDrivers: z.record(z.string(), lineDriverSchema).optional(),
+  /** Pre-E1 fields, still accepted and migrated into lineDrivers on read. */
+  revenueGrowthPct: pctArray.optional(),
+  ebitdaMarginPct: pctArray.optional(),
+  daPctRevenue: z.number().min(0).max(100).optional(),
   capexPctRevenue: z.number().min(0).max(100),
   nwcPctRevenue: z.number().min(-100).max(100),
   taxRate: z.number().min(0).max(60),
-  daPctRevenue: z.number().min(0).max(100),
   // Exit & discounting
   exitMultiple: z.number().positive().max(100),
   exitYear: z.number().int().min(1).max(10),
@@ -228,14 +256,11 @@ export const assumptionsSchema = z.object({
 export type ModelAssumptions = z.infer<typeof assumptionsSchema>;
 
 const DEFAULT_PROJECTION_YEARS = 5;
-/** Growth bounds. Extrapolating one explosive year produces a fantasy. */
-const MAX_SEEDED_GROWTH = 30;
-const MIN_SEEDED_GROWTH = -15;
 
-function cagrPct(first: number, last: number, years: number): number | null {
-  if (first <= 0 || last <= 0 || years <= 0) return null;
-  return (Math.pow(last / first, 1 / years) - 1) * 100;
-}
+/** Assumptions with a driver for every line of the deal's catalogue. */
+export type ResolvedAssumptions = Omit<ModelAssumptions, 'lineDrivers' | 'revenueGrowthPct' | 'ebitdaMarginPct' | 'daPctRevenue'> & {
+  lineDrivers: Record<string, LineDriver>;
+};
 
 export interface DealSeed {
   evMultiple?: number | null;
@@ -245,42 +270,17 @@ export interface DealSeed {
 /**
  * Starting assumptions derived from history.
  *
- * Conservative by construction: growth is the trailing CAGR clamped to a
- * believable band, margin is held flat at the latest actual, and the exit
- * multiple equals the entry multiple — assuming multiple expansion by
- * default would flatter every return the model produces.
+ * Conservative by construction: every line is held at its historical
+ * full-year average (revenue at the trailing CAGR, clamped to a believable
+ * band), and the exit multiple equals the entry multiple — assuming
+ * multiple expansion by default would flatter every return the model
+ * produces.
  */
 export function deriveDefaults(
   history: HistoricalRow[],
   deal: DealSeed = {},
-): ModelAssumptions {
-  const withRevenue = history.filter((r) => typeof r.revenue === 'number' && r.revenue! > 0);
-  // Growth from full fiscal years over the real span of years — a 9-month
-  // YTD is not a year, and 2021 → 2024 is 3 years even with 2022 missing.
-  const fullYears = withRevenue.map(withPeriodMeta).filter(isFullYearRow);
-  // Labels the parser can't date ("Year 1") keep the old row-count behaviour.
-  const hasMeta = fullYears.length > 0;
-  const years = hasMeta ? fullYears : withRevenue;
-  const latest = years.at(-1);
-  const earliest = years[0];
-
-  let growth = 5;
-  if (latest && earliest && years.length > 1) {
-    const span = hasMeta ? (latest.fiscalYear ?? 0) - (earliest.fiscalYear ?? 0) : years.length - 1;
-    const derived = cagrPct(earliest.revenue!, latest.revenue!, span);
-    if (derived !== null) {
-      growth = Math.max(MIN_SEEDED_GROWTH, Math.min(MAX_SEEDED_GROWTH, derived));
-    }
-  }
-
-  // Margin from the base period (LTM or last full year), never a YTD.
-  const base = selectBasePeriod(history)?.row;
-  let margin = 15;
-  if (base?.revenue && typeof base.ebitda === 'number' && base.revenue !== 0) {
-    const derived = (base.ebitda / base.revenue) * 100;
-    if (Number.isFinite(derived)) margin = Math.max(-50, Math.min(80, derived));
-  }
-
+  catalogue: LineCatalogue = buildLineCatalogue(history),
+): ResolvedAssumptions {
   const projectionYears = DEFAULT_PROJECTION_YEARS;
   const entryMultiple = deal.evMultiple && deal.evMultiple > 0 ? deal.evMultiple : 5;
 
@@ -296,12 +296,10 @@ export function deriveDefaults(
     cashSweepPct: 50,
 
     projectionYears,
-    revenueGrowthPct: Array.from({ length: projectionYears }, () => Math.round(growth * 10) / 10),
-    ebitdaMarginPct: Array.from({ length: projectionYears }, () => Math.round(margin * 10) / 10),
+    lineDrivers: seedLineDrivers(history, catalogue, projectionYears),
     capexPctRevenue: 3,
     nwcPctRevenue: 10,
     taxRate: 25,
-    daPctRevenue: 3,
 
     // Same as entry: no assumed multiple expansion.
     exitMultiple: entryMultiple,
@@ -312,4 +310,28 @@ export function deriveDefaults(
     unitScale: 'MILLIONS',
     currency: (deal.currency || 'USD').toUpperCase(),
   };
+}
+
+/**
+ * Saved (possibly partial, possibly pre-E1) assumptions → a complete set
+ * with a driver for every catalogue line. Saved values win; anything missing
+ * comes from the derived defaults; legacy growth / margin are migrated.
+ */
+export function resolveAssumptions(
+  saved: Partial<ModelAssumptions> | null | undefined,
+  history: HistoricalRow[],
+  deal: DealSeed = {},
+  catalogue: LineCatalogue = buildLineCatalogue(history),
+): ResolvedAssumptions {
+  const defaults = deriveDefaults(history, deal, catalogue);
+  if (!saved) return defaults;
+  const { lineDrivers, revenueGrowthPct, ebitdaMarginPct, daPctRevenue, ...rest } = saved;
+  const merged = { ...defaults, ...rest } as ResolvedAssumptions;
+  const years = merged.projectionYears;
+  const seeded = years === defaults.projectionYears ? defaults.lineDrivers : seedLineDrivers(history, catalogue, years);
+  merged.lineDrivers = resolveLineDrivers(
+    lineDrivers, { revenueGrowthPct, ebitdaMarginPct, daPctRevenue }, catalogue.lines, seeded, years,
+  );
+  merged.exitYear = Math.min(merged.exitYear, years);
+  return merged;
 }

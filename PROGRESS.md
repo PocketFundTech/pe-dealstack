@@ -5,6 +5,27 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 84 — October 1, 2026
+
+#### Timestamp: October 1, 2026 — 21:55 IST
+
+#### Goal: Model builder fix plan **E1** — model every P&L line (branch `feat/model-line-items-scenarios`, stacked on PR #165).
+
+**Analyst feedback (Pushkar, SRM deal):** "the build model feature is really good; the main problem is it's only using the main figures — every line item should be modelled out."
+
+**E1 · Every P&L line is now modelled**
+- **Root cause:** the model carried six fixed figures (revenue, COGS, GP, EBITDA, D&A, net income) on hard-coded rows (`PL_ROWS`, `ASSUMPTION_CELLS`), and projected EBITDA from one growth + one margin input. Every raw account (cement, fly ash, insurance …) was thrown away.
+- **Line catalogue** (`dealModel/lineCatalogue.ts`): the standard income-statement vocabulary (revenue → net income, incl. other income / expense) plus every raw account the extractor filed under a parent (`cogs_cement`, `revenue_discounts` …), nested under that parent. A parent is the sum of its accounts; where the accounts don't add up to the printed total an "Other (unallocated)" line keeps it tied. Gaps the statement implies are filled and shown grey (COGS = revenue − GP, operating costs = GP − EBITDA, D&A = EBITDA − EBIT).
+- **Per-line drivers** (`dealModel/drivers.ts`): each input line has `{ method: GROWTH | PCT_REVENUE | FIXED, values per year }`, seeded from **full fiscal years only** (revenue at the CAGR, costs at their average % of revenue, other income at its average amount). Subtotals, parents, interest (debt schedule) and tax (tax rate × EBT) are formulas, never inputs.
+- **Old saved models still load:** rows saved with one growth / margin are migrated in code — revenue lines get the saved growth, the saved margin is split across cost lines in their historical proportions (projected EBITDA margin equals the saved margin exactly), D&A keeps its %.
+- **Workbook** split from one 700-line file into `workbook/` modules (registry, assumptions, historicals, projections, returns, sensitivity, cover/notes). A generated registry hands out every address. Assumptions has a blue driver row per line with a method dropdown; Projections and Historicals have a row per line with accounts outlined under their parent; subtotals are formulas on both sheets. Exit EBITDA now follows the exit-year input.
+- **Found while verifying:** revenue accounts' formulas referenced the revenue row (their own sum) in an untaken IF branch — a circular reference to Google Sheets. Fixed, with a static circular-reference test.
+- **Panel:** per-line driver table (method + value per year, collapsible parents), and the preview now runs the shared calculator (`@ai-crm/shared` `projectModel`, margin × revenue), which recalculated to the workbook's exact IRR / MoM / exit EV on the SRM fixture.
+
+**Verification:** see the E2 entry below for the final counts.
+
+---
+
 ### Session 83 — September 30, 2026
 
 #### Timestamp: September 30, 2026 — 13:53 IST

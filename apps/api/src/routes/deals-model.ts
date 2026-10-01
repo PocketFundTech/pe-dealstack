@@ -20,7 +20,7 @@ import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import {
   normaliseStatements,
-  deriveDefaults,
+  resolveAssumptions,
   assumptionsSchema,
   UnitMismatchError,
   type ModelAssumptions,
@@ -28,6 +28,7 @@ import {
 } from '../services/dealModel/assumptions.js';
 import { buildModelWorkbook } from '../services/dealModel/workbook.js';
 import { selectBasePeriod } from '../services/dealModel/basePeriod.js';
+import { buildLineCatalogue, baseColumnValues, evaluateLine } from '../services/dealModel/lineCatalogue.js';
 
 const router = Router();
 
@@ -73,13 +74,21 @@ function dealEbitdaMillions(ebitda: unknown): number | null {
  * doesn't exist — a silent #REF! rather than a clear 400.
  */
 const coherentAssumptions = assumptionsSchema
-  .refine((a) => a.revenueGrowthPct.length === a.projectionYears, {
+  .refine((a) => !a.revenueGrowthPct || a.revenueGrowthPct.length === a.projectionYears, {
     message: 'revenueGrowthPct must have exactly one entry per projected year',
     path: ['revenueGrowthPct'],
   })
-  .refine((a) => a.ebitdaMarginPct.length === a.projectionYears, {
+  .refine((a) => !a.ebitdaMarginPct || a.ebitdaMarginPct.length === a.projectionYears, {
     message: 'ebitdaMarginPct must have exactly one entry per projected year',
     path: ['ebitdaMarginPct'],
+  })
+  .refine((a) => Object.values(a.lineDrivers ?? {}).every((d) => d.method === 'SUBTOTAL' || d.values.length === a.projectionYears), {
+    message: 'every line driver must have exactly one value per projected year',
+    path: ['lineDrivers'],
+  })
+  .refine((a) => Object.values(a.lineDrivers ?? {}).every((d) => d.method === 'FIXED' || d.values.every((v) => v >= -100 && v <= 500)), {
+    message: 'growth and % of revenue drivers must be between -100% and 500%',
+    path: ['lineDrivers'],
   })
   .refine((a) => a.exitYear <= a.projectionYears, {
     message: 'exitYear cannot be beyond the projection window',
@@ -139,6 +148,33 @@ async function loadModelInputs(dealId: string, orgId: string): Promise<LoadedDea
   };
 }
 
+function dealSeed(inputs: LoadedDeal) {
+  return { evMultiple: inputs.deal.evMultiple, currency: inputs.currency };
+}
+
+/**
+ * The line catalogue and base column the workbook projects from (LTM or
+ * last full year) — the panel's driver table and preview read these rather
+ * than guessing from history.
+ */
+function modelStructure(inputs: LoadedDeal, catalogue: ReturnType<typeof buildLineCatalogue>) {
+  const base = selectBasePeriod(inputs.history);
+  const baseCol = baseColumnValues(catalogue, inputs.history, base, inputs.deal.ebitdaMillions);
+  return {
+    lines: catalogue.lines,
+    baseValues: baseCol.values,
+    base: base
+      ? {
+          label: base.label,
+          basis: base.basis,
+          revenue: evaluateLine(catalogue.lines, baseCol.values, 'revenue'),
+          ebitda: baseCol.entrySource === 'missing' ? null : evaluateLine(catalogue.lines, baseCol.values, 'ebitda'),
+          entrySource: baseCol.entrySource,
+        }
+      : null,
+  };
+}
+
 async function loadSavedAssumptions(dealId: string, orgId: string): Promise<ModelAssumptions | null> {
   const { data } = await supabase
     .from('DealModel')
@@ -159,6 +195,23 @@ function sendModelError(res: Parameters<typeof router.get>[1] extends never ? ne
   return res.status(500).json({ error: 'Failed to build the model' });
 }
 
+/**
+ * Body may carry unsaved edits from the panel — merge over the saved set so
+ * "download" always reflects what the user is looking at. An invalid body is
+ * ignored rather than failing the download.
+ */
+function withEdits(
+  base: ReturnType<typeof resolveAssumptions>, body: unknown, inputs: LoadedDeal,
+  catalogue: ReturnType<typeof buildLineCatalogue>,
+) {
+  const edits = (body && typeof body === 'object' ? body : {}) as Partial<ModelAssumptions>;
+  const merged: Partial<ModelAssumptions> = { ...base, ...edits };
+  // A pre-E1 client posting growth / margin edits: migrate those, not the saved drivers.
+  if (!edits.lineDrivers && (edits.revenueGrowthPct || edits.ebitdaMarginPct)) delete merged.lineDrivers;
+  const parsed = coherentAssumptions.safeParse(merged);
+  return parsed.success ? resolveAssumptions(parsed.data, inputs.history, dealSeed(inputs), catalogue) : base;
+}
+
 // GET /api/deals/:dealId/model
 router.get('/:dealId/model', async (req, res) => {
   try {
@@ -171,23 +224,14 @@ router.get('/:dealId/model', async (req, res) => {
     if (!inputs) return res.status(404).json({ error: 'Deal not found' });
 
     const saved = await loadSavedAssumptions(dealId, orgId);
-    const assumptions = saved ?? deriveDefaults(inputs.history, {
-      evMultiple: inputs.deal.evMultiple,
-      currency: inputs.currency,
-    });
+    const catalogue = buildLineCatalogue(inputs.history);
+    const assumptions = resolveAssumptions(saved, inputs.history, dealSeed(inputs), catalogue);
 
     res.json({
       assumptions,
       isDerived: !saved,
       history: inputs.history,
-      // The column the workbook projects from (LTM or last full year) — the
-      // panel preview reads this rather than guessing from history.
-      base: (() => {
-        const base = selectBasePeriod(inputs.history);
-        if (!base) return null;
-        const ebitda = typeof base.row.ebitda === 'number' ? base.row.ebitda : inputs.deal.ebitdaMillions;
-        return { label: base.label, basis: base.basis, revenue: base.row.revenue ?? null, ebitda: ebitda ?? null };
-      })(),
+      ...modelStructure(inputs, catalogue),
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -253,15 +297,10 @@ router.post('/:dealId/model/export', async (req, res) => {
     }
 
     const saved = await loadSavedAssumptions(dealId, orgId);
-    const base = saved ?? deriveDefaults(inputs.history, {
-      evMultiple: inputs.deal.evMultiple,
-      currency: inputs.currency,
-    });
-
-    // Body may carry unsaved edits from the panel — merge over the base so
-    // "download" always reflects what the user is looking at.
-    const merged = coherentAssumptions.safeParse({ ...base, ...(req.body ?? {}) });
-    const assumptions = merged.success ? merged.data : base;
+    const catalogue = buildLineCatalogue(inputs.history);
+    const assumptions = withEdits(
+      resolveAssumptions(saved, inputs.history, dealSeed(inputs), catalogue), req.body, inputs, catalogue,
+    );
 
     const buffer = await buildModelWorkbook({
       assumptions,

@@ -167,6 +167,28 @@ describe('GET /api/deals/:dealId/model', () => {
     expect((await request(app).get('/api/deals/other/model')).status).toBe(404);
   });
 
+  it('returns the line catalogue, base values and a driver per line (E1)', async () => {
+    statements = [stmt('2023', 9, 1.5, { lineItems: { revenue: 9, cogs: 5, cogs_cement: 3, ebitda: 1.5 } }),
+      stmt('2024', 10, 2, { lineItems: { revenue: 10, cogs: 6, cogs_cement: 3.5, ebitda: 2 } })];
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model');
+    const keys = res.body.lines.map((l: { key: string }) => l.key);
+    expect(keys).toEqual(expect.arrayContaining(['revenue', 'cogs', 'cogs_cement', 'cogs__other', 'gross_profit', 'ebitda']));
+    expect(res.body.baseValues.cogs_cement).toBe(3.5);
+    expect(res.body.base).toMatchObject({ revenue: 10, ebitda: 2, entrySource: 'base' });
+    expect(res.body.assumptions.lineDrivers.cogs_cement.method).toBe('PCT_REVENUE');
+  });
+
+  it('loads a pre-E1 saved row by migrating growth / margin into line drivers', async () => {
+    modelRow = { id: 'model-1', name: 'Base case', assumptions: { entryMultiple: 7, revenueGrowthPct: [6, 6, 6, 6, 6], ebitdaMarginPct: [25, 25, 25, 25, 25] } };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model');
+    expect(res.body.assumptions.entryMultiple).toBe(7);
+    expect(res.body.assumptions.lineDrivers.revenue).toEqual({ method: 'GROWTH', values: [6, 6, 6, 6, 6] });
+    expect(res.body.assumptions.lineDrivers.total_opex.values[0]).toBeCloseTo(75, 6);
+    expect(res.body.assumptions.revenueGrowthPct).toBeUndefined();
+  });
+
   it('400s a deal whose financials are in two currencies', async () => {
     statements = [stmt('2023', 9, 1.5), stmt('2024', 10, 2, { currency: 'EUR' })];
     const app = await buildApp();
@@ -216,6 +238,26 @@ describe('PUT /api/deals/:dealId/model', () => {
       .send({ ...valid, revenueGrowthPct: [8, 8] });
 
     expect(res.status).toBe(400);
+    expect(upserted).toBeNull();
+  });
+
+  it('saves per-line drivers', async () => {
+    const { revenueGrowthPct: _g, ebitdaMarginPct: _m, daPctRevenue: _d, ...rest } = valid;
+    const body = { ...rest, lineDrivers: { revenue: { method: 'GROWTH', values: [5, 5, 5, 5, 5] }, ebitda: { method: 'SUBTOTAL', values: [] } } };
+    const app = await buildApp();
+    const res = await request(app).put('/api/deals/deal-1/model').send(body);
+    expect(res.status).toBe(200);
+    expect(upserted.assumptions.lineDrivers.revenue.values).toEqual([5, 5, 5, 5, 5]);
+  });
+
+  it('rejects a line driver with the wrong number of years, or an absurd %', async () => {
+    const app = await buildApp();
+    const short = await request(app).put('/api/deals/deal-1/model')
+      .send({ ...valid, lineDrivers: { revenue: { method: 'GROWTH', values: [5] } } });
+    expect(short.status).toBe(400);
+    const absurd = await request(app).put('/api/deals/deal-1/model')
+      .send({ ...valid, lineDrivers: { cogs: { method: 'PCT_REVENUE', values: [900, 9, 9, 9, 9] } } });
+    expect(absurd.status).toBe(400);
     expect(upserted).toBeNull();
   });
 
