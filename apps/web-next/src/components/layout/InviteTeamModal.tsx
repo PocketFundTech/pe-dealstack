@@ -5,14 +5,11 @@ import { createPortal } from "react-dom";
 import { api, ApiError } from "@/lib/api";
 import { BulkCsvImportPanel } from "./InviteTeamModal.csv";
 import { RowDealPicker, type DealOption } from "./RowDealPicker";
+import { ROLE_OPTIONS, type ApiRole } from "@/lib/roles";
 
-type Role = "VIEWER" | "MEMBER" | "ADMIN";
-
-const ROLES: { value: Role; label: string; description: string }[] = [
-  { value: "VIEWER", label: "Analyst", description: "View-only access" },
-  { value: "MEMBER", label: "Associate", description: "Can edit deals" },
-  { value: "ADMIN", label: "Admin", description: "Full access" },
-];
+// Shared with onboarding, the team list and accept-invite (lib/roles.ts).
+type Role = ApiRole;
+const ROLES = ROLE_OPTIONS;
 
 interface InviteRow {
   id: number;

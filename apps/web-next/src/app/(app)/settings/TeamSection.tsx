@@ -3,24 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { InviteTeamModal } from "@/components/layout/InviteTeamModal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { RequireMfaToggle } from "./TeamSection.requireMfa";
-
-// ─── Types ──────────────────────────────────────────────────────────
-
-interface Invitation {
-  id: string;
-  email: string;
-  role: string;
-  status: "PENDING" | "ACCEPTED" | "EXPIRED";
-  inviteUrl?: string;
-  createdAt: string;
-}
-
-const STATUS_STYLES: Record<string, string> = {
-  PENDING: "bg-amber-50 text-amber-700 border-amber-200",
-  ACCEPTED: "bg-green-50 text-green-700 border-green-200",
-  EXPIRED: "bg-gray-50 text-gray-600 border-gray-200",
-};
+import { InviteRow, type Invitation } from "./TeamSection.inviteRow";
 
 // ─── Component ──────────────────────────────────────────────────────
 
@@ -31,16 +16,21 @@ export function TeamSection({
 }) {
   const [invites, setInvites] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<Invitation | null>(null);
 
   const loadInvitations = useCallback(async () => {
     try {
       const data = await api.get<Invitation[]>("/invitations");
       setInvites(Array.isArray(data) ? data : []);
+      setLoadError(null);
     } catch (err) {
+      // Don't pretend the list is empty — say it failed and offer Retry.
       console.warn("[settings/team] failed to load invitations:", err);
-      setInvites([]);
+      setLoadError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
     }
@@ -49,6 +39,39 @@ export function TeamSection({
   useEffect(() => {
     loadInvitations();
   }, [loadInvitations]);
+
+  const resend = async (inv: Invitation) => {
+    setBusyId(inv.id);
+    try {
+      const res = await api.post<{ emailSent?: boolean }>(`/invitations/${inv.id}/resend`, {});
+      if (res?.emailSent === false) {
+        onToast("Invite renewed, but the email couldn't be sent — copy the link instead.", "error");
+      } else {
+        onToast(`Invitation resent to ${inv.email}`, "success");
+      }
+      await loadInvitations();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "Couldn't resend the invitation", "error");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const confirmRevoke = async () => {
+    const inv = revokeTarget;
+    setRevokeTarget(null);
+    if (!inv) return;
+    setBusyId(inv.id);
+    try {
+      await api.delete(`/invitations/${inv.id}`);
+      onToast(`Invitation to ${inv.email} revoked`, "success");
+      await loadInvitations();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "Couldn't revoke the invitation", "error");
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   // Auto-open modal if hash is #invite
   useEffect(() => {
@@ -109,8 +132,26 @@ export function TeamSection({
           </button>
         </div>
         <div className="p-6">
-          {loading ? (
+          {loading && invites.length === 0 ? (
             <p className="text-sm text-text-muted text-center py-4">Loading invitations...</p>
+          ) : loadError ? (
+            <div className="text-center py-6">
+              <span className="material-symbols-outlined text-red-500 text-[32px]">error</span>
+              <p className="text-sm text-text-main mt-2">Couldn&apos;t load invitations.</p>
+              <p className="text-xs text-text-muted">{loadError}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoading(true);
+                  setLoadError(null);
+                  void loadInvitations();
+                }}
+                className="mt-3 px-4 py-2 text-white text-sm font-semibold rounded-lg"
+                style={{ backgroundColor: "#003366" }}
+              >
+                Retry
+              </button>
+            </div>
           ) : invites.length === 0 ? (
             <div className="text-center py-6">
               <span className="material-symbols-outlined text-text-muted text-[40px]">
@@ -124,50 +165,31 @@ export function TeamSection({
           ) : (
             <div className="space-y-2">
               {invites.map((inv) => (
-                <div
+                <InviteRow
                   key={inv.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-border-subtle gap-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-text-main truncate">{inv.email}</p>
-                    <p className="text-xs text-text-muted">
-                      Role: {inv.role} &middot; Sent{" "}
-                      {new Date(inv.createdAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {inv.status === "PENDING" && inv.inviteUrl && (
-                      <button
-                        type="button"
-                        onClick={() => copyLink(inv.inviteUrl!, inv.id)}
-                        className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors ${
-                          copiedId === inv.id
-                            ? "bg-green-50 text-green-700 border-green-200"
-                            : "border-border-subtle bg-white text-text-main hover:bg-gray-50"
-                        }`}
-                        title="Copy invite link"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">
-                          {copiedId === inv.id ? "check" : "link"}
-                        </span>
-                        {copiedId === inv.id ? "Copied" : "Copy Link"}
-                      </button>
-                    )}
-                    <span
-                      className={`inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider border ${
-                        STATUS_STYLES[inv.status] || STATUS_STYLES.EXPIRED
-                      }`}
-                    >
-                      {inv.status}
-                    </span>
-                  </div>
-                </div>
+                  inv={inv}
+                  copied={copiedId === inv.id}
+                  busy={busyId === inv.id}
+                  onCopy={() => inv.inviteUrl && copyLink(inv.inviteUrl, inv.id)}
+                  onResend={() => resend(inv)}
+                  onRevoke={() => setRevokeTarget(inv)}
+                />
               ))}
             </div>
           )}
           <RequireMfaToggle onToast={onToast} />
         </div>
       </section>
+
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        title="Revoke invitation?"
+        message={`${revokeTarget?.email ?? "This person"} won't be able to use their invite link any more. You can invite them again later.`}
+        confirmLabel="Revoke invite"
+        variant="danger"
+        onConfirm={confirmRevoke}
+        onCancel={() => setRevokeTarget(null)}
+      />
 
       {showInviteModal && (
         <InviteTeamModal
