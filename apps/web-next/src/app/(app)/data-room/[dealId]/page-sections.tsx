@@ -3,7 +3,7 @@
 // Page sections specific to the [dealId] route — extracted from page.tsx so
 // the page itself stays under the 500-line cap. components.tsx already
 // holds the modal-shaped pieces (CreateFolderModal, UploadConfirmModal,
-// LinkToDealModal, DataRoomHeader, DataRoomLoading, VDRToast); this file
+// LinkToDealModal, DataRoomHeader, DataRoomLoading); this file
 // holds the layout fragments that only this page composes (search-status
 // banner, file-list section, folder sidebar).
 

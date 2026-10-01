@@ -461,32 +461,3 @@ export function LinkToDealModal({
     </div>
   );
 }
-
-/* ────────────────────────────────────────────────────────────────────── */
-/*  Toast notification (inline, no provider needed)                      */
-/* ────────────────────────────────────────────────────────────────────── */
-
-interface ToastProps {
-  message: string;
-  type: "success" | "error" | "info";
-  onDismiss: () => void;
-}
-
-const TOAST_STYLES: Record<string, { bg: string; border: string; icon: string; iconColor: string }> = {
-  success: { bg: "bg-green-50", border: "border-green-200", icon: "check_circle", iconColor: "text-green-600" },
-  error: { bg: "bg-red-50", border: "border-red-200", icon: "error", iconColor: "text-red-600" },
-  info: { bg: "bg-blue-50", border: "border-blue-200", icon: "info", iconColor: "text-blue-700" },
-};
-
-export function VDRToast({ message, type, onDismiss }: ToastProps) {
-  const s = TOAST_STYLES[type] || TOAST_STYLES.info;
-  return (
-    <div className={`fixed bottom-6 right-6 z-[9998] flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border max-w-sm ${s.bg} ${s.border}`}>
-      <span className={`material-symbols-outlined text-xl shrink-0 ${s.iconColor}`}>{s.icon}</span>
-      <p className="text-sm text-slate-800 flex-1">{message}</p>
-      <button type="button" onClick={onDismiss} className="text-slate-400 hover:text-slate-600 shrink-0">
-        <span className="material-symbols-outlined text-lg">close</span>
-      </button>
-    </div>
-  );
-}

@@ -96,13 +96,13 @@ describe('generateFolderInsights', () => {
     expect(result?.missingDocuments[0]).toMatchObject({ id: 'md-1', name: 'Unknown Document' });
   });
 
-  it('returns null (not a throw) when the model call errors', async () => {
+  // The route needs the real reason (out of credit, rate limit…) to tell
+  // the user; null is reserved for "Anthropic isn't configured".
+  it('passes a model-call error up to the route instead of hiding it as null', async () => {
     isAnthropicAvailable.mockReturnValue(true);
-    trackedClaudeMessage.mockRejectedValue(new Error('rate limited'));
+    trackedClaudeMessage.mockImplementation(async () => { throw new Error('rate limited'); });
 
     const { generateFolderInsights } = await getGenerator();
-    const result = await generateFolderInsights('Financials', DEAL_CONTEXT, DOCS);
-
-    expect(result).toBeNull();
+    await expect(generateFolderInsights('Financials', DEAL_CONTEXT, DOCS)).rejects.toThrow('rate limited');
   });
 });

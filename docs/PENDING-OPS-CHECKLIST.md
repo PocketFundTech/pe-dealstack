@@ -14,7 +14,7 @@ Most urgent first. Tick each box once it's done and verified.
 
 These couldn't be run from Claude Code: the service keys can't change the database structure, and the automated production-write checks blocked the data update.
 
-- [ ] **OPS-4 — Run `apps/api/usage-cost-accuracy-migration.sql`** (safe to re-run)
+- [x] ✅ *Run and verified by the founder 2026-10-02.* **OPS-4 — Run `apps/api/usage-cost-accuracy-migration.sql`** (safe to re-run)
   - Fixes AI cost tracking:
     - Sonnet 5 is currently priced at $3/$15 instead of $2/$10.
     - Sonnet 4.6 is missing from the price list, so its calls record $0.
@@ -26,7 +26,7 @@ These couldn't be run from Claude Code: the service keys can't change the databa
     -- claude-sonnet-5 = 2 / 10, claude-sonnet-4-6 = 3 / 15
     select to_regclass('public."UsageReconciliation"');  -- not null
     ```
-- [ ] **OPS-5 — Run `apps/api/deal-stage-cleanup.sql`** (data only, safe to re-run)
+- [x] ✅ *Run and verified by the founder 2026-10-02 (0 hidden deals remain).* **OPS-5 — Run `apps/api/deal-stage-cleanup.sql`** (data only, safe to re-run)
   - Moves deals saved with stages the pipeline doesn't show onto real stages: `SCREENING` → Initial Review, `LOI_NEGOTIATION` → LOI Submitted. Until it runs, those deals are hidden from the Deals kanban.
   - Optional preview first: run the commented `SELECT` at the top of the file.
   - Verify:
@@ -107,7 +107,7 @@ Filled in as each feature ships. Each row references the PR + feature.
 
 ## Financials fix plan (2026-10-01)
 
-- [ ] **OPS-FIN-1 — Run `apps/api/financials-source-period-migration.sql`, then the backfill**
+- [x] ✅ *Migration run and verified by the founder 2026-10-02 (6 columns). Backfill script added in PR `fix/qa-retest-followups`; optional.* **OPS-FIN-1 — Run `apps/api/financials-source-period-migration.sql`, then the backfill**
   - Where: Supabase Dashboard → SQL Editor; then `cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts` (try `--dry-run` first)
   - Without it: works, but periods are matched by parsing labels on every write, and reported-vs-model provenance isn't stored (it's re-derived from file names).
   - Then: **Re-extract** the Strong Ready Mix deal so its balance sheet / cash flow move off `SRM_Valuation_Summary_.xlsx`.

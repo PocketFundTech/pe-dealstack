@@ -25,8 +25,11 @@ vi.mock('../src/middleware/orgScope.js', () => ({
 }));
 
 const generateFolderInsights = vi.fn();
+// Plain-function rejection: a throwing vi.fn behind the route's dynamic
+// import trips a Vitest 4 quirk, so failures are injected here instead.
+let insightsError: Error | null = null;
 vi.mock('../src/services/folderInsightsGenerator.js', () => ({
-  generateFolderInsights: (...args: any[]) => generateFolderInsights(...args),
+  generateFolderInsights: (...args: any[]) => (insightsError ? Promise.reject(insightsError) : generateFolderInsights(...args)),
 }));
 
 let folderRow: any;
@@ -84,6 +87,7 @@ beforeEach(() => {
   dealRow = { name: 'Project Neptune', industry: 'Software', stage: 'DUE_DILIGENCE', revenue: 10, ebitda: 2, company: null };
   documents = [{ id: 'doc-1', name: 'CIM.pdf', mimeType: 'application/pdf', fileSize: 12345, aiAnalysis: null, createdAt: '2026-09-01T00:00:00Z' }];
   mockSupabase.from.mockImplementation(tableMock());
+  insightsError = null;
 });
 
 describe('POST /api/folders/:id/generate-insights', () => {
@@ -96,6 +100,21 @@ describe('POST /api/folders/:id/generate-insights', () => {
     expect(res.status).toBe(503);
     expect(res.body.error).toMatch(/ANTHROPIC_API_KEY/);
     expect(res.body.error).not.toMatch(/OPENAI_API_KEY|OpenAI/i);
+  });
+
+  // Live QA 2026-10-01: production was out of Anthropic credit, but the
+  // panel said "Check that ANTHROPIC_API_KEY is configured" — the route
+  // reported every AI failure as a missing key.
+  it('reports an out-of-credit AI provider as such, not as a missing key', async () => {
+    insightsError = Object.assign(new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}'), { status: 400 });
+    const app = await buildApp();
+
+    const res = await request(app).post('/api/folders/folder-1/generate-insights').send({});
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/AI service \(Anthropic\).*credits are exhausted/i);
+    expect(res.body.error).not.toMatch(/ANTHROPIC_API_KEY/);
   });
 
   it('saves and returns the generated insights in the shape the VDR UI expects', async () => {
