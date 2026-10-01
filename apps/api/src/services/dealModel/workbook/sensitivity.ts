@@ -35,11 +35,13 @@ export function writeSensitivity(sheet: ExcelJS.Worksheet, a: ResolvedAssumption
     rowHead.numFmt = FMT_MULT;
     rowHead.font = { bold: true };
     steps.forEach((exitStep, c) => {
-      // Closed-form MoM-implied IRR at this (entry, exit) pair.
-      // equity0 = EV(entry) + fees - debt ; proceeds = EV(exit) - exit debt
+      // Closed-form MoM-implied IRR at this (entry, exit) pair, with the
+      // debt and cash path of the live case held as it is:
+      // equity0 = EV(entry) + fees + minimum cash − new debt
+      // proceeds = EV(exit) − debt at exit + cash at exit
       const entryEv = `${entryBasis}*(${S('entryMultiple')}+${entryStep})`;
-      const equity0 = `(${entryEv})*(1+${S('transactionFeesPct')})-${Rt}!$B$${R.debt}`;
-      const proceeds = `${Rt}!$B$${R.exitEbitda}*(${S('exitMultiple')}+${exitStep})-${Rt}!$B$${R.exitDebt}`;
+      const equity0 = `(${entryEv})*(1+${S('transactionFeesPct')})+${Rt}!$B$${R.minCash}-${Rt}!$B$${R.totalDebt}`;
+      const proceeds = `${Rt}!$B$${R.exitEbitda}*(${S('exitMultiple')}+${exitStep})-${Rt}!$B$${R.exitDebt}+${Rt}!$B$${R.exitCash}`;
       const cell = sheet.getCell(row, 2 + c);
       cell.value = fx(`IFERROR(((${proceeds})/(${equity0}))^(1/${S('exitYear')})-1,"n/a")`);
       cell.numFmt = FMT_PCT;

@@ -2,7 +2,7 @@
 // The arithmetic itself lives in @ai-crm/shared (projectModel) so the
 // preview is the same calculation the API and the workbook's formulas do.
 
-import type { CalcAssumptions, CaseSummary, DriverMethod, LineDriver, ModelCase, ModelLine } from "@ai-crm/shared";
+import type { CalcAssumptions, CaseSummary, DriverMethod, LineDriver, ModelCase, ModelLine, OpeningBalances } from "@ai-crm/shared";
 
 export interface Assumptions extends CalcAssumptions {
   wacc: number;
@@ -26,6 +26,8 @@ export interface ModelStructure {
   baseValues: Record<string, number>;
   /** Base / entry column the workbook projects from (LTM or last full year). */
   base?: { label: string; basis: string; revenue: number | null; ebitda: number | null; entrySource?: string } | null;
+  /** Latest full-year balance sheet (fix plan E3): Days working-capital base + net debt refinanced at entry. */
+  opening?: OpeningBalances;
   currency: string;
   unitScale: string;
 }
@@ -38,8 +40,8 @@ export interface CasesResponse extends ModelStructure {
 
 export type ScalarKey =
   | "entryMultiple" | "transactionFeesPct" | "debtQuantum" | "interestRate"
-  | "amortPctPerYear" | "cashSweepPct" | "capexPctRevenue" | "nwcPctRevenue"
-  | "taxRate" | "exitMultiple" | "exitYear" | "wacc" | "dscrTarget";
+  | "amortPctPerYear" | "debt2Quantum" | "debt2InterestRate" | "debt2AmortPct"
+  | "cashSweepPct" | "minCash" | "taxRate" | "exitMultiple" | "exitYear" | "wacc" | "dscrTarget";
 
 export const SCALAR_GROUPS: Array<{ title: string; fields: Array<{ key: ScalarKey; label: string; suffix: string; step?: number }> }> = [
   {
@@ -50,21 +52,11 @@ export const SCALAR_GROUPS: Array<{ title: string; fields: Array<{ key: ScalarKe
     ],
   },
   {
-    title: "Capital structure",
+    // Debt tranches, sweep and minimum cash live in the balance-sheet section (deal-model-balance.tsx).
+    title: "Tax & covenant",
     fields: [
-      { key: "debtQuantum", label: "Debt", suffix: "x EBITDA", step: 0.25 },
-      { key: "interestRate", label: "Interest rate", suffix: "%", step: 0.25 },
-      { key: "amortPctPerYear", label: "Amortisation", suffix: "% / yr", step: 1 },
-      { key: "cashSweepPct", label: "Cash sweep", suffix: "% of FCF", step: 5 },
-      { key: "dscrTarget", label: "DSCR target", suffix: "x", step: 0.05 },
-    ],
-  },
-  {
-    title: "Cash flow",
-    fields: [
-      { key: "capexPctRevenue", label: "Capex", suffix: "% of revenue", step: 0.5 },
-      { key: "nwcPctRevenue", label: "NWC", suffix: "% of revenue", step: 1 },
       { key: "taxRate", label: "Tax rate", suffix: "%", step: 1 },
+      { key: "dscrTarget", label: "DSCR target", suffix: "x", step: 0.05 },
     ],
   },
   {

@@ -10,12 +10,16 @@
 // ever disagree, the workbook is right.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MODEL_CASES, projectModel, summariseCase, type DriverMethod, type ModelCase } from "@ai-crm/shared";
+import {
+  MODEL_CASES, balanceDriversOf, projectModel, summariseCase,
+  type BalanceDrivers, type BalanceSeriesKey, type DriverMethod, type ModelCase,
+} from "@ai-crm/shared";
 import { api } from "@/lib/api";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { useToast } from "@/providers/ToastProvider";
 import { DriverTable } from "./deal-model-driver-table";
 import { CaseTabs, ScenarioSummary } from "./deal-model-scenarios";
+import { BalanceSection } from "./deal-model-balance";
 import {
   SCALAR_GROUPS, convertDriver, fmtMoney,
   type Assumptions, type CasesResponse, type ModelStructure, type ScalarKey,
@@ -58,12 +62,12 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
 
   const projection = useMemo(() => {
     if (!assumptions || !model?.lines?.length) return null;
-    return projectModel(model.lines, model.baseValues ?? {}, assumptions);
+    return projectModel(model.lines, model.baseValues ?? {}, assumptions, model.opening ?? {});
   }, [assumptions, model]);
 
   const summaries = useMemo(() => {
     if (!cases || !model?.lines?.length || model.base?.entrySource === "missing") return null;
-    return byCase((c) => summariseCase(model.lines, model.baseValues ?? {}, cases[c]));
+    return byCase((c) => summariseCase(model.lines, model.baseValues ?? {}, cases[c], model.opening ?? {}));
   }, [cases, model]);
 
   /** Edit the active case only. */
@@ -93,6 +97,20 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
       return { ...a, lineDrivers: { ...a.lineDrivers, [key]: converted } };
     });
   }, [projection, setAssumptions]);
+
+  /** One year of a working-capital / capex series (fix plan E3), active case only. */
+  const setBalanceValue = useCallback((key: BalanceSeriesKey, year: number, value: number) => {
+    setAssumptions((a) => {
+      const bd = balanceDriversOf(a);
+      return { ...a, balanceDrivers: { ...bd, [key]: bd[key].map((v, y) => (y === year ? value : v)) } };
+    });
+  }, [setAssumptions]);
+
+  /** Working-capital / capex method: structural (one workbook layout), so every case switches. */
+  const setBalanceMethods = useCallback((patch: Partial<Pick<BalanceDrivers, "nwcMethod" | "capexMethod">>) => {
+    setCases((all) => all && byCase((c) => ({ ...all[c], balanceDrivers: { ...balanceDriversOf(all[c]), ...patch } })));
+    setDirty(() => byCase(() => true));
+  }, []);
 
   const save = useCallback(async () => {
     if (!assumptions) return;
@@ -232,7 +250,7 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
                     <input
                       type="number"
                       step={f.step ?? 0.1}
-                      value={assumptions[f.key]}
+                      value={assumptions[f.key] ?? 0}
                       onChange={(e) => set(f.key, e.target.value)}
                       className="w-24 rounded-lg border border-border-subtle px-2 py-1.5 text-right text-sm tabular-nums focus:border-[#003366] focus:outline-none"
                     />
@@ -243,6 +261,18 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
             </div>
           </div>
         ))}
+
+        <div className="md:col-span-2">
+          <BalanceSection
+            assumptions={assumptions}
+            projection={projection}
+            opening={model.opening}
+            currency={model.currency}
+            onSeries={setBalanceValue}
+            onMethods={setBalanceMethods}
+            onScalar={set}
+          />
+        </div>
 
         <div className="md:col-span-2">
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">

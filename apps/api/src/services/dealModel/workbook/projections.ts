@@ -2,10 +2,11 @@
 // YTD) carried in as values; every projected cell is a live formula driven
 // by the line's driver on Assumptions. Parents are sums of their accounts,
 // subtotals are formulas, interest comes from the debt schedule and tax from
-// the tax rate.
+// the tax rate. Below the P&L, the cash-flow block (fix plan E3): working
+// capital, capex, unlevered and levered FCF (workingCapital.ts).
 
 import type ExcelJS from 'exceljs';
-import { DRIVER_METHOD_LABELS, type ModelLine } from '@ai-crm/shared';
+import { DRIVER_METHOD_LABELS, type ModelLine, type OpeningBalances } from '@ai-crm/shared';
 import type { ResolvedAssumptions } from '../assumptions.js';
 import type { BasePeriod } from '../basePeriod.js';
 import type { BaseColumn } from '../lineCatalogue.js';
@@ -15,6 +16,7 @@ import {
   SHEETS, FMT_MONEY, INPUT_FONT, colLetter, fx, label, styleHeaderRow, title, unitsText, type WorkbookContext,
 } from './xlsx.js';
 import { writeMarginRows } from './historicals.js';
+import { writeCashFlowBlock } from './workingCapital.js';
 
 /** Where a block's formulas read drivers and scalars from. */
 export interface DriverRefs {
@@ -53,14 +55,6 @@ export function projectedLineFormula(
   }
 }
 
-/** Unlevered FCF = EBIT × (1 − tax) + D&A − capex − change in NWC. */
-export function fcfFormula(col: string, prev: string, row: (key: string) => number, refs: DriverRefs): string {
-  const rev = row('revenue');
-  return `${col}${row('ebit')}*(1-${refs.scalar('taxRate')})+${col}${row('da')}` +
-    `-${col}${rev}*${refs.scalar('capexPctRevenue')}` +
-    `-(${col}${rev}-${prev}${rev})*${refs.scalar('nwcPctRevenue')}`;
-}
-
 /** Live refs: the Assumptions inputs the main model runs on. */
 export function liveRefs(reg: Registry): DriverRefs {
   return {
@@ -77,6 +71,7 @@ export function writeProjections(
   reg: Registry,
   base: BasePeriod | null,
   baseCol: BaseColumn,
+  opening: OpeningBalances,
   ctx: WorkbookContext,
 ) {
   const years = a.projectionYears;
@@ -121,13 +116,15 @@ export function writeProjections(
 
   if (reg.pl.grossMargin !== null) label(sheet, reg.pl.grossMargin, 'Gross margin');
   label(sheet, reg.pl.ebitdaMargin, 'EBITDA margin');
-  label(sheet, reg.pl.fcf, 'Unlevered FCF', true);
   for (let col = 2; col <= 2 + years; col++) writeMarginRows(sheet, reg, col, false);
-  for (let y = 0; y < years; y++) {
-    const cell = sheet.getCell(reg.pl.fcf, 3 + y);
-    cell.value = fx(fcfFormula(colLetter(3 + y), colLetter(2 + y), row, refs));
-    cell.numFmt = FMT_MONEY;
-  }
+
+  label(sheet, reg.pl.cfHeader, reg.methods.nwcMethod === 'DAYS'
+    ? `Cash flow — working capital from the ${opening.period ?? 'latest'} balance sheet (blue), then DSO / DIO / DPO`
+    : 'Cash flow — working capital as % of revenue', true);
+  writeCashFlowBlock(sheet, {
+    rows: reg.pl.cf, methods: reg.methods, line: (key) => reg.pl.row[key], refs, years,
+    baseBalance: (k) => opening[k] ?? 0, baseFont: INPUT_FONT,
+  });
 
   sheet.views = [{ state: 'frozen', xSplit: 1, ySplit: reg.pl.header }];
 }

@@ -103,7 +103,9 @@ describe('projectModel (shared with the panel preview)', () => {
     const a = deriveDefaults(history);
     const p = projectModel(cat.lines, baseValues, a);
     expect(p.debt).toBeCloseTo(2.8 * a.debtQuantum, 6);
-    expect(p.values.interest_expense[0]).toBeCloseTo(p.debt * a.interestRate / 100, 6);
+    // Interest on the average balance after scheduled amortisation (E3): opening − mandatory / 2.
+    const mandatory = p.debt * a.amortPctPerYear / 100;
+    expect(p.values.interest_expense[0]).toBeCloseTo((p.debt - mandatory / 2) * a.interestRate / 100, 6);
     const ebt = p.values.ebt[0];
     expect(p.values.tax[0]).toBeCloseTo(Math.max(0, ebt) * a.taxRate / 100, 6);
     expect(p.values.net_income[0]).toBeCloseTo(ebt - p.values.tax[0], 6);

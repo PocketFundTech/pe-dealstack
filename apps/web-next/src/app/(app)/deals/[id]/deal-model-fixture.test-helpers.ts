@@ -30,7 +30,13 @@ export function assumptions(overrides: Partial<Assumptions> = {}): Assumptions {
   return {
     entryMultiple: 5, entryBasis: "EBITDA", transactionFeesPct: 2,
     debtQuantumMode: "MULTIPLE", debtQuantum: 2.5, interestRate: 10, amortPctPerYear: 5, cashSweepPct: 50,
-    projectionYears: 5, capexPctRevenue: 3, nwcPctRevenue: 10, taxRate: 25,
+    debt2Quantum: 0, debt2InterestRate: 12, debt2AmortPct: 0, minCash: 0,
+    projectionYears: 5, taxRate: 25,
+    // Fix plan E3: as the API seeds them from the FY2023 / FY2024 balance sheets.
+    balanceDrivers: {
+      nwcMethod: "DAYS", dso: flat(48), dio: flat(20), dpo: flat(40), nwcPct: flat(9),
+      capexMethod: "TOTAL", capexPct: flat(4), capexMaintPct: flat(0), capexGrowthPct: flat(0),
+    },
     exitMultiple: 5, exitYear: 5, wacc: 12, dscrTarget: 1.25, unitScale: "MILLIONS", currency: "USD",
     lineDrivers: {
       revenue: { method: "GROWTH", values: flat(10) },
@@ -51,6 +57,16 @@ export const BASE_VALUES = {
   revenue: 27.3, cogs_cement: 8.2, cogs_fly_ash: 2.0, total_opex: 14.3, da: 0.7, interest_expense: 0.5, tax: 0.45,
 };
 
+/** Latest full-year balance sheet (GET …/model/cases `opening`). */
+export const OPENING = { period: "FY2024", ar: 3.6, inventory: 1.1, ap: 2.2, cash: 0.9, debt: 4.6 };
+
+/** A case saved before E3: scalar NWC / capex %, no balance drivers or second tranche. */
+export function legacyAssumptions(): Assumptions {
+  const legacy: Assumptions = { ...assumptions(), capexPctRevenue: 3, nwcPctRevenue: 10 };
+  for (const k of ["balanceDrivers", "debt2Quantum", "debt2InterestRate", "debt2AmortPct", "minCash"] as const) delete legacy[k];
+  return legacy;
+}
+
 /** Low / High as the API seeds them: growth ∓3pp, costs ±2pp, exit ∓1x. */
 export function seeded(which: "Low" | "High"): Assumptions {
   const d = which === "Low" ? -1 : 1;
@@ -65,12 +81,13 @@ export function casesResponse(saved: { Low?: boolean; Base?: boolean; High?: boo
   return {
     cases: (["Low", "Base", "High"] as const).map((c) => ({
       case: c, name: `${c} case`, saved: !!saved[c], assumptions: sets[c],
-      summary: summariseCase(LINES, BASE_VALUES, sets[c]),
+      summary: summariseCase(LINES, BASE_VALUES, sets[c], OPENING),
     })),
     history: [{ period: "FY2023" }, { period: "FY2024" }, { period: "2025 YTD" }],
     lines: LINES,
     baseValues: BASE_VALUES,
     base: { label: "FY2024 A", basis: "FY", revenue: 27.3, ebitda: 2.8, entrySource: "base" },
+    opening: OPENING,
     currency: "USD",
     unitScale: "MILLIONS",
   };

@@ -1,6 +1,7 @@
 // ─── Deal model ───────────────────────────────────────────────────
 // GET  /api/deals/:dealId/model?case=Low|Base|High — one case: saved, or derived (Base) / seeded from Base (Low, High)
 // GET  /api/deals/:dealId/model/cases              — all three cases + a summary of each
+//      (both GETs carry `opening`: the latest full-year balance sheet — fix plan E3)
 // PUT  /api/deals/:dealId/model?case=…             — save one case
 // POST /api/deals/:dealId/model/export?case=…      — the .xlsx binary (all three cases, opened on `case`)
 //
@@ -37,7 +38,8 @@ import { buildLineCatalogue, baseColumnValues, evaluateLine } from '../services/
 import {
   CASE_ROW_NAMES, MODEL_CASES, SCENARIO_DELTAS, parseCase, resolveCases, type CaseSet, type ModelCase,
 } from '../services/dealModel/scenarios.js';
-import { summariseCase } from '@ai-crm/shared';
+import { activeBalanceKeys, summariseCase } from '@ai-crm/shared';
+import { openingBalances } from '../services/dealModel/balanceItems.js';
 
 const router = Router();
 
@@ -96,6 +98,10 @@ const coherentAssumptions = assumptionsSchema
   .refine((a) => Object.values(a.lineDrivers ?? {}).every((d) => d.method === 'FIXED' || d.values.every((v) => v >= -100 && v <= 500)), {
     message: 'growth and % of revenue drivers must be between -100% and 500%',
     path: ['lineDrivers'],
+  })
+  .refine((a) => !a.balanceDrivers || activeBalanceKeys(a.balanceDrivers).every((k) => a.balanceDrivers![k].length === a.projectionYears), {
+    message: 'working-capital and capex drivers must have exactly one value per projected year',
+    path: ['balanceDrivers'],
   })
   .refine((a) => a.exitYear <= a.projectionYears, {
     message: 'exitYear cannot be beyond the projection window',
@@ -170,6 +176,8 @@ function modelStructure(inputs: LoadedDeal, catalogue: ReturnType<typeof buildLi
   return {
     lines: catalogue.lines,
     baseValues: baseCol.values,
+    // Latest full-year balance sheet (E3): Days working-capital base + net debt refinanced at entry.
+    opening: openingBalances(inputs.history),
     base: base
       ? {
           label: base.label,
@@ -228,6 +236,8 @@ function withEdits(
   const merged: Partial<ModelAssumptions> = { ...base, ...edits };
   // A pre-E1 client posting growth / margin edits: migrate those, not the saved drivers.
   if (!edits.lineDrivers && (edits.revenueGrowthPct || edits.ebitdaMarginPct)) delete merged.lineDrivers;
+  // …and pre-E3 scalar NWC / capex edits.
+  if (!edits.balanceDrivers && (edits.nwcPctRevenue !== undefined || edits.capexPctRevenue !== undefined)) delete merged.balanceDrivers;
   const parsed = coherentAssumptions.safeParse(merged);
   return parsed.success ? resolveAssumptions(parsed.data, inputs.history, dealSeed(inputs), catalogue) : base;
 }
@@ -289,7 +299,7 @@ router.get('/:dealId/model/cases', async (req, res) => {
         saved: !!saved[c],
         assumptions: cases[c],
         // Same arithmetic as the workbook's Scenarios sheet.
-        summary: structure.base ? summariseCase(catalogue.lines, structure.baseValues, cases[c]) : null,
+        summary: structure.base ? summariseCase(catalogue.lines, structure.baseValues, cases[c], structure.opening) : null,
       })),
       deltas: SCENARIO_DELTAS,
       history: inputs.history,

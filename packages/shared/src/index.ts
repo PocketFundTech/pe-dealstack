@@ -80,3 +80,4 @@ export * from './periods.js';
 
 // Deal model line structure + calculator (API summary and web preview)
 export * from './dealModel.js';
+export * from './dealModelCash.js';

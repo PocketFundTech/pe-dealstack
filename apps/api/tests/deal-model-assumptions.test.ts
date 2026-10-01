@@ -105,7 +105,7 @@ describe('normaliseStatements — currency and period hygiene', () => {
     expect(rows.map((r) => r.period)).toEqual(['2024', 'LTM']);
   });
 
-  it('ignores balance sheets and cash flows for the P&L build', () => {
+  it('keeps balance sheets and cash flows out of the P&L columns (they attach to their period, E3)', () => {
     const { rows } = normaliseStatements([
       stmt({ period: '2024' }),
       stmt({ period: '2024', statementType: 'BALANCE_SHEET' }),

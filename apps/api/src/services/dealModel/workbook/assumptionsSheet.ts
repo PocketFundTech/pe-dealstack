@@ -1,29 +1,37 @@
 // Assumptions sheet: blue scalar inputs, then one driver row per P&L line.
 
 import type ExcelJS from 'exceljs';
-import { DRIVER_METHOD_LABELS, MODEL_CASES, allowedMethods, type LineDriver, type ModelCase } from '@ai-crm/shared';
+import {
+  BALANCE_SERIES_LABELS, DRIVER_METHOD_LABELS, MODEL_CASES, allowedMethods,
+  type LineDriver, type ModelCase,
+} from '@ai-crm/shared';
 import type { ResolvedAssumptions } from '../assumptions.js';
 import type { CaseSet } from '../scenarios.js';
 import {
   SCALAR_KEYS, CASE_COLUMNS, SCALAR_CASE_COL, SCALAR_HEADER_ROW, ACTIVE_CASE_ROW, ACTIVE_INDEX_ROW,
-  DRIVER_CASE_COL, DRIVER_METHOD_COL, DRIVER_FIRST_YEAR_COL, type Registry, type ScalarKey,
+  DRIVER_CASE_COL, DRIVER_METHOD_COL, DRIVER_FIRST_YEAR_COL, bsKey, type Registry, type ScalarKey,
 } from './registry.js';
 import { INPUT_FONT, FMT_MONEY, FMT_PCT, FMT_MULT, colLetter, fx, label, styleHeaderRow, title } from './xlsx.js';
 
 /** Label, cell value and format for a scalar. Percentages are written as fractions. */
 export function scalarCell(a: ResolvedAssumptions, key: ScalarKey): [string, number, string] {
   const pct = (v: number) => v / 100;
+  const money = `${a.currency}, ${a.unitScale.toLowerCase()}`;
   switch (key) {
     case 'entryMultiple': return [a.entryBasis === 'REVENUE' ? 'Entry multiple (x revenue)' : 'Entry multiple (x EBITDA)', a.entryMultiple, FMT_MULT];
     case 'transactionFeesPct': return ['Transaction fees (% of EV)', pct(a.transactionFeesPct), FMT_PCT];
     case 'debtQuantum': return a.debtQuantumMode === 'ABSOLUTE'
-      ? [`Debt raised (${a.currency}, ${a.unitScale.toLowerCase()})`, a.debtQuantum, FMT_MONEY]
-      : ['Debt (x EBITDA)', a.debtQuantum, FMT_MULT];
-    case 'interestRate': return ['Interest rate', pct(a.interestRate), FMT_PCT];
-    case 'amortPctPerYear': return ['Amortisation (% / yr)', pct(a.amortPctPerYear), FMT_PCT];
-    case 'cashSweepPct': return ['Cash sweep (% of FCF)', pct(a.cashSweepPct), FMT_PCT];
-    case 'capexPctRevenue': return ['Capex (% of revenue)', pct(a.capexPctRevenue), FMT_PCT];
-    case 'nwcPctRevenue': return ['NWC (% of revenue)', pct(a.nwcPctRevenue), FMT_PCT];
+      ? [`Senior debt (${money})`, a.debtQuantum, FMT_MONEY]
+      : ['Senior debt (x EBITDA)', a.debtQuantum, FMT_MULT];
+    case 'interestRate': return ['Senior interest rate', pct(a.interestRate), FMT_PCT];
+    case 'amortPctPerYear': return ['Senior amortisation (% of original / yr)', pct(a.amortPctPerYear), FMT_PCT];
+    case 'debt2Quantum': return a.debtQuantumMode === 'ABSOLUTE'
+      ? [`Second tranche debt (${money})`, a.debt2Quantum, FMT_MONEY]
+      : ['Second tranche debt (x EBITDA)', a.debt2Quantum, FMT_MULT];
+    case 'debt2InterestRate': return ['Second tranche interest rate', pct(a.debt2InterestRate), FMT_PCT];
+    case 'debt2AmortPct': return ['Second tranche amortisation (% of original / yr)', pct(a.debt2AmortPct), FMT_PCT];
+    case 'cashSweepPct': return ['Cash sweep (% of cash above minimum)', pct(a.cashSweepPct), FMT_PCT];
+    case 'minCash': return [`Minimum cash (${money})`, a.minCash, FMT_MONEY];
     case 'taxRate': return ['Tax rate', pct(a.taxRate), FMT_PCT];
     case 'exitMultiple': return ['Exit multiple', a.exitMultiple, FMT_MULT];
     case 'exitYear': return ['Exit year', a.exitYear, '0'];
@@ -116,7 +124,14 @@ export function writeAssumptions(sheet: ExcelJS.Worksheet, cases: CaseSet, activ
     }
   }
 
-  const notesRow = h + reg.driverLines.length * CASE_COLUMNS.length + 2;
+  writeBalanceDrivers(sheet, cases, reg, idx);
+
+  const notesRow = reg.assumptions.notesRow;
+  sheet.getCell(notesRow + 1, 1).value =
+    'Working capital: "Days" projects receivables = revenue x DSO / 365, inventory = COGS x DIO / 365 and payables = COGS x DPO / 365; ' +
+    '"% of revenue" holds net working capital at a share of revenue. Capex is a % of revenue (maintenance + growth when the cash flow split them). ' +
+    'Methods are chosen in the app and shared by all three cases.';
+  sheet.getCell(notesRow + 1, 1).font = { italic: true, size: 9, color: { argb: 'FF6B7280' } };
   sheet.getCell(notesRow, 1).value =
     'Method: "Growth %" grows last year\'s figure; "% of revenue" applies to that year\'s revenue; "Fixed" is an amount. ' +
     'Percentages are entered as %, Fixed amounts in the model\'s units. Subtotals (gross profit, EBITDA, EBIT, EBT, net income), ' +
@@ -140,4 +155,44 @@ export function writeDriverRow(
     c.numFmt = cells.numFmt;
     c.font = INPUT_FONT;
   }
+}
+
+/** Days and percentages per working-capital / capex series: Low / Base / High rows + a Live row. */
+function writeBalanceDrivers(sheet: ExcelJS.Worksheet, cases: CaseSet, reg: Registry, idx: string) {
+  const h = sheet.getRow(reg.assumptions.balanceHeaderRow);
+  h.getCell(1).value = 'Working capital & capex drivers';
+  h.getCell(DRIVER_CASE_COL).value = 'Case';
+  h.getCell(DRIVER_METHOD_COL).value = 'Unit';
+  for (let y = 0; y < reg.years; y++) h.getCell(DRIVER_FIRST_YEAR_COL + y).value = `Y${y + 1}`;
+  styleHeaderRow(h);
+
+  for (const key of reg.balanceKeys) {
+    const rows = reg.assumptions.driverRow[bsKey(key)];
+    const { label: name, unit } = BALANCE_SERIES_LABELS[key];
+    const fmt = unit === 'days' ? '0.0' : '0.00%';
+    for (const c of CASE_COLUMNS) {
+      const row = rows[c];
+      label(sheet, row, name, c === 'Live');
+      sheet.getCell(row, DRIVER_CASE_COL).value = c;
+      sheet.getCell(row, DRIVER_METHOD_COL).value = unit === 'days' ? 'Days' : '% of revenue';
+      for (let y = 0; y < reg.years; y++) {
+        const cell = sheet.getCell(row, DRIVER_FIRST_YEAR_COL + y);
+        if (c === 'Live') {
+          const L = colLetter(DRIVER_FIRST_YEAR_COL + y);
+          cell.value = fx(`CHOOSE(${idx},${MODEL_CASES.map((x) => `${L}${rows[x]}`).join(',')})`);
+          cell.font = { bold: true };
+        } else {
+          cell.value = balanceCellValue(cases[c].balanceDrivers[key], y, unit);
+          cell.font = INPUT_FONT;
+        }
+        cell.numFmt = fmt;
+      }
+    }
+  }
+}
+
+/** Days as numbers, percentages as fractions. */
+export function balanceCellValue(values: number[], y: number, unit: 'days' | '%'): number {
+  const v = values[y] ?? values.at(-1) ?? 0;
+  return unit === 'days' ? v : v / 100;
 }

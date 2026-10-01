@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { projectModel, summariseCase } from "@ai-crm/shared";
-import { BASE_VALUES, LINES, assumptions, casesResponse, seeded } from "./deal-model-fixture.test-helpers";
+import { BASE_VALUES, LINES, OPENING, assumptions, casesResponse, seeded } from "./deal-model-fixture.test-helpers";
 
 const get = vi.fn();
 const put = vi.fn();
@@ -87,7 +87,7 @@ describe("DealModelPanel — Low / Base / High (E2)", () => {
     await renderPanel();
     expect(get).toHaveBeenCalledWith("/deals/deal-1/model/cases");
     for (const [c, a] of [["Low", seeded("Low")], ["Base", assumptions()], ["High", seeded("High")]] as const) {
-      const s = summariseCase(LINES, BASE_VALUES, a);
+      const s = summariseCase(LINES, BASE_VALUES, a, OPENING);
       expect(screen.getByTestId(`summary-IRR-${c}`)).toHaveTextContent(`${(s.irr! * 100).toFixed(1)}%`);
       expect(screen.getByTestId(`summary-MoM-${c}`)).toHaveTextContent(`${s.mom!.toFixed(2)}x`);
     }

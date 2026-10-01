@@ -39,6 +39,42 @@ export const SRM_STATEMENTS = [
   }),
 ];
 
+/**
+ * Balance sheets and cash flows for the same shape (fix plan E3): labelled
+ * the way other documents label them ("FY2023", "2024", "YTD Sep 2025") so
+ * they must match the P&L by canonical period. FY2023 capex is only the
+ * split lines (no total); FY2024 prints a total, the split and total_debt
+ * (#163); outflows are negative. The YTD figures are deliberately different
+ * so tests can prove they are never used as a year.
+ */
+const srmSide = (statementType: string, period: string, lineItems: Record<string, number>) => ({
+  ...srmStatement(period, lineItems), statementType,
+});
+
+export const SRM_BALANCE_STATEMENTS = [
+  srmSide('BALANCE_SHEET', 'FY2023', {
+    cash: 0.6, accounts_receivable: 2.9, inventory: 0.8, ppe_net: 6.0, total_assets: 10.3,
+    accounts_payable: 1.7, short_term_debt: 0.5, long_term_debt: 3.5, total_equity: 4.6,
+  }),
+  srmSide('BALANCE_SHEET', '2024', {
+    cash: 0.9, accounts_receivable: 3.6, inventory: 1.1, ppe_net: 7.0, total_assets: 12.6,
+    accounts_payable: 2.2, short_term_debt: 0.6, long_term_debt: 4.0, total_debt: 4.6, total_equity: 5.8,
+  }),
+  srmSide('BALANCE_SHEET', 'YTD Sep 2025', {
+    cash: 0.4, accounts_receivable: 4.4, inventory: 1.2, ppe_net: 7.8, accounts_payable: 2.5,
+    short_term_debt: 0.7, long_term_debt: 4.5,
+  }),
+  srmSide('CASH_FLOW', 'FY2023', {
+    operating_cf: 1.4, maintenance_capex: -0.5, replacement_capex_capitalized: -0.2, growth_capex: -0.6,
+  }),
+  srmSide('CASH_FLOW', '2024', {
+    operating_cf: 1.5, capex: -1.6, maintenance_capex: -0.6, replacement_capex_capitalized: -0.3, growth_capex: -0.7,
+  }),
+  srmSide('CASH_FLOW', 'YTD Sep 2025', { operating_cf: 0.9, capex: -2.0, growth_capex: -1.2, maintenance_capex: -0.8 }),
+];
+
+export const SRM_FULL_STATEMENTS = [...SRM_STATEMENTS, ...SRM_BALANCE_STATEMENTS];
+
 export const SRM_CONTEXT = {
   dealName: 'SRM', companyName: 'Strong Ready Mix', currency: 'USD', unitScale: 'MILLIONS' as const,
   sourceDocuments: ['SRM P&L.xlsx'], generatedAt: '2026-10-01T00:00:00Z', notes: [],
