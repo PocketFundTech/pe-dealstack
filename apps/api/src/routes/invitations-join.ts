@@ -59,6 +59,15 @@ router.post('/join/:token', authMiddleware, async (req: Request, res: Response, 
     if (!check.ok) return res.status(check.status).json(check.body);
     const invitation = check.invitation;
 
+    // The email match below only proves anything if the account has
+    // confirmed it owns that address.
+    if (authUser.emailConfirmed !== true) {
+      return res.status(403).json({
+        error: 'Confirm your email address first, then accept the invitation.',
+        code: 'EMAIL_NOT_CONFIRMED',
+      });
+    }
+
     const callerEmail = (authUser.email || '').trim().toLowerCase();
     if (!callerEmail || callerEmail !== invitation.email.trim().toLowerCase()) {
       log.warn('Invite join: email mismatch', { invitationId: invitation.id, authId: authUser.id });

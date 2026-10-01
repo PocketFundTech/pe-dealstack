@@ -106,7 +106,7 @@ async function adminApp() {
 }
 
 const jane = (extra: Record<string, unknown> = {}) =>
-  JSON.stringify({ id: 'auth-jane', email: 'jane@acme.com', role: 'MEMBER', user_metadata: {}, ...extra });
+  JSON.stringify({ id: 'auth-jane', email: 'jane@acme.com', emailConfirmed: true, role: 'MEMBER', user_metadata: {}, ...extra });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -235,6 +235,17 @@ describe('POST /join/:token (existing account, authenticated)', () => {
     const res = await join(null);
     expect(res.status).toBe(401);
     expect(writes()).toHaveLength(0);
+  });
+
+  // Defence in depth: email match proves nothing if the account never
+  // confirmed that it owns the address.
+  it('403s an account whose email is not confirmed (no writes)', async () => {
+    joinWorld({ user: { id: 'u-jane', organizationId: null, role: 'MEMBER' } });
+    const res = await join(jane({ emailConfirmed: false }));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('EMAIL_NOT_CONFIRMED');
+    expect(writesTo('User', 'update')).toHaveLength(0);
+    expect(writesTo('Invitation', 'update')).toHaveLength(0);
   });
 
   it('403s when the signed-in email does not match the invitation (no writes)', async () => {
