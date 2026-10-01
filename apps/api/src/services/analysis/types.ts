@@ -39,6 +39,8 @@ export interface QoEFlag {
   title: string;
   detail: string;
   metric?: string;
+  /** Source citation (document quote) — set by document-derived flags (F1 part 2). */
+  evidence?: string;
   icon: string;
 }
 
