@@ -214,6 +214,8 @@ STEP 1 — DETECT THE REPORTING SCALE BEFORE READING ANY NUMBER:
    PE documents almost always declare units once at the top of a financial table or in a note. Common headers:
    - "$ in millions" / "(USD millions)" / "in $M" → numbers are already in millions, e.g. "Revenue 45" means $45M (output 45)
    - "$ in thousands" / "(USD 000s)" / "in $K" / "$ '000" → numbers are in thousands, e.g. "Revenue 45" means $45K (output 0.045)
+   - "(INR crore)" / "₹ in crores" / "₹ Cr" / "Rs. crore" → numbers are in crores (1 crore = 10 million), e.g. "Revenue 251.3" in a crore table means ₹2,513M (output 2513)
+   - "(INR lakhs)" / "₹ in lakhs" / "Rs. lakh" → numbers are in lakhs (1 lakh = 0.1 million), e.g. "Revenue 450" in a lakh table means ₹45M (output 45)
    - No header → numbers are raw dollars unless explicitly suffixed with M, K, B, Cr, L
    You MUST scan the section header, table header, and any footnote ABOVE OR ON the financial figure before deciding the scale.
    If you cannot determine the scale, set the value to null with confidence 0 — do NOT guess.
