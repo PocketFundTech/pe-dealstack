@@ -6,6 +6,10 @@ Line numbers are from that commit — re-check before editing, they drift.
 
 Paths: `W/` = `apps/web-next/src/`, `A/` = `apps/api/src/`.
 
+> **Status 2026-10-02:** Batch 0 ✅ (#160), Batch 1 ✅ (#158), Batch 2 ✅ (#170), live-QA follow-ups in #171.
+> **Next:** Batch 3 (stop losing work: memo "Generate all" saves per section, chat failure handling, re-auth without losing the page, unsaved-changes guard), then Batch 4.
+> Re-test with the QA account (`qa.tester@example.com`, "Avise QA Test Org") using `playwright-cli` after each batch — production must have AI credit for the AI flows.
+
 How to work this list: one batch = one PR, failing test first, tick the box when merged.
 
 ---

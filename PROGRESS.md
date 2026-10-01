@@ -36,6 +36,12 @@ Ticked in `docs/PENDING-MIGRATIONS.md` and `docs/PENDING-OPS-CHECKLIST.md`.
 
 **Production finding:** Anthropic and OpenAI are both out of credit in production. Real users' extractions are failing (e.g. a "Kliniva" deal), not just the QA org.
 
+**Handoff docs (for safe context compaction):**
+- New root `CONTEXT.md`: one-page current state, open PRs, blockers, founder to-dos, next steps, and this week's gotchas.
+- `CLAUDE.md` gained reminders: start from `CONTEXT.md`; check AI credit first when AI features fail; `apps/api/scripts/` is gitignored; merge stacked PRs bottom-up; worktree shared-package setup.
+- `docs/FINANCIALS-FIX-PLAN.md`: all items A1–F1 ticked as merged, with the remaining non-code steps.
+- `docs/USERFLOW-SMOOTHING-TODO.md`: status header added (Batches 0–2 done; Batch 3 next).
+
 **Verification:** API 2326 tests passing (+5), web 509, tsc clean, lint 0 errors, lockfile unchanged.
 
 ---
