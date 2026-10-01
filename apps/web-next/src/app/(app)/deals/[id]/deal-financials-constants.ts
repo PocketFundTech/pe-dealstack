@@ -18,7 +18,7 @@ export const LINE_ITEM_LABELS: Record<string, string> = {
   gross_margin_pct: "Gross Margin %", sga: "SG&A", rd: "R&D",
   other_opex: "Other OpEx", total_opex: "Total OpEx", ebitda: "EBITDA",
   ebitda_margin_pct: "EBITDA Margin %", da: "D&A", ebit: "EBIT",
-  interest_expense: "Interest Expense", ebt: "EBT", tax: "Tax",
+  interest_expense: "Interest Expense", other_income: "Other Income", other_expense: "Other Expense", ebt: "EBT", tax: "Tax",
   net_income: "Net Income", sde: "SDE", depreciation: "D&A", tax_expense: "Tax Expense",
   cash: "Cash & Equivalents", accounts_receivable: "Accounts Receivable",
   inventory: "Inventory", other_current_assets: "Other Current Assets",

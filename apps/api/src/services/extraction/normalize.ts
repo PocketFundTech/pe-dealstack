@@ -28,8 +28,33 @@ import type {
   ClassificationResult,
   ClassifiedStatement,
 } from '../financialClassifier.js';
-import { validateLineItems, LINE_ITEM_ALIASES } from '../financialSchema.js';
-import { computeDerivedFields, normalizeCashFlowSigns } from '../financialDerivations.js';
+import {
+  validateLineItems, LINE_ITEM_ALIASES, incomeStatementSchema, balanceSheetSchema, cashFlowSchema,
+} from '../financialSchema.js';
+import {
+  computeDerivedFields, normalizeCashFlowSigns, normalizeIncomeStatementSigns, nestedLineItemKey,
+} from '../financialDerivations.js';
+
+/** Standard (non-_source) keys — never renamed under a parent. */
+const STANDARD_KEYS: ReadonlySet<string> = new Set(
+  [incomeStatementSchema, balanceSheetSchema, cashFlowSchema]
+    .flatMap((schema) => Object.keys(schema.shape))
+    .filter((k) => !k.endsWith('_source')),
+);
+
+/**
+ * Aliases ("sales" → revenue) are protected too, EXCEPT under their own
+ * target: a "Sales" account the extractor placed under revenue is a
+ * component of revenue — renamed revenue_sales — not a second copy of it
+ * that dropDuplicateAliases would delete.
+ */
+function protectedKeysFor(parent: string | null | undefined): ReadonlySet<string> {
+  if (!parent) return STANDARD_KEYS;
+  return new Set([
+    ...STANDARD_KEYS,
+    ...Object.entries(LINE_ITEM_ALIASES).filter(([, target]) => target !== parent).map(([alias]) => alias),
+  ]);
+}
 import type { ExtractionResponse, RawStatement } from './extractionSchema.js';
 
 const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
@@ -72,12 +97,14 @@ function dropDuplicateAliases(
 }
 
 function foldPeriodLineItems(
-  items: Array<{ name: string; value: number | null; sourcePage: number | null; sourceQuote: string | null }>,
+  items: Array<{ name: string; value: number | null; sourcePage: number | null; sourceQuote: string | null; parent?: string | null }>,
   factor: number,
 ): Record<string, number | string | null> {
   const record: Record<string, number | string | null> = {};
   for (const item of items) {
-    const name = item.name.trim().toLowerCase().replace(/\s+/g, '_');
+    // Raw accounts nest under their parent ("sand_cos" + cogs → cogs_sand_cos)
+    // so the table can show them under COGS instead of after Net Income.
+    const name = nestedLineItemKey(item.name.trim().toLowerCase().replace(/\s+/g, '_'), item.parent, protectedKeysFor(item.parent));
     // First non-null value wins — a null placeholder shouldn't shadow a
     // real value reported under the same name later in the array.
     if (name in record && record[name] !== null) continue;
@@ -111,7 +138,10 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
       dropDuplicateAliases(normalized, warnings);
       // Derive EBITDA / EBIT / GP / margins the statement doesn't print —
       // same rules as the legacy engine (financialDerivations.ts).
-      if (stmt.statementType === 'INCOME_STATEMENT') computeDerivedFields(normalized);
+      if (stmt.statementType === 'INCOME_STATEMENT') {
+        warnings.push(...normalizeIncomeStatementSigns(normalized, p.period));
+        computeDerivedFields(normalized);
+      }
       // Cash outflows (capex, repayments, distributions…) stored ≤ 0.
       if (stmt.statementType === 'CASH_FLOW') warnings.push(...normalizeCashFlowSigns(normalized, p.period));
       return {

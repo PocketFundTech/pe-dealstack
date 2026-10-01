@@ -6,6 +6,7 @@ import {
   inferPeriodScope,
   type PeriodScope,
 } from '../utils/periodChrono.js';
+import { LINE_ITEM_PARENTS } from './extraction/extractionSchema.js';
 
 // Convert a stored numeric value to actual dollars given the statement's
 // unitScale. Used by the revenue-floor gate so we don't false-flag tiny
@@ -435,6 +436,39 @@ function checkCashFlow(
   return checks;
 }
 
+/**
+ * Nested accounts (`<parent>_<label>`, fix plan C1) should add up to the
+ * parent the document prints. Warning only — sources often itemise just
+ * part of a line.
+ */
+function checkChildrenSum(
+  lineItems: Record<string, number | null>,
+  period: string,
+  unitScale?: UnitScale | string | null,
+): StatementCheck[] {
+  const checks: StatementCheck[] = [];
+  const keys = Object.keys(lineItems).filter((k) => !k.endsWith('_source') && typeof lineItems[k] === 'number');
+  for (const parent of LINE_ITEM_PARENTS) {
+    const total = lineItems[parent];
+    if (typeof total !== 'number' || total === 0) continue;
+    // Direct children only: cogs_sand, not cogs_sand_fine (a grandchild) or a standard key.
+    const children = keys.filter((k) => k.startsWith(`${parent}_`) && !k.endsWith('_pct')
+      && !keys.some((other) => other !== k && other.startsWith(`${parent}_`) && k.startsWith(`${other}_`)));
+    if (children.length < 2) continue;
+    const sum = children.reduce((acc, k) => acc + (lineItems[k] as number), 0);
+    if (Math.abs(sum - total) / Math.abs(total) > 0.02) {
+      checks.push({
+        check: 'children_sum',
+        passed: false,
+        severity: 'warning',
+        message: `${parent}: ${children.length} itemised accounts sum to ${fmtVal(sum, unitScale)}, but ${parent} is ${fmtVal(total, unitScale)}`,
+        period,
+      });
+    }
+  }
+  return checks;
+}
+
 /** Subtask 4e — YoY growth sanity across sorted periods.
  *
  * The pairwise growth scan must only compare like-for-like periods. Historical
@@ -536,7 +570,7 @@ export function validateStatements(statements: ClassifiedStatement[]): Statement
         periodChecks = checkCashFlow(period.lineItems, period.period, stmt.unitScale);
       }
 
-      allChecks.push(...periodChecks);
+      allChecks.push(...periodChecks, ...checkChildrenSum(period.lineItems, period.period, stmt.unitScale));
     }
 
     // YoY growth checks across all periods for income statements
