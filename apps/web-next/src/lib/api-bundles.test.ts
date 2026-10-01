@@ -31,6 +31,7 @@ describe("pickBundle", () => {
     ["/api/data-rooms/summary", "lite"], // plain Supabase reads, no LLM — mounted in app-lite
     ["/api/deals/123/model", "lite"], // model export is pure computation, no LLM
     ["/api/deals/123/model/export", "lite"],
+    ["/api/deals/123/model/cases", "lite"], // Low / Base / High (E2) — same router, lite bundle
     ["/api/deals/reactivations", "lite"], // the feed is a plain read (router is in both bundles)
     ["/api/organizations/criteria", "lite"], // D2 regression: investment criteria
     ["/api/organizations/nda-playbook", "lite"], // playbook CRUD is a settings read/write

@@ -7,6 +7,63 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ### Session 84 — October 1, 2026
 
+#### Timestamp: October 1, 2026 — 22:27 IST
+
+#### Goal: Model builder fix plan **E3** — working capital, capex and debt from the balance sheet and cash flow (branch `feat/model-wc-capex-debt`, stacked on the E1 / E2 branch).
+
+**E3 · Balance-sheet and cash-flow driven items**
+- **Root cause:** `normaliseStatements` kept only income statements — balance sheets and cash flows were thrown away. Working capital and capex were two scalars (`nwcPctRevenue`, `capexPctRevenue`), the debt was one tranche, interest ran on the opening balance and the cash sweep used **unlevered** FCF (before interest and tax). Opening net debt never appeared.
+- **Inputs from history** (`dealModel/balanceItems.ts`): AR, inventory, AP, PP&E, cash, short- / long-term debt (`total_debt` when printed) and capex now attach to the P&L of the same canonical period ("FY2024", "2024" and "FY2024 (Jan - Dec 2024)" all match). Split capex lines (growth / maintenance / replacement) are summed; outflows (stored ≤ 0) are read as positive amounts. A statement in another currency, or for a period with no P&L, is left out rather than failing the model.
+- **Working capital:** per-year **DSO / DIO / DPO** seeded from **full fiscal years only** (AR / revenue × 365, inventory and AP / COGS × 365); projected receivables, inventory and payables start from the latest full-year balance sheet, and the increase in NWC is a use of cash. Falls back to % of revenue — from the balance sheet if it has any working-capital items, else the old 10%.
+- **Capex:** per-year % of revenue from the cash flow (else the old 3%), split into maintenance + growth when both were reported.
+- **Debt:** opening net debt from the latest full-year balance sheet goes into a full sources & uses (cash-free, debt-free: refinanced at entry; sources = uses). Two tranches (senior + optional second), mandatory amortisation, a year-end cash sweep from **levered** FCF (net income + D&A − capex − ΔNWC) above a **minimum cash** input, senior first, and a cash balance. Interest is on the average balance after scheduled amortisation (opening − mandatory / 2), so it never depends on the sweep — **no circular reference, no iterative calculation.** Exit equity = EV − debt + cash. DSCR now uses scheduled debt service only.
+- **Scenarios:** every new input has Low / Base / High values and a Live (`CHOOSE`) cell; each Scenarios block now carries the full P&L, working capital, capex and the two-tranche schedule. Low / High start equal to Base (no obvious delta). Methods (days vs %, total vs split) are shared by all three cases.
+- **Old saved models still load:** scalar NWC / capex % become per-year % of revenue drivers at the same value (cash flows identical), no second tranche, no minimum cash. Returns move by design (levered sweep, cash at exit).
+- **Workbook:** new modules `workbook/workingCapital.ts`, `workbook/debtSchedule.ts`, `workbook/balanceHistory.ts` (Historicals block with full-year DSO / DIO / DPO / capex % as formulas). Assumptions has a "Working capital & capex drivers" block; Projections a cash-flow block; Returns sources & uses and the debt and cash schedule.
+- **Checked:** recalculating the generated workbook with a throwaway evaluator matched the shared calculator for all three cases in five set-ups (days + split capex with two tranches and minimum cash, defaults, P&L only, a pre-E3 saved model, absolute debt with a 100% sweep): IRR, MoM, equity, exit EV, levered / unlevered FCF, ΔNWC, debt and cash per year all within 4e-15; sources = uses in every case.
+- **Panel:** a "Working capital, capex & debt" section — method selectors, DSO / DIO / DPO (or NWC %) and capex % per year, senior and second tranche (size, rate, amortisation), cash sweep and minimum cash, the opening net debt, and read-only ΔNWC / capex / levered FCF / debt / cash from the shared calculator.
+
+**No migration** (assumptions are JSON). No new route.
+
+**Verification:** API 2265 tests passing (+32: balance inputs, workbook debt / working capital, route), web 474 passing (+6 panel), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
+#### Timestamp: October 1, 2026 — 21:55 IST
+
+#### Goal: Model builder fix plan **E1** — model every P&L line (branch `feat/model-line-items-scenarios`, stacked on PR #165).
+
+**Analyst feedback (Pushkar, SRM deal):** "the build model feature is really good; the main problem is it's only using the main figures — every line item should be modelled out."
+
+**E1 · Every P&L line is now modelled**
+- **Root cause:** the model carried six fixed figures (revenue, COGS, GP, EBITDA, D&A, net income) on hard-coded rows (`PL_ROWS`, `ASSUMPTION_CELLS`), and projected EBITDA from one growth + one margin input. Every raw account (cement, fly ash, insurance …) was thrown away.
+- **Line catalogue** (`dealModel/lineCatalogue.ts`): the standard income-statement vocabulary (revenue → net income, incl. other income / expense) plus every raw account the extractor filed under a parent (`cogs_cement`, `revenue_discounts` …), nested under that parent. A parent is the sum of its accounts; where the accounts don't add up to the printed total an "Other (unallocated)" line keeps it tied. Gaps the statement implies are filled and shown grey (COGS = revenue − GP, operating costs = GP − EBITDA, D&A = EBITDA − EBIT).
+- **Per-line drivers** (`dealModel/drivers.ts`): each input line has `{ method: GROWTH | PCT_REVENUE | FIXED, values per year }`, seeded from **full fiscal years only** (revenue at the CAGR, costs at their average % of revenue, other income at its average amount). Subtotals, parents, interest (debt schedule) and tax (tax rate × EBT) are formulas, never inputs.
+- **Old saved models still load:** rows saved with one growth / margin are migrated in code — revenue lines get the saved growth, the saved margin is split across cost lines in their historical proportions (projected EBITDA margin equals the saved margin exactly), D&A keeps its %.
+- **Workbook** split from one 700-line file into `workbook/` modules (registry, assumptions, historicals, projections, returns, sensitivity, cover/notes). A generated registry hands out every address. Assumptions has a blue driver row per line with a method dropdown; Projections and Historicals have a row per line with accounts outlined under their parent; subtotals are formulas on both sheets. Exit EBITDA now follows the exit-year input.
+- **Found while verifying:** revenue accounts' formulas referenced the revenue row (their own sum) in an untaken IF branch — a circular reference to Google Sheets. Fixed, with a static circular-reference test.
+- **Panel:** per-line driver table (method + value per year, collapsible parents), and the preview now runs the shared calculator (`@ai-crm/shared` `projectModel`, margin × revenue), which recalculated to the workbook's exact IRR / MoM / exit EV on the SRM fixture.
+
+**Verification:** see the E2 entry below for the final counts.
+
+#### Timestamp: October 1, 2026 — 22:05 IST
+
+#### Goal: Model builder fix plan **E2** — Low / Base / High scenarios (same branch).
+
+**Analyst feedback:** "there is no high/base/low scenario; even basic models should have quick scenario analysis."
+
+**E2 · Low / Base / High cases**
+- **Root cause:** `DealModel` already supported named cases (`name` + `UNIQUE("dealId", name)`), but the route hard-coded `'Base case'`. **No migration needed.**
+- **API:** `GET` / `PUT /model?case=Low|Base|High` (default Base — every existing saved model is the Base case), new `GET /model/cases` (all three + a summary of each), and export carries all three cases and opens on the requested one. Unknown case → 400 `INVALID_CASE`. Same router, already in the lite bundle.
+- **Seeding:** an unsaved Low / High starts from Base — revenue growth ∓3pp, EBITDA margin ∓2pp (through the % of revenue cost lines, in proportion), exit multiple ∓1.0x (floor 0.5x). After that every number is an ordinary editable input. Projection years, entry basis and debt mode follow Base so the workbook has one layout.
+- **Workbook:** Assumptions has Low / Base / High columns for every scalar and Low / Base / High rows for every line driver, a blue **Active case** dropdown, and a Live column (`CHOOSE` on the active case) that every formula reads. A new **Scenarios** sheet shows revenue, EBITDA, margin, entry / exit EV, equity, IRR and MoM for all three cases at once, each from its own compact calculation block (no macros, no data tables). `fullCalcOnLoad` stays on.
+- **Checked:** recalculating the generated workbook gave the same IRR / MoM / exit EV as the shared calculator for all three cases (difference < 1e-14), and the Returns sheet followed whichever case was active.
+- **Panel:** Low / Base / High tabs ("seeded" / unsaved markers), Save saves the active case only, a side-by-side IRR / MoM / exit EV / exit EBITDA summary that moves as you edit, and Download sends all three cases.
+
+**Not done here:** ticking E1 / E2 in `docs/FINANCIALS-FIX-PLAN.md` — that file lives only on the unmerged `docs/financials-fix-plan` branch.
+
+**Verification:** API 2233 tests passing (+46 new across catalogue / drivers / workbook-lines / scenarios / route), web 467 passing (+9 panel, +1 routing), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors when the API isn't built), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
+---
+
 #### Timestamp: October 1, 2026 — 21:38 IST
 
 #### Goal: Financials fix plan **F1 part 2** — customer concentration and related-party customers in the AI Financial Analysis (branch `feat/financials-f1-customer-concentration`, stacked on `feat/financials-f1-cashflow-flags`).

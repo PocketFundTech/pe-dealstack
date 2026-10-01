@@ -43,6 +43,8 @@ function badColumns(sel: string): string[] {
 let dealRow: any;
 let statements: any[] = [];
 let modelRow: any = null;
+/** Several saved cases; overrides modelRow when set. */
+let modelRows: any[] | null = null;
 let upserted: any = null;
 let documents: any[] = [];
 
@@ -88,7 +90,7 @@ function tableMock() {
           upserted = row;
           return { select: () => ({ single: async () => ({ data: { id: 'model-1', ...row }, error: null }) }) };
         },
-        then: (resolve: any) => resolve({ data: modelRow ? [modelRow] : [], error: null }),
+        then: (resolve: any) => resolve({ data: modelRows ?? (modelRow ? [modelRow] : []), error: null }),
       };
       return chain;
     }
@@ -130,6 +132,7 @@ beforeEach(() => {
   statements = [stmt('2023', 9, 1.5), stmt('2024', 10, 2)];
   documents = [{ id: 'doc-1', name: 'CIM.pdf' }];
   modelRow = null;
+  modelRows = null;
   upserted = null;
   mockSupabase.from.mockImplementation(tableMock());
 });
@@ -165,6 +168,28 @@ describe('GET /api/deals/:dealId/model', () => {
     dealAccess = null;
     const app = await buildApp();
     expect((await request(app).get('/api/deals/other/model')).status).toBe(404);
+  });
+
+  it('returns the line catalogue, base values and a driver per line (E1)', async () => {
+    statements = [stmt('2023', 9, 1.5, { lineItems: { revenue: 9, cogs: 5, cogs_cement: 3, ebitda: 1.5 } }),
+      stmt('2024', 10, 2, { lineItems: { revenue: 10, cogs: 6, cogs_cement: 3.5, ebitda: 2 } })];
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model');
+    const keys = res.body.lines.map((l: { key: string }) => l.key);
+    expect(keys).toEqual(expect.arrayContaining(['revenue', 'cogs', 'cogs_cement', 'cogs__other', 'gross_profit', 'ebitda']));
+    expect(res.body.baseValues.cogs_cement).toBe(3.5);
+    expect(res.body.base).toMatchObject({ revenue: 10, ebitda: 2, entrySource: 'base' });
+    expect(res.body.assumptions.lineDrivers.cogs_cement.method).toBe('PCT_REVENUE');
+  });
+
+  it('loads a pre-E1 saved row by migrating growth / margin into line drivers', async () => {
+    modelRow = { id: 'model-1', name: 'Base case', assumptions: { entryMultiple: 7, revenueGrowthPct: [6, 6, 6, 6, 6], ebitdaMarginPct: [25, 25, 25, 25, 25] } };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model');
+    expect(res.body.assumptions.entryMultiple).toBe(7);
+    expect(res.body.assumptions.lineDrivers.revenue).toEqual({ method: 'GROWTH', values: [6, 6, 6, 6, 6] });
+    expect(res.body.assumptions.lineDrivers.total_opex.values[0]).toBeCloseTo(75, 6);
+    expect(res.body.assumptions.revenueGrowthPct).toBeUndefined();
   });
 
   it('400s a deal whose financials are in two currencies', async () => {
@@ -216,6 +241,26 @@ describe('PUT /api/deals/:dealId/model', () => {
       .send({ ...valid, revenueGrowthPct: [8, 8] });
 
     expect(res.status).toBe(400);
+    expect(upserted).toBeNull();
+  });
+
+  it('saves per-line drivers', async () => {
+    const { revenueGrowthPct: _g, ebitdaMarginPct: _m, daPctRevenue: _d, ...rest } = valid;
+    const body = { ...rest, lineDrivers: { revenue: { method: 'GROWTH', values: [5, 5, 5, 5, 5] }, ebitda: { method: 'SUBTOTAL', values: [] } } };
+    const app = await buildApp();
+    const res = await request(app).put('/api/deals/deal-1/model').send(body);
+    expect(res.status).toBe(200);
+    expect(upserted.assumptions.lineDrivers.revenue.values).toEqual([5, 5, 5, 5, 5]);
+  });
+
+  it('rejects a line driver with the wrong number of years, or an absurd %', async () => {
+    const app = await buildApp();
+    const short = await request(app).put('/api/deals/deal-1/model')
+      .send({ ...valid, lineDrivers: { revenue: { method: 'GROWTH', values: [5] } } });
+    expect(short.status).toBe(400);
+    const absurd = await request(app).put('/api/deals/deal-1/model')
+      .send({ ...valid, lineDrivers: { cogs: { method: 'PCT_REVENUE', values: [900, 9, 9, 9, 9] } } });
+    expect(absurd.status).toBe(400);
     expect(upserted).toBeNull();
   });
 
@@ -279,5 +324,138 @@ describe('POST /api/deals/:dealId/model/export', () => {
     dealAccess = null;
     const app = await buildApp();
     expect((await request(app).post('/api/deals/other/model/export').send({})).status).toBe(404);
+  });
+});
+
+describe('Low / Base / High cases (fix plan E2)', () => {
+  it('GET ?case=Low seeds Low from the saved Base when Low was never saved', async () => {
+    modelRow = { id: 'model-1', name: 'Base case', assumptions: { exitMultiple: 6 } };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model?case=Low');
+    expect(res.status).toBe(200);
+    expect(res.body.case).toBe('Low');
+    expect(res.body.seededFromBase).toBe(true);
+    expect(res.body.isDerived).toBe(true);
+    expect(res.body.assumptions.exitMultiple).toBe(5); // 6 − 1.0x
+  });
+
+  it('GET ?case=High returns the saved High row', async () => {
+    modelRows = [
+      { name: 'Base case', assumptions: { exitMultiple: 6 } },
+      { name: 'High case', assumptions: { exitMultiple: 9 } },
+    ];
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model?case=high');
+    expect(res.body.assumptions.exitMultiple).toBe(9);
+    expect(res.body.isDerived).toBe(false);
+    expect(res.body.seededFromBase).toBe(false);
+  });
+
+  it('400s an unknown case', async () => {
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model?case=Upside');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CASE');
+  });
+
+  it('PUT ?case=High saves under "High case"; no case still saves Base', async () => {
+    const app = await buildApp();
+    const body = {
+      entryMultiple: 6, entryBasis: 'EBITDA', transactionFeesPct: 2, debtQuantumMode: 'MULTIPLE', debtQuantum: 3,
+      interestRate: 9, amortPctPerYear: 5, cashSweepPct: 50, projectionYears: 5, capexPctRevenue: 3,
+      nwcPctRevenue: 10, taxRate: 25, exitMultiple: 7, exitYear: 5, wacc: 12, dscrTarget: 1.25,
+      unitScale: 'MILLIONS', currency: 'USD',
+    };
+    await request(app).put('/api/deals/deal-1/model?case=High').send(body);
+    expect(upserted.name).toBe('High case');
+    await request(app).put('/api/deals/deal-1/model').send(body);
+    expect(upserted.name).toBe('Base case');
+    const bad = await request(app).put('/api/deals/deal-1/model?case=Upside').send(body);
+    expect(bad.status).toBe(400);
+  });
+
+  it('GET /model/cases returns all three cases with saved flags and summaries', async () => {
+    modelRows = [{ name: 'Low case', assumptions: { exitMultiple: 3 } }];
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    expect(res.body.cases.map((c: any) => [c.case, c.name, c.saved])).toEqual([
+      ['Low', 'Low case', true], ['Base', 'Base case', false], ['High', 'High case', false],
+    ]);
+    const [low, base, high] = res.body.cases;
+    expect(low.assumptions.exitMultiple).toBe(3);
+    expect(high.assumptions.exitMultiple).toBe(base.assumptions.exitMultiple + 1);
+    expect(low.summary.exitEv).toBeLessThan(base.summary.exitEv);
+    expect(high.summary.irr).toBeGreaterThan(base.summary.irr);
+    expect(res.body.deltas.High).toEqual({ revenueGrowthPp: 3, ebitdaMarginPp: 2, exitMultipleX: 1 });
+    expect(res.body.lines.length).toBeGreaterThan(5);
+  });
+
+  it('export carries all three cases and opens on the requested one', async () => {
+    const app = await buildApp();
+    const res = await request(app)
+      .post('/api/deals/deal-1/model/export?case=Base')
+      .send({ cases: { High: { exitMultiple: 12 } }, activeCase: 'High' })
+      .buffer(true)
+      .parse(binaryParser);
+    expect(res.status).toBe(200);
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.body);
+    const a = wb.getWorksheet('Assumptions')!;
+    expect(a.getCell('B4').value).toBe('High');
+    let exitRow = 0;
+    a.eachRow((row, n) => { if (row.getCell(1).value === 'Exit multiple') exitRow = n; });
+    expect(a.getCell(exitRow, 4).value).toBe(12); // High column
+    expect(wb.getWorksheet('Scenarios')).toBeTruthy();
+  });
+});
+
+describe('balance sheet + cash flow (fix plan E3)', () => {
+  const side = (statementType: string, period: string, lineItems: Record<string, number>) =>
+    ({ ...stmt(period, 0, 0), statementType, lineItems });
+  const withBalance = () => [
+    stmt('2023', 9, 1.5, { lineItems: { revenue: 9, cogs: 5, ebitda: 1.5 } }),
+    stmt('2024', 10, 2, { lineItems: { revenue: 10, cogs: 6, ebitda: 2 } }),
+    side('BALANCE_SHEET', '2024', { accounts_receivable: 1.5, inventory: 0.6, accounts_payable: 0.9, cash: 0.4, total_debt: 3 }),
+    side('CASH_FLOW', '2024', { capex: -0.5 }),
+  ];
+
+  it('GET /model/cases returns the opening balances and seeds days + capex from them', async () => {
+    statements = withBalance();
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    expect(res.body.opening).toEqual({ period: '2024', ar: 1.5, inventory: 0.6, ap: 0.9, cash: 0.4, debt: 3 });
+    const bd = res.body.cases[1].assumptions.balanceDrivers;
+    expect(bd.nwcMethod).toBe('DAYS');
+    expect(bd.dso[0]).toBeCloseTo(54.8, 6); // 1.5 / 10 × 365
+    expect(bd.capexPct[0]).toBe(5);
+    expect(res.body.cases[0].assumptions.balanceDrivers).toEqual(bd); // Low starts equal to Base
+    expect(res.body.cases[1].summary.irr).not.toBeNull();
+  });
+
+  it('loads a pre-E3 saved row: scalar NWC / capex become % of revenue drivers', async () => {
+    statements = withBalance();
+    modelRow = { id: 'model-1', name: 'Base case', assumptions: { nwcPctRevenue: 8, capexPctRevenue: 2 } };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model');
+    expect(res.body.assumptions.balanceDrivers).toMatchObject({ nwcMethod: 'PCT_REVENUE', nwcPct: [8, 8, 8, 8, 8], capexMethod: 'TOTAL', capexPct: [2, 2, 2, 2, 2] });
+    expect(res.body.assumptions.nwcPctRevenue).toBeUndefined();
+    expect(res.body.assumptions.debt2Quantum).toBe(0);
+  });
+
+  it('PUT accepts balance drivers and tranches, and rejects a series of the wrong length', async () => {
+    statements = withBalance();
+    const app = await buildApp();
+    const { body: got } = await request(app).get('/api/deals/deal-1/model');
+    const ok = await request(app).put('/api/deals/deal-1/model').send({ ...got.assumptions, debt2Quantum: 1, minCash: 0.3 });
+    expect(ok.status).toBe(200);
+    expect(upserted.assumptions.balanceDrivers.dso).toHaveLength(5);
+    expect(upserted.assumptions.minCash).toBe(0.3);
+    const bad = await request(app).put('/api/deals/deal-1/model').send({
+      ...got.assumptions, balanceDrivers: { ...got.assumptions.balanceDrivers, dso: [40, 40] },
+    });
+    expect(bad.status).toBe(400);
   });
 });
