@@ -5,6 +5,7 @@ import type ExcelJS from 'exceljs';
 export const SHEETS = {
   cover: 'Cover',
   assumptions: 'Assumptions',
+  scenarios: 'Scenarios',
   historicals: 'Historicals',
   projections: 'Projections',
   returns: 'Returns',

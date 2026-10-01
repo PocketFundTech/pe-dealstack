@@ -1,7 +1,12 @@
 // ─── Deal model ───────────────────────────────────────────────────
-// GET  /api/deals/:dealId/model        — saved assumptions, or derived
-// PUT  /api/deals/:dealId/model        — save assumptions
-// POST /api/deals/:dealId/model/export — the .xlsx binary
+// GET  /api/deals/:dealId/model?case=Low|Base|High — one case: saved, or derived (Base) / seeded from Base (Low, High)
+// GET  /api/deals/:dealId/model/cases              — all three cases + a summary of each
+// PUT  /api/deals/:dealId/model?case=…             — save one case
+// POST /api/deals/:dealId/model/export?case=…      — the .xlsx binary (all three cases, opened on `case`)
+//
+// Cases are DealModel rows named "Low case" / "Base case" / "High case"
+// (UNIQUE("dealId", name) already exists — no migration). `case` defaults
+// to Base, which is the row every pre-E2 model was saved under.
 //
 // Demo-call origin: Evan M15, Himanshu M11, Daniel Callahan — the actual
 // deliverable a deal team sends its IC and its lender is a spreadsheet,
@@ -29,10 +34,12 @@ import {
 import { buildModelWorkbook } from '../services/dealModel/workbook.js';
 import { selectBasePeriod } from '../services/dealModel/basePeriod.js';
 import { buildLineCatalogue, baseColumnValues, evaluateLine } from '../services/dealModel/lineCatalogue.js';
+import {
+  CASE_ROW_NAMES, MODEL_CASES, SCENARIO_DELTAS, parseCase, resolveCases, type CaseSet, type ModelCase,
+} from '../services/dealModel/scenarios.js';
+import { summariseCase } from '@ai-crm/shared';
 
 const router = Router();
-
-const DEFAULT_CASE = 'Base case';
 
 /**
  * Deal has NO `companyName` column (company is a relation via
@@ -175,15 +182,28 @@ function modelStructure(inputs: LoadedDeal, catalogue: ReturnType<typeof buildLi
   };
 }
 
-async function loadSavedAssumptions(dealId: string, orgId: string): Promise<ModelAssumptions | null> {
+type SavedCases = Partial<Record<ModelCase, Partial<ModelAssumptions>>>;
+
+/** Every saved case for the deal, keyed Low / Base / High. */
+async function loadSavedCases(dealId: string, orgId: string): Promise<SavedCases> {
   const { data } = await supabase
     .from('DealModel')
-    .select('assumptions')
+    .select('name, assumptions')
     .eq('dealId', dealId)
-    .eq('organizationId', orgId)
-    .eq('name', DEFAULT_CASE)
-    .single();
-  return (data?.assumptions as ModelAssumptions) ?? null;
+    .eq('organizationId', orgId);
+  const out: SavedCases = {};
+  for (const row of (data ?? []) as Array<{ name?: string; assumptions?: Partial<ModelAssumptions> }>) {
+    const c = MODEL_CASES.find((x) => CASE_ROW_NAMES[x] === row.name);
+    if (c && row.assumptions) out[c] = row.assumptions;
+  }
+  return out;
+}
+
+/** `?case=` → a case, or a 400 already sent. */
+function requestedCase(req: { query: Record<string, unknown> }, res: any): ModelCase | null {
+  const c = parseCase(req.query.case);
+  if (!c) res.status(400).json({ error: 'case must be Low, Base or High', code: 'INVALID_CASE' });
+  return c;
 }
 
 function sendModelError(res: Parameters<typeof router.get>[1] extends never ? never : any, error: unknown) {
@@ -212,8 +232,10 @@ function withEdits(
   return parsed.success ? resolveAssumptions(parsed.data, inputs.history, dealSeed(inputs), catalogue) : base;
 }
 
-// GET /api/deals/:dealId/model
+// GET /api/deals/:dealId/model?case=
 router.get('/:dealId/model', async (req, res) => {
+  const which = requestedCase(req, res);
+  if (!which) return;
   try {
     const { dealId } = req.params;
     const orgId = getOrgId(req);
@@ -223,13 +245,16 @@ router.get('/:dealId/model', async (req, res) => {
     const inputs = await loadModelInputs(dealId, orgId);
     if (!inputs) return res.status(404).json({ error: 'Deal not found' });
 
-    const saved = await loadSavedAssumptions(dealId, orgId);
+    const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
-    const assumptions = resolveAssumptions(saved, inputs.history, dealSeed(inputs), catalogue);
+    const cases = resolveCases(saved, inputs.history, dealSeed(inputs), catalogue);
 
     res.json({
-      assumptions,
-      isDerived: !saved,
+      case: which,
+      assumptions: cases[which],
+      isDerived: !saved[which],
+      // Low / High never saved: seeded from Base with SCENARIO_DELTAS.
+      seededFromBase: which !== 'Base' && !saved[which],
       history: inputs.history,
       ...modelStructure(inputs, catalogue),
       currency: inputs.currency,
@@ -241,8 +266,47 @@ router.get('/:dealId/model', async (req, res) => {
   }
 });
 
-// PUT /api/deals/:dealId/model
+// GET /api/deals/:dealId/model/cases — Low / Base / High side by side
+router.get('/:dealId/model/cases', async (req, res) => {
+  try {
+    const { dealId } = req.params;
+    const orgId = getOrgId(req);
+    const access = await verifyDealAccess(dealId, orgId);
+    if (!access) return res.status(404).json({ error: 'Deal not found' });
+
+    const inputs = await loadModelInputs(dealId, orgId);
+    if (!inputs) return res.status(404).json({ error: 'Deal not found' });
+
+    const saved = await loadSavedCases(dealId, orgId);
+    const catalogue = buildLineCatalogue(inputs.history);
+    const cases = resolveCases(saved, inputs.history, dealSeed(inputs), catalogue);
+    const structure = modelStructure(inputs, catalogue);
+
+    res.json({
+      cases: MODEL_CASES.map((c) => ({
+        case: c,
+        name: CASE_ROW_NAMES[c],
+        saved: !!saved[c],
+        assumptions: cases[c],
+        // Same arithmetic as the workbook's Scenarios sheet.
+        summary: structure.base ? summariseCase(catalogue.lines, structure.baseValues, cases[c]) : null,
+      })),
+      deltas: SCENARIO_DELTAS,
+      history: inputs.history,
+      ...structure,
+      currency: inputs.currency,
+      unitScale: 'MILLIONS',
+      sourceDocuments: inputs.documentNames,
+    });
+  } catch (error) {
+    sendModelError(res, error);
+  }
+});
+
+// PUT /api/deals/:dealId/model?case=
 router.put('/:dealId/model', async (req, res) => {
+  const which = requestedCase(req, res);
+  if (!which) return;
   const parsed = coherentAssumptions.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid assumptions', details: parsed.error.flatten() });
@@ -259,7 +323,7 @@ router.put('/:dealId/model', async (req, res) => {
         {
           dealId,
           organizationId: orgId,
-          name: DEFAULT_CASE,
+          name: CASE_ROW_NAMES[which],
           assumptions: parsed.data,
           createdBy: (req as any).user?.id ?? null,
           updatedAt: new Date().toISOString(),
@@ -276,8 +340,11 @@ router.put('/:dealId/model', async (req, res) => {
   }
 });
 
-// POST /api/deals/:dealId/model/export — returns the workbook
+// POST /api/deals/:dealId/model/export?case= — returns the workbook
+//   body: edits for `case` (legacy shape), or { cases: { Low?, Base?, High? }, activeCase? }
 router.post('/:dealId/model/export', async (req, res) => {
+  const which = requestedCase(req, res);
+  if (!which) return;
   try {
     const { dealId } = req.params;
     const orgId = getOrgId(req);
@@ -296,14 +363,24 @@ router.post('/:dealId/model/export', async (req, res) => {
       });
     }
 
-    const saved = await loadSavedAssumptions(dealId, orgId);
+    const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
-    const assumptions = withEdits(
-      resolveAssumptions(saved, inputs.history, dealSeed(inputs), catalogue), req.body, inputs, catalogue,
-    );
+    const resolved = resolveCases(saved, inputs.history, dealSeed(inputs), catalogue);
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const cases: CaseSet = { ...resolved };
+    let activeCase = which;
+    if (body.cases && typeof body.cases === 'object') {
+      const edits = body.cases as Partial<Record<ModelCase, unknown>>;
+      for (const c of MODEL_CASES) if (edits[c]) cases[c] = withEdits(resolved[c], edits[c], inputs, catalogue);
+      activeCase = parseCase(body.activeCase) ?? which;
+    } else {
+      cases[which] = withEdits(resolved[which], body, inputs, catalogue);
+    }
 
     const buffer = await buildModelWorkbook({
-      assumptions,
+      assumptions: cases.Base,
+      cases,
+      activeCase,
       history: inputs.history,
       context: {
         dealName: inputs.deal.name,

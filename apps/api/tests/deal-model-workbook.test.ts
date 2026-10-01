@@ -60,7 +60,7 @@ function isFormula(value: unknown): boolean {
 describe('workbook structure', () => {
   it('has every sheet a banker expects, in order', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual([
-      SHEETS.cover, SHEETS.assumptions, SHEETS.historicals,
+      SHEETS.cover, SHEETS.assumptions, SHEETS.scenarios, SHEETS.historicals,
       SHEETS.projections, SHEETS.returns, SHEETS.sensitivity, SHEETS.notes,
     ]);
   });
@@ -202,6 +202,24 @@ describe('every input earns its place', () => {
       ]),
     ];
     const dead = inputs.filter(([, ref]) => !allFormulas.includes(ref)).map(([name]) => name);
+
+    // Every Low / Base / High input feeds its case's Scenarios block (E2).
+    const scenarioFormulas = cells(SHEETS.scenarios)
+      .filter((c) => isFormula(c.value))
+      .map((c) => (c.value as { formula: string }).formula)
+      .join(' | ');
+    // Interest rate, WACC and DSCR target don't move IRR / MoM / exit EV, so the
+    // compact blocks skip them; each case's value still reaches the model
+    // through the Live column when that case is active.
+    const notInBlocks = ['interestRate', 'wacc', 'dscrTarget'];
+    for (const c of ['Low', 'Base', 'High'] as const) {
+      for (const k of SCALAR_KEYS.filter((x) => !notInBlocks.includes(x))) {
+        if (!scenarioFormulas.includes(reg.scalar(k, c))) dead.push(`${c}.${k}`);
+      }
+      for (const l of reg.driverLines) {
+        if (!scenarioFormulas.includes(reg.value(l.key, 0, c))) dead.push(`${c}.${l.key}`);
+      }
+    }
 
     expect(dead).toEqual([]);
   });

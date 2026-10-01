@@ -2,7 +2,7 @@
 // The arithmetic itself lives in @ai-crm/shared (projectModel) so the
 // preview is the same calculation the API and the workbook's formulas do.
 
-import type { CalcAssumptions, DriverMethod, LineDriver, ModelLine } from "@ai-crm/shared";
+import type { CalcAssumptions, CaseSummary, DriverMethod, LineDriver, ModelCase, ModelLine } from "@ai-crm/shared";
 
 export interface Assumptions extends CalcAssumptions {
   wacc: number;
@@ -17,9 +17,8 @@ export interface HistoryRow {
   ebitda?: number;
 }
 
-export interface ModelResponse {
-  assumptions: Assumptions;
-  isDerived: boolean;
+/** Line structure + base column, shared by every case. */
+export interface ModelStructure {
   history: HistoryRow[];
   /** Every P&L line of the deal (fix plan E1), in statement order. */
   lines: ModelLine[];
@@ -29,6 +28,12 @@ export interface ModelResponse {
   base?: { label: string; basis: string; revenue: number | null; ebitda: number | null; entrySource?: string } | null;
   currency: string;
   unitScale: string;
+}
+
+/** GET /deals/:id/model/cases (fix plan E2). */
+export interface CasesResponse extends ModelStructure {
+  cases: Array<{ case: ModelCase; name: string; saved: boolean; assumptions: Assumptions; summary: CaseSummary | null }>;
+  deltas?: Record<string, { revenueGrowthPp: number; ebitdaMarginPp: number; exitMultipleX: number }>;
 }
 
 export type ScalarKey =

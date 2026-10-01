@@ -192,3 +192,29 @@ export function projectModel(
     exitRevenue: revenue[exitIdx] ?? 0, exitEbitda, exitEv, exitEquity, mom, irr,
   };
 }
+
+// ─── Scenarios (fix plan E2) ──────────────────────────────────────
+// Each case is a full assumption set (a DealModel row per name); the
+// workbook carries all three and switches with an "Active case" cell.
+
+export const MODEL_CASES = ['Low', 'Base', 'High'] as const;
+export type ModelCase = (typeof MODEL_CASES)[number];
+
+export interface CaseSummary {
+  exitRevenue: number;
+  exitEbitda: number;
+  exitEv: number;
+  entryEv: number;
+  equity: number;
+  irr: number | null;
+  mom: number | null;
+}
+
+/** Headline figures for one case — what the workbook's Scenarios sheet shows. */
+export function summariseCase(lines: ModelLine[], baseValues: Record<string, number>, a: CalcAssumptions): CaseSummary {
+  const p = projectModel(lines, baseValues, a);
+  return {
+    exitRevenue: p.exitRevenue, exitEbitda: p.exitEbitda, exitEv: p.exitEv,
+    entryEv: p.entryEv, equity: p.equity, irr: p.irr, mom: p.mom,
+  };
+}

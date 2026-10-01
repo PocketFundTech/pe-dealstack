@@ -24,6 +24,24 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 **Verification:** see the E2 entry below for the final counts.
 
+#### Timestamp: October 1, 2026 — 22:05 IST
+
+#### Goal: Model builder fix plan **E2** — Low / Base / High scenarios (same branch).
+
+**Analyst feedback:** "there is no high/base/low scenario; even basic models should have quick scenario analysis."
+
+**E2 · Low / Base / High cases**
+- **Root cause:** `DealModel` already supported named cases (`name` + `UNIQUE("dealId", name)`), but the route hard-coded `'Base case'`. **No migration needed.**
+- **API:** `GET` / `PUT /model?case=Low|Base|High` (default Base — every existing saved model is the Base case), new `GET /model/cases` (all three + a summary of each), and export carries all three cases and opens on the requested one. Unknown case → 400 `INVALID_CASE`. Same router, already in the lite bundle.
+- **Seeding:** an unsaved Low / High starts from Base — revenue growth ∓3pp, EBITDA margin ∓2pp (through the % of revenue cost lines, in proportion), exit multiple ∓1.0x (floor 0.5x). After that every number is an ordinary editable input. Projection years, entry basis and debt mode follow Base so the workbook has one layout.
+- **Workbook:** Assumptions has Low / Base / High columns for every scalar and Low / Base / High rows for every line driver, a blue **Active case** dropdown, and a Live column (`CHOOSE` on the active case) that every formula reads. A new **Scenarios** sheet shows revenue, EBITDA, margin, entry / exit EV, equity, IRR and MoM for all three cases at once, each from its own compact calculation block (no macros, no data tables). `fullCalcOnLoad` stays on.
+- **Checked:** recalculating the generated workbook gave the same IRR / MoM / exit EV as the shared calculator for all three cases (difference < 1e-14), and the Returns sheet followed whichever case was active.
+- **Panel:** Low / Base / High tabs ("seeded" / unsaved markers), Save saves the active case only, a side-by-side IRR / MoM / exit EV / exit EBITDA summary that moves as you edit, and Download sends all three cases.
+
+**Not done here:** ticking E1 / E2 in `docs/FINANCIALS-FIX-PLAN.md` — that file lives only on the unmerged `docs/financials-fix-plan` branch.
+
+**Verification:** API 2233 tests passing (+46 new across catalogue / drivers / workbook-lines / scenarios / route), web 467 passing (+9 panel, +1 routing), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors when the API isn't built), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
 ---
 
 ### Session 83 — September 30, 2026

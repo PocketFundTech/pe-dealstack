@@ -1,8 +1,8 @@
 // Shared fixture for the deal-model panel tests: an SRM-shaped catalogue
-// (COGS with cement / fly-ash accounts) as GET /deals/:id/model returns it.
+// (COGS with cement / fly-ash accounts) as GET /deals/:id/model/cases returns it.
 
-import type { ModelLine } from "@ai-crm/shared";
-import type { Assumptions, ModelResponse } from "./deal-model-types";
+import { summariseCase, type ModelLine } from "@ai-crm/shared";
+import type { Assumptions, CasesResponse } from "./deal-model-types";
 
 export const LINES: ModelLine[] = [
   { key: "revenue", label: "Revenue", kind: "INPUT", level: 0, revenueLine: true },
@@ -47,13 +47,29 @@ export function assumptions(overrides: Partial<Assumptions> = {}): Assumptions {
   };
 }
 
-export function modelResponse(a: Assumptions = assumptions()): ModelResponse {
+export const BASE_VALUES = {
+  revenue: 27.3, cogs_cement: 8.2, cogs_fly_ash: 2.0, total_opex: 14.3, da: 0.7, interest_expense: 0.5, tax: 0.45,
+};
+
+/** Low / High as the API seeds them: growth ∓3pp, costs ±2pp, exit ∓1x. */
+export function seeded(which: "Low" | "High"): Assumptions {
+  const d = which === "Low" ? -1 : 1;
+  const a = assumptions({ exitMultiple: 5 + d });
+  a.lineDrivers.revenue = { method: "GROWTH", values: flat(10 + 3 * d) };
+  a.lineDrivers.total_opex = { method: "PCT_REVENUE", values: flat(50 - 2 * d) };
+  return a;
+}
+
+export function casesResponse(saved: { Low?: boolean; Base?: boolean; High?: boolean } = {}): CasesResponse {
+  const sets = { Low: seeded("Low"), Base: assumptions(), High: seeded("High") };
   return {
-    assumptions: a,
-    isDerived: true,
+    cases: (["Low", "Base", "High"] as const).map((c) => ({
+      case: c, name: `${c} case`, saved: !!saved[c], assumptions: sets[c],
+      summary: summariseCase(LINES, BASE_VALUES, sets[c]),
+    })),
     history: [{ period: "FY2023" }, { period: "FY2024" }, { period: "2025 YTD" }],
     lines: LINES,
-    baseValues: { revenue: 27.3, cogs_cement: 8.2, cogs_fly_ash: 2.0, total_opex: 14.3, da: 0.7, interest_expense: 0.5, tax: 0.45 },
+    baseValues: BASE_VALUES,
     base: { label: "FY2024 A", basis: "FY", revenue: 27.3, ebitda: 2.8, entrySource: "base" },
     currency: "USD",
     unitScale: "MILLIONS",

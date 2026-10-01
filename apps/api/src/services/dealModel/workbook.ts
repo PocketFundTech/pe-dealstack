@@ -15,10 +15,18 @@
 // Layout is generated from the deal's P&L line catalogue (fix plan E1):
 // workbook/registry.ts hands out every address, so nothing here hard-codes
 // a row. Sheets live in workbook/*.ts.
+//
+// Scenarios (fix plan E2): the Assumptions sheet carries Low / Base / High
+// columns per input and an "Active case" switch; every main-model formula
+// reads the Live column (CHOOSE on the active case). The Scenarios sheet
+// computes all three cases side by side.
 
 import ExcelJS from 'exceljs';
+import type { ModelCase } from '@ai-crm/shared';
 import type { HistoricalRow, ModelAssumptions, ResolvedAssumptions } from './assumptions.js';
 import { resolveAssumptions } from './assumptions.js';
+import { alignToBase, seedScenario, SCENARIO_DELTAS, type CaseSet } from './scenarios.js';
+import { writeScenarios } from './workbook/scenariosSheet.js';
 import { selectBasePeriod } from './basePeriod.js';
 import { buildLineCatalogue, baseColumnValues, type LineCatalogue } from './lineCatalogue.js';
 import { buildRegistry, type Registry } from './workbook/registry.js';
@@ -33,30 +41,45 @@ import { SHEETS, type WorkbookContext } from './workbook/xlsx.js';
 export { SHEETS, type WorkbookContext };
 export { RETURNS_ROWS } from './workbook/returns.js';
 export { buildRegistry, SCALAR_KEYS, type Registry } from './workbook/registry.js';
+export { scenarioLayout } from './workbook/scenariosSheet.js';
+
+type AnyAssumptions = Partial<ModelAssumptions> | ResolvedAssumptions;
 
 export interface BuildModelInput {
-  /** Saved or edited assumptions — partial / pre-E1 sets are resolved against the catalogue. */
-  assumptions: Partial<ModelAssumptions> | ResolvedAssumptions;
+  /** Base case — saved or edited; partial / pre-E1 sets are resolved against the catalogue. */
+  assumptions: AnyAssumptions;
+  /** Low / High (and optionally Base) sets; a missing case is seeded from Base. */
+  cases?: Partial<Record<ModelCase, AnyAssumptions | null>>;
+  /** Which case the workbook opens on (the Active case cell). Default Base. */
+  activeCase?: ModelCase;
   history: HistoricalRow[];
   context: WorkbookContext;
 }
 
 export interface ModelLayout {
   catalogue: LineCatalogue;
+  /** The Base case. */
   assumptions: ResolvedAssumptions;
+  cases: CaseSet;
   registry: Registry;
 }
 
-/** The catalogue, resolved assumptions and cell registry a workbook is built on. */
-export function buildModelLayout(input: Pick<BuildModelInput, 'assumptions' | 'history'>): ModelLayout {
-  const catalogue = buildLineCatalogue(input.history);
-  const assumptions = resolveAssumptions(input.assumptions as Partial<ModelAssumptions>, input.history, {}, catalogue);
-  return { catalogue, assumptions, registry: buildRegistry(catalogue.lines, assumptions.projectionYears) };
+/** The catalogue, resolved cases and cell registry a workbook is built on. */
+export function buildModelLayout(input: Pick<BuildModelInput, 'assumptions' | 'history' | 'cases'>): ModelLayout {
+  const { history } = input;
+  const catalogue = buildLineCatalogue(history);
+  const base = resolveAssumptions((input.cases?.Base ?? input.assumptions) as Partial<ModelAssumptions>, history, {}, catalogue);
+  const side = (c: 'Low' | 'High') => {
+    const given = input.cases?.[c];
+    return given ? alignToBase(given as Partial<ModelAssumptions>, base, history, {}, catalogue) : seedScenario(base, catalogue.lines, c);
+  };
+  const cases: CaseSet = { Low: side('Low'), Base: base, High: side('High') };
+  return { catalogue, assumptions: base, cases, registry: buildRegistry(catalogue.lines, base.projectionYears) };
 }
 
 export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer> {
   const { history, context } = input;
-  const { catalogue, assumptions, registry } = buildModelLayout(input);
+  const { catalogue, assumptions, cases, registry } = buildModelLayout(input);
   const base = selectBasePeriod(history);
   const baseCol = baseColumnValues(catalogue, history, base, context.fallbackEntryEbitda);
 
@@ -65,12 +88,20 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
   wb.created = new Date(context.generatedAt);
 
   writeCover(wb.addWorksheet(SHEETS.cover), context);
-  writeAssumptions(wb.addWorksheet(SHEETS.assumptions), assumptions, registry);
+  writeAssumptions(wb.addWorksheet(SHEETS.assumptions), cases, input.activeCase ?? 'Base', registry);
+  const scenarioSheet = wb.addWorksheet(SHEETS.scenarios);
   const checks = writeHistoricals(wb.addWorksheet(SHEETS.historicals), history, catalogue, registry, context);
   writeProjections(wb.addWorksheet(SHEETS.projections), assumptions, registry, base, baseCol, context);
   writeReturns(wb.addWorksheet(SHEETS.returns), assumptions, registry, base, baseCol, context);
   writeSensitivity(wb.addWorksheet(SHEETS.sensitivity), assumptions, registry);
-  writeNotes(wb.addWorksheet(SHEETS.notes), { ctx: context, history, base, baseCol, cat: catalogue, reg: registry, checks });
+  writeScenarios(scenarioSheet, cases, registry, context);
+  writeNotes(wb.addWorksheet(SHEETS.notes), { ctx: context, history, base, baseCol, cat: catalogue, reg: registry, checks,
+    extra: [
+      `Scenarios: switch the Active case on the Assumptions sheet (Low / Base / High) and the whole model follows; the Scenarios sheet shows all three at once. ` +
+      `Unsaved Low / High cases were seeded from Base: revenue growth ${SCENARIO_DELTAS.Low.revenueGrowthPp}pp / +${SCENARIO_DELTAS.High.revenueGrowthPp}pp, ` +
+      `EBITDA margin ${SCENARIO_DELTAS.Low.ebitdaMarginPp}pp / +${SCENARIO_DELTAS.High.ebitdaMarginPp}pp (through the % of revenue cost lines), ` +
+      `exit multiple ${SCENARIO_DELTAS.Low.exitMultipleX}x / +${SCENARIO_DELTAS.High.exitMultipleX}x. Every case value is an editable input.`,
+    ] });
 
   // No cached results are written; make Excel / Sheets compute on open so
   // previews don't show blanks.

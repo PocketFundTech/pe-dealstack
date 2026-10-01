@@ -10,30 +10,41 @@
 // ever disagree, the workbook is right.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { projectModel, type DriverMethod } from "@ai-crm/shared";
+import { MODEL_CASES, projectModel, summariseCase, type DriverMethod, type ModelCase } from "@ai-crm/shared";
 import { api } from "@/lib/api";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { useToast } from "@/providers/ToastProvider";
 import { DriverTable } from "./deal-model-driver-table";
+import { CaseTabs, ScenarioSummary } from "./deal-model-scenarios";
 import {
   SCALAR_GROUPS, convertDriver, fmtMoney,
-  type Assumptions, type ModelResponse, type ScalarKey,
+  type Assumptions, type CasesResponse, type ModelStructure, type ScalarKey,
 } from "./deal-model-types";
+
+type ByCase<T> = Record<ModelCase, T>;
+const byCase = <T,>(fn: (c: ModelCase) => T) =>
+  Object.fromEntries(MODEL_CASES.map((c) => [c, fn(c)])) as ByCase<T>;
 
 export function DealModelPanel({ dealId }: { dealId: string }) {
   const { showToast } = useToast();
-  const [model, setModel] = useState<ModelResponse | null>(null);
-  const [assumptions, setAssumptions] = useState<Assumptions | null>(null);
+  const [model, setModel] = useState<ModelStructure | null>(null);
+  const [cases, setCases] = useState<ByCase<Assumptions> | null>(null);
+  const [saved, setSaved] = useState<ByCase<boolean>>(() => byCase(() => false));
+  const [dirty, setDirty] = useState<ByCase<boolean>>(() => byCase(() => false));
+  const [active, setActive] = useState<ModelCase>("Base");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
+  const assumptions = cases?.[active] ?? null;
 
   useEffect(() => {
     void (async () => {
       try {
-        const res = await api.get<ModelResponse>(`/deals/${dealId}/model`);
-        setModel(res);
-        setAssumptions(res.assumptions);
+        const res = await api.get<CasesResponse>(`/deals/${dealId}/model/cases`);
+        const { cases: list, ...structure } = res;
+        setModel(structure);
+        setCases(byCase((c) => list.find((x) => x.case === c)!.assumptions));
+        setSaved(byCase((c) => !!list.find((x) => x.case === c)?.saved));
       } catch (err) {
         // Either no financials yet or the migration hasn't run — both are
         // empty states the user can act on, not errors to shout about.
@@ -50,50 +61,63 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
     return projectModel(model.lines, model.baseValues ?? {}, assumptions);
   }, [assumptions, model]);
 
+  const summaries = useMemo(() => {
+    if (!cases || !model?.lines?.length || model.base?.entrySource === "missing") return null;
+    return byCase((c) => summariseCase(model.lines, model.baseValues ?? {}, cases[c]));
+  }, [cases, model]);
+
+  /** Edit the active case only. */
+  const setAssumptions = useCallback((fn: (a: Assumptions) => Assumptions) => {
+    setCases((all) => (all ? { ...all, [active]: fn(all[active]) } : all));
+    setDirty((d) => ({ ...d, [active]: true }));
+  }, [active]);
+
   const set = useCallback((key: ScalarKey, raw: string) => {
     const value = Number(raw);
     if (!Number.isFinite(value)) return;
-    setAssumptions((a) => (a ? { ...a, [key]: value } : a));
-  }, []);
+    setAssumptions((a) => ({ ...a, [key]: value }));
+  }, [setAssumptions]);
 
   const setDriverValue = useCallback((key: string, year: number, value: number) => {
     setAssumptions((a) => {
-      if (!a) return a;
       const d = a.lineDrivers[key];
       const values = d.values.map((v, y) => (y === year ? value : v));
       return { ...a, lineDrivers: { ...a.lineDrivers, [key]: { ...d, values } } };
     });
-  }, []);
+  }, [setAssumptions]);
 
   const setDriverMethod = useCallback((key: string, method: DriverMethod) => {
     setAssumptions((a) => {
-      if (!a || !projection) return a;
+      if (!projection) return a;
       const converted = convertDriver(method, projection.values[key] ?? [], projection.revenue, projection.base[key] ?? 0);
       return { ...a, lineDrivers: { ...a.lineDrivers, [key]: converted } };
     });
-  }, [projection]);
+  }, [projection, setAssumptions]);
 
   const save = useCallback(async () => {
     if (!assumptions) return;
     setBusy(true);
     try {
-      await api.put(`/deals/${dealId}/model`, assumptions);
-      showToast("Assumptions saved", "success");
+      await api.put(`/deals/${dealId}/model?case=${active}`, assumptions);
+      setSaved((s) => ({ ...s, [active]: true }));
+      setDirty((d) => ({ ...d, [active]: false }));
+      showToast(`${active} case saved`, "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Couldn't save assumptions", "error");
     } finally {
       setBusy(false);
     }
-  }, [dealId, assumptions, showToast]);
+  }, [dealId, assumptions, active, showToast]);
 
   const download = useCallback(async () => {
-    if (!assumptions) return;
+    if (!cases) return;
     setBusy(true);
     try {
-      const res = await authFetchRaw(`/deals/${dealId}/model/export`, {
+      // All three cases (incl. unsaved edits); the workbook opens on the active one.
+      const res = await authFetchRaw(`/deals/${dealId}/model/export?case=${active}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(assumptions),
+        body: JSON.stringify({ cases, activeCase: active }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -114,7 +138,7 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
     } finally {
       setBusy(false);
     }
-  }, [dealId, assumptions, showToast]);
+  }, [dealId, cases, active, showToast]);
 
   if (loading) {
     return <div className="h-32 animate-pulse rounded-xl bg-gray-100" />;
@@ -143,16 +167,17 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
             {model.history.length} historical period{model.history.length === 1 ? "" : "s"} ·{" "}
             {model.currency} in millions
             {model.base && ` · base ${model.base.label}`}
-            {model.isDerived && " · starting from derived defaults"}
+            {!saved.Base && " · starting from derived defaults"}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <CaseTabs active={active} saved={saved} dirty={dirty} onSelect={setActive} />
           <button
             onClick={() => void save()}
             disabled={busy}
             className="rounded-lg border border-border-subtle px-3 py-2 text-sm font-medium text-text-secondary hover:bg-gray-50 disabled:opacity-60"
           >
-            Save
+            Save {active}
           </button>
           <button
             onClick={() => void download()}
@@ -179,6 +204,17 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
               <p className="mt-0.5 text-lg font-semibold tabular-nums text-text-main">{m.value}</p>
             </div>
           ))}
+        </div>
+      )}
+
+      {summaries && (
+        <div className="border-b border-border-subtle px-5 py-3">
+          <ScenarioSummary summaries={summaries} active={active} currency={model.currency} />
+          {!saved.Low || !saved.High ? (
+            <p className="mt-2 text-xs text-text-muted">
+              Unsaved Low / High cases start from Base: revenue growth ∓3pp, EBITDA margin ∓2pp, exit multiple ∓1.0x. Edit and save each case on its tab.
+            </p>
+          ) : null}
         </div>
       )}
 

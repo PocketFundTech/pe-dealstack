@@ -43,6 +43,8 @@ function badColumns(sel: string): string[] {
 let dealRow: any;
 let statements: any[] = [];
 let modelRow: any = null;
+/** Several saved cases; overrides modelRow when set. */
+let modelRows: any[] | null = null;
 let upserted: any = null;
 let documents: any[] = [];
 
@@ -88,7 +90,7 @@ function tableMock() {
           upserted = row;
           return { select: () => ({ single: async () => ({ data: { id: 'model-1', ...row }, error: null }) }) };
         },
-        then: (resolve: any) => resolve({ data: modelRow ? [modelRow] : [], error: null }),
+        then: (resolve: any) => resolve({ data: modelRows ?? (modelRow ? [modelRow] : []), error: null }),
       };
       return chain;
     }
@@ -130,6 +132,7 @@ beforeEach(() => {
   statements = [stmt('2023', 9, 1.5), stmt('2024', 10, 2)];
   documents = [{ id: 'doc-1', name: 'CIM.pdf' }];
   modelRow = null;
+  modelRows = null;
   upserted = null;
   mockSupabase.from.mockImplementation(tableMock());
 });
@@ -321,5 +324,89 @@ describe('POST /api/deals/:dealId/model/export', () => {
     dealAccess = null;
     const app = await buildApp();
     expect((await request(app).post('/api/deals/other/model/export').send({})).status).toBe(404);
+  });
+});
+
+describe('Low / Base / High cases (fix plan E2)', () => {
+  it('GET ?case=Low seeds Low from the saved Base when Low was never saved', async () => {
+    modelRow = { id: 'model-1', name: 'Base case', assumptions: { exitMultiple: 6 } };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model?case=Low');
+    expect(res.status).toBe(200);
+    expect(res.body.case).toBe('Low');
+    expect(res.body.seededFromBase).toBe(true);
+    expect(res.body.isDerived).toBe(true);
+    expect(res.body.assumptions.exitMultiple).toBe(5); // 6 − 1.0x
+  });
+
+  it('GET ?case=High returns the saved High row', async () => {
+    modelRows = [
+      { name: 'Base case', assumptions: { exitMultiple: 6 } },
+      { name: 'High case', assumptions: { exitMultiple: 9 } },
+    ];
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model?case=high');
+    expect(res.body.assumptions.exitMultiple).toBe(9);
+    expect(res.body.isDerived).toBe(false);
+    expect(res.body.seededFromBase).toBe(false);
+  });
+
+  it('400s an unknown case', async () => {
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model?case=Upside');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CASE');
+  });
+
+  it('PUT ?case=High saves under "High case"; no case still saves Base', async () => {
+    const app = await buildApp();
+    const body = {
+      entryMultiple: 6, entryBasis: 'EBITDA', transactionFeesPct: 2, debtQuantumMode: 'MULTIPLE', debtQuantum: 3,
+      interestRate: 9, amortPctPerYear: 5, cashSweepPct: 50, projectionYears: 5, capexPctRevenue: 3,
+      nwcPctRevenue: 10, taxRate: 25, exitMultiple: 7, exitYear: 5, wacc: 12, dscrTarget: 1.25,
+      unitScale: 'MILLIONS', currency: 'USD',
+    };
+    await request(app).put('/api/deals/deal-1/model?case=High').send(body);
+    expect(upserted.name).toBe('High case');
+    await request(app).put('/api/deals/deal-1/model').send(body);
+    expect(upserted.name).toBe('Base case');
+    const bad = await request(app).put('/api/deals/deal-1/model?case=Upside').send(body);
+    expect(bad.status).toBe(400);
+  });
+
+  it('GET /model/cases returns all three cases with saved flags and summaries', async () => {
+    modelRows = [{ name: 'Low case', assumptions: { exitMultiple: 3 } }];
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    expect(res.body.cases.map((c: any) => [c.case, c.name, c.saved])).toEqual([
+      ['Low', 'Low case', true], ['Base', 'Base case', false], ['High', 'High case', false],
+    ]);
+    const [low, base, high] = res.body.cases;
+    expect(low.assumptions.exitMultiple).toBe(3);
+    expect(high.assumptions.exitMultiple).toBe(base.assumptions.exitMultiple + 1);
+    expect(low.summary.exitEv).toBeLessThan(base.summary.exitEv);
+    expect(high.summary.irr).toBeGreaterThan(base.summary.irr);
+    expect(res.body.deltas.High).toEqual({ revenueGrowthPp: 3, ebitdaMarginPp: 2, exitMultipleX: 1 });
+    expect(res.body.lines.length).toBeGreaterThan(5);
+  });
+
+  it('export carries all three cases and opens on the requested one', async () => {
+    const app = await buildApp();
+    const res = await request(app)
+      .post('/api/deals/deal-1/model/export?case=Base')
+      .send({ cases: { High: { exitMultiple: 12 } }, activeCase: 'High' })
+      .buffer(true)
+      .parse(binaryParser);
+    expect(res.status).toBe(200);
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.body);
+    const a = wb.getWorksheet('Assumptions')!;
+    expect(a.getCell('B4').value).toBe('High');
+    let exitRow = 0;
+    a.eachRow((row, n) => { if (row.getCell(1).value === 'Exit multiple') exitRow = n; });
+    expect(a.getCell(exitRow, 4).value).toBe(12); // High column
+    expect(wb.getWorksheet('Scenarios')).toBeTruthy();
   });
 });

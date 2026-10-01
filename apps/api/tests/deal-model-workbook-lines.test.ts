@@ -10,6 +10,7 @@ import ExcelJS from 'exceljs';
 import { normaliseStatements, deriveDefaults } from '../src/services/dealModel/assumptions.js';
 import { buildModelWorkbook, buildModelLayout, SHEETS, RETURNS_ROWS } from '../src/services/dealModel/workbook.js';
 import { SRM_STATEMENTS, SRM_CONTEXT } from './helpers/srmModelFixture.js';
+import { findCycle } from './helpers/workbookGraph.js';
 
 const history = normaliseStatements(SRM_STATEMENTS).rows;
 const assumptions = deriveDefaults(history);
@@ -27,18 +28,19 @@ beforeAll(async () => {
 describe('Assumptions — a driver row per line', () => {
   it('writes method + per-year values as blue inputs, % as fractions', () => {
     const a = sheet(SHEETS.assumptions);
-    const row = reg.assumptions.driverRow.cogs_cement;
+    const row = reg.assumptions.driverRow.cogs_cement.Base;
     expect(a.getCell(row, 1).value).toBe('Cement');
-    expect(a.getCell(row, 2).value).toBe('% of revenue');
-    expect(a.getCell(row, 3).value).toBeCloseTo(assumptions.lineDrivers.cogs_cement.values[0] / 100, 6);
-    expect(a.getCell(row, 3).font?.color?.argb).toBe('FF0000CC');
+    expect(a.getCell(row, 2).value).toBe('Base');
+    expect(a.getCell(row, 3).value).toBe('% of revenue');
+    expect(a.getCell(row, 4).value).toBeCloseTo(assumptions.lineDrivers.cogs_cement.values[0] / 100, 6);
+    expect(a.getCell(row, 4).font?.color?.argb).toBe('FF0000CC');
     expect(a.getRow(row).outlineLevel).toBe(1);
   });
 
   it('offers the allowed methods as a dropdown — no % of revenue on revenue lines', () => {
     const a = sheet(SHEETS.assumptions);
-    const cost = a.getCell(reg.assumptions.driverRow.cogs_cement, 2).dataValidation;
-    const rev = a.getCell(reg.assumptions.driverRow.revenue_sales, 2).dataValidation;
+    const cost = a.getCell(reg.assumptions.driverRow.cogs_cement.Low, 3).dataValidation;
+    const rev = a.getCell(reg.assumptions.driverRow.revenue_sales.High, 3).dataValidation;
     expect(cost?.type).toBe('list');
     expect(cost?.formulae?.[0]).toContain('% of revenue');
     expect(rev?.formulae?.[0]).not.toContain('% of revenue');
@@ -131,32 +133,3 @@ describe('Projections — live formulas from each driver', () => {
   });
 });
 
-/** Static dependency graph over every formula (IF branches included) → first cycle found, or null. */
-function findCycle(book: ExcelJS.Workbook): string | null {
-  const colNum = (c: string) => c.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
-  const colLet = (n: number) => { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
-  const edges = new Map<string, string[]>();
-  const REF = /(?:([A-Za-z]+)!)?\$?([A-Z]+)\$?(\d+)(?::\$?([A-Z]+)\$?(\d+))?/g;
-  book.eachSheet((ws) => ws.eachRow((row) => row.eachCell((cell) => {
-    const formula = f(cell.value).replace(/"[^"]*"/g, '');
-    if (!formula) return;
-    const deps: string[] = [];
-    for (const m of formula.matchAll(REF)) {
-      const sh = m[1] ?? ws.name;
-      const [c1, r1, c2, r2] = [colNum(m[2]), +m[3], colNum(m[4] ?? m[2]), +(m[5] ?? m[3])];
-      for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) deps.push(`${sh}!${colLet(c)}${r}`);
-    }
-    edges.set(`${ws.name}!${cell.address}`, deps);
-  })));
-  const state = new Map<string, 1 | 2>();
-  const visit = (n: string): string | null => {
-    if (state.get(n) === 2) return null;
-    if (state.get(n) === 1) return n;
-    state.set(n, 1);
-    for (const d of edges.get(n) ?? []) { const hit = visit(d); if (hit) return hit; }
-    state.set(n, 2);
-    return null;
-  };
-  for (const n of edges.keys()) { const hit = visit(n); if (hit) return hit; }
-  return null;
-}
