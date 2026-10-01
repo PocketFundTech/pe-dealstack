@@ -5,6 +5,41 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 86 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 00:11 IST
+
+#### Goal: follow-ups from the live re-test (PR `fix/qa-retest-followups`), plus migration bookkeeping.
+
+**Migrations:** the founder ran all three pending SQL files on 2026-10-02 and the combined check passed:
+- `usage-cost-accuracy-migration.sql` — `claude-sonnet-5` priced at 2 / 10, `UsageReconciliation` table created.
+- `deal-stage-cleanup.sql` — 0 deals left on hidden stages.
+- `financials-source-period-migration.sql` — 6 new `FinancialStatement` columns.
+
+Ticked in `docs/PENDING-MIGRATIONS.md` and `docs/PENDING-OPS-CHECKLIST.md`.
+
+**1. AI failures said "check ANTHROPIC_API_KEY" when the account was out of credit**
+- **Root cause:** `folderInsightsGenerator` turned every model error into `null`, and the route reported `null` as a missing key. The shared `classifyAIErrorObject` also let an out-of-credit 400 fall through to a generic "AI error: 400 {…}".
+- **Fix:** the generator rethrows model errors and the route classifies them. `classifyAIErrorObject` now checks provider rejections first (out of credit, bad key, rate limit, overloaded) and names the provider, e.g. "AI service (Anthropic) … credits are exhausted". Every route using the shared classifier benefits.
+- **Missing toast:** the data room used its own toast, whose hide-timer was never cleared, so an older toast could dismiss a newer error before anyone saw it. The page now uses the app-wide `useToast`, and the old `VDRToast` is removed.
+
+**2. Deal headline showed "₹25.1 Cr" instead of "₹251.3 Cr"**
+- **Root cause:** an Excel P&L headed "(INR crore)" was read as millions. Both deal-reading prompts (the legacy `aiExtractor` and the Claude deal reader) described only $-millions and $-thousands table headers; crore appeared only as a suffix on a single number.
+- **Fix:** both prompts now state that a crore table is ×10 and a lakh table ×0.1 to reach millions, with worked examples.
+- **Existing data:** deals already written this way need the deal edited or the file re-uploaded. Financial statements are unaffected; that path was fixed in #160.
+
+**3. Re-extract "timed out after ~10 s"**
+- **Finding:** production logs show the request never reached the server; only page loads appear for that deal. The client waits up to 290 s, and the app showed its "Couldn't reach the server" message, so the app behaved correctly.
+- **Conclusion:** this is the same intermittent network-level `ERR_TIMED_OUT` seen earlier from this network. No code change.
+
+**Also:** added `apps/api/scripts/backfill-statement-period-keys.ts`. It was referenced by #164 but never committed. It fills the new period columns on old rows with the same values new extractions write. It is optional, since the app parses labels when the columns are empty. Usage: `--dry-run` first.
+
+**Production finding:** Anthropic and OpenAI are both out of credit in production. Real users' extractions are failing (e.g. a "Kliniva" deal), not just the QA org.
+
+**Verification:** API 2326 tests passing (+5), web 509, tsc clean, lint 0 errors, lockfile unchanged.
+
+---
+
 ### Session 85 — October 1, 2026
 
 #### Timestamp: October 1, 2026 — 23:06 IST
