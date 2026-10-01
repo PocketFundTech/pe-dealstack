@@ -3,6 +3,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { analyzeFinancials } from '../services/analysis/index.js';
+import { getConcentrationFacts } from '../services/analysis/customerConcentrationReader.js';
 
 const router = Router();
 
@@ -220,7 +221,7 @@ router.get('/deals/:dealId/financials/memo', async (req, res) => {
     // Fetch analysis
     let analysis = null;
     if (rows && rows.length > 0) {
-      analysis = await analyzeFinancials(dealId, rows);
+      analysis = await analyzeFinancials(dealId, rows, { concentration: await getConcentrationFacts(dealId) });
     }
 
     // Build memo sections

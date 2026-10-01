@@ -11,6 +11,7 @@
 import { supabase } from '../../../supabase.js';
 import { trackedClaudeMessage } from '../../ai/client.js';
 import { analyzeFinancials } from '../../analysis/index.js';
+import { getConcentrationFacts } from '../../analysis/customerConcentrationReader.js';
 import { log } from '../../../utils/logger.js';
 
 const SCORECARD_TIMEOUT_MS = 30_000;
@@ -101,7 +102,7 @@ export async function scoreDeal(dealId: string, orgId: string): Promise<Scorecar
 
   let financialSection: string;
   if (statements && statements.length > 0) {
-    const analysis = await analyzeFinancials(dealId, statements);
+    const analysis = await analyzeFinancials(dealId, statements, { concentration: await getConcentrationFacts(dealId) });
     const flags = (analysis.redFlags ?? [])
       .map((f: any) => `- [${f.severity ?? 'unknown'}] ${f.title ?? f.description ?? JSON.stringify(f)}`)
       .join('\n');

@@ -3,6 +3,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { analyzeFinancials } from '../services/analysis/index.js';
+import { getConcentrationFacts } from '../services/analysis/customerConcentrationReader.js';
 import {
   generateNarrativeInsights,
   computeAnalysisHash,
@@ -42,13 +43,18 @@ router.get('/deals/:dealId/financials/analysis', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
-    const { data: rows, error } = await supabase
-      .from('FinancialStatement')
-      .select('*')
-      .eq('dealId', dealId)
-      .eq('isActive', true)
-      .order('period', { ascending: true })
-      .range(0, AGGREGATE_CAP - 1);
+    // Customer concentration / related parties from the documents (fix plan
+    // F1 part 2): cached per deal; a first view reads them (bounded wait).
+    const [{ data: rows, error }, concentration] = await Promise.all([
+      supabase
+        .from('FinancialStatement')
+        .select('*')
+        .eq('dealId', dealId)
+        .eq('isActive', true)
+        .order('period', { ascending: true })
+        .range(0, AGGREGATE_CAP - 1),
+      getConcentrationFacts(dealId, { generate: true }),
+    ]);
 
     if (error) throw error;
 
@@ -60,7 +66,7 @@ router.get('/deals/:dealId/financials/analysis', async (req, res) => {
       return res.json({ hasData: false, qoe: null, ratios: [], periods: [] });
     }
 
-    const analysis = await analyzeFinancials(dealId, rows);
+    const analysis = await analyzeFinancials(dealId, rows, { concentration });
     res.json({ hasData: true, ...analysis });
   } catch (err) {
     log.error('GET financials analysis error', err);
@@ -97,7 +103,8 @@ router.get('/deals/:dealId/financials/insights', async (req, res) => {
     }
 
     // Run analysis (pure math — fast)
-    const analysis = await analyzeFinancials(dealId, rows);
+    const concentration = await getConcentrationFacts(dealId); // cache only — the analysis view fills it
+    const analysis = await analyzeFinancials(dealId, rows, { concentration });
     const analysisHash = computeAnalysisHash(analysis);
 
     // Fetch deal context (cheap; needed even on cache hit for downstream
@@ -182,7 +189,8 @@ router.post('/deals/:dealId/financials/insights/regenerate', async (req, res) =>
       return res.json({ hasData: false, insights: null });
     }
 
-    const analysis = await analyzeFinancials(dealId, rows);
+    const concentration = await getConcentrationFacts(dealId); // cache only — the analysis view fills it
+    const analysis = await analyzeFinancials(dealId, rows, { concentration });
     const analysisHash = computeAnalysisHash(analysis);
 
     const { data: deal } = await supabase

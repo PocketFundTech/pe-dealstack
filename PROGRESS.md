@@ -5,6 +5,37 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 84 — October 1, 2026
+
+#### Timestamp: October 1, 2026 — 21:38 IST
+
+#### Goal: Financials fix plan **F1 part 2** — customer concentration and related-party customers in the AI Financial Analysis (branch `feat/financials-f1-customer-concentration`, stacked on `feat/financials-f1-cashflow-flags`).
+
+**Problem:** the SRM analyst found by hand that one customer was 39% of revenue and was also a part-owner. The analysis never saw it: those facts are in the CIM / management presentation, not on the financial statements.
+
+**Fix:**
+- New `analysis/customerConcentrationReader.ts`: takes keyword windows from the deal's document text ("% of revenue", "largest customer", "related party", "shareholder" …, CIM first, max 60k chars). It then makes **one** Claude call (Haiku, `operation: customer_concentration`, structured output, today's date in the prompt) for top customers and their revenue share, related-party customers, and related-party suppliers or transactions, each with a verbatim quote and document name.
+- Every quote is checked against the text that was sent. Anything not found there is dropped, so the analysis never invents a finding.
+- The result is cached in the existing `FinancialExtractionCache` table (mode `customer_concentration`), keyed by the deal's document ids and `updatedAt`. **No migration needed.** A new or re-processed document refreshes it automatically.
+- The analysis page reads the cache. Only the first view calls the model, and waits at most 15s; after that the read finishes in the background. The insights, memo, scorecard and deal-chat paths read the cache only.
+- New `analysis/customerConcentrationFlags.ts` turns the facts into flags with fixed rules:
+
+  | Finding | Severity |
+  |---|---|
+  | Top customer ≥ 20% of revenue | warning |
+  | Top customer ≥ 35% of revenue | critical |
+  | Top 5 customers ≥ 60% of revenue | warning |
+  | Related-party customer, ≥ 10% of revenue | critical |
+  | Related-party customer, smaller share | warning |
+  | Related-party suppliers / transactions | warning |
+
+- Each flag cites its quote and document. The flags feed Red Flags, Key Findings and the QoE score, the same way the part 1 cash-flow flags do.
+- On an SRM-shaped document: critical "One Customer Is 39% of Revenue" plus critical "Related-Party Customer".
+- **Cost:** about $0.02 per deal at most, once per document set.
+- **Tests:** 24 new tests (flag rules, call shape, quote check, caching, analysis integration). API suite 2205 passing, tsc clean.
+
+---
+
 ### Session 83 — September 30, 2026
 
 #### Timestamp: September 30, 2026 — 13:53 IST
