@@ -13,6 +13,12 @@
 //                profit, EBITDA, EBIT, EBT, net income) or a linked line
 //                (interest from the debt schedule, tax from the tax rate).
 // Percentages are stored as percent numbers (5 = 5%), money in millions.
+// Working capital, capex and the debt schedule: see dealModelCash.ts (E3).
+
+import {
+  DAYS_IN_YEAR, balanceDriversOf, debtScheduler,
+  type CashFlowAssumptionFields, type DebtYear, type OpeningBalances,
+} from './dealModelCash.js';
 
 export type DriverMethod = 'PCT_REVENUE' | 'GROWTH' | 'FIXED' | 'SUBTOTAL';
 export const INPUT_METHODS = ['GROWTH', 'PCT_REVENUE', 'FIXED'] as const;
@@ -56,18 +62,23 @@ export function allowedMethods(line: ModelLine): DriverMethod[] {
   return line.revenueLine ? ['GROWTH', 'FIXED'] : ['PCT_REVENUE', 'GROWTH', 'FIXED'];
 }
 
-export interface CalcAssumptions {
+export interface CalcAssumptions extends CashFlowAssumptionFields {
   entryMultiple: number;
   entryBasis: 'EBITDA' | 'REVENUE';
   transactionFeesPct: number;
   debtQuantumMode: 'MULTIPLE' | 'ABSOLUTE';
+  /** Senior tranche: × entry EBITDA (MULTIPLE) or an amount (ABSOLUTE). */
   debtQuantum: number;
   interestRate: number;
   amortPctPerYear: number;
+  /** Optional second tranche (fix plan E3), same quantum mode; 0 / absent = none. */
+  debt2Quantum?: number;
+  debt2InterestRate?: number;
+  debt2AmortPct?: number;
+  /** % of cash above the minimum swept to repay debt. */
   cashSweepPct: number;
-  projectionYears: number;
-  capexPctRevenue: number;
-  nwcPctRevenue: number;
+  /** Minimum cash balance (millions), funded at entry. */
+  minCash?: number;
   taxRate: number;
   exitMultiple: number;
   exitYear: number;
@@ -82,15 +93,31 @@ export interface ModelProjection {
   revenue: number[];
   ebitda: number[];
   ebitdaMarginPct: Array<number | null>;
+  /** Net working capital per year, and the base column's. */
+  nwc: number[];
+  nwcBase: number;
+  deltaNwc: number[];
+  capex: number[];
+  /** Unlevered FCF = EBIT × (1 − tax) + D&A − capex − ΔNWC (DCF). */
   fcf: number[];
+  /** Levered FCF = net income + D&A − capex − ΔNWC (feeds the cash sweep). */
+  leveredFcf: number[];
+  debtSchedule: DebtYear[];
   debtClosing: number[];
+  cashClosing: number[];
   entryEbitda: number;
   entryEv: number;
   equity: number;
+  /** Total debt raised at entry (senior + second tranche). */
   debt: number;
+  seniorDebt: number;
+  secondDebt: number;
+  minCash: number;
   exitRevenue: number;
   exitEbitda: number;
   exitEv: number;
+  exitDebt: number;
+  exitCash: number;
   exitEquity: number;
   mom: number | null;
   irr: number | null;
@@ -99,20 +126,20 @@ export interface ModelProjection {
 /**
  * Evaluate the model the way the workbook's formulas do. `baseValues` are
  * the base-column figures for INPUT (and COMPUTED) lines; missing = 0.
+ * `opening` carries the latest full-year balances (DAYS working capital).
  */
 export function projectModel(
   lines: ModelLine[],
   baseValues: Record<string, number>,
   a: CalcAssumptions,
+  opening: OpeningBalances = {},
 ): ModelProjection {
   const n = a.projectionYears;
   const byKey = new Map(lines.map((l) => [l.key, l]));
   const memo = new Map<string, number>();
   const pct = (v: number) => v / 100;
-
-  const debtState: { opening: number[]; amort: number[]; closing: number[]; debt0: number | null } = {
-    opening: [], amort: [], closing: [], debt0: null,
-  };
+  const bd = balanceDriversOf(a);
+  const at = (xs: number[], y: number) => xs[y] ?? xs[xs.length - 1] ?? 0;
 
   const val = (key: string, y: number): number => {
     const id = `${key}|${y}`;
@@ -125,7 +152,7 @@ export function projectModel(
       out = (line.components ?? []).reduce((s, c) => s + c.sign * val(c.key, y), 0);
     } else if (line.kind === 'COMPUTED') {
       if (y < 0) out = baseValues[key] ?? 0;
-      else if (line.computed === 'INTEREST') out = debtAt(y).opening * pct(a.interestRate);
+      else if (line.computed === 'INTEREST') out = debt.interestAt(y);
       else if (line.computed === 'TAX') out = Math.max(0, val('ebt', y)) * pct(a.taxRate);
     } else if (y < 0) {
       out = baseValues[key] ?? 0;
@@ -140,27 +167,29 @@ export function projectModel(
     return out;
   };
 
-  const fcfAt = (y: number): number => {
-    const rev = val('revenue', y);
-    const prev = val('revenue', y - 1);
-    return val('ebit', y) * (1 - pct(a.taxRate)) + val('da', y)
-      - rev * pct(a.capexPctRevenue) - (rev - prev) * pct(a.nwcPctRevenue);
+  const nwcAt = (y: number): number => {
+    if (bd.nwcMethod === 'PCT_REVENUE') return val('revenue', y) * pct(at(bd.nwcPct, Math.max(y, 0)));
+    if (y < 0) return (opening.ar ?? 0) + (opening.inventory ?? 0) - (opening.ap ?? 0);
+    const cogs = val('cogs', y);
+    return (val('revenue', y) * at(bd.dso, y) + cogs * at(bd.dio, y) - cogs * at(bd.dpo, y)) / DAYS_IN_YEAR;
   };
+  const capexAt = (y: number): number => val('revenue', y) * pct(bd.capexMethod === 'SPLIT'
+    ? at(bd.capexMaintPct, y) + at(bd.capexGrowthPct, y)
+    : at(bd.capexPct, y));
+  const cashItems = (y: number) => val('da', y) - capexAt(y) - (nwcAt(y) - nwcAt(y - 1));
+  const fcfAt = (y: number) => val('ebit', y) * (1 - pct(a.taxRate)) + cashItems(y);
+  const lfcfAt = (y: number) => val('net_income', y) + cashItems(y);
 
   const entryEbitda = val('ebitda', -1);
-  const debt0 = a.debtQuantumMode === 'ABSOLUTE' ? a.debtQuantum : entryEbitda * a.debtQuantum;
-  debtState.debt0 = debt0;
-
-  function debtAt(y: number): { opening: number; closing: number } {
-    for (let i = debtState.closing.length; i <= y; i++) {
-      const opening = i === 0 ? debt0 : debtState.closing[i - 1];
-      const amort = Math.min(opening, debt0 * pct(a.amortPctPerYear) + Math.max(0, fcfAt(i)) * pct(a.cashSweepPct));
-      debtState.opening.push(opening);
-      debtState.amort.push(amort);
-      debtState.closing.push(opening - amort);
-    }
-    return { opening: debtState.opening[y], closing: debtState.closing[y] };
-  }
+  const size = (q: number | undefined) => (a.debtQuantumMode === 'ABSOLUTE' ? (q ?? 0) : entryEbitda * (q ?? 0));
+  const seniorDebt = size(a.debtQuantum);
+  const secondDebt = size(a.debt2Quantum);
+  const minCash = a.minCash ?? 0;
+  const debt = debtScheduler({
+    senior: seniorDebt, seniorRate: a.interestRate, seniorAmort: a.amortPctPerYear,
+    second: secondDebt, secondRate: a.debt2InterestRate ?? 0, secondAmort: a.debt2AmortPct ?? 0,
+    minCash, sweepPct: a.cashSweepPct,
+  }, lfcfAt);
 
   const years = Array.from({ length: n }, (_, y) => y);
   const values: Record<string, number[]> = {};
@@ -171,16 +200,18 @@ export function projectModel(
   }
   const revenue = years.map((y) => val('revenue', y));
   const ebitda = years.map((y) => val('ebitda', y));
-  const fcf = years.map(fcfAt);
-  const debtClosing = years.map((y) => debtAt(y).closing);
+  const debtSchedule = years.map((y) => debt.year(y));
 
   const entryMetric = a.entryBasis === 'REVENUE' ? val('revenue', -1) : entryEbitda;
   const entryEv = entryMetric * a.entryMultiple;
-  const equity = entryEv * (1 + pct(a.transactionFeesPct)) - debt0;
+  const totalDebt = seniorDebt + secondDebt;
+  const equity = entryEv * (1 + pct(a.transactionFeesPct)) + minCash - totalDebt;
   const exitIdx = Math.min(Math.max(a.exitYear, 1), n) - 1;
   const exitEbitda = ebitda[exitIdx] ?? 0;
   const exitEv = exitEbitda * a.exitMultiple;
-  const exitEquity = exitEv - (debtClosing[exitIdx] ?? 0);
+  const exitDebt = debtSchedule[exitIdx]?.closing ?? 0;
+  const exitCash = debtSchedule[exitIdx]?.cashClose ?? 0;
+  const exitEquity = exitEv - exitDebt + exitCash;
   // Excel: MoM = IF(equity=0,"",proceeds/equity); IRR of [-equity, 0…, proceeds].
   const mom = equity !== 0 ? exitEquity / equity : null;
   const irr = equity > 0 && exitEquity > 0 ? Math.pow(exitEquity / equity, 1 / (exitIdx + 1)) - 1 : null;
@@ -188,8 +219,11 @@ export function projectModel(
   return {
     values, base, revenue, ebitda,
     ebitdaMarginPct: years.map((y) => (revenue[y] ? (ebitda[y] / revenue[y]) * 100 : null)),
-    fcf, debtClosing, entryEbitda, entryEv, equity, debt: debt0,
-    exitRevenue: revenue[exitIdx] ?? 0, exitEbitda, exitEv, exitEquity, mom, irr,
+    nwc: years.map(nwcAt), nwcBase: nwcAt(-1), deltaNwc: years.map((y) => nwcAt(y) - nwcAt(y - 1)),
+    capex: years.map(capexAt), fcf: years.map(fcfAt), leveredFcf: debtSchedule.map((d) => d.lfcf),
+    debtSchedule, debtClosing: debtSchedule.map((d) => d.closing), cashClosing: debtSchedule.map((d) => d.cashClose),
+    entryEbitda, entryEv, equity, debt: totalDebt, seniorDebt, secondDebt, minCash,
+    exitRevenue: revenue[exitIdx] ?? 0, exitEbitda, exitEv, exitDebt, exitCash, exitEquity, mom, irr,
   };
 }
 
@@ -211,8 +245,10 @@ export interface CaseSummary {
 }
 
 /** Headline figures for one case — what the workbook's Scenarios sheet shows. */
-export function summariseCase(lines: ModelLine[], baseValues: Record<string, number>, a: CalcAssumptions): CaseSummary {
-  const p = projectModel(lines, baseValues, a);
+export function summariseCase(
+  lines: ModelLine[], baseValues: Record<string, number>, a: CalcAssumptions, opening: OpeningBalances = {},
+): CaseSummary {
+  const p = projectModel(lines, baseValues, a, opening);
   return {
     exitRevenue: p.exitRevenue, exitEbitda: p.exitEbitda, exitEv: p.exitEv,
     entryEv: p.entryEv, equity: p.equity, irr: p.irr, mom: p.mom,

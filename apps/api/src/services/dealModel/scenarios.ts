@@ -14,8 +14,15 @@
 //                    lines are left alone
 //   exit multiple    ±1.0x (never below 0.5x)
 //
-// Structural choices — projection years, entry basis, debt mode, currency
-// — are the Base case's in every case, so the workbook has one layout.
+// Working capital, capex and debt drivers (fix plan E3) start EQUAL to Base
+// in Low and High: no delta is obvious enough to impose (a weaker year
+// doesn't reliably mean longer receivable days or less capex). They are
+// ordinary Low / High inputs once seeded.
+//
+// Structural choices — projection years, entry basis, debt mode, currency,
+// and the working-capital / capex methods (days vs % of revenue, total vs
+// maintenance + growth) — are the Base case's in every case, so the
+// workbook has one layout.
 
 import { MODEL_CASES, type LineDriver, type ModelCase, type ModelLine } from '@ai-crm/shared';
 import type { HistoricalRow, ModelAssumptions, ResolvedAssumptions } from './assumptions.js';
@@ -66,8 +73,10 @@ export function seedScenario(base: ResolvedAssumptions, lines: ModelLine[], whic
     for (const l of costs) drivers[l.key].values[y] = round((drivers[l.key].values[y] ?? 0) * factor, 4);
   }
 
+  const bd = base.balanceDrivers;
   return {
     ...base,
+    balanceDrivers: Object.fromEntries(Object.entries(bd).map(([k, v]) => [k, Array.isArray(v) ? [...v] : v])) as typeof bd,
     lineDrivers: drivers,
     exitMultiple: Math.max(MIN_EXIT_MULTIPLE, round(base.exitMultiple + d.exitMultipleX, 2)),
   };
@@ -81,7 +90,7 @@ export function alignToBase(
   deal: DealSeed,
   catalogue: LineCatalogue,
 ): ResolvedAssumptions {
-  return resolveAssumptions({
+  const resolved = resolveAssumptions({
     ...saved,
     projectionYears: base.projectionYears,
     entryBasis: base.entryBasis,
@@ -89,6 +98,13 @@ export function alignToBase(
     unitScale: base.unitScale,
     currency: base.currency,
   }, history, deal, catalogue);
+  // Every series is always filled, so switching method keeps the case's own figures.
+  resolved.balanceDrivers = {
+    ...resolved.balanceDrivers,
+    nwcMethod: base.balanceDrivers.nwcMethod,
+    capexMethod: base.balanceDrivers.capexMethod,
+  };
+  return resolved;
 }
 
 export type CaseSet = Record<ModelCase, ResolvedAssumptions>;

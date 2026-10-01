@@ -112,7 +112,10 @@ describe('Projections — live formulas from each driver', () => {
     const r = sheet(SHEETS.returns);
     expect(f(r.getCell(RETURNS_ROWS.entryEbitda, 2).value)).toBe(`${SHEETS.projections}!B${PL.ebitda}`);
     expect(f(r.getCell(RETURNS_ROWS.exitEbitda, 2).value)).toContain(`${SHEETS.projections}!C${PL.ebitda}:G${PL.ebitda}`);
-    expect(f(r.getCell(RETURNS_ROWS.amort, 2).value)).toContain(`${SHEETS.projections}!C${reg.pl.fcf}`);
+    // The sweep runs on levered FCF (after interest and tax), not unlevered (E3).
+    expect(f(r.getCell(RETURNS_ROWS.lfcf, 2).value)).toBe(`${SHEETS.projections}!C${reg.pl.lfcf}`);
+    expect(f(r.getCell(RETURNS_ROWS.available, 2).value)).toContain(`B${RETURNS_ROWS.lfcf}`);
+    expect(f(r.getCell(RETURNS_ROWS.dcfValue, 2).value)).toContain(`${SHEETS.projections}!C${reg.pl.fcf}:G${reg.pl.fcf}`);
     expect(f(r.getCell(RETURNS_ROWS.dscr, 2).value)).toContain(`${SHEETS.projections}!C${PL.ebitda}`);
   });
 

@@ -7,6 +7,7 @@ import type { ModelLine } from '@ai-crm/shared';
 import type { HistoricalRow } from '../assumptions.js';
 import { evaluateLine, rowLines, type LineCatalogue } from '../lineCatalogue.js';
 import type { Registry } from './registry.js';
+import { writeBalanceHistory } from './balanceHistory.js';
 import {
   FMT_MONEY, FMT_PCT, IMPLIED_FONT, colLetter, fx, label, styleHeaderRow, title, unitsText, type WorkbookContext,
 } from './xlsx.js';
@@ -103,6 +104,7 @@ export function writeHistoricals(
   const foot = reg.pl.ebitdaMargin + 2;
   sheet.getCell(foot, 1).value = 'Grey italic figures were not printed — they are implied by the statement (e.g. COGS = revenue − gross profit, operating costs = gross profit − EBITDA).';
   sheet.getCell(foot, 1).font = { italic: true, size: 9, color: { argb: 'FF6B7280' } };
+  writeBalanceHistory(sheet, history, reg, foot + 2);
 
   sheet.views = [{ state: 'frozen', xSplit: 1, ySplit: reg.pl.header }];
   return checks;

@@ -7,6 +7,26 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ### Session 84 — October 1, 2026
 
+#### Timestamp: October 1, 2026 — 22:27 IST
+
+#### Goal: Model builder fix plan **E3** — working capital, capex and debt from the balance sheet and cash flow (branch `feat/model-wc-capex-debt`, stacked on the E1 / E2 branch).
+
+**E3 · Balance-sheet and cash-flow driven items**
+- **Root cause:** `normaliseStatements` kept only income statements — balance sheets and cash flows were thrown away. Working capital and capex were two scalars (`nwcPctRevenue`, `capexPctRevenue`), the debt was one tranche, interest ran on the opening balance and the cash sweep used **unlevered** FCF (before interest and tax). Opening net debt never appeared.
+- **Inputs from history** (`dealModel/balanceItems.ts`): AR, inventory, AP, PP&E, cash, short- / long-term debt (`total_debt` when printed) and capex now attach to the P&L of the same canonical period ("FY2024", "2024" and "FY2024 (Jan - Dec 2024)" all match). Split capex lines (growth / maintenance / replacement) are summed; outflows (stored ≤ 0) are read as positive amounts. A statement in another currency, or for a period with no P&L, is left out rather than failing the model.
+- **Working capital:** per-year **DSO / DIO / DPO** seeded from **full fiscal years only** (AR / revenue × 365, inventory and AP / COGS × 365); projected receivables, inventory and payables start from the latest full-year balance sheet, and the increase in NWC is a use of cash. Falls back to % of revenue — from the balance sheet if it has any working-capital items, else the old 10%.
+- **Capex:** per-year % of revenue from the cash flow (else the old 3%), split into maintenance + growth when both were reported.
+- **Debt:** opening net debt from the latest full-year balance sheet goes into a full sources & uses (cash-free, debt-free: refinanced at entry; sources = uses). Two tranches (senior + optional second), mandatory amortisation, a year-end cash sweep from **levered** FCF (net income + D&A − capex − ΔNWC) above a **minimum cash** input, senior first, and a cash balance. Interest is on the average balance after scheduled amortisation (opening − mandatory / 2), so it never depends on the sweep — **no circular reference, no iterative calculation.** Exit equity = EV − debt + cash. DSCR now uses scheduled debt service only.
+- **Scenarios:** every new input has Low / Base / High values and a Live (`CHOOSE`) cell; each Scenarios block now carries the full P&L, working capital, capex and the two-tranche schedule. Low / High start equal to Base (no obvious delta). Methods (days vs %, total vs split) are shared by all three cases.
+- **Old saved models still load:** scalar NWC / capex % become per-year % of revenue drivers at the same value (cash flows identical), no second tranche, no minimum cash. Returns move by design (levered sweep, cash at exit).
+- **Workbook:** new modules `workbook/workingCapital.ts`, `workbook/debtSchedule.ts`, `workbook/balanceHistory.ts` (Historicals block with full-year DSO / DIO / DPO / capex % as formulas). Assumptions has a "Working capital & capex drivers" block; Projections a cash-flow block; Returns sources & uses and the debt and cash schedule.
+- **Checked:** recalculating the generated workbook with a throwaway evaluator matched the shared calculator for all three cases in five set-ups (days + split capex with two tranches and minimum cash, defaults, P&L only, a pre-E3 saved model, absolute debt with a 100% sweep): IRR, MoM, equity, exit EV, levered / unlevered FCF, ΔNWC, debt and cash per year all within 4e-15; sources = uses in every case.
+- **Panel:** a "Working capital, capex & debt" section — method selectors, DSO / DIO / DPO (or NWC %) and capex % per year, senior and second tranche (size, rate, amortisation), cash sweep and minimum cash, the opening net debt, and read-only ΔNWC / capex / levered FCF / debt / cash from the shared calculator.
+
+**No migration** (assumptions are JSON). No new route.
+
+**Verification:** API 2265 tests passing (+32: balance inputs, workbook debt / working capital, route), web 474 passing (+6 panel), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
 #### Timestamp: October 1, 2026 — 21:55 IST
 
 #### Goal: Model builder fix plan **E1** — model every P&L line (branch `feat/model-line-items-scenarios`, stacked on PR #165).

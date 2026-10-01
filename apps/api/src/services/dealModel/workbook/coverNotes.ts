@@ -81,7 +81,6 @@ export function writeNotes(sheet: ExcelJS.Worksheet, n: NotesInput) {
     `Every P&L line is modelled (${reg.lines.length} lines, ${accounts} of them individual accounts nested under their parent). Each input line has its own driver on the Assumptions sheet; parents are the sum of their accounts and subtotals are formulas.`,
     'Drivers were seeded from full fiscal years only (partial / YTD periods are shown for information): revenue at the trailing CAGR, costs at their average % of revenue, other income / expense at their average amount.',
     'Projections, the debt schedule, returns and the sensitivity grid are all live formulas driven by the Assumptions sheet.',
-    'The debt structure is a single senior tranche: straight-line amortisation plus a cash sweep of unlevered free cash flow. Multi-tranche structures are not modelled.',
     ...(base ? [base.note] : []),
     ...(base?.row.ebitdaDerived ? ['Base-period EBITDA was not printed in the source; it was derived (EBIT + D&A, or equivalent).'] : []),
     ...ebitdaGapNote(base, ctx, reg),

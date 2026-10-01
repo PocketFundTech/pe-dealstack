@@ -12,7 +12,7 @@ import { selectBasePeriod } from '../src/services/dealModel/basePeriod.js';
 import {
   parseCase, seedScenario, resolveCases, SCENARIO_DELTAS,
 } from '../src/services/dealModel/scenarios.js';
-import { buildModelWorkbook, buildModelLayout, scenarioLayout, SHEETS, SCALAR_KEYS } from '../src/services/dealModel/workbook.js';
+import { buildModelWorkbook, buildModelLayout, scenarioLayout, SHEETS, SCALAR_KEYS, RETURNS_ROWS } from '../src/services/dealModel/workbook.js';
 import { SRM_STATEMENTS, SRM_CONTEXT } from './helpers/srmModelFixture.js';
 import { findCycle } from './helpers/workbookGraph.js';
 
@@ -110,12 +110,17 @@ describe('workbook — active-case switch', () => {
   });
 
   it('points every main-model formula at Live, never at a single case', () => {
-    const caseRefs = SCALAR_KEYS.flatMap((k) => (['Low', 'Base', 'High'] as const).map((c) => reg.scalar(k, c)));
+    const caseRefs = (['Low', 'Base', 'High'] as const).flatMap((c) => [
+      ...SCALAR_KEYS.map((k) => reg.scalar(k, c)),
+      // P&L and working-capital / capex driver cells (E3) of each case.
+      ...Object.keys(reg.assumptions.driverRow).flatMap((k) => Array.from({ length: reg.years }, (_, y) => reg.value(k, y, c))),
+    ]);
     const offenders: string[] = [];
     for (const name of [SHEETS.projections, SHEETS.returns, SHEETS.sensitivity]) {
       wb.getWorksheet(name)!.eachRow((row) => row.eachCell((cell) => {
         const formula = f(cell.value);
-        if (caseRefs.some((ref) => formula.includes(ref))) offenders.push(`${name}!${cell.address}`);
+        // Whole references only — Assumptions!$D$8 is a prefix of a Live driver cell like $D$80.
+        if (caseRefs.some((ref) => new RegExp(`${ref.replace(/\$/g, '\\$')}(?!\\d)`).test(formula))) offenders.push(`${name}!${cell.address}`);
       }));
     }
     expect(offenders).toEqual([]);
@@ -139,7 +144,7 @@ describe('workbook — active-case switch', () => {
       expect(f(s.getCell(block.row.exitEv, 2).value)).toBe(`B${block.row.exitEbitda}*${reg.scalar('exitMultiple', c)}`);
       expect(f(s.getCell(block.row.irr, 2).value)).toMatch(/^IFERROR\(IRR\(B\d+:G\d+\),"n\/a"\)$/);
     }
-    expect(f(s.getCell(scen.liveIrrRow, 2).value)).toBe(`${SHEETS.returns}!B29`);
+    expect(f(s.getCell(scen.liveIrrRow, 2).value)).toBe(`${SHEETS.returns}!B${RETURNS_ROWS.irr}`);
   });
 
   it('keeps the whole workbook free of circular references', () => {

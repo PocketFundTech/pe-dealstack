@@ -21,6 +21,8 @@ import { computeDerivedFields } from '../financialDerivations.js';
 import type { LineDriver } from '@ai-crm/shared';
 import { buildLineCatalogue, type LineCatalogue } from './lineCatalogue.js';
 import { seedLineDrivers, resolveLineDrivers } from './drivers.js';
+import type { BalanceDrivers } from '@ai-crm/shared';
+import { readBalanceItems, resolveBalanceDrivers, seedBalanceDrivers, type BalanceItems } from './balanceItems.js';
 
 export class UnitMismatchError extends Error {
   code = 'UNIT_MISMATCH';
@@ -64,6 +66,8 @@ export interface HistoricalRow {
   endMonth?: number;
   /** EBITDA wasn't printed; derived from EBIT + D&A etc. (financialDerivations.ts). */
   ebitdaDerived?: boolean;
+  /** Balance sheet + cash flow items for the same period (fix plan E3), in millions. */
+  balance?: BalanceItems;
 }
 
 interface StatementLike {
@@ -96,14 +100,17 @@ export interface NormalisedFinancials {
  *
  * Only HISTORICAL and LTM rows survive: feeding a PROJECTED row in as
  * history would compound our forecast on top of the seller's.
+ *
+ * Balance sheets and cash flows (fix plan E3) attach to the income
+ * statement of the same canonical period as `balance`; one in another
+ * currency, or for a period with no P&L, is left out rather than failing
+ * the whole model.
  */
 export function normaliseStatements(statements: StatementLike[]): NormalisedFinancials {
-  const usable = statements.filter(
-    (s) =>
-      s.statementType === 'INCOME_STATEMENT' &&
-      s.isActive !== false &&
-      (s.periodType ?? 'HISTORICAL') !== 'PROJECTED',
+  const historical = statements.filter(
+    (s) => s.isActive !== false && (s.periodType ?? 'HISTORICAL') !== 'PROJECTED',
   );
+  const usable = historical.filter((s) => s.statementType === 'INCOME_STATEMENT');
 
   const currencies = new Set(usable.map((s) => (s.currency || 'USD').toUpperCase()));
   if (currencies.size > 1) {
@@ -197,6 +204,20 @@ export function normaliseStatements(statements: StatementLike[]): NormalisedFina
     byKey.set(r._key, base);
   }
 
+  for (const s of historical) {
+    if (s.statementType !== 'BALANCE_SHEET' && s.statementType !== 'CASH_FLOW') continue;
+    if ((s.currency || 'USD').toUpperCase() !== currency) continue;
+    const target = byKey.get(parsePeriod(s.period)?.canonicalKey ?? s.period);
+    if (!target) continue;
+    const factor = TO_MILLIONS[(s.unitScale as UnitScale) ?? 'MILLIONS'] ?? 1;
+    const items = readBalanceItems(s.statementType, s.lineItems ?? {}, (v) => {
+      const n = num(v);
+      return n === undefined ? undefined : r3(n * factor);
+    });
+    // First statement for a period wins per item; a second only fills gaps.
+    target.balance = { ...items, ...target.balance };
+  }
+
   const rows: HistoricalRow[] = [...byKey.values()]
     .map(({ _key: _k, _count: _c, ...row }) => row)
     .sort((a, b) => {
@@ -221,6 +242,19 @@ const lineDriverSchema = z.object({
   values: z.array(z.number().min(-1e7).max(1e7)).max(10),
 });
 
+const daysArray = z.array(z.number().min(0).max(730)).max(10);
+const balanceDriversSchema = z.object({
+  nwcMethod: z.enum(['DAYS', 'PCT_REVENUE']),
+  dso: daysArray,
+  dio: daysArray,
+  dpo: daysArray,
+  nwcPct: z.array(z.number().min(-100).max(100)).max(10),
+  capexMethod: z.enum(['TOTAL', 'SPLIT']),
+  capexPct: z.array(z.number().min(0).max(100)).max(10),
+  capexMaintPct: z.array(z.number().min(0).max(100)).max(10),
+  capexGrowthPct: z.array(z.number().min(0).max(100)).max(10),
+});
+
 export const assumptionsSchema = z.object({
   // Entry
   entryMultiple: z.number().positive().max(100),
@@ -240,8 +274,16 @@ export const assumptionsSchema = z.object({
   revenueGrowthPct: pctArray.optional(),
   ebitdaMarginPct: pctArray.optional(),
   daPctRevenue: z.number().min(0).max(100).optional(),
-  capexPctRevenue: z.number().min(0).max(100),
-  nwcPctRevenue: z.number().min(-100).max(100),
+  /** Working capital + capex per projected year (fix plan E3) — see balanceItems.ts. */
+  balanceDrivers: balanceDriversSchema.optional(),
+  /** Pre-E3 scalars, still accepted and migrated into balanceDrivers on read. */
+  capexPctRevenue: z.number().min(0).max(100).optional(),
+  nwcPctRevenue: z.number().min(-100).max(100).optional(),
+  /** Optional second debt tranche (same quantum mode as the senior) and minimum cash. */
+  debt2Quantum: z.number().min(0).optional(),
+  debt2InterestRate: z.number().min(0).max(50).optional(),
+  debt2AmortPct: z.number().min(0).max(100).optional(),
+  minCash: z.number().min(0).max(1e7).optional(),
   taxRate: z.number().min(0).max(60),
   // Exit & discounting
   exitMultiple: z.number().positive().max(100),
@@ -257,9 +299,17 @@ export type ModelAssumptions = z.infer<typeof assumptionsSchema>;
 
 const DEFAULT_PROJECTION_YEARS = 5;
 
-/** Assumptions with a driver for every line of the deal's catalogue. */
-export type ResolvedAssumptions = Omit<ModelAssumptions, 'lineDrivers' | 'revenueGrowthPct' | 'ebitdaMarginPct' | 'daPctRevenue'> & {
+type LegacyKeys = 'revenueGrowthPct' | 'ebitdaMarginPct' | 'daPctRevenue' | 'capexPctRevenue' | 'nwcPctRevenue';
+type CompletedKeys = 'lineDrivers' | 'balanceDrivers' | 'debt2Quantum' | 'debt2InterestRate' | 'debt2AmortPct' | 'minCash';
+
+/** Assumptions with a driver for every line of the deal's catalogue, and every E3 field filled. */
+export type ResolvedAssumptions = Omit<ModelAssumptions, LegacyKeys | CompletedKeys> & {
   lineDrivers: Record<string, LineDriver>;
+  balanceDrivers: BalanceDrivers;
+  debt2Quantum: number;
+  debt2InterestRate: number;
+  debt2AmortPct: number;
+  minCash: number;
 };
 
 export interface DealSeed {
@@ -293,12 +343,16 @@ export function deriveDefaults(
     debtQuantum: 2.5,
     interestRate: 10,
     amortPctPerYear: 5,
+    // No second tranche unless the user adds one; its rate is a starting point.
+    debt2Quantum: 0,
+    debt2InterestRate: 12,
+    debt2AmortPct: 0,
     cashSweepPct: 50,
+    minCash: 0,
 
     projectionYears,
     lineDrivers: seedLineDrivers(history, catalogue, projectionYears),
-    capexPctRevenue: 3,
-    nwcPctRevenue: 10,
+    balanceDrivers: seedBalanceDrivers(history, catalogue, projectionYears),
     taxRate: 25,
 
     // Same as entry: no assumed multiple expansion.
@@ -325,12 +379,20 @@ export function resolveAssumptions(
 ): ResolvedAssumptions {
   const defaults = deriveDefaults(history, deal, catalogue);
   if (!saved) return defaults;
-  const { lineDrivers, revenueGrowthPct, ebitdaMarginPct, daPctRevenue, ...rest } = saved;
+  const {
+    lineDrivers, revenueGrowthPct, ebitdaMarginPct, daPctRevenue,
+    balanceDrivers, capexPctRevenue, nwcPctRevenue, ...rest
+  } = saved;
   const merged = { ...defaults, ...rest } as ResolvedAssumptions;
   const years = merged.projectionYears;
-  const seeded = years === defaults.projectionYears ? defaults.lineDrivers : seedLineDrivers(history, catalogue, years);
+  const sameYears = years === defaults.projectionYears;
+  const seeded = sameYears ? defaults.lineDrivers : seedLineDrivers(history, catalogue, years);
   merged.lineDrivers = resolveLineDrivers(
     lineDrivers, { revenueGrowthPct, ebitdaMarginPct, daPctRevenue }, catalogue.lines, seeded, years,
+  );
+  merged.balanceDrivers = resolveBalanceDrivers(
+    balanceDrivers, { nwcPctRevenue, capexPctRevenue },
+    sameYears ? defaults.balanceDrivers : seedBalanceDrivers(history, catalogue, years), years,
   );
   merged.exitYear = Math.min(merged.exitYear, years);
   return merged;

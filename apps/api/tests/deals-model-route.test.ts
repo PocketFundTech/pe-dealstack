@@ -410,3 +410,52 @@ describe('Low / Base / High cases (fix plan E2)', () => {
     expect(wb.getWorksheet('Scenarios')).toBeTruthy();
   });
 });
+
+describe('balance sheet + cash flow (fix plan E3)', () => {
+  const side = (statementType: string, period: string, lineItems: Record<string, number>) =>
+    ({ ...stmt(period, 0, 0), statementType, lineItems });
+  const withBalance = () => [
+    stmt('2023', 9, 1.5, { lineItems: { revenue: 9, cogs: 5, ebitda: 1.5 } }),
+    stmt('2024', 10, 2, { lineItems: { revenue: 10, cogs: 6, ebitda: 2 } }),
+    side('BALANCE_SHEET', '2024', { accounts_receivable: 1.5, inventory: 0.6, accounts_payable: 0.9, cash: 0.4, total_debt: 3 }),
+    side('CASH_FLOW', '2024', { capex: -0.5 }),
+  ];
+
+  it('GET /model/cases returns the opening balances and seeds days + capex from them', async () => {
+    statements = withBalance();
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    expect(res.body.opening).toEqual({ period: '2024', ar: 1.5, inventory: 0.6, ap: 0.9, cash: 0.4, debt: 3 });
+    const bd = res.body.cases[1].assumptions.balanceDrivers;
+    expect(bd.nwcMethod).toBe('DAYS');
+    expect(bd.dso[0]).toBeCloseTo(54.8, 6); // 1.5 / 10 × 365
+    expect(bd.capexPct[0]).toBe(5);
+    expect(res.body.cases[0].assumptions.balanceDrivers).toEqual(bd); // Low starts equal to Base
+    expect(res.body.cases[1].summary.irr).not.toBeNull();
+  });
+
+  it('loads a pre-E3 saved row: scalar NWC / capex become % of revenue drivers', async () => {
+    statements = withBalance();
+    modelRow = { id: 'model-1', name: 'Base case', assumptions: { nwcPctRevenue: 8, capexPctRevenue: 2 } };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model');
+    expect(res.body.assumptions.balanceDrivers).toMatchObject({ nwcMethod: 'PCT_REVENUE', nwcPct: [8, 8, 8, 8, 8], capexMethod: 'TOTAL', capexPct: [2, 2, 2, 2, 2] });
+    expect(res.body.assumptions.nwcPctRevenue).toBeUndefined();
+    expect(res.body.assumptions.debt2Quantum).toBe(0);
+  });
+
+  it('PUT accepts balance drivers and tranches, and rejects a series of the wrong length', async () => {
+    statements = withBalance();
+    const app = await buildApp();
+    const { body: got } = await request(app).get('/api/deals/deal-1/model');
+    const ok = await request(app).put('/api/deals/deal-1/model').send({ ...got.assumptions, debt2Quantum: 1, minCash: 0.3 });
+    expect(ok.status).toBe(200);
+    expect(upserted.assumptions.balanceDrivers.dso).toHaveLength(5);
+    expect(upserted.assumptions.minCash).toBe(0.3);
+    const bad = await request(app).put('/api/deals/deal-1/model').send({
+      ...got.assumptions, balanceDrivers: { ...got.assumptions.balanceDrivers, dso: [40, 40] },
+    });
+    expect(bad.status).toBe(400);
+  });
+});

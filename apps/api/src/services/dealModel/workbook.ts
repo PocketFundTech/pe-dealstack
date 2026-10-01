@@ -20,6 +20,11 @@
 // columns per input and an "Active case" switch; every main-model formula
 // reads the Live column (CHOOSE on the active case). The Scenarios sheet
 // computes all three cases side by side.
+//
+// Balance sheet and cash flow (fix plan E3): working capital (DSO / DIO /
+// DPO, or % of revenue), capex, levered FCF, opening net debt into sources
+// & uses, a two-tranche debt schedule and a cash balance — see
+// workbook/workingCapital.ts, workbook/debtSchedule.ts and returns.ts.
 
 import ExcelJS from 'exceljs';
 import type { ModelCase } from '@ai-crm/shared';
@@ -29,6 +34,8 @@ import { alignToBase, seedScenario, SCENARIO_DELTAS, type CaseSet } from './scen
 import { writeScenarios } from './workbook/scenariosSheet.js';
 import { selectBasePeriod } from './basePeriod.js';
 import { buildLineCatalogue, baseColumnValues, type LineCatalogue } from './lineCatalogue.js';
+import { openingBalances } from './balanceItems.js';
+import type { OpeningBalances } from '@ai-crm/shared';
 import { buildRegistry, type Registry } from './workbook/registry.js';
 import { writeAssumptions } from './workbook/assumptionsSheet.js';
 import { writeHistoricals } from './workbook/historicals.js';
@@ -62,6 +69,8 @@ export interface ModelLayout {
   assumptions: ResolvedAssumptions;
   cases: CaseSet;
   registry: Registry;
+  /** Latest full-year balance sheet: Days working-capital base and the net debt refinanced at entry. */
+  opening: OpeningBalances;
 }
 
 /** The catalogue, resolved cases and cell registry a workbook is built on. */
@@ -74,12 +83,15 @@ export function buildModelLayout(input: Pick<BuildModelInput, 'assumptions' | 'h
     return given ? alignToBase(given as Partial<ModelAssumptions>, base, history, {}, catalogue) : seedScenario(base, catalogue.lines, c);
   };
   const cases: CaseSet = { Low: side('Low'), Base: base, High: side('High') };
-  return { catalogue, assumptions: base, cases, registry: buildRegistry(catalogue.lines, base.projectionYears) };
+  return {
+    catalogue, assumptions: base, cases, opening: openingBalances(history),
+    registry: buildRegistry(catalogue.lines, base.projectionYears, base.balanceDrivers),
+  };
 }
 
 export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer> {
   const { history, context } = input;
-  const { catalogue, assumptions, cases, registry } = buildModelLayout(input);
+  const { catalogue, assumptions, cases, registry, opening } = buildModelLayout(input);
   const base = selectBasePeriod(history);
   const baseCol = baseColumnValues(catalogue, history, base, context.fallbackEntryEbitda);
 
@@ -91,8 +103,8 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
   writeAssumptions(wb.addWorksheet(SHEETS.assumptions), cases, input.activeCase ?? 'Base', registry);
   const scenarioSheet = wb.addWorksheet(SHEETS.scenarios);
   const checks = writeHistoricals(wb.addWorksheet(SHEETS.historicals), history, catalogue, registry, context);
-  writeProjections(wb.addWorksheet(SHEETS.projections), assumptions, registry, base, baseCol, context);
-  writeReturns(wb.addWorksheet(SHEETS.returns), assumptions, registry, base, baseCol, context);
+  writeProjections(wb.addWorksheet(SHEETS.projections), assumptions, registry, base, baseCol, opening, context);
+  writeReturns(wb.addWorksheet(SHEETS.returns), assumptions, registry, base, baseCol, opening, context);
   writeSensitivity(wb.addWorksheet(SHEETS.sensitivity), assumptions, registry);
   writeScenarios(scenarioSheet, cases, registry, context);
   writeNotes(wb.addWorksheet(SHEETS.notes), { ctx: context, history, base, baseCol, cat: catalogue, reg: registry, checks,
@@ -100,7 +112,8 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
       `Scenarios: switch the Active case on the Assumptions sheet (Low / Base / High) and the whole model follows; the Scenarios sheet shows all three at once. ` +
       `Unsaved Low / High cases were seeded from Base: revenue growth ${SCENARIO_DELTAS.Low.revenueGrowthPp}pp / +${SCENARIO_DELTAS.High.revenueGrowthPp}pp, ` +
       `EBITDA margin ${SCENARIO_DELTAS.Low.ebitdaMarginPp}pp / +${SCENARIO_DELTAS.High.ebitdaMarginPp}pp (through the % of revenue cost lines), ` +
-      `exit multiple ${SCENARIO_DELTAS.Low.exitMultipleX}x / +${SCENARIO_DELTAS.High.exitMultipleX}x. Every case value is an editable input.`,
+      `exit multiple ${SCENARIO_DELTAS.Low.exitMultipleX}x / +${SCENARIO_DELTAS.High.exitMultipleX}x; working capital, capex and debt start equal to Base. Every case value is an editable input.`,
+      ...balanceNotes(assumptions, opening),
     ] });
 
   // No cached results are written; make Excel / Sheets compute on open so
@@ -110,4 +123,22 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
 
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);
+}
+
+/** Notes on the balance-sheet side of the model (fix plan E3). */
+function balanceNotes(a: ResolvedAssumptions, opening: OpeningBalances): string[] {
+  const bd = a.balanceDrivers;
+  const bs = opening.period ? `the ${opening.period} balance sheet` : 'no balance sheet (none extracted)';
+  return [
+    bd.nwcMethod === 'DAYS'
+      ? `Working capital: receivables, inventory and payables start from ${bs} and are projected with DSO (of revenue), DIO and DPO (of COGS) seeded from full fiscal years; the increase in net working capital is a use of cash.`
+      : 'Working capital is held at a % of revenue (the balance sheet did not give receivables / payables the model could turn into days, or the model was saved before days were available).',
+    bd.capexMethod === 'SPLIT'
+      ? 'Capex is maintenance + growth, each a % of revenue seeded from the cash flow statement (outflows read as positive amounts).'
+      : 'Capex is a % of revenue, seeded from the cash flow statement where it was reported (3% otherwise).',
+    `Entry is cash-free, debt-free: existing net debt from ${bs} is refinanced at entry (Returns, sources & uses), so the equity cheque is EV + fees + minimum cash − new debt.`,
+    'Debt: a senior tranche and an optional second tranche (both sized at entry), with mandatory amortisation and a year-end cash sweep of levered FCF (after interest and tax) above the minimum cash — senior first. ' +
+      'Interest is charged on the average balance after scheduled amortisation (opening − mandatory / 2), so it never depends on that year\'s sweep: no circular reference and no iterative calculation is needed. ' +
+      'Closing cash below zero means a funding shortfall (no revolver is modelled). The integrated balance sheet is not modelled.',
+  ];
 }
