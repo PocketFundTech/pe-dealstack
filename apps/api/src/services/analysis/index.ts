@@ -14,6 +14,7 @@ import {
 } from './operationalAnalysis.js';
 import { computeDebtCapacity, computeLBOScreen } from './debtAndLBO.js';
 import { computeRedFlags } from './redFlags.js';
+import { computeCashFlowRedFlags, computeCashFlowQoEFlags } from './cashFlowFlags.js';
 
 // Re-export all types
 export type {
@@ -44,7 +45,8 @@ export async function analyzeFinancials(dealId: string, rows: any[]): Promise<An
   ] = await Promise.all([
     // Group A
     Promise.all([
-      Promise.resolve(computeQoEFlags(data)),
+      // Cash-flow findings (negative FCF, debt-funded capex — fix plan F1) feed QoE too.
+      Promise.resolve([...computeQoEFlags(data), ...computeCashFlowQoEFlags(data)]),
       Promise.resolve(computeRatios(data)),
       Promise.resolve(computeDuPont(data)),
     ]),
@@ -64,7 +66,7 @@ export async function analyzeFinancials(dealId: string, rows: any[]): Promise<An
       Promise.resolve(computeDebtCapacity(data)),
       Promise.resolve(computeLBOScreen(data)),
       Promise.resolve(computeWorkforceMetrics(data)),
-      Promise.resolve(computeRedFlags(data)),
+      Promise.resolve([...computeRedFlags(data), ...computeCashFlowRedFlags(data)]),
     ]),
   ]);
 
