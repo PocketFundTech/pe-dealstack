@@ -4,29 +4,33 @@
  */
 
 import { PreparedData, QoEFlag } from './types.js';
-import { li, pctChange, round2, avg, trendDirection } from './helpers.js';
+import { li, pctChange, round2, avg, trendDirection, comparablePeriods, ebitdaOf, periodGrowth } from './helpers.js';
 
 export function computeQoEFlags(data: PreparedData): QoEFlag[] {
   const flags: QoEFlag[] = [];
-  const { income, balance, cashflow, periods } = data;
+  const { income, balance, cashflow } = data;
 
-  if (periods.length < 2) {
+  if (data.periods.length < 2) {
     flags.push({
       id: 'insufficient_data',
       severity: 'info',
       category: 'Data Quality',
       title: 'Limited Historical Data',
-      detail: `Only ${periods.length} historical period(s) available. At least 3 years recommended for thorough QoE analysis.`,
+      detail: `Only ${data.periods.length} historical period(s) available. At least 3 years recommended for thorough QoE analysis.`,
       icon: 'info',
     });
     return flags;
   }
 
+  // Flows (revenue, EBITDA, cash) are only compared across like periods —
+  // full years when available — so a partial YTD never reads as a decline.
+  const periods = comparablePeriods(data, 'income');
+
   // 1. Revenue Quality Checks
   const revenues = periods.map(p => li(income.get(p) ?? {}, 'revenue'));
   const revenueGrowths: (number | null)[] = [];
   for (let i = 1; i < periods.length; i++) {
-    revenueGrowths.push(pctChange(revenues[i], revenues[i - 1]));
+    revenueGrowths.push(periodGrowth(data, periods[i - 1], periods[i], revenues[i - 1], revenues[i]));
   }
 
   const validGrowths = revenueGrowths.filter((g): g is number => g != null);
@@ -70,7 +74,7 @@ export function computeQoEFlags(data: PreparedData): QoEFlag[] {
   }
 
   // 2. EBITDA Adjustments / Quality
-  const ebitdas = periods.map(p => li(income.get(p) ?? {}, 'ebitda'));
+  const ebitdas = periods.map(p => ebitdaOf(income.get(p) ?? {}));
   const ebitdaMargins = periods.map((p, i) => {
     const rev = revenues[i];
     const ebitda = ebitdas[i];
@@ -216,7 +220,8 @@ export function computeQoEFlags(data: PreparedData): QoEFlag[] {
   // 5. Leverage Check
   const latestBal = balance.get(periods[periods.length - 1]);
   if (latestBal && latestEbitda != null && latestEbitda > 0) {
-    const totalDebt = (li(latestBal, 'short_term_debt') ?? 0) + (li(latestBal, 'long_term_debt') ?? 0);
+    const totalDebt = (li(latestBal, 'short_term_debt') ?? 0) + (li(latestBal, 'long_term_debt') ?? 0)
+      || (li(latestBal, 'total_debt') ?? 0);
     const cash = li(latestBal, 'cash') ?? 0;
     const netDebt = totalDebt - cash;
     const leverage = netDebt / latestEbitda;

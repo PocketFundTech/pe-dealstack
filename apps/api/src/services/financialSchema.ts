@@ -49,6 +49,8 @@ export const balanceSheetSchema = z.object({
   other_current_liabilities: num, other_current_liabilities_source: src,
   total_current_liabilities: num, total_current_liabilities_source: src,
   long_term_debt: num, long_term_debt_source: src,
+  // Its own key: aliasing it to long_term_debt mislabelled total debt.
+  total_debt: num, total_debt_source: src,
   total_liabilities: num, total_liabilities_source: src,
   total_equity: num, total_equity_source: src,
 }).passthrough();
@@ -94,7 +96,6 @@ export const LINE_ITEM_ALIASES: Record<string, string> = {
   selling_general_admin: 'sga',
   research_development: 'rd',
   depreciation_amortization: 'da',
-  total_debt: 'long_term_debt',
   shareholders_equity: 'total_equity',
   stockholders_equity: 'total_equity',
 };

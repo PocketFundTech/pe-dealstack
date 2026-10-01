@@ -10,7 +10,10 @@ import { log } from '../utils/logger.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { extractTextFromPDF } from '../services/pdfExtractor.js';
-import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
+import { acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
+
+/** How long an upload waits for an extraction slot before skipping (see B3). */
+const UPLOAD_SLOT_WAIT_MS = 30_000;
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { runAfterResponse, type RequestWithAfterResponse } from '../utils/afterResponse.js';
 import { resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
@@ -482,9 +485,11 @@ export async function handleDocumentUpload(req: Request, res: Response) {
           // (financials-extraction.ts:173). Without it, parallel uploads from
           // the same org both run runDeepPass concurrently and can blow
           // Vercel's function memory on a multi-statement workbook. If the
-          // slot isn't available, log and skip — the user can re-extract
-          // manually via the Re-extract button rather than the upload failing.
-          const slotAcquired = acquireExtractionSlot(orgId);
+          // slot isn't free, wait a short while for one (a multi-file upload
+          // arrives as parallel requests); only then log and skip — the user
+          // can Re-extract rather than the upload failing. The wait is short
+          // because the upload response is waiting on it.
+          const slotAcquired = await acquireExtractionSlotBy(orgId, Date.now() + UPLOAD_SLOT_WAIT_MS);
           if (!slotAcquired) {
             log.warn('Deep financial extraction skipped — org at concurrency cap', {
               documentId: document.id,

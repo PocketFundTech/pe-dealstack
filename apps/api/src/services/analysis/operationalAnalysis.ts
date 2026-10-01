@@ -5,9 +5,9 @@
 
 import {
   PreparedData, EBITDABridge, RevenueQuality, CashFlowAnalysis,
-  WorkingCapital, CostStructure, WorkforceMetrics,
+  WorkingCapital, CostStructure, WorkforceMetrics, YtdGrowth,
 } from './types.js';
-import { li, pctChange, safeDiv, round2, avg, trendDirection } from './helpers.js';
+import { li, pctChange, safeDiv, round2, avg, trendDirection, comparablePeriods, comparableTrend, ebitdaOf, periodGrowth } from './helpers.js';
 
 export function computeEBITDABridge(data: PreparedData): EBITDABridge | undefined {
   const { income, periods } = data;
@@ -15,7 +15,7 @@ export function computeEBITDABridge(data: PreparedData): EBITDABridge | undefine
 
   const bridgePeriods = periods.map(p => {
     const inc = income.get(p) ?? {};
-    const reportedEbitda = li(inc, 'ebitda');
+    const reportedEbitda = ebitdaOf(inc);
     const revenue = li(inc, 'revenue');
     const sga = li(inc, 'sga');
     const rd = li(inc, 'rd');
@@ -52,22 +52,34 @@ export function computeEBITDABridge(data: PreparedData): EBITDABridge | undefine
 }
 
 export function computeRevenueQuality(data: PreparedData): RevenueQuality | undefined {
-  const { income, periods } = data;
-  if (periods.length < 2) return undefined;
+  const { income, periodInfo } = data;
+  // Growth, CAGR and consistency compare like with like — full years only
+  // (a 9-month YTD against a full year is not a decline).
+  const series = comparablePeriods(data, 'income');
+  const ytd = computeYtdGrowth(data);
+  if (series.length < 2 && !ytd) return undefined;
 
-  const revenues = periods.map(p => li(income.get(p) ?? {}, 'revenue'));
-  const validRevs = revenues.filter((r): r is number => r != null);
+  const revenues = series.map(p => li(income.get(p) ?? {}, 'revenue'));
+  const points = series
+    .map((p, i) => ({ p, rev: revenues[i] }))
+    .filter((x): x is { p: string; rev: number } => x.rev != null);
 
-  const firstRev = validRevs[0];
-  const lastRev = validRevs[validRevs.length - 1];
-  const years = validRevs.length - 1;
-  const revenueCAGR = firstRev && lastRev && firstRev > 0 && years > 0
-    ? round2((Math.pow(lastRev / firstRev, 1 / years) - 1) * 100)
+  const first = points[0];
+  const lastPt = points[points.length - 1];
+  // CAGR over the real span of years, not the number of columns (2021 →
+  // FY2024 is 3 years even if 2022 is missing).
+  const firstEnd = first ? periodInfo.get(first.p)?.endDate : undefined;
+  const lastEnd = lastPt ? periodInfo.get(lastPt.p)?.endDate : undefined;
+  const years = firstEnd && lastEnd
+    ? (Date.parse(lastEnd) - Date.parse(firstEnd)) / (365.25 * 24 * 3600 * 1000)
+    : points.length - 1;
+  const revenueCAGR = first && lastPt && first.rev > 0 && lastPt.rev > 0 && years > 0.5
+    ? round2((Math.pow(lastPt.rev / first.rev, 1 / years) - 1) * 100)
     : null;
 
-  const organicGrowthRates = periods.slice(1).map((p, i) => ({
+  const organicGrowthRates = series.slice(1).map((p, i) => ({
     period: p,
-    rate: round2(pctChange(revenues[i + 1], revenues[i])),
+    rate: round2(periodGrowth(data, series[i], p, revenues[i], revenues[i + 1])),
   }));
 
   const validGrowths = organicGrowthRates.map(g => g.rate).filter((r): r is number => r != null);
@@ -85,7 +97,46 @@ export function computeRevenueQuality(data: PreparedData): RevenueQuality | unde
     if (validGrowths.some(g => g < -5)) consistencyScore = Math.max(0, consistencyScore - 15);
   }
 
-  return { revenueCAGR, organicGrowthRates, consistencyScore };
+  return { revenueCAGR, organicGrowthRates, consistencyScore, ...(ytd ? { ytd } : {}) };
+}
+
+/**
+ * The latest YTD period, compared against prior-year YTD when both exist,
+ * otherwise annualised (× 12 / months) against the last full year — marked
+ * as an estimate.
+ */
+export function computeYtdGrowth(data: PreparedData): YtdGrowth | undefined {
+  const { income, periods, periodInfo, annualPeriods } = data;
+  const ytdPeriods = periods.filter(p => periodInfo.get(p)?.kind === 'YTD');
+  const latest = ytdPeriods[ytdPeriods.length - 1];
+  if (!latest) return undefined;
+  const info = periodInfo.get(latest)!;
+  // Only meaningful when the YTD is the newest period, not an old partial.
+  const incomeYears = annualPeriods.filter(p => income.has(p));
+  const lastFy = incomeYears[incomeYears.length - 1];
+  if (lastFy && periodInfo.get(lastFy)!.endDate >= info.endDate) return undefined;
+  const revenue = li(income.get(latest) ?? {}, 'revenue');
+  if (revenue == null) return undefined;
+
+  const prior = ytdPeriods.find(p => {
+    const pi = periodInfo.get(p)!;
+    return pi.fiscalYear === info.fiscalYear - 1 && pi.months === info.months;
+  });
+  const priorRev = prior ? li(income.get(prior) ?? {}, 'revenue') : null;
+  if (prior && priorRev != null) {
+    return {
+      period: latest, months: info.months, revenue, basis: 'prior_ytd', comparedTo: prior,
+      annualisedRevenue: null, growthPct: round2(pctChange(revenue, priorRev)),
+    };
+  }
+
+  if (!lastFy || !info.months) return undefined;
+  const fyRev = li(income.get(lastFy) ?? {}, 'revenue');
+  const annualisedRevenue = round2((revenue * 12) / info.months);
+  return {
+    period: latest, months: info.months, revenue, basis: 'annualised_estimate', comparedTo: lastFy,
+    annualisedRevenue, growthPct: round2(pctChange(annualisedRevenue, fyRev)),
+  };
 }
 
 export function computeCashFlowAnalysis(data: PreparedData): CashFlowAnalysis | undefined {
@@ -98,7 +149,7 @@ export function computeCashFlowAnalysis(data: PreparedData): CashFlowAnalysis | 
     const bal = balance.get(p) ?? {};
     const prevBal = i > 0 ? balance.get(periods[i - 1]) ?? {} : {};
 
-    const ebitda = li(inc, 'ebitda');
+    const ebitda = ebitdaOf(inc);
     const capex = li(cf, 'capex');
     const capexAbs = capex != null ? Math.abs(capex) : null;
 
@@ -142,7 +193,7 @@ export function computeCashFlowAnalysis(data: PreparedData): CashFlowAnalysis | 
 
   const conversions = cfPeriods.map(p => p.ebitdaToFcfConversion);
   const avgConversion = round2(avg(conversions));
-  const fcfTrend = trendDirection(cfPeriods.map(p => p.fcf));
+  const fcfTrend = comparableTrend(data, cfPeriods.map(p => ({ period: p.period, value: p.fcf })));
 
   return { periods: cfPeriods, avgConversion, fcfTrend };
 }
@@ -182,7 +233,7 @@ export function computeWorkingCapital(data: PreparedData): WorkingCapital | unde
     ? round2((avgNwcPct / 100) * latestRevenue)
     : null;
 
-  const nwcTrend = trendDirection(wcPeriods.map(p => p.nwcPctRevenue));
+  const nwcTrend = comparableTrend(data, wcPeriods.map(p => ({ period: p.period, value: p.nwcPctRevenue })));
 
   return { periods: wcPeriods, normalizedNwc, nwcTrend };
 }
@@ -211,7 +262,7 @@ export function computeCostStructure(data: PreparedData): CostStructure | undefi
   const latestInc = income.get(periods[periods.length - 1]) ?? {};
   const revenue = li(latestInc, 'revenue');
   const cogs = li(latestInc, 'cogs');
-  const ebitda = li(latestInc, 'ebitda');
+  const ebitda = ebitdaOf(latestInc);
 
   let breakEvenRevenue: number | null = null;
   let operatingLeverage: 'high' | 'moderate' | 'low' | 'unknown' = 'unknown';
@@ -246,6 +297,6 @@ export function computeWorkforceMetrics(data: PreparedData): WorkforceMetrics | 
 
   return {
     revenuePerEmployee: revenues,
-    trend: trendDirection(revenues.map(r => r.value)),
+    trend: comparableTrend(data, revenues),
   };
 }

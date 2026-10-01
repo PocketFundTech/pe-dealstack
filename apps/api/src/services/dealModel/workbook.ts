@@ -17,6 +17,7 @@
 
 import ExcelJS from 'exceljs';
 import type { ModelAssumptions, HistoricalRow } from './assumptions.js';
+import { selectBasePeriod, type BasePeriod } from './basePeriod.js';
 
 export const SHEETS = {
   cover: 'Cover',
@@ -47,6 +48,8 @@ export interface WorkbookContext {
   sourceDocuments: string[];
   generatedAt: string;
   notes: string[];
+  /** Deal.ebitda (millions) — used as entry EBITDA only when the base period has none. */
+  fallbackEntryEbitda?: number | null;
 }
 
 export interface BuildModelInput {
@@ -158,9 +161,11 @@ function writeAssumptions(sheet: ExcelJS.Worksheet, a: ModelAssumptions) {
 
   // Order here MUST match ASSUMPTION_CELLS above.
   const scalar: Array<[string, number, string]> = [
-    ['Entry multiple', a.entryMultiple, FMT_MULT],
+    [a.entryBasis === 'REVENUE' ? 'Entry multiple (x revenue)' : 'Entry multiple (x EBITDA)', a.entryMultiple, FMT_MULT],
     ['Transaction fees (% of EV)', a.transactionFeesPct / 100, FMT_PCT],
-    ['Debt (x EBITDA)', a.debtQuantum, FMT_MULT],
+    a.debtQuantumMode === 'ABSOLUTE'
+      ? [`Debt raised (${a.currency}, ${a.unitScale.toLowerCase()})`, a.debtQuantum, FMT_MONEY]
+      : ['Debt (x EBITDA)', a.debtQuantum, FMT_MULT],
     ['Interest rate', a.interestRate / 100, FMT_PCT],
     ['Amortisation (% / yr)', a.amortPctPerYear / 100, FMT_PCT],
     ['Cash sweep (% of FCF)', a.cashSweepPct / 100, FMT_PCT],
@@ -214,11 +219,13 @@ export const PL_ROWS = {
   da: 8,
   ebit: 9,
   netIncome: 10,
+  /** Projections only — its own row so row 10 means net income on both sheets. */
+  fcf: 11,
   ebitdaMargin: 12,
 } as const;
 
 function writeHistoricals(sheet: ExcelJS.Worksheet, history: HistoricalRow[], ctx: WorkbookContext) {
-  sheet.columns = [{ width: 26 }, ...history.map(() => ({ width: 14 })), { width: 34 }];
+  sheet.columns = [{ width: 26 }, ...history.map(() => ({ width: 22 })), { width: 34 }];
 
   sheet.getCell('A1').value = 'Historicals';
   sheet.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF003366' } };
@@ -262,7 +269,8 @@ function writeHistoricals(sheet: ExcelJS.Worksheet, history: HistoricalRow[], ct
     const col = colLetter(2 + i);
     const cell = sheet.getCell(PL_ROWS.ebitdaMargin, 2 + i);
     cell.value = {
-      formula: `IF(${col}${PL_ROWS.revenue}=0,"",${col}${PL_ROWS.ebitda}/${col}${PL_ROWS.revenue})`,
+      // Blank EBITDA is "not reported", not 0% — don't print a fake margin.
+      formula: `IF(OR(${col}${PL_ROWS.revenue}=0,ISBLANK(${col}${PL_ROWS.ebitda})),"",${col}${PL_ROWS.ebitda}/${col}${PL_ROWS.revenue})`,
     } as ExcelJS.CellFormulaValue;
     cell.numFmt = FMT_PCT;
   });
@@ -270,40 +278,63 @@ function writeHistoricals(sheet: ExcelJS.Worksheet, history: HistoricalRow[], ct
   sheet.views = [{ state: 'frozen', xSplit: 1, ySplit: PL_ROWS.header }];
 }
 
+/** Entry EBITDA: the base period's (reported or derived), else Deal.ebitda. */
+function entryEbitda(base: BasePeriod | null, ctx: WorkbookContext): { value: number; source: 'base' | 'deal' | 'missing' } {
+  if (typeof base?.row.ebitda === 'number') return { value: base.row.ebitda, source: 'base' };
+  if (typeof ctx.fallbackEntryEbitda === 'number' && ctx.fallbackEntryEbitda > 0) {
+    return { value: ctx.fallbackEntryEbitda, source: 'deal' };
+  }
+  return { value: 0, source: 'missing' };
+}
+
 function writeProjections(
   sheet: ExcelJS.Worksheet,
   a: ModelAssumptions,
-  history: HistoricalRow[],
+  base: BasePeriod | null,
   ctx: WorkbookContext,
 ) {
   const years = a.projectionYears;
-  sheet.columns = [{ width: 26 }, ...Array.from({ length: years + 1 }, () => ({ width: 14 }))];
+  sheet.columns = [{ width: 26 }, { width: 22 }, ...Array.from({ length: years }, () => ({ width: 14 }))];
 
   sheet.getCell('A1').value = 'Projections';
   sheet.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF003366' } };
   sheet.getCell('A2').value = `${ctx.currency} in ${ctx.unitScale === 'MILLIONS' ? 'millions' : 'thousands'} — every figure derives from Assumptions`;
   sheet.getCell('A2').font = { italic: true, size: 9, color: { argb: 'FF6B7280' } };
 
-  const lastActual = history.at(-1);
+  const baseRow = base?.row;
   const header = sheet.getRow(PL_ROWS.header);
   header.getCell(1).value = 'Period';
-  header.getCell(2).value = lastActual ? `${lastActual.period}A` : 'Base';
+  header.getCell(2).value = base ? base.label : 'Base';
   for (let y = 0; y < years; y++) header.getCell(3 + y).value = `Y${y + 1}`;
   styleHeaderRow(header);
 
-  // Column B is the anchor: the last actual, carried in as a value.
+  // Column B is the anchor: the base period (LTM or last full year — see
+  // basePeriod.ts), carried in as values. Never a YTD.
   label(sheet, PL_ROWS.revenue, 'Revenue');
-  sheet.getCell(PL_ROWS.revenue, 2).value = lastActual?.revenue ?? 0;
-  sheet.getCell(PL_ROWS.revenue, 2).numFmt = FMT_MONEY;
+  const baseRev = sheet.getCell(PL_ROWS.revenue, 2);
+  baseRev.value = baseRow?.revenue ?? 0;
+  baseRev.numFmt = FMT_MONEY;
+  baseRev.font = INPUT_FONT;
 
   label(sheet, PL_ROWS.ebitda, 'EBITDA');
-  sheet.getCell(PL_ROWS.ebitda, 2).value = lastActual?.ebitda ?? 0;
-  sheet.getCell(PL_ROWS.ebitda, 2).numFmt = FMT_MONEY;
+  const baseEbitda = sheet.getCell(PL_ROWS.ebitda, 2);
+  baseEbitda.value = entryEbitda(base, ctx).value;
+  baseEbitda.numFmt = FMT_MONEY;
+  baseEbitda.font = INPUT_FONT;
 
   label(sheet, PL_ROWS.da, 'D&A');
+  if (typeof baseRow?.da === 'number') {
+    sheet.getCell(PL_ROWS.da, 2).value = baseRow.da;
+    sheet.getCell(PL_ROWS.da, 2).numFmt = FMT_MONEY;
+    sheet.getCell(PL_ROWS.ebit, 2).value = { formula: `B${PL_ROWS.ebitda}-B${PL_ROWS.da}` } as ExcelJS.CellFormulaValue;
+    sheet.getCell(PL_ROWS.ebit, 2).numFmt = FMT_MONEY;
+  }
   label(sheet, PL_ROWS.ebit, 'EBIT');
-  label(sheet, PL_ROWS.netIncome, 'Unlevered FCF');
+  label(sheet, PL_ROWS.fcf, 'Unlevered FCF');
   label(sheet, PL_ROWS.ebitdaMargin, 'EBITDA margin');
+  const baseMargin = sheet.getCell(PL_ROWS.ebitdaMargin, 2);
+  baseMargin.value = { formula: `IF(B${PL_ROWS.revenue}=0,"",B${PL_ROWS.ebitda}/B${PL_ROWS.revenue})` } as ExcelJS.CellFormulaValue;
+  baseMargin.numFmt = FMT_PCT;
 
   for (let y = 0; y < years; y++) {
     const col = colLetter(3 + y);
@@ -328,7 +359,7 @@ function writeProjections(
     ebit.numFmt = FMT_MONEY;
 
     // Unlevered FCF = EBIT x (1-tax) + D&A - capex - change in NWC
-    const fcf = sheet.getCell(PL_ROWS.netIncome, 3 + y);
+    const fcf = sheet.getCell(PL_ROWS.fcf, 3 + y);
     fcf.value = {
       formula:
         `${col}${PL_ROWS.ebit}*(1-${ASSUMPTION_CELLS.taxRate})+${col}${PL_ROWS.da}` +
@@ -374,7 +405,14 @@ const R = {
   dcfVsEntry: 34,
 } as const;
 
-function writeReturns(sheet: ExcelJS.Worksheet, a: ModelAssumptions, ctx: WorkbookContext) {
+/** The metric the entry multiple applies to: base EBITDA, or base revenue when entryBasis is REVENUE. */
+function entryBasisRef(a: ModelAssumptions): string {
+  return a.entryBasis === 'REVENUE'
+    ? `${SHEETS.projections}!$B$${PL_ROWS.revenue}`
+    : `${SHEETS.returns}!$B$${R.entryEbitda}`;
+}
+
+function writeReturns(sheet: ExcelJS.Worksheet, a: ModelAssumptions, base: BasePeriod | null, ctx: WorkbookContext) {
   const years = a.projectionYears;
   const P = SHEETS.projections;
   sheet.columns = [{ width: 30 }, ...Array.from({ length: years + 2 }, () => ({ width: 14 }))];
@@ -385,12 +423,15 @@ function writeReturns(sheet: ExcelJS.Worksheet, a: ModelAssumptions, ctx: Workbo
   sheet.getCell('A2').font = { italic: true, size: 9, color: { argb: 'FF6B7280' } };
 
   const lastActualCol = 'B';
-  label(sheet, R.entryEbitda, 'Entry EBITDA (LTM)');
+  const entry = entryEbitda(base, ctx);
+  label(sheet, R.entryEbitda, `Entry EBITDA (${base ? base.label.replace(/ ?A$/, '') : 'base'}${entry.source === 'deal' ? ', from deal' : ''}${entry.source === 'missing' ? ' — MISSING' : ''})`);
   sheet.getCell(R.entryEbitda, 2).value = { formula: `${P}!${lastActualCol}${PL_ROWS.ebitda}` } as ExcelJS.CellFormulaValue;
   sheet.getCell(R.entryEbitda, 2).numFmt = FMT_MONEY;
 
   label(sheet, R.entryEv, 'Entry enterprise value');
-  sheet.getCell(R.entryEv, 2).value = { formula: `B${R.entryEbitda}*${ASSUMPTION_CELLS.entryMultiple}` } as ExcelJS.CellFormulaValue;
+  // entryBasis REVENUE: the multiple applies to base revenue, not EBITDA.
+  const entryMetric = a.entryBasis === 'REVENUE' ? `${P}!B${PL_ROWS.revenue}` : `B${R.entryEbitda}`;
+  sheet.getCell(R.entryEv, 2).value = { formula: `${entryMetric}*${ASSUMPTION_CELLS.entryMultiple}` } as ExcelJS.CellFormulaValue;
   sheet.getCell(R.entryEv, 2).numFmt = FMT_MONEY;
 
   label(sheet, R.fees, 'Transaction fees');
@@ -398,7 +439,11 @@ function writeReturns(sheet: ExcelJS.Worksheet, a: ModelAssumptions, ctx: Workbo
   sheet.getCell(R.fees, 2).numFmt = FMT_MONEY;
 
   label(sheet, R.debt, 'Debt raised');
-  sheet.getCell(R.debt, 2).value = { formula: `B${R.entryEbitda}*${ASSUMPTION_CELLS.debtQuantum}` } as ExcelJS.CellFormulaValue;
+  sheet.getCell(R.debt, 2).value = {
+    formula: a.debtQuantumMode === 'ABSOLUTE'
+      ? ASSUMPTION_CELLS.debtQuantum
+      : `B${R.entryEbitda}*${ASSUMPTION_CELLS.debtQuantum}`,
+  } as ExcelJS.CellFormulaValue;
   sheet.getCell(R.debt, 2).numFmt = FMT_MONEY;
 
   label(sheet, R.equity, 'Equity cheque', true);
@@ -436,7 +481,7 @@ function writeReturns(sheet: ExcelJS.Worksheet, a: ModelAssumptions, ctx: Workbo
     amort.value = {
       formula:
         `MIN(${col}${R.opening},B${R.debt}*${ASSUMPTION_CELLS.amortPctPerYear}` +
-        `+MAX(0,${P}!${projCol}${PL_ROWS.netIncome})*${ASSUMPTION_CELLS.cashSweepPct})`,
+        `+MAX(0,${P}!${projCol}${PL_ROWS.fcf})*${ASSUMPTION_CELLS.cashSweepPct})`,
     } as ExcelJS.CellFormulaValue;
     amort.numFmt = FMT_MONEY;
 
@@ -518,7 +563,7 @@ function writeReturns(sheet: ExcelJS.Worksheet, a: ModelAssumptions, ctx: Workbo
   label(sheet, R.dcfValue, 'PV of unlevered FCF + terminal');
   // Sheet name goes on the range ONCE — `Sheet!A1:Sheet!B2` is tolerated by
   // Excel but rejected by Google Sheets, and this file has to open in both.
-  const fcfRange = `${P}!${colLetter(3)}${PL_ROWS.netIncome}:${colLetter(2 + years)}${PL_ROWS.netIncome}`;
+  const fcfRange = `${P}!${colLetter(3)}${PL_ROWS.fcf}:${colLetter(2 + years)}${PL_ROWS.fcf}`;
   const terminal = `(${P}!${colLetter(2 + years)}${PL_ROWS.ebitda}*${ASSUMPTION_CELLS.exitMultiple})/((1+${ASSUMPTION_CELLS.wacc})^${years})`;
   const dcf = sheet.getCell(R.dcfValue, 2);
   dcf.value = {
@@ -567,7 +612,7 @@ function writeSensitivity(sheet: ExcelJS.Worksheet, a: ModelAssumptions) {
       // Closed-form MoM-implied IRR at this (entry, exit) pair, expressed
       // as formulas so the grid recalculates when the base model changes.
       // equity0 = EV(entry) + fees - debt ; proceeds = EV(exit) - exit debt
-      const entryEv = `${Rt}!$B$${R.entryEbitda}*(${ASSUMPTION_CELLS.entryMultiple}+${entryStep})`;
+      const entryEv = `${entryBasisRef(a)}*(${ASSUMPTION_CELLS.entryMultiple}+${entryStep})`;
       const equity0 = `(${entryEv})*(1+${ASSUMPTION_CELLS.transactionFeesPct})-${Rt}!$B$${R.debt}`;
       const proceeds = `${Rt}!$B$${R.exitEbitda}*(${ASSUMPTION_CELLS.exitMultiple}+${exitStep})-${Rt}!$B$${R.exitDebt}`;
       cell.value = {
@@ -578,7 +623,25 @@ function writeSensitivity(sheet: ExcelJS.Worksheet, a: ModelAssumptions) {
   });
 }
 
-function writeNotes(sheet: ExcelJS.Worksheet, ctx: WorkbookContext, history: HistoricalRow[]) {
+/**
+ * The deal record's EBITDA (often adjusted, from the CIM or a valuation) can
+ * differ a lot from the statements' — on SRM 6.1 vs a derived 2.21. Say so
+ * rather than silently picking one: it moves entry EV and every return.
+ */
+function ebitdaGapNote(base: BasePeriod | null, ctx: WorkbookContext): string[] {
+  const own = base?.row.ebitda;
+  const deal = ctx.fallbackEntryEbitda;
+  if (typeof own !== 'number' || typeof deal !== 'number' || own <= 0 || deal <= 0) return [];
+  const gap = Math.abs(deal - own) / own;
+  if (gap < 0.25) return [];
+  return [
+    `CHECK: base-period EBITDA from the statements is ${own.toFixed(2)}${base?.row.ebitdaDerived ? ' (derived)' : ''}, ` +
+    `but the deal record says ${deal.toFixed(2)} — a ${Math.round(gap * 100)}% difference (e.g. adjusted vs reported EBITDA). ` +
+    'The model uses the statements figure; change Projections!B7 if the adjusted figure is the right entry basis.',
+  ];
+}
+
+function writeNotes(sheet: ExcelJS.Worksheet, ctx: WorkbookContext, history: HistoricalRow[], base: BasePeriod | null) {
   sheet.columns = [{ width: 100 }];
   sheet.getCell('A1').value = 'Notes & caveats';
   sheet.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF003366' } };
@@ -587,7 +650,13 @@ function writeNotes(sheet: ExcelJS.Worksheet, ctx: WorkbookContext, history: His
     `Historical periods included: ${history.map((h) => h.period).join(', ') || 'none'}.`,
     'Historical figures were extracted automatically and normalised to a single currency and unit scale. Verify them against the source documents.',
     'Projections, the debt schedule, returns and the sensitivity grid are all live formulas driven by the Assumptions sheet.',
-    'The debt structure is a single senior tranche with straight-line amortisation. Multi-tranche structures and cash sweeps are not modelled.',
+    'The debt structure is a single senior tranche: straight-line amortisation plus a cash sweep of unlevered free cash flow. Multi-tranche structures are not modelled.',
+    ...(base ? [base.note] : []),
+    ...(base?.row.ebitdaDerived ? ['Base-period EBITDA was not printed in the source; it was derived (EBIT + D&A, or equivalent).'] : []),
+    ...(ebitdaGapNote(base, ctx)),
+    ...(entryEbitda(base, ctx).source === 'deal' ? ["The base period has no EBITDA — entry EBITDA uses the deal's recorded EBITDA instead. Verify it."] : []),
+    ...(entryEbitda(base, ctx).source === 'missing' ? ['WARNING: no entry EBITDA could be found or derived, so entry EV, debt and equity are 0 and returns are not meaningful. Enter it on the Projections sheet (cell B7) or extract a P&L with EBITDA.'] : []),
+    ...(history.some((h) => h.ebitdaDerived) ? ['Where a period\'s EBITDA was not printed, Historicals shows a derived figure (EBIT + D&A, or equivalent).'] : []),
     'Blank cells in Historicals mean the figure was not present in the source documents — they are not zeros.',
     ...ctx.notes,
   ];
@@ -612,10 +681,15 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
   writeCover(wb.addWorksheet(SHEETS.cover), context);
   writeAssumptions(wb.addWorksheet(SHEETS.assumptions), assumptions);
   writeHistoricals(wb.addWorksheet(SHEETS.historicals), history, context);
-  writeProjections(wb.addWorksheet(SHEETS.projections), assumptions, history, context);
-  writeReturns(wb.addWorksheet(SHEETS.returns), assumptions, context);
+  const base = selectBasePeriod(history);
+  writeProjections(wb.addWorksheet(SHEETS.projections), assumptions, base, context);
+  writeReturns(wb.addWorksheet(SHEETS.returns), assumptions, base, context);
   writeSensitivity(wb.addWorksheet(SHEETS.sensitivity), assumptions);
-  writeNotes(wb.addWorksheet(SHEETS.notes), context, history);
+  writeNotes(wb.addWorksheet(SHEETS.notes), context, history, base);
+
+  // No cached results are written; make Excel / Sheets compute on open so
+  // previews don't show blanks.
+  wb.calcProperties.fullCalcOnLoad = true;
 
   for (const sheet of wb.worksheets) sheet.properties.showGridLines = false;
 

@@ -47,6 +47,8 @@ interface ModelResponse {
   assumptions: Assumptions;
   isDerived: boolean;
   history: HistoryRow[];
+  /** Base / entry column the workbook projects from (LTM or last full year). */
+  base?: { label: string; basis: string; revenue: number | null; ebitda: number | null } | null;
   currency: string;
   unitScale: string;
 }
@@ -138,17 +140,26 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
   // Echo of the workbook's own arithmetic — see the note at the top.
   const preview = useMemo(() => {
     if (!assumptions || !model) return null;
-    const lastEbitda = [...model.history].reverse().find((h) => typeof h.ebitda === "number")?.ebitda;
-    if (typeof lastEbitda !== "number") return null;
+    // Same inputs as the workbook: the base period's revenue and EBITDA.
+    const baseRevenue = model.base?.revenue ?? null;
+    const baseEbitda = model.base?.ebitda ?? null;
+    if (typeof baseEbitda !== "number") return null;
 
-    const entryEv = lastEbitda * assumptions.entryMultiple;
-    const debt = lastEbitda * assumptions.debtQuantum;
+    const entryMetric = assumptions.entryBasis === "REVENUE" ? baseRevenue : baseEbitda;
+    if (typeof entryMetric !== "number") return null;
+    const entryEv = entryMetric * assumptions.entryMultiple;
+    const debt = assumptions.debtQuantumMode === "ABSOLUTE" ? assumptions.debtQuantum : baseEbitda * assumptions.debtQuantum;
     const equity = entryEv * (1 + assumptions.transactionFeesPct / 100) - debt;
 
-    let ebitda = lastEbitda;
-    for (let y = 0; y < assumptions.exitYear; y++) {
-      const growth = (assumptions.revenueGrowthPct[y] ?? 0) / 100;
-      ebitda = ebitda * (1 + growth);
+    // Exit EBITDA = projected revenue × that year's margin (as the workbook
+    // does), not base EBITDA grown at the revenue rate.
+    let ebitda = baseEbitda;
+    if (typeof baseRevenue === "number") {
+      let revenue = baseRevenue;
+      for (let y = 0; y < assumptions.exitYear; y++) {
+        revenue = revenue * (1 + (assumptions.revenueGrowthPct[y] ?? 0) / 100);
+      }
+      ebitda = revenue * ((assumptions.ebitdaMarginPct[assumptions.exitYear - 1] ?? 0) / 100);
     }
     const exitEv = ebitda * assumptions.exitMultiple;
     const proceeds = exitEv - Math.max(0, debt * (1 - (assumptions.amortPctPerYear / 100) * assumptions.exitYear));

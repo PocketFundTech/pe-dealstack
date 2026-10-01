@@ -75,8 +75,20 @@ export function scoreSheet(name: string): number {
     }
   }
 
-  // Short generic names like "BS", "CF", "PL", "IS" — moderate score
+  // Short generic names like "BS", "CF", "PL", "IS" — moderate score alone,
+  // high as a word in a longer name ("CFS Source", "BS Source" used to score
+  // the minimum 10 because only the whole name matched).
   if (/^(bs|cf|pl|is|cfs)$/i.test(trimmed)) maxScore = Math.max(maxScore, 70);
+  else if (/\b(bs|cf|cfs|pl|is)\b/i.test(trimmed.replace(/[_\-]/g, ' '))) maxScore = Math.max(maxScore, 85);
+
+  // Reported statements beat derived models: bonus for source / historical /
+  // actuals tabs, cap for valuation / returns / sensitivity / summary tabs.
+  if (maxScore > 10 && /\b(source|historical|historicals|actuals?|reported|audited|quickbooks)\b/i.test(trimmed)) {
+    maxScore += 10;
+  }
+  if (/\b(valuation|returns?|dcf|sensitivity|irr|output|summary)\b/i.test(trimmed)) {
+    maxScore = Math.min(maxScore, 40);
+  }
 
   // Fallback: sheets with numbers in content might still be useful (scored low)
   if (maxScore === 0) maxScore = 10;

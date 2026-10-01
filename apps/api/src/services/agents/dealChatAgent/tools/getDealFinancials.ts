@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import { correctMistaggedUnitScale, formatDealHeadline, formatFinancialValue, type UnitScale } from '../../../../utils/financialFormat.js';
+import { periodOrdinal } from '@ai-crm/shared';
 
 // Chronological sort key for period strings the extractor emits:
 //   "Sep '25", "Sep 2025", "Sep-25", "May 2025", "Q1 2025", "FY2024",
@@ -29,10 +30,6 @@ import { correctMistaggedUnitScale, formatDealHeadline, formatFinancialValue, ty
 // chronological output stays predictable. Higher numbers are more
 // recent. Synthetic buckets bucket AFTER the latest concrete date so
 // the agent sees them as the "latest" snapshots.
-const MONTHS: Record<string, number> = {
-  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
-};
 const SYNTHETIC_PERIODS: Record<string, number> = {
   ltm: 999900,
   current: 999901,
@@ -45,33 +42,12 @@ function periodSortKey(period: string | null | undefined): number {
   if (!period) return -1;
   const lower = period.toLowerCase().trim();
   if (lower in SYNTHETIC_PERIODS) return SYNTHETIC_PERIODS[lower];
-
-  // FY YYYY / FYNN
-  const fy = lower.match(/^fy\s*'?(\d{2,4})$/);
-  if (fy) {
-    const yr = parseInt(fy[1], 10);
-    const fullYear = yr < 100 ? 2000 + yr : yr;
-    return fullYear * 100 + 12; // year-end
-  }
-  // Q1 2025 / Q1-25
-  const q = lower.match(/^q([1-4])[\s'-]*(\d{2,4})$/);
-  if (q) {
-    const fullYear = parseInt(q[2], 10) < 100 ? 2000 + parseInt(q[2], 10) : parseInt(q[2], 10);
-    return fullYear * 100 + parseInt(q[1], 10) * 3;
-  }
-  // "Sep '25", "Sep 2025", "Sep-25", "May 2023"
-  const m = lower.match(/^([a-z]{3,})[\s'-]+(\d{2,4})$/);
-  if (m && m[1].slice(0, 3) in MONTHS) {
-    const fullYear = parseInt(m[2], 10) < 100 ? 2000 + parseInt(m[2], 10) : parseInt(m[2], 10);
-    return fullYear * 100 + MONTHS[m[1].slice(0, 3)];
-  }
   // YYYY-MM
   const ym = lower.match(/^(\d{4})-(\d{1,2})$/);
   if (ym) return parseInt(ym[1], 10) * 100 + parseInt(ym[2], 10);
-  // Bare year
-  const yr = lower.match(/^(\d{4})$/);
-  if (yr) return parseInt(yr[1], 10) * 100 + 12;
-  return 0;
+  // Everything else — FY/YTD/LTM/Q/H/month labels, including date-range
+  // suffixes like "FY2023 (Jan - Dec 2023)" — via the shared period parser.
+  return periodOrdinal(period) ?? 0;
 }
 
 export const inputSchema = z.object({});

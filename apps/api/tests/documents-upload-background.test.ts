@@ -65,6 +65,7 @@ vi.mock('../src/services/pdfExtractor.js', () => ({
 
 vi.mock('../src/services/agents/financialAgent/concurrency.js', () => ({
   acquireExtractionSlot: () => true,
+  acquireExtractionSlotBy: async () => true,
   releaseExtractionSlot: () => {},
 }));
 

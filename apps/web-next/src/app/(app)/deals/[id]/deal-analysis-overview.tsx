@@ -54,9 +54,29 @@ function RevenueQualityCard({ rq }: { rq: NonNullable<AnalysisData["revenueQuali
               </div>
             );
           })}
+          {rq.ytd && <YtdGrowthChip ytd={rq.ytd} />}
         </div>
       )}
     </AnalysisCard>
+  );
+}
+
+/** Partial-year growth, shown apart from the full-year chips (never compared to a full year as-is). */
+function YtdGrowthChip({ ytd }: { ytd: NonNullable<NonNullable<AnalysisData["revenueQuality"]>["ytd"]> }) {
+  const estimate = ytd.basis === "annualised_estimate";
+  const c = ytd.growthPct == null ? "#94A3B8" : ytd.growthPct > 0 ? "#059669" : "#dc2626";
+  const title = estimate
+    ? `${ytd.period} annualised (× 12 / ${ytd.months}) vs ${ytd.comparedTo} — an estimate`
+    : `${ytd.period} vs ${ytd.comparedTo} (same months, prior year)`;
+  return (
+    <div title={title} className="bg-white border border-dashed border-gray-300 rounded-lg px-3.5 py-2 text-center">
+      <div className="text-[10px] text-gray-500 font-medium">
+        {ytd.period} {estimate ? "run-rate (est.)" : "vs prior YTD"}
+      </div>
+      <div className="text-sm font-bold" style={{ color: c }}>
+        {ytd.growthPct != null ? (ytd.growthPct > 0 ? "+" : "") + ytd.growthPct + "%" : "--"}
+      </div>
+    </div>
   );
 }
 

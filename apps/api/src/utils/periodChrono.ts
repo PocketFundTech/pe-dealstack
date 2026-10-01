@@ -22,6 +22,8 @@
  * ("Apr-26 < Aug-26 < Dec-26 < Feb-26 < Jan-26 …").
  */
 
+import { parsePeriod, comparePeriods } from '@ai-crm/shared';
+
 const MONTH_INDEX: Record<string, number> = {
   JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
   JUL: 7, AUG: 8, SEP: 9, SEPT: 9, OCT: 10, NOV: 11, DEC: 12,
@@ -56,6 +58,15 @@ export function inferPeriodScope(period: string | null | undefined): PeriodScope
   // (ARR ≈ MRR × 12 — a unit conversion, not growth).
   if (/\bARR\b/.test(upper) || /\bANNUAL(IZED|ISED)?\b/.test(upper)) return 'annual';
   if (/^FY\s?\d{2,4}$/.test(upper) || /^\d{4}$/.test(upper)) return 'annual';
+  // Date-range labels ("FY2023 (Jan - Dec 2023)", "(Jan - Sep 2025)"): the
+  // shared parser reads the span. Without this, "JAN" matched the monthly
+  // regex below and a full year was classified monthly.
+  if (/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)[A-Z]*\b.*[-–—].*\d{4}/.test(upper)) {
+    const parsed = parsePeriod(period);
+    if (parsed?.kind === 'FY') return 'annual';
+    if (parsed?.kind === 'YTD') return 'ytd';
+    if (parsed?.kind === 'Q') return 'quarterly';
+  }
   if (/\bQ[1-4]\b/.test(upper) || /^[1-4]Q\d{2,4}$/.test(upper) || /\bQUARTERLY\b/.test(upper)) return 'quarterly';
   const monthRe = /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\b/;
   if (monthRe.test(upper)) return 'monthly';
@@ -99,6 +110,11 @@ export function comparePeriodChronologically(
   a: string | null | undefined,
   b: string | null | undefined,
 ): number {
+  // Shared canonical ordering (end date, then kind); fall back to the local
+  // key only for labels the parser can't date.
+  const pa = parsePeriod(a);
+  const pb = parsePeriod(b);
+  if (pa && pb) return comparePeriods(pa, pb);
   const [ay, asub] = periodChronoKey(a);
   const [by, bsub] = periodChronoKey(b);
   if (ay !== by) return ay - by;

@@ -43,20 +43,6 @@ export const SUBTOTAL_KEYS = new Set([
   "operating_cf", "operating_cash_flow", "net_change_cash",
 ]);
 
-export const ORDERED_LINE_ITEMS = [
-  "revenue", "cogs", "gross_profit", "gross_margin_pct",
-  "sga", "rd", "other_opex", "total_opex",
-  "ebitda", "ebitda_margin_pct", "da", "ebit",
-  "interest_expense", "ebt", "tax", "net_income", "sde",
-  "cash", "accounts_receivable", "inventory", "other_current_assets", "total_current_assets",
-  "ppe_net", "goodwill", "intangibles", "total_assets",
-  "accounts_payable", "short_term_debt", "other_current_liabilities", "total_current_liabilities",
-  "long_term_debt", "total_liabilities", "total_equity",
-  "operating_cf", "operating_cash_flow", "capex", "fcf", "free_cash_flow",
-  "acquisitions", "debt_repayment", "dividends", "net_change_cash",
-  "investing_activities", "financing_activities",
-];
-
 export type StatementType = "INCOME_STATEMENT" | "BALANCE_SHEET" | "CASH_FLOW";
 export type ChartType = "revenue" | "growth" | "composition";
 

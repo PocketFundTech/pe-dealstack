@@ -6,6 +6,8 @@ import { api, NotFoundError } from "@/lib/api";
 import { mutateApiCache } from "@/lib/useApiQuery";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { extractionErrorMessage } from "./deal-financials-errors";
+import { inferPeriodScope } from "./deal-financials-period-scope";
+import { runExtractAll } from "./deal-financials-extract-all";
 import { useToast } from "@/providers/ToastProvider";
 import { type FinancialStatement } from "./deal-financials-charts";
 
@@ -180,9 +182,10 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
 
     const startedAt = Date.now();
     setExtractLabel("Extracting… 0s");
+    let progressDocs = "";
     const progressTimer = setInterval(() => {
       const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-      setExtractLabel(`Extracting… ${elapsedSec}s`);
+      setExtractLabel(`Extracting… ${elapsedSec}s${progressDocs}`);
     }, 1000);
 
     const controller = new AbortController();
@@ -193,14 +196,18 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
       // mode='single' regardless of the mode field. Bulk path stays on
       // 'all_financials' which loops every CIM/FINANCIALS/spreadsheet doc
       // and merges by (statementType, period) inside runDeepPass.
-      const body = documentId
-        ? { documentId, mode: "single" as const }
-        : { mode: "all_financials" as const };
-      const result = await api.post<ExtractionResult>(
-        `/deals/${dealId}/financials/extract`,
-        body,
-        { signal: controller.signal },
-      );
+      // Bulk: runExtractAll re-sends documents the API couldn't reach in one
+      // request (pendingDocumentIds) until all are processed.
+      const result: ExtractionResult = documentId
+        ? await api.post<ExtractionResult>(
+            `/deals/${dealId}/financials/extract`,
+            { documentId, mode: "single" as const },
+            { signal: controller.signal },
+          )
+        : await runExtractAll(api.post, dealId, {
+            timeoutMs: EXTRACT_CLIENT_TIMEOUT_MS,
+            onProgress: ({ done, total }) => { progressDocs = total > 0 ? ` · ${done}/${total} documents` : ""; },
+          });
 
       // Small delay before fetching — the API may return success before data
       // is fully committed to the database (observed in production).
@@ -371,14 +378,16 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
   const availableTabs = TAB_CONFIG.filter((t) => statements.some((s) => s.statementType === t.key));
   const resolvedTab = availableTabs.find((t) => t.key === activeTab) ? activeTab : (availableTabs[0]?.key ?? "INCOME_STATEMENT");
 
+  // "FY2023 (Jan - Dec 2023)" is annual too — /^FY\b/ never matched it.
+  const isAnnualPeriod = (period: string) => inferPeriodScope(period) === "annual";
   const filteredStatements = statements.filter((s) => {
     if (periodFilter === "all") return true;
-    const isFY = /^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period);
+    const isFY = isAnnualPeriod(s.period);
     return periodFilter === "annual" ? isFY : !isFY;
   });
 
-  const hasAnnual = statements.some((s) => /^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period));
-  const hasQuarterly = statements.some((s) => !(/^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period)));
+  const hasAnnual = statements.some((s) => isAnnualPeriod(s.period));
+  const hasQuarterly = statements.some((s) => !isAnnualPeriod(s.period));
   const showPeriodToggle = hasAnnual && hasQuarterly;
   const detectedCurrency = statements.find((s) => s.currency)?.currency ?? "USD";
   const confidences = statements.map((s) => s.extractionConfidence).filter((c): c is number => c != null);

@@ -17,6 +17,9 @@
  *   `p{page}` marker only when no quote was captured. A prefix-wrapped quote
  *   would never literally appear in the source document, which silently
  *   defeats storeNode.ts's scoreSourceMatch() substring check.
+ * - Missing income-statement subtotals (EBITDA, EBIT, gross profit, margins)
+ *   are derived deterministically (financialDerivations.ts), tagged
+ *   `<key>_source: "derived: …"`.
  * - Alias canonicalization is delegated to validateLineItems (financialSchema),
  *   which exports its alias table so this module has a single source of truth.
  */
@@ -26,6 +29,7 @@ import type {
   ClassifiedStatement,
 } from '../financialClassifier.js';
 import { validateLineItems, LINE_ITEM_ALIASES } from '../financialSchema.js';
+import { computeDerivedFields, normalizeCashFlowSigns } from '../financialDerivations.js';
 import type { ExtractionResponse, RawStatement } from './extractionSchema.js';
 
 const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
@@ -105,6 +109,11 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
       const { normalized, warnings: itemWarnings } = validateLineItems(stmt.statementType, folded);
       warnings.push(...itemWarnings.map((w) => `${stmt.statementType} ${p.period}: ${w}`));
       dropDuplicateAliases(normalized, warnings);
+      // Derive EBITDA / EBIT / GP / margins the statement doesn't print —
+      // same rules as the legacy engine (financialDerivations.ts).
+      if (stmt.statementType === 'INCOME_STATEMENT') computeDerivedFields(normalized);
+      // Cash outflows (capex, repayments, distributions…) stored ≤ 0.
+      if (stmt.statementType === 'CASH_FLOW') warnings.push(...normalizeCashFlowSigns(normalized, p.period));
       return {
         period: p.period,
         periodType: p.periodType,
