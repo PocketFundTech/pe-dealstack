@@ -68,6 +68,15 @@ export function selectBasePeriod(input: HistoricalRow[]): BasePeriod | null {
         const c = priorYtd[m];
         if (typeof a === 'number' && typeof b === 'number' && typeof c === 'number') row[m] = r3(a + b - c);
       }
+      // Every P&L line (E1), not just the summary metrics.
+      if (lastFy.lines && latestYtd.lines && priorYtd.lines) {
+        row.lines = {};
+        for (const [k, a] of Object.entries(lastFy.lines)) {
+          const b = latestYtd.lines[k];
+          const c = priorYtd.lines[k];
+          if (typeof b === 'number' && typeof c === 'number') row.lines[k] = r3(a + b - c);
+        }
+      }
       if (row.ebitda !== undefined && (lastFy.ebitdaDerived || latestYtd.ebitdaDerived || priorYtd.ebitdaDerived)) {
         row.ebitdaDerived = true;
       }

@@ -9,7 +9,11 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { normaliseStatements, deriveDefaults } from '../src/services/dealModel/assumptions.js';
 import { selectBasePeriod } from '../src/services/dealModel/basePeriod.js';
-import { buildModelWorkbook, SHEETS, PL_ROWS } from '../src/services/dealModel/workbook.js';
+import { buildModelWorkbook, buildModelLayout, SHEETS, RETURNS_ROWS } from '../src/services/dealModel/workbook.js';
+import type { HistoricalRow } from '../src/services/dealModel/assumptions.js';
+
+/** Registry rows for a history — addresses are generated (fix plan E1). */
+const rowsFor = (history: HistoricalRow[]) => buildModelLayout({ assumptions: deriveDefaults(history), history }).registry;
 
 const is = (period: string, lineItems: Record<string, number>) =>
   ({ statementType: 'INCOME_STATEMENT', period, periodType: 'HISTORICAL', unitScale: 'MILLIONS', currency: 'USD', isActive: true, lineItems });
@@ -67,11 +71,13 @@ describe('selectBasePeriod (D1)', () => {
     expect(base.row.ebitda).toBeCloseTo(2.8 + 4.0 - 2.0, 3);
   });
 
-  it('seeds growth from full years over the real span, margin from the base year', () => {
+  it('seeds growth from full years over the real span, costs from the full-year average', () => {
     const a = deriveDefaults(normaliseStatements(SRM).rows);
     // 2021 → FY2024 is 3 years: (27.32/12.50)^(1/3) - 1 ≈ 29.8%
-    expect(a.revenueGrowthPct[0]).toBeCloseTo(29.8, 0);
-    expect(a.ebitdaMarginPct[0]).toBeCloseTo((2.8 / 27.3214) * 100, 0);
+    expect(a.lineDrivers.revenue.values[0]).toBeCloseTo(29.8, 0);
+    // Operating costs implied as revenue − EBITDA; the 9-month YTD is excluded.
+    const margin = 100 - a.lineDrivers.total_opex.values[0];
+    expect(margin).toBeCloseTo(((2.2 / 20.9597 + 2.8 / 27.3214) / 2) * 100, 1);
   });
 });
 
@@ -81,12 +87,16 @@ describe('workbook entry values (D2)', () => {
     const buffer = await buildModelWorkbook({ assumptions: deriveDefaults(rows), history: rows, context: CONTEXT });
     const wb = await load(buffer);
     const proj = wb.getWorksheet(SHEETS.projections)!;
-    expect(proj.getRow(PL_ROWS.header).getCell(2).value).toBe('FY2024 (Jan - Dec 2024) A');
-    expect(proj.getRow(PL_ROWS.revenue).getCell(2).value).toBeCloseTo(27.321, 2);
-    expect(proj.getRow(PL_ROWS.ebitda).getCell(2).value).toBeCloseTo(2.8, 3);
-    // Row 10 is net income on both sheets; FCF has its own row.
-    expect(proj.getRow(PL_ROWS.fcf).getCell(1).value).toBe('Unlevered FCF');
-    expect(proj.getRow(PL_ROWS.netIncome).getCell(1).value ?? null).toBeNull();
+    const PL = rowsFor(rows).pl;
+    expect(proj.getRow(PL.header).getCell(2).value).toBe('FY2024 (Jan - Dec 2024) A');
+    expect(proj.getRow(PL.row.revenue).getCell(2).value).toBeCloseTo(27.321, 2);
+    // Base EBITDA is a formula over its lines; the implied costs make it 2.8.
+    expect(formula(proj.getRow(PL.row.ebitda).getCell(2).value)).toBe(`B${PL.row.revenue}-B${PL.row.total_opex}`);
+    expect(proj.getRow(PL.row.total_opex).getCell(2).value).toBeCloseTo(27.3214 - 2.8, 3);
+    // Net income sits on the same row on both sheets; FCF has its own row.
+    expect(proj.getRow(PL.fcf).getCell(1).value).toBe('Unlevered FCF');
+    expect(proj.getRow(PL.row.net_income).getCell(1).value).toBe('Net income');
+    expect(wb.getWorksheet(SHEETS.historicals)!.getRow(PL.row.net_income).getCell(1).value).toBe('Net income');
     // exceljs doesn't read calcPr back on load — check the written XML.
     const workbookXml = await (await JSZip.loadAsync(buffer)).file('xl/workbook.xml')!.async('string');
     expect(workbookXml).toMatch(/fullCalcOnLoad="(1|true)"/);
@@ -101,7 +111,10 @@ describe('workbook entry values (D2)', () => {
     const withDeal = await load(await buildModelWorkbook({
       assumptions: deriveDefaults(rows), history: rows, context: { ...CONTEXT, fallbackEntryEbitda: 1.5 },
     }));
-    expect(withDeal.getWorksheet(SHEETS.projections)!.getRow(PL_ROWS.ebitda).getCell(2).value).toBe(1.5);
+    const PL = rowsFor(rows).pl.row;
+    // Entry EBITDA = revenue − implied operating costs = the deal's 1.5.
+    expect(withDeal.getWorksheet(SHEETS.projections)!.getRow(PL.total_opex).getCell(2).value).toBe(8.5);
+    expect(JSON.stringify(withDeal.getWorksheet(SHEETS.notes)!.getSheetValues())).toContain("deal's recorded EBITDA");
 
     const none = await load(await buildModelWorkbook({ assumptions: deriveDefaults(rows), history: rows, context: CONTEXT }));
     expect(JSON.stringify(none.getWorksheet(SHEETS.notes)!.getSheetValues())).toContain('WARNING: no entry EBITDA');
@@ -112,7 +125,8 @@ describe('workbook entry values (D2)', () => {
     const wb = await load(await buildModelWorkbook({
       assumptions: deriveDefaults(rows), history: rows, context: { ...CONTEXT, fallbackEntryEbitda: 6.1 },
     }));
-    expect(wb.getWorksheet(SHEETS.projections)!.getRow(PL_ROWS.ebitda).getCell(2).value).toBe(2.21);
+    const PL = rowsFor(rows).pl.row;
+    expect(wb.getWorksheet(SHEETS.projections)!.getRow(PL.total_opex).getCell(2).value).toBeCloseTo(27.3 - 2.21, 6);
     expect(JSON.stringify(wb.getWorksheet(SHEETS.notes)!.getSheetValues())).toContain('the deal record says 6.10');
   });
 
@@ -121,14 +135,17 @@ describe('workbook entry values (D2)', () => {
     const a = { ...deriveDefaults(rows), entryBasis: 'REVENUE' as const, entryMultiple: 1.2, debtQuantumMode: 'ABSOLUTE' as const, debtQuantum: 10 };
     const wb = await load(await buildModelWorkbook({ assumptions: a, history: rows, context: CONTEXT }));
     const ret = wb.getWorksheet(SHEETS.returns)!;
-    expect(formula(ret.getRow(5).getCell(2).value)).toBe(`${SHEETS.projections}!B${PL_ROWS.revenue}*Assumptions!$B$4`);
-    expect(formula(ret.getRow(7).getCell(2).value)).toBe('Assumptions!$B$6');
+    const reg = rowsFor(rows);
+    expect(formula(ret.getRow(RETURNS_ROWS.entryEv).getCell(2).value)).toBe(`${SHEETS.projections}!B${reg.pl.row.revenue}*${reg.scalar('entryMultiple')}`);
+    expect(formula(ret.getRow(RETURNS_ROWS.debt).getCell(2).value)).toBe(reg.scalar('debtQuantum'));
   });
 
   it('leaves the historical EBITDA margin blank (not 0%) when EBITDA is missing', async () => {
     const rows = [{ period: '2023', revenue: 9 }, { period: '2024', revenue: 10, ebitda: 2 }];
     const wb = await load(await buildModelWorkbook({ assumptions: deriveDefaults(rows), history: rows, context: CONTEXT }));
-    const f = formula(wb.getWorksheet(SHEETS.historicals)!.getRow(PL_ROWS.ebitdaMargin).getCell(2).value);
-    expect(f).toContain('ISBLANK(B7)');
+    const reg = rowsFor(rows);
+    const f = formula(wb.getWorksheet(SHEETS.historicals)!.getRow(reg.pl.ebitdaMargin).getCell(2).value);
+    expect(f).toContain(`ISBLANK(B${reg.pl.row.ebitda})`);
+    expect(wb.getWorksheet(SHEETS.historicals)!.getRow(reg.pl.row.ebitda).getCell(2).value ?? null).toBeNull();
   });
 });
