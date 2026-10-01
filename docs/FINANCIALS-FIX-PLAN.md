@@ -26,43 +26,47 @@ exact code paths, proposed designs, and the working checklist (§8). Tick boxes 
 
 ## To-do — in recommended order
 
+> **Status 2026-10-01:** every item below has an open PR. Merge order: **#163 → #164 → #165 → #166 / #167 → #168**.
+> After merging: run #164's migration + backfill (founder), then **Re-extract** the SRM deal (with the team's OK) and have Pushkar re-test.
+> Tick each box when its PR is merged.
+
 Sizes: **S** ≤ ½ day · **M** 1–2 days · **L** 3–5 days. "Mig" = needs a Supabase migration (founder runs it).
 
 ### Phase A — Stop showing wrong analysis (fastest client-visible win)
 
-- [ ] **A1 · One period model, one ordering (M)**
+- [ ] **A1 · One period model, one ordering (M)** → **PR #163**
   - Add a shared `parsePeriod(label)` → `{ fiscalYear, months, kind: FY|YTD|LTM|Q|H|M|EST, endDate, canonicalKey }` in `packages/shared`, reading trailing ranges: "FY2023 (Jan - Dec 2023)" → FY 2023 (12 months, key `2023`); "2025 YTD (Jan - Sep 2025)" → YTD 2025 (9 months).
   - Add one `comparePeriods(a, b)` (by end date, then kind) and use it everywhere: analysis `prepareData` (`helpers.ts:64`), ratios, the web tables/charts (delete the hand-copied `W/…/deal-financials-period-scope.ts:133`), the model builder, and both chat agents' `getDealFinancials` sort helpers.
   - Fix `inferPeriodScope` so "FY2023 (Jan - Dec 2023)" is annual, not "monthly" (matches "JAN" today).
   - Done when: SRM periods order 2021 → FY2023 → FY2024 → 2025 YTD everywhere, and "FY2024 (Jan–Dec 2024)" and "2024" are recognised as the same year.
-- [ ] **A2 · Growth, CAGR and consistency use full years only (S)** — `A/services/analysis/operationalAnalysis.ts`, `qoeAnalysis.ts`
+- [ ] **A2 · Growth, CAGR and consistency use full years only (S)** → **PR #163** — `A/services/analysis/operationalAnalysis.ts`, `qoeAnalysis.ts`
   - Growth/CAGR/consistency/QoE flags on FY periods only; CAGR over the real year span.
   - Show YTD separately: "YTD vs prior-year YTD" when both exist, else "annualised run-rate (estimate)" = value × 12/months (SRM: 29.0 × 12/9 = 38.7 → ~+41% vs FY2024).
   - Done when: SRM shows FY2023 → FY2024 +30%, 2025 run-rate ~+41% (marked as estimate), no false −27.7% and no "volatile" flag.
-- [ ] **A3 · Derive EBITDA on the live extraction path (S)**
+- [ ] **A3 · Derive EBITDA on the live extraction path (S)** → **PR #163**
   - Move `computeDerivedFields` to a shared helper; call it in `A/services/extraction/normalize.ts` for income statements. Order: EBIT + D&A → GP − total OpEx → net income + interest + tax + D&A. Tag `ebitda_source: "derived: …"` so the UI can mark it.
   - Safety net: ratios fall back to EBIT + D&A, then `ebitda_margin_pct`.
   - Bump `EXTRACTION_SCHEMA_VERSION` so Re-extract recomputes.
   - Done when: SRM shows EBITDA and EBITDA margin in the table, ratios, and the model.
-- [ ] **A4 · Store the canonical period (M, Mig)**
+- [ ] **A4 · Store the canonical period (M, Mig)** → **PR #164 (migration + backfill pending)**
   - Columns on `FinancialStatement`: `periodKey`, `periodKind`, `periodMonths`, `periodEndDate` (add `YTD` handling). Cross-document conflict lookup matches on `periodKey`, not the raw label (`financialExtractionOrchestrator.ts:185`).
   - Backfill existing rows (pattern: `apps/api/scripts/dedup-existing-statements.ts`).
 
 ### Phase B — Use the right source documents
 
-- [ ] **B1 · Real statements beat derived models (M)** — `A/services/financialSourceAuthority.ts`, `financialExtractionOrchestrator.ts`
+- [ ] **B1 · Real statements beat derived models (M)** → **PR #164** — `A/services/financialSourceAuthority.ts`, `financialExtractionOrchestrator.ts`
   - New rank below "source statement": derived/model files (signals: valuation, summary, returns, DCF, sensitivity, model output).
   - Have the Claude container extraction report, per statement, the **sheet name** and `sourceKind` (`source_statement` | `model_derived`); store both on the row.
   - Break ties by `sourceKind`, then completeness (line-item count, presence of totals) — never by who wrote first.
   - Done when: SRM's balance sheet and cash flow come from the LBO workbook's source tabs; the valuation summary's rows are inactive "needs review" alternatives.
-- [ ] **B2 · Point the extractor at the statement tabs (S)**
+- [ ] **B2 · Point the extractor at the statement tabs (S)** → **PR #163**
   - Sheet scoring: match `cfs`/`bs`/`pl`/`is` as words (not only whole names), bonus for "source / historical / actuals", lower score for valuation/returns/sensitivity/summary (`A/services/excelFinancialExtractor.ts:38-85`).
   - Container prompt: "Prefer tabs with the company's reported historical statements (e.g. '*Source*', 'Historical', 'Actuals'); extract every balance-sheet and cash-flow line from them; never take them from valuation or analysis tabs; report the sheet name."
-- [ ] **B3 · Queue documents instead of skipping them (S–M)** — `A/routes/financials-extraction.ts:359`, `A/services/ingestDeepPass.ts:36-41`, `A/routes/documents-upload.ts:484-491`
+- [ ] **B3 · Queue documents instead of skipping them (S–M)** → **PR #163** — `A/routes/financials-extraction.ts:359`, `A/services/ingestDeepPass.ts:36-41`, `A/routes/documents-upload.ts:484-491`
   - Replace parallel `Promise.allSettled` + "skipped_no_slot" with a bounded queue (`utils/limitConcurrency` `mapWithConcurrencyLimit` exists), source statements first, derived models last.
   - Make the conflict check + upsert atomic per (deal, statement, period) so completion order can't decide the winner.
   - Done when: "Extract all" on a 15-doc deal processes all 15 (reports progress), none silently skipped.
-- [ ] **B4 · Cash-flow signs and statement checks (S–M)**
+- [ ] **B4 · Cash-flow signs and statement checks (S–M)** → **PR #163**
   - Deterministic sign pass in `extraction/normalize.ts` (and legacy): cash outflows — capex, debt repayment, dividends/distributions, acquisitions — stored ≤ 0; prompt rule "cash outflows negative". Stop treating capex as positive in the legacy prompt.
   - Validator (error level → triggers repair): CFO + CFI + CFF ≈ net change in cash; balance sheet has totals and assets = liabilities + equity (`A/services/financialValidator.ts`).
   - Map `total_debt` to its own key (today it's aliased to `long_term_debt`, which mislabels it).
@@ -70,33 +74,33 @@ Sizes: **S** ≤ ½ day · **M** 1–2 days · **L** 3–5 days. "Mig" = needs a
 
 ### Phase C — A P&L that reads like a P&L
 
-- [ ] **C1 · Extraction records the parent line, label and order (M)** — `A/services/extraction/extractionSchema.ts:93`, `normalize.ts`
+- [ ] **C1 · Extraction records the parent line, label and order (M)** → **PR #164 (source label/row order deferred)** — `A/services/extraction/extractionSchema.ts:93`, `normalize.ts`
   - Add a `parent` field (restricted to standard keys) per line item; store the source's own label and row order (`lineItemMeta` or `<key>_label`); add `other_income` / `other_expense` standard keys; enforce signs (contra-revenue like discounts/refunds negative; costs positive).
   - Bump the schema version.
-- [ ] **C2 · Statement-specific layout in the table (M)** — `W/app/(app)/deals/[id]/deal-financials-table.tsx`, new `deal-financials-layout.ts`
+- [ ] **C2 · Statement-specific layout in the table (M)** → **PR #163** — `W/app/(app)/deals/[id]/deal-financials-table.tsx`, new `deal-financials-layout.ts`
   - Income statement sections: Revenue → COGS → **Gross Profit** → OpEx → **EBITDA** → D&A → **EBIT** → Interest/Other → **EBT** → Tax → **Net Income**; raw accounts nested as collapsible children under their section; balance-sheet/cash-flow keys never shown on the P&L; leftovers in one collapsed "Unclassified accounts" group.
   - Show derived values (e.g. EBITDA) marked "derived"; negatives in accounting style; fix the label bug that upper-cases any short word ("Fly ASH").
   - Done when: SRM's P&L reads top-down like the source QuickBooks statement, with Cement/Fly Ash/Sand under COGS and Discounts/Refunds under Revenue.
 
 ### Phase D — Model builder: correct numbers
 
-- [ ] **D1 · Pick the right base / entry period (M)** — `A/services/dealModel/assumptions.ts`, `workbook.ts`
+- [ ] **D1 · Pick the right base / entry period (M)** → **PR #163** — `A/services/dealModel/assumptions.ts`, `workbook.ts`
   - Base = LTM (FY(n−1) + YTD(n) − YTD(n−1)) when a prior-year YTD exists, else the last full fiscal year; YTD shown for information only, never as a full year.
   - Drop or flag sparse rows (e.g. a revenue-only "2021" from a CIM chart); default growth from full-year CAGR over real years.
-- [ ] **D2 · Entry values and formula fixes (S)**
+- [ ] **D2 · Entry values and formula fixes (S)** → **PR #163**
   - Entry EBITDA = base-period EBITDA (derived if needed, A3), fallback `Deal.ebitda`; write it as a labelled input; warn instead of silently writing 0.
   - Honour `entryBasis` (revenue-based entry) and `debtQuantumMode`; EBITDA-margin formula shows blank (not 0%) when EBITDA is missing; set `fullCalcOnLoad` so previews show values; fix the Projections row-10 label (Net income vs Unlevered FCF); fix the Notes text ("cash sweeps are not modelled" — they are); make the panel preview use margin × revenue.
   - Done when: SRM's model has non-zero entry EV / debt / equity and a real IRR and MoM.
 
 ### Phase E — Model builder: what the team asked for
 
-- [ ] **E1 · Model every P&L line (L)** — each line gets a driver (% of revenue / growth / fixed / subtotal), seeded from historical averages; subtotals as live formulas; per-line driver table in the panel. Requires replacing the fixed cell map (`ASSUMPTION_CELLS`) with a generated one and updating `tests/deal-model-workbook.test.ts`.
-- [ ] **E2 · High / base / low scenarios (M)** — use the existing named-case support in `DealModel`; Low/Base/High columns per driver with an "active case" switch in the workbook (`CHOOSE`), a case switcher and per-case save in the panel, and an IRR/MoM summary per case.
-- [ ] **E3 · Balance-sheet and cash-flow driven items (L)** — working capital (DSO/DIO/DPO), capex schedule from historical cash flows, opening net debt into sources & uses, multiple debt tranches, levered FCF feeding the cash sweep. Integrated balance sheet with a balance check is a later L+.
+- [ ] **E1 · Model every P&L line (L)** → **PR #167** — each line gets a driver (% of revenue / growth / fixed / subtotal), seeded from historical averages; subtotals as live formulas; per-line driver table in the panel. Requires replacing the fixed cell map (`ASSUMPTION_CELLS`) with a generated one and updating `tests/deal-model-workbook.test.ts`.
+- [ ] **E2 · High / base / low scenarios (M)** → **PR #167** — use the existing named-case support in `DealModel`; Low/Base/High columns per driver with an "active case" switch in the workbook (`CHOOSE`), a case switcher and per-case save in the panel, and an IRR/MoM summary per case.
+- [ ] **E3 · Balance-sheet and cash-flow driven items (L)** → **PR #168** — working capital (DSO/DIO/DPO), capex schedule from historical cash flows, opening net debt into sources & uses, multiple debt tranches, levered FCF feeding the cash sweep. Integrated balance sheet with a balance check is a later L+.
 
 ### Phase F — Analysis depth
 
-- [ ] **F1 · Surface the qualitative red flags (M)** — customer concentration and related-party customers from the CIM/notes (the deal chat can already read documents); negative free cash flow and debt-funded capex from the (now correct) cash flow; feed both into Quality of Earnings and Key Findings.
+- [ ] **F1 · Surface the qualitative red flags (M)** → **PR #165 (cash-flow flags) + #166 (customer concentration)** — customer concentration and related-party customers from the CIM/notes (the deal chat can already read documents); negative free cash flow and debt-funded capex from the (now correct) cash flow; feed both into Quality of Earnings and Key Findings.
 
 ### Checks before / alongside the fixes
 
