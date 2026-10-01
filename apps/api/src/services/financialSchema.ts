@@ -25,6 +25,9 @@ export const incomeStatementSchema = z.object({
   da: num, da_source: src,
   ebit: num, ebit_source: src,
   interest_expense: num, interest_expense_source: src,
+  // Between EBIT and EBT (fix plan C1) — QuickBooks "Other Income / Expense".
+  other_income: num, other_income_source: src,
+  other_expense: num, other_expense_source: src,
   ebt: num, ebt_source: src,
   tax: num, tax_source: src,
   net_income: num, net_income_source: src,

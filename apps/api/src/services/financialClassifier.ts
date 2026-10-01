@@ -6,7 +6,7 @@ import { periodHygieneGuidanceIfEnabled } from './extraction-evals/fewshot.js';
 import { MAX_TEXT_LENGTH } from './agents/financialAgent/config.js';
 import { validateLineItems } from './financialSchema.js';
 import { wrapDocumentContent } from './agents/guardrails.js';
-import { computeDerivedFields, normalizeCashFlowSigns } from './financialDerivations.js';
+import { computeDerivedFields, normalizeCashFlowSigns, normalizeIncomeStatementSigns } from './financialDerivations.js';
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -23,11 +23,17 @@ export interface FinancialPeriod {
 }
 
 /** One statement type (e.g. Income Statement) with all its periods */
+/** Reported statement vs a valuation / analysis model built on top of it (fix plan B1). */
+export type SourceKind = 'source_statement' | 'model_derived';
+
 export interface ClassifiedStatement {
   statementType: StatementType;
   unitScale: UnitScale;
   currency: string;
   periods: FinancialPeriod[];
+  /** Sheet / tab the statement was read from (spreadsheets). */
+  sheetName?: string | null;
+  sourceKind?: SourceKind | null;
 }
 
 /** Full result from classifyFinancials() */
@@ -302,6 +308,7 @@ export function normalizeClassificationResult(raw: any): ClassificationResult {
         }
         // Auto-calculate derived fields if missing
         if (statementType === 'INCOME_STATEMENT') {
+          warnings.push(...normalizeIncomeStatementSigns(validatedItems, String(p.period)));
           computeDerivedFields(validatedItems);
         }
         if (statementType === 'CASH_FLOW') {

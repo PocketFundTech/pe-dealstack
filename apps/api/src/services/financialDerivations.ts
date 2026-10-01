@@ -94,3 +94,31 @@ export function normalizeCashFlowSigns(li: Items, periodLabel: string): string[]
   }
   return warnings;
 }
+
+// ─── Income-statement account conventions (fix plan C1) ────────
+
+const CONTRA_REVENUE_RE = /(^|_)(discounts?|refunds?|returns?|returned|allowances?|rebates?)(_|$)/;
+
+/** Contra-revenue accounts nested under revenue (revenue_discounts …) are stored ≤ 0. */
+export function normalizeIncomeStatementSigns(li: Items, periodLabel: string): string[] {
+  const warnings: string[] = [];
+  for (const [key, value] of Object.entries(li)) {
+    if (typeof value === 'number' && value > 0 && key.startsWith('revenue_') && !key.endsWith('_source')
+      && CONTRA_REVENUE_RE.test(key.slice('revenue_'.length))) {
+      li[key] = -value;
+      warnings.push(`INCOME_STATEMENT ${periodLabel}: ${key} stored as contra-revenue (${value} → ${-value})`);
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Key for a raw account the extractor placed under `parent`: the existing
+ * `<parent>_<label>` convention the UI and legacy engine already use
+ * ("sand_cos" under cogs → "cogs_sand_cos"). Standard keys are unchanged.
+ */
+export function nestedLineItemKey(name: string, parent: string | null | undefined, standardKeys: ReadonlySet<string>): string {
+  if (!parent || name === parent || standardKeys.has(name) || name.startsWith(`${parent}_`)) return name;
+  const rest = name.split('_').filter((t) => t && t !== parent).join('_');
+  return rest ? `${parent}_${rest}` : name;
+}

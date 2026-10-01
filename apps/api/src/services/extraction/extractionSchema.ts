@@ -23,8 +23,11 @@ import { getTodayIso } from '../../utils/dates.js';
  * v2 (2026-09-30): LAKHS/CRORES scales + no rounding of small scaled values.
  * v3 (2026-09-30): EBITDA / EBIT / GP / margins derived on the Claude path;
  *   cash outflows stored negative; total_debt its own key; prefer source tabs.
+ * v4 (2026-10-01): per-statement sheetName + sourceKind (source vs model);
+ *   per-line-item parent (raw accounts nest under standard keys), other
+ *   income / expense keys, contra-revenue negative.
  */
-export const EXTRACTION_SCHEMA_VERSION = 'v3';
+export const EXTRACTION_SCHEMA_VERSION = 'v4';
 
 /** Extraction-cache tier for the Claude engine: the model plus the schema version. */
 export function claudeExtractionCacheTier(model: string): string {
@@ -34,11 +37,24 @@ export function claudeExtractionCacheTier(model: string): string {
 export const RAW_UNIT_SCALES = ['UNITS', 'THOUSANDS', 'LAKHS', 'MILLIONS', 'CRORES', 'BILLIONS'] as const;
 
 // ── Zod mirror (validates the parsed model output) ────────────────────
+/**
+ * Standard keys a raw account may nest under (fix plan C1). Restricted so the
+ * model can't invent parents the UI and analysis don't know.
+ */
+export const LINE_ITEM_PARENTS = [
+  'revenue', 'cogs', 'sga', 'rd', 'other_opex', 'total_opex', 'da', 'interest_expense', 'other_income', 'other_expense', 'tax',
+  'cash', 'accounts_receivable', 'inventory', 'other_current_assets', 'ppe_net', 'intangibles',
+  'accounts_payable', 'short_term_debt', 'other_current_liabilities', 'long_term_debt',
+  'operating_cf', 'capex', 'investing_activities', 'financing_activities',
+] as const;
+
 const rawLineItem = z.object({
   name: z.string(),
   value: z.number().nullable(),
   sourcePage: z.number().int().nullable(),
   sourceQuote: z.string().nullable(),
+  // Optional in zod so pre-v4 cached results and repair outputs still parse.
+  parent: z.enum(LINE_ITEM_PARENTS).nullable().optional(),
 });
 
 const rawPeriod = z.object({
@@ -52,6 +68,9 @@ const rawStatement = z.object({
   statementType: z.enum(['INCOME_STATEMENT', 'BALANCE_SHEET', 'CASH_FLOW']),
   unitScale: z.enum(RAW_UNIT_SCALES),
   currency: z.string(),
+  // Optional in zod so pre-v4 cached results and repair outputs still parse.
+  sheetName: z.string().nullable().optional(),
+  sourceKind: z.enum(['source_statement', 'model_derived']).nullable().optional(),
   periods: z.array(rawPeriod),
 });
 
@@ -79,6 +98,12 @@ export const EXTRACTION_JSON_SCHEMA = {
           statementType: { type: 'string', enum: ['INCOME_STATEMENT', 'BALANCE_SHEET', 'CASH_FLOW'] },
           unitScale: { type: 'string', enum: [...RAW_UNIT_SCALES] },
           currency: { type: 'string', description: 'ISO code as printed, e.g. USD, EUR' },
+          sheetName: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Spreadsheet tab this statement was read from; null for PDFs' },
+          sourceKind: {
+            type: 'string',
+            enum: ['source_statement', 'model_derived'],
+            description: 'source_statement = the company\'s reported statement (P&L / balance sheet / cash flow as kept by the company or its accountant); model_derived = a valuation, LBO, DCF, returns, sensitivity or summary/analysis built from it',
+          },
           periods: {
             type: 'array',
             items: {
@@ -98,8 +123,12 @@ export const EXTRACTION_JSON_SCHEMA = {
                       value: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'Value EXACTLY as printed — do NOT convert units' },
                       sourcePage: { anyOf: [{ type: 'integer' }, { type: 'null' }], description: '1-based page the value appears on' },
                       sourceQuote: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Short verbatim snippet containing the value' },
+                      parent: {
+                        anyOf: [{ type: 'string', enum: [...LINE_ITEM_PARENTS] }, { type: 'null' }],
+                        description: 'For a raw account that is a component of a standard line (e.g. "Sand COS" under cogs, "Discounts" under revenue), that standard key; null for standard lines themselves',
+                      },
                     },
-                    required: ['name', 'value', 'sourcePage', 'sourceQuote'],
+                    required: ['name', 'value', 'sourcePage', 'sourceQuote', 'parent'],
                     additionalProperties: false,
                   },
                 },
@@ -109,7 +138,7 @@ export const EXTRACTION_JSON_SCHEMA = {
             },
           },
         },
-        required: ['statementType', 'unitScale', 'currency', 'periods'],
+        required: ['statementType', 'unitScale', 'currency', 'sheetName', 'sourceKind', 'periods'],
         additionalProperties: false,
       },
     },
@@ -139,7 +168,7 @@ DATE CONTEXT — TODAY IS ${todayIso}. Use THIS date as the boundary for HISTORI
 Rules:
 - Report every value EXACTLY as printed in the document. Do NOT convert units or currencies — instead set unitScale (UNITS/THOUSANDS/LAKHS/MILLIONS/CRORES/BILLIONS) and currency per statement to describe how the document prints them. Indian-scale tables use LAKHS (lakh / lac / L = 100,000) or CRORES (crore / cr = 10,000,000) — e.g. a table headed "INR crore" or "₹ Cr" is CRORES, never UNITS. UNITS means the printed numbers are whole currency units (e.g. 1,824,000,000).
 - Use these canonical snake_case names when a line represents the same concept, even if the document's label differs (e.g. "Turnover"/"Net Sales" → revenue):
-  income statement: revenue, cogs, gross_profit, gross_margin_pct, sga, rd, other_opex, total_opex, ebitda, ebitda_margin_pct, da, ebit, interest_expense, ebt, tax, net_income, sde
+  income statement: revenue, cogs, gross_profit, gross_margin_pct, sga, rd, other_opex, total_opex, ebitda, ebitda_margin_pct, da, ebit, interest_expense, other_income, other_expense, ebt, tax, net_income, sde
   balance sheet: cash, accounts_receivable, inventory, other_current_assets, total_current_assets, ppe_net, goodwill, intangibles, total_assets, accounts_payable, short_term_debt, other_current_liabilities, total_current_liabilities, long_term_debt, total_debt, total_liabilities, total_equity
   cash flow: operating_cf, capex, fcf, acquisitions, debt_repayment, dividends, net_change_cash, investing_activities, financing_activities
   Anything material that doesn't match gets a descriptive snake_case name. Any invented name for a ratio, rate, or multiple (not a dollar amount) MUST end in _pct (percentages) or _ratio/_multiple (e.g. tax_rate_pct, debt_to_ebitda_ratio, current_ratio) — downstream code scales dollar amounts by unitScale but leaves these suffixed fields untouched, so an unsuffixed ratio would be silently corrupted.
@@ -147,7 +176,10 @@ Rules:
 - Percentages (names ending _pct) are reported as percent numbers (e.g. 42.5), never fractions — the one exception to "exactly as printed": convert a printed decimal fraction (0.425) to its percent equivalent (42.5).
 - Every line item needs sourcePage (1-based) and a short verbatim sourceQuote when the value is visible in the document; use null only when genuinely unavailable.
 - One period entry per fiscal period column. Projected periods keep their suffix (e.g. "2025E").
-- If a statement type is absent, omit it and add a warning.`;
+- If a statement type is absent, omit it and add a warning.
+- Raw accounts (QuickBooks-style lines such as "Sand COS", "Fly Ash COS", "Discounts", "Insurance", "Goodwill amortization") are reported as their own line items AND get a parent: the standard key they roll up into (cogs, revenue, total_opex, da, other_income, …). Standard lines and subtotals have parent null. Also report the rolled-up parent total under its standard key when the document prints one. Taxes & licenses, payroll taxes and permits are operating expenses (total_opex), not income tax.
+- Signs: revenue positive; contra-revenue (discounts, refunds, returns, allowances) NEGATIVE; costs, D&A, interest and tax positive; other income positive, other expense positive.
+- For every statement set sourceKind: "source_statement" when it is the company's reported statement, "model_derived" when it comes from a valuation, LBO, DCF, returns, sensitivity or summary/analysis output. Set sheetName to the spreadsheet tab it came from (null for PDFs). When the document has both for the same statement type, return only the source_statement version.`;
 }
 
 export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balance sheet, and cash flow data from the attached document into the required JSON structure.`;

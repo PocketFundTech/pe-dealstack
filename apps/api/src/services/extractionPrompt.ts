@@ -8,7 +8,7 @@ import { getTodayIso } from '../utils/dates.js';
 
 /** Known line item keys per statement type, for prompt guidance */
 export const LINE_ITEM_KEYS = {
-  INCOME_STATEMENT: 'revenue, cogs, gross_profit, gross_margin_pct, sga, rd, other_opex, total_opex, ebitda, ebitda_margin_pct, da, ebit, interest_expense, ebt, tax, net_income, sde',
+  INCOME_STATEMENT: 'revenue, cogs, gross_profit, gross_margin_pct, sga, rd, other_opex, total_opex, ebitda, ebitda_margin_pct, da, ebit, interest_expense, other_income, other_expense, ebt, tax, net_income, sde',
   BALANCE_SHEET: 'cash, accounts_receivable, inventory, other_current_assets, total_current_assets, ppe_net, goodwill, intangibles, total_assets, accounts_payable, short_term_debt, other_current_liabilities, total_current_liabilities, long_term_debt, total_liabilities, total_equity',
   CASH_FLOW: 'operating_cf, capex, fcf, acquisitions, debt_repayment, dividends, net_change_cash',
 };
