@@ -3,6 +3,7 @@
 import { use, useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/providers/ToastProvider";
 import { FiltersBar } from "@/components/vdr/FiltersBar";
 import { InsightsPanel } from "@/components/vdr/InsightsPanel";
 import { DEFAULT_SMART_FILTERS } from "@/lib/vdr/filters";
@@ -18,7 +19,6 @@ import {
   DataRoomLoading,
   LinkToDealModal,
   UploadConfirmModal,
-  VDRToast,
 } from "./components";
 import {
   FolderSidebar,
@@ -88,13 +88,14 @@ export default function DataRoomDealPage({ params }: PageProps) {
   const [linkDeals, setLinkDeals] = useState<Array<{ id: string; name: string; industry?: string }>>([]);
   const [linkSearchQuery, setLinkSearchQuery] = useState("");
   const [linking, setLinking] = useState(false);
-  // Toast notifications
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
-
-  const showToast = useCallback((message: string, type: "success" | "error" | "info" = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 5000);
-  }, []);
+  // App-wide toasts. The page's own toast hid itself on a timer that was
+  // never cleared, so an older toast's timer could dismiss a newer error
+  // (e.g. a failed "Generate insights") before anyone saw it.
+  const { showToast: appToast } = useToast();
+  const showToast = useCallback(
+    (message: string, type: "success" | "error" | "info" = "success") => appToast(message, type),
+    [appToast],
+  );
 
   const [insightsCollapsed, handleToggleInsightsCollapse] = useInsightsCollapse();
   const isSearching = searchQuery.trim().length > 0;
@@ -484,9 +485,6 @@ export default function DataRoomDealPage({ params }: PageProps) {
         onCancel={() => setPendingDelete(null)}
       />
 
-      {toast && (
-        <VDRToast message={toast.message} type={toast.type} onDismiss={() => setToast(null)} />
-      )}
     </div>
   );
 }

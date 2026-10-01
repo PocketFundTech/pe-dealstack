@@ -172,7 +172,9 @@ Generate insights as JSON.`;
 
     return insights;
   } catch (error) {
+    // Rethrow: the route turns it into a readable reason (out of credit,
+    // rate limit, timeout…). null means only "Anthropic isn't configured".
     log.error('Error generating folder insights', error);
-    return null;
+    throw error;
   }
 }

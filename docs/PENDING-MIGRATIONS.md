@@ -1,4 +1,8 @@
-# 🔴 THREE MIGRATIONS PENDING (2026-09-29 / 2026-09-30 / 2026-10-01)
+# ✅ 2026-09-29 → 2026-10-01 BATCH — ALL THREE RUN AND VERIFIED (2026-10-02)
+
+The founder ran all three in the Supabase SQL Editor on 2026-10-02 and the combined check passed:
+6 new `FinancialStatement` columns, `claude-sonnet-5` = 2 / 10, `UsageReconciliation` exists, 0 deals left on `SCREENING` / `LOI_NEGOTIATION`.
+The optional period-key backfill for #3 is `apps/api/scripts/backfill-statement-period-keys.ts`.
 
 ## 1. `usage-cost-accuracy-migration.sql` (2026-09-29)
 
@@ -21,7 +25,7 @@ price fixes above are not in effect. Idempotent — safe to re-run.
 
 | # | Migration file | Fixes | Run? |
 |---|---|---|---|
-| 1 | `apps/api/usage-cost-accuracy-migration.sql` | Correct Claude prices, new providers, reconciliation table | ☐ |
+| 1 | `apps/api/usage-cost-accuracy-migration.sql` | Correct Claude prices, new providers, reconciliation table | ✅ 2026-10-02 |
 
 Verify after running (queries also at the bottom of the file):
 ```sql
@@ -42,7 +46,7 @@ moves existing deals onto real ones (`SCREENING` → Initial Review,
 
 | # | File | Fixes | Run? |
 |---|---|---|---|
-| 2 | `apps/api/deal-stage-cleanup.sql` | Makes hidden deals show on the kanban | ☐ |
+| 2 | `apps/api/deal-stage-cleanup.sql` | Makes hidden deals show on the kanban | ✅ 2026-10-02 |
 
 Verify: the `SELECT` at the bottom of the file returns no rows.
 
@@ -65,7 +69,7 @@ cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts
 
 | # | File | Fixes | Run? |
 |---|---|---|---|
-| 3 | `apps/api/financials-source-period-migration.sql` + backfill script | Canonical periods, source provenance | ☐ |
+| 3 | `apps/api/financials-source-period-migration.sql` + backfill script | Canonical periods, source provenance | ✅ 2026-10-02 |
 
 Verify: the queries at the bottom of the file — 6 columns, then 0 rows missing `periodKey` after the backfill.
 

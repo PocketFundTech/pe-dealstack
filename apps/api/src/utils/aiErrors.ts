@@ -69,6 +69,14 @@ function providerUnavailableMessage(provider: string, reason?: ProviderRejection
   }
 }
 
+/** Best-effort provider name from an SDK error message, for user-facing text. */
+function providerNameFromError(detail: string): string {
+  const lower = detail.toLowerCase();
+  if (lower.includes('anthropic') || lower.includes('claude')) return 'Anthropic';
+  if (lower.includes('openai')) return 'OpenAI';
+  return 'AI provider';
+}
+
 /**
  * Classify a raw SDK / LangChain error as a provider rejection, or null when
  * it is anything else (schema mismatch, parse failure, network, timeout…).
@@ -127,6 +135,18 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
     return {
       statusCode: 503,
       userMessage: err.message,
+      code: 'AI_PROVIDER_UNAVAILABLE',
+    };
+  }
+
+  // Provider rejections (out of credit, bad key, rate limit, overloaded)
+  // are never the user's fault — say exactly which, instead of letting an
+  // out-of-credit 400 fall through to a generic "AI error: 400 {…}".
+  const rejection = classifyProviderRejection(err);
+  if (rejection) {
+    return {
+      statusCode: 503,
+      userMessage: providerUnavailableMessage(providerNameFromError(rejection.detail), rejection.reason),
       code: 'AI_PROVIDER_UNAVAILABLE',
     };
   }
