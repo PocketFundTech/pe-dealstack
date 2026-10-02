@@ -19,7 +19,7 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 - **URL rules:** https only, and private-network URLs are refused.
 - **Who can manage them:** admins. API keys are allowed here, so tools can register their own URLs.
 
-**2. Polling support:** `updatedSince` on deals, contacts, tasks and companies; optional `limit`/`offset` on deals and companies. Responses keep the same shape, so the app is unaffected.
+**2. Polling support:** `updatedSince` on deals, contacts, tasks and companies; optional paging on deals and companies with `offset` + `limit`. Paging only applies when `offset` is sent, because the web app already sends `limit=50` to `/api/deals` and expects every deal back. Deal and company updates now set `updatedAt` explicitly.
 
 **3. Bugs fixed:**
 - `PATCH /api/contacts/:id` on an unknown id now returns 404 instead of 500.
@@ -31,7 +31,13 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 **6. Docs:** /api-reference gains a Webhooks section (events, payload, signature verification), the new query params, and the regenerated index (315 endpoints). The smoke test covers the new endpoints too.
 
-**Tests:** 2,356 API tests pass, including 14 new webhook tests. Two background-upload tests now stub the webhook module, because they count after-response jobs.
+**Review fixes (independent Opus review before merge):**
+- **Deal lists:** honouring `limit` alone would have cut the Deals page to 50 deals and capped dashboard counts. Paging now needs `offset`, with a regression test.
+- **SSRF:** webhook delivery now resolves DNS at connect time, rejects private, CGNAT and IPv4-mapped addresses, and connects to the checked IP, so DNS rebinding can't get through.
+- **Payload size:** payloads no longer include document text or nested documents and activities.
+- **Smaller fixes:** dead endpoints are auto-paused after 20 failures, `document.uploaded` fires only on success, and the rate-limit key is used only for well-formed `avise_sk_` keys.
+
+**Tests:** 2,388 API tests pass, including 38 new tests covering webhooks, SSRF and paging. Two background-upload tests now stub the webhook module, because they count after-response jobs.
 
 **⏳ Founder to-do:** run `apps/api/webhook-subscriptions-migration.sql`.
 

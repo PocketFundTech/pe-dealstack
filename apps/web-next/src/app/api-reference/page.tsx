@@ -231,7 +231,9 @@ const valid = crypto.timingSafeEqual(Buffer.from(v1), Buffer.from(expected))
         </div>
         <p className="text-sm text-[#64748b] mt-6">
           Each event is sent once with a 5-second timeout; answer with any 2xx status. Failures show in Settings →
-          Webhooks, where you can send a test event. To catch up after downtime, list records with{" "}
+          Webhooks, where you can send a test event; after 20 failures in a row the webhook is paused until you
+          resume it. Payloads carry the record&apos;s fields but not document text or nested lists — fetch
+          details from the API when you need them. To catch up after downtime, list records with{" "}
           <code className="bg-[#f1f5f9] px-1 rounded">?updatedSince=</code> on deals, contacts, tasks or companies.
         </p>
       </div>

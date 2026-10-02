@@ -2,7 +2,7 @@
  * Outbound webhooks: signing, delivery bookkeeping, and the management API's
  * guards (admin-only, https-only, no private networks, secret shown once).
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createHmac } from 'node:crypto';
@@ -38,6 +38,11 @@ vi.mock('../src/supabase.js', () => {
   };
   return { supabase: { from } };
 });
+const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
+vi.mock('../src/services/safeHttpPost.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/services/safeHttpPost.js')>('../src/services/safeHttpPost.js');
+  return { ...actual, safePostJson: postMock };
+});
 vi.mock('../src/utils/logger.js', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
 import { deliverWebhook, signWebhookPayload, generateWebhookSecret } from '../src/services/outboundWebhooks.js';
@@ -51,13 +56,11 @@ function app(role = 'ADMIN') {
   return a;
 }
 
-const fetchMock = vi.fn();
+const fetchMock = postMock;
 beforeEach(() => {
   db.updates = []; db.inserted = null; db.subs = [];
-  fetchMock.mockReset();
-  vi.stubGlobal('fetch', fetchMock);
+  postMock.mockReset();
 });
-afterEach(() => vi.unstubAllGlobals());
 
 describe('webhook signing', () => {
   it('secrets use the whsec_ prefix and are random', () => {
@@ -76,22 +79,22 @@ describe('deliverWebhook', () => {
   const sub = { id: 'wh-1', url: 'https://hooks.example.com/avise', secret: 'whsec_test', failureCount: 2 };
 
   it('POSTs a signed JSON envelope and resets the failure count on 2xx', async () => {
-    fetchMock.mockResolvedValue(new Response('ok', { status: 200 }));
+    fetchMock.mockResolvedValue({ status: 200 });
     const result = await deliverWebhook(sub, 'deal.created', 'org-1', { id: 'deal-1' });
 
     expect(result).toEqual({ ok: true, status: 200, error: undefined });
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, headers, rawBody] = fetchMock.mock.calls[0];
     expect(url).toBe(sub.url);
-    const body = JSON.parse(init.body);
+    const body = JSON.parse(rawBody);
     expect(body).toMatchObject({ event: 'deal.created', organizationId: 'org-1', data: { id: 'deal-1' } });
-    expect(init.headers['Avise-Event']).toBe('deal.created');
-    const [, t, v1] = init.headers['Avise-Signature'].match(/^t=(\d+),v1=([0-9a-f]{64})$/);
-    expect(v1).toBe(signWebhookPayload(sub.secret, Number(t), init.body));
+    expect(headers['Avise-Event']).toBe('deal.created');
+    const [, t, v1] = headers['Avise-Signature'].match(/^t=(\d+),v1=([0-9a-f]{64})$/);
+    expect(v1).toBe(signWebhookPayload(sub.secret, Number(t), rawBody));
     expect(db.updates.at(-1)).toMatchObject({ lastStatus: 200, failureCount: 0, lastError: null });
   });
 
   it('records a non-2xx answer as a failure with a readable reason', async () => {
-    fetchMock.mockResolvedValue(new Response('nope', { status: 500 }));
+    fetchMock.mockResolvedValue({ status: 500 });
     const result = await deliverWebhook(sub, 'deal.updated', 'org-1', {});
     expect(result.ok).toBe(false);
     expect(db.updates.at(-1)).toMatchObject({ lastStatus: 500, failureCount: 3, lastError: 'Receiver answered HTTP 500' });
@@ -103,6 +106,28 @@ describe('deliverWebhook', () => {
     expect(result).toMatchObject({ ok: false, status: 0 });
     expect(db.updates.at(-1)).toMatchObject({ lastStatus: null, failureCount: 3 });
     expect(String(db.updates.at(-1)?.lastError)).toContain('Could not reach the URL');
+  });
+
+  it('reports a URL that resolves to a private address as blocked', async () => {
+    const { BlockedAddressError } = await import('../src/services/safeHttpPost.js');
+    fetchMock.mockRejectedValue(new BlockedAddressError('evil.example resolves to a private or internal address'));
+    await deliverWebhook(sub, 'deal.updated', 'org-1', {});
+    expect(String(db.updates.at(-1)?.lastError)).toMatch(/^Blocked: /);
+  });
+
+  it('pauses the subscription after 20 failures in a row', async () => {
+    fetchMock.mockResolvedValue({ status: 500 });
+    await deliverWebhook({ ...sub, failureCount: 19 }, 'deal.updated', 'org-1', {});
+    expect(db.updates.at(-1)).toMatchObject({ failureCount: 20, active: false });
+  });
+
+  it('strips document text and nested collections from the payload', async () => {
+    fetchMock.mockResolvedValue({ status: 200 });
+    await deliverWebhook(sub, 'deal.updated', 'org-1', {
+      id: 'deal-1', name: 'Falcon', documents: [{ extractedText: 'x'.repeat(1000) }], activities: [{}], extractedText: 'big',
+    });
+    const data = JSON.parse(fetchMock.mock.calls[0][2]).data;
+    expect(data).toEqual({ id: 'deal-1', name: 'Falcon' });
   });
 });
 
@@ -141,11 +166,11 @@ describe('/api/webhook-subscriptions', () => {
 
   it('test-sends a ping and reports the receiver status', async () => {
     db.subs = [{ id: '11111111-1111-1111-1111-111111111111', url: 'https://hooks.example.com/x', secret: 'whsec_t', failureCount: 0 }];
-    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    fetchMock.mockResolvedValue({ status: 204 });
     const res = await request(app()).post('/api/webhook-subscriptions/11111111-1111-1111-1111-111111111111/test');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true, status: 204 });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).event).toBe('ping');
+    expect(JSON.parse(fetchMock.mock.calls[0][2]).event).toBe('ping');
   });
 
   it('404s an unknown id without touching the database', async () => {

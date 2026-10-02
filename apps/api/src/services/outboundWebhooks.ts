@@ -19,6 +19,7 @@ import type { Request } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
+import { BlockedAddressError, safePostJson } from './safeHttpPost.js';
 
 export const WEBHOOK_EVENTS = [
   'deal.created',
@@ -37,6 +38,18 @@ export const WEBHOOK_EVENTS = [
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 
 const DELIVERY_TIMEOUT_MS = 5_000;
+// After this many failures in a row the subscription is paused, so a dead URL
+// doesn't cost a 5 s timeout on every event forever. Resume it in Settings.
+const AUTO_PAUSE_AFTER_FAILURES = 20;
+
+// Heavy fields never leave Avise in a webhook: full document text, embeddings,
+// and nested collections. Receivers fetch details via the API if they need them.
+const OMIT_KEYS = new Set(['documents', 'activities', 'folders', 'extractedText', 'extractedData', 'embedding', 'chunks']);
+
+export function toWebhookData(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  return Object.fromEntries(Object.entries(data as Record<string, unknown>).filter(([k]) => !OMIT_KEYS.has(k)));
+}
 
 export function generateWebhookSecret(): string {
   return 'whsec_' + randomBytes(24).toString('base64url');
@@ -61,16 +74,16 @@ export async function deliverWebhook(
   data: unknown,
 ): Promise<{ ok: boolean; status: number; error?: string }> {
   const deliveryId = randomUUID();
-  const body = JSON.stringify({ id: deliveryId, event, createdAt: new Date().toISOString(), organizationId, data });
+  const body = JSON.stringify({ id: deliveryId, event, createdAt: new Date().toISOString(), organizationId, data: toWebhookData(data) });
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = signWebhookPayload(sub.secret, timestamp, body);
 
   let status = 0;
   let error: string | undefined;
   try {
-    const res = await fetch(sub.url, {
-      method: 'POST',
-      headers: {
+    const res = await safePostJson(
+      sub.url,
+      {
         'Content-Type': 'application/json',
         'User-Agent': 'Avise-Webhooks/1.0',
         'Avise-Event': event,
@@ -78,25 +91,26 @@ export async function deliverWebhook(
         'Avise-Signature': `t=${timestamp},v1=${signature}`,
       },
       body,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
-    });
+      DELIVERY_TIMEOUT_MS,
+    );
     status = res.status;
-    if (!res.ok) error = `Receiver answered HTTP ${res.status}`;
+    if (status < 200 || status >= 300) error = `Receiver answered HTTP ${status}`;
   } catch (err) {
-    error = err instanceof Error && err.name === 'TimeoutError'
-      ? `No answer within ${DELIVERY_TIMEOUT_MS / 1000} s`
-      : `Could not reach the URL (${err instanceof Error ? err.message : String(err)})`;
+    if (err instanceof BlockedAddressError) error = `Blocked: ${err.message}`;
+    else if (err instanceof Error && err.name === 'TimeoutError') error = `No answer within ${DELIVERY_TIMEOUT_MS / 1000} s`;
+    else error = 'Could not reach the URL (DNS or connection failed)';
   }
 
   const ok = status >= 200 && status < 300;
+  const failureCount = ok ? 0 : (sub.failureCount ?? 0) + 1;
   const { error: updErr } = await supabase
     .from('WebhookSubscription')
     .update({
       lastDeliveryAt: new Date().toISOString(),
       lastStatus: status || null,
       lastError: ok ? null : error ?? null,
-      failureCount: ok ? 0 : (sub.failureCount ?? 0) + 1,
+      failureCount,
+      ...(failureCount >= AUTO_PAUSE_AFTER_FAILURES ? { active: false } : {}),
     })
     .eq('id', sub.id);
   if (updErr) log.warn('Webhook delivery status not saved', { subscriptionId: sub.id, error: updErr.message });

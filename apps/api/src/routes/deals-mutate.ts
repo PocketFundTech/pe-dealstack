@@ -208,6 +208,8 @@ router.patch('/:id', async (req, res) => {
         ...data,
         ...passedFields,
         companyId: undefined,
+        // Set explicitly so `updatedSince` polling and the optimistic lock see every edit.
+        updatedAt: new Date().toISOString(),
       })
       .eq('id', id)
       .eq('organizationId', orgId)

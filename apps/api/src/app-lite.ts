@@ -183,7 +183,7 @@ const rateLimitKeyGenerator = (req: express.Request) => {
   // API keys sent as X-API-Key get their own bucket too — otherwise every n8n
   // Cloud customer behind the same egress IP would share one limit.
   const apiKey = req.headers['x-api-key'];
-  if (typeof apiKey === 'string' && apiKey) {
+  if (typeof apiKey === 'string' && apiKey.startsWith('avise_sk_')) {
     return 'user:' + apiKey.slice(-16);
   }
   const authHeader = req.headers.authorization;

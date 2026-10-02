@@ -114,9 +114,11 @@ router.get('/', async (req, res) => {
     const sortField = params.sortBy || 'updatedAt';
     const ascending = params.sortOrder === 'asc';
     query = query.order(sortField, { ascending, nullsFirst: false });
-    if (params.limit) {
-      const offset = params.offset ?? 0;
-      query = query.range(offset, offset + params.limit - 1);
+    // Paging is opt-in via `offset`: the web app has long sent `limit` here
+    // without expecting truncation, so `limit` alone keeps returning everything.
+    if (params.offset !== undefined) {
+      const limit = params.limit ?? 100;
+      query = query.order('id', { ascending: true }).range(params.offset, params.offset + limit - 1);
     }
 
     const { data, error } = await query;

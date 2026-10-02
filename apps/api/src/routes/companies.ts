@@ -40,7 +40,9 @@ router.get('/', async (req, res) => {
       .eq('organizationId', orgId)
       .order('name', { ascending: true });
     if (updatedSince) query = query.gte('updatedAt', updatedSince.toISOString());
-    if (limit) query = query.range(offset, offset + limit - 1);
+    if (params.data.offset !== undefined) {
+      query = query.order('id', { ascending: true }).range(offset, offset + (limit ?? 100) - 1);
+    }
 
     const { data, error } = await query;
 
@@ -123,7 +125,7 @@ router.patch('/:id', async (req, res) => {
 
     const { data: company, error } = await supabase
       .from('Company')
-      .update(data)
+      .update({ ...data, updatedAt: new Date().toISOString() })
       .eq('id', id)
       .eq('organizationId', orgId)
       .select(`

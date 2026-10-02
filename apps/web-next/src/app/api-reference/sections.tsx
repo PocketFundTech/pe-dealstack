@@ -44,7 +44,7 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         description:
           "List your organization's deals (plain array, newest activity first). Deleted deals are excluded.",
         queryParams:
-          "updatedSince (ISO date: only deals changed since), limit (≤500), offset, stage, status, industry, priority, assignedTo, minDealSize, maxDealSize, search, sortBy, sortOrder",
+          "updatedSince (ISO date: only deals changed since), offset + limit (paging, limit ≤500, default 100; applies when offset is sent), stage, status, industry, priority, assignedTo, minDealSize, maxDealSize, search, sortBy, sortOrder",
       },
       {
         method: "GET",
@@ -151,7 +151,7 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         method: "GET",
         path: "/api/companies",
         description: "Companies with their deals. POST with { name, industry, website } creates one.",
-        queryParams: "updatedSince, limit (≤500), offset",
+        queryParams: "updatedSince, offset + limit (paging applies when offset is sent)",
       },
     ],
   },
