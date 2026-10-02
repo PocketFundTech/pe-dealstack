@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { supabase } from '../supabase.js';
-import { requirePermission, PERMISSIONS } from '../middleware/rbac.js';
+import { requirePermission, hasPermission, PERMISSIONS } from '../middleware/rbac.js';
 import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
@@ -81,7 +81,20 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
 // ─── POST /api/tasks — Create task ───────────────────────────
 
-router.post('/', requirePermission(PERMISSIONS.DEAL_ASSIGN), async (req: Request, res: Response, next: NextFunction) => {
+/** Assigning a task to anyone other than yourself is delegation — DEAL_ASSIGN. */
+function canAssignOthers(req: Request): boolean {
+  return hasPermission(req.user?.role, PERMISSIONS.DEAL_ASSIGN);
+}
+
+const ASSIGN_OTHERS_FORBIDDEN = {
+  error: 'You can create tasks for yourself. Assigning a task to someone else needs a Partner, Principal or Admin role.',
+  code: 'TASK_ASSIGN_FORBIDDEN',
+};
+
+// QA #10: this was gated on DEAL_ASSIGN alone, so MEMBER / ASSOCIATE /
+// ANALYST got a 403 and the dashboard's optimistic task vanished. Now any
+// role with TASK_CREATE (everyone but VIEWER) can create its own tasks.
+router.post('/', requirePermission(PERMISSIONS.TASK_CREATE, PERMISSIONS.DEAL_ASSIGN), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validation = createTaskSchema.safeParse(req.body);
     if (!validation.success) {
@@ -116,6 +129,10 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_ASSIGN), async (req: Request
     let createdBy: string | null = null;
     if (req.user?.id) {
       createdBy = await resolveUserId(req.user.id);
+    }
+
+    if (data.assignedTo && data.assignedTo !== createdBy && !canAssignOthers(req)) {
+      return res.status(403).json(ASSIGN_OTHERS_FORBIDDEN);
     }
 
     const { data: task, error } = await supabase
@@ -211,6 +228,11 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       if (!dealAccess) {
         return res.status(400).json({ error: 'Invalid dealId' });
       }
+    }
+    // Reassigning to someone else (not yourself) is delegation.
+    if (data.assignedTo && data.assignedTo !== existing.assignedTo && !canAssignOthers(req)) {
+      const me = req.user?.id ? await resolveUserId(req.user.id) : null;
+      if (data.assignedTo !== me) return res.status(403).json(ASSIGN_OTHERS_FORBIDDEN);
     }
     if (data.assignedTo) {
       const { data: assignee } = await supabase
