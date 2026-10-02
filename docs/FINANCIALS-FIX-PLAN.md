@@ -134,6 +134,15 @@ Three read-only audits after A–F merged (extraction correctness, model correct
 **PR E — headcount extraction** (founder's choice)
 - [ ] **G17** Extract period-end headcount (`employees`, never unit-scaled), keep it out of the P&L table and model lines, show revenue per employee in Analysis. Extraction schema version bump.
 
+### Phase H — model extras (founder's pick while AI credit is out, 3 Oct 2026)
+
+Founder decisions: entry balance sheet uses a **goodwill plug** (fees expensed at close, no dividends during the hold); account labels / order stored **inside lineItems** (`<key>_label`, `<key>_order`); revolver **off by default** (size 0).
+
+- [x] **H1 · Workbook = live preview, by the numbers.** A parity test compares every cached workbook value (entry, each projected year, interest, cash, levered FCF, exit, IRR / MoM, the Scenarios summary, the Sensitivity centre) with `projectModel` / `summariseCase`. It found `INDEX` over another sheet cached as 0, so previews of the export showed exit EV 0 and IRR "n/a"; `calc.ts` now resolves `INDEX` itself.
+- [ ] **H2 · Revolving credit facility.** Draws only to hold minimum cash, repaid first from spare cash, interest + undrawn fee on the opening balance (no circularity). Both implementations, parity-tested.
+- [ ] **H3 · Integrated balance sheet + balance check.** Entry balance sheet with goodwill plug; PP&E roll-forward (capex − D&A); working capital from the drivers; debt and revolver from the schedule; retained earnings from net income; a check row that must be 0 every year (workbook and preview).
+- [ ] **H4 · Per-account label and order** (needs AI credit — extraction schema bump).
+
 ### Checks before / alongside the fixes
 
 - [ ] **V1 · Confirm on the SRM deal's stored data** (needs a founder SQL run — Claude Code can't read production data):
