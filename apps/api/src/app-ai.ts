@@ -27,7 +27,7 @@ import legalDocumentsRouter from './routes/legal-documents.js';
 import ndaReviewRouter from './routes/nda-review.js';
 import legalDocumentTemplatesRouter from './routes/legal-document-templates.js';
 import authWorkspaceEmailRouter from './routes/auth-workspace-email.js';
-import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
+import { authMiddleware, enforceOrgMfaMiddleware, enforceApiKeyScope } from './middleware/auth.js';
 import { orgMiddleware } from './middleware/orgScope.js';
 import { usageContextMiddleware } from './middleware/usageContext.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -226,7 +226,7 @@ app.use('/api/cron/usage-reconciliation', cronUsageReconciliationRouter);
 // ========================================
 // Protected Routes (require authentication + org resolution)
 // ========================================
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, chatRouter);
 // Deal chat — POST /api/deals/:dealId/chat. This is the DEAL_CHAT_ENGINE-aware
 // handler (streaming SSE + legacy JSON, financial-context tables, history
 // caps). pickBundle routes /api/deals/:id/chat to THIS bundle, so it must be
@@ -234,37 +234,37 @@ app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageCon
 // legacy-only duplicate of the same path that silently shadowed every chat
 // improvement (found 2026-08-18: streaming was "on" for days but never
 // executed in production). The duplicate in routes/ai.ts is removed.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsChatAiRouter);
-app.use('/api/ingest', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ingestRouter);
-app.use('/api/memos', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, memosRouter);
-app.use('/api/onboarding', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, onboardingRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsChatAiRouter);
+app.use('/api/ingest', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ingestRouter);
+app.use('/api/memos', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, memosRouter);
+app.use('/api/onboarding', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, onboardingRouter);
 // CustomGraph CRUD — /api/graphs and /api/deals/:dealId/graphs
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, graphsRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, graphsRouter);
 // financials timeseries — /api/deals/:dealId/financials/timeseries
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
 // Deal scorecard (POST /:dealId/scorecard) — runs trackedClaudeMessage, so
 // it lives in the AI bundle; pickBundle routes /api/deals/:id/scorecard here.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsScorecardRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsScorecardRouter);
 // Reactivations. POST /:dealId/rescore runs the scorecard engine, so pickBundle
 // routes it here; the same router also serves the feed + triage in app-lite.
 // One file, mounted in BOTH bundles — split routing, single implementation.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, financialsRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
 // NDA review of INCOMING counterparty paper — runs trackedClaudeMessage,
 // so pickBundle routes /api/deals/:id/nda-reviews to the AI bundle.
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 
 // Auth-scoped self-service routes (MFA bypass active for /api/auth/* in
 // middleware). No orgMiddleware — handler resolves the User row itself.
-app.use('/api/auth', authMiddleware, authWorkspaceEmailRouter);
+app.use('/api/auth', authMiddleware, enforceApiKeyScope, authWorkspaceEmailRouter);
 
 // ========================================
 // AI Routes (mixed - some protected, some public)
 // ========================================
 // AI deal chat and analysis endpoints (require auth + org)
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, aiRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, aiRouter);
 
 // (Cron routes are mounted near the top of this file, ABOVE the protected
 // routes — see the "Cron Routes" block for why that ordering is load-bearing.)
