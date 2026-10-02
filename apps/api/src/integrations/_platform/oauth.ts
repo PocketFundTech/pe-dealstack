@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { ProviderId } from './types.js';
+import { IntegrationNotConfiguredError } from './errors.js';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -13,9 +14,9 @@ interface StateClaims {
 
 function getSecret(): Buffer {
   const secret = process.env.OAUTH_STATE_SECRET;
-  if (!secret) throw new Error('OAUTH_STATE_SECRET is not configured');
-  if (secret.length < 32) {
-    throw new Error('OAUTH_STATE_SECRET must be at least 32 characters');
+  if (!secret || secret.length < 32) {
+    // Missing or too short (< 32 chars) — either way connecting can't work.
+    throw new IntegrationNotConfiguredError('Connecting accounts', ['OAUTH_STATE_SECRET (32+ chars)']);
   }
   return Buffer.from(secret, 'utf8');
 }

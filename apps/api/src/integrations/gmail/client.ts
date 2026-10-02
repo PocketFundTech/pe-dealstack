@@ -8,6 +8,7 @@ import type {
   GmailTokenResponse,
   GmailUserInfo,
 } from './types.js';
+import { googleClientCreds } from '../_platform/errors.js';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
@@ -20,12 +21,6 @@ export const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
 
-function googleClientCreds(): { id: string; secret: string } {
-  const id = process.env.GOOGLE_CLIENT_ID;
-  const secret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!id || !secret) throw new Error('GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured');
-  return { id, secret };
-}
 
 export function buildAuthorizeUrl(params: {
   redirectUri: string;
