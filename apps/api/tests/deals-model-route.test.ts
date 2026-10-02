@@ -522,3 +522,27 @@ describe('modelErrorResponse', () => {
     expect(body.error).toContain(body.ref!);
   });
 });
+
+describe('deal-record units (G15)', () => {
+  it('reads whole-dollar records as whole dollars, using the deal size as a hint', async () => {
+    const { dealEbitdaMillions } = await import('../src/routes/deals-model.js');
+    expect(dealEbitdaMillions(2.21)).toBe(2.21);
+    expect(dealEbitdaMillions(150)).toBe(150);                 // $150M, in millions
+    expect(dealEbitdaMillions(150_000)).toBe(0.15);            // $150K in whole dollars
+    expect(dealEbitdaMillions(50_000, 400_000)).toBe(0.05);    // both whole dollars
+    expect(dealEbitdaMillions(50_000, 400)).toBe(50_000);      // deal size in millions: unchanged
+  });
+
+  it('ignores an implied multiple that is not believable', async () => {
+    const { impliedEvMultiple } = await import('../src/routes/deals-model.js');
+    expect(impliedEvMultiple(11, 2)).toBe(5.5);
+    expect(impliedEvMultiple(11, 150_000)).toBeNull();         // millions over whole dollars
+    expect(impliedEvMultiple(5_000, 2)).toBeNull();            // 2,500x
+  });
+
+  it('forces the model to millions whatever a saved case says', async () => {
+    const { resolveAssumptions } = await import('../src/services/dealModel/assumptions.js');
+    const a = resolveAssumptions({ unitScale: 'THOUSANDS' }, [{ period: '2024', revenue: 10, ebitda: 2 }]);
+    expect(a.unitScale).toBe('MILLIONS');
+  });
+});

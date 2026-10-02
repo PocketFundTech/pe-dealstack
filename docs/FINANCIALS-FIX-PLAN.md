@@ -124,11 +124,11 @@ Three read-only audits after A–F merged (extraction correctness, model correct
 - [x] **G10** Mixed currencies: the analysis uses the main currency's statements only and says which it left out (`currencyNote`, shown on the Analysis section); the statements table says when its columns are in different currencies instead of labelling all of them with the first one's.
 
 **PR D — scenarios + lower priority**
-- [ ] **G11** Low/High margin delta no longer silently does nothing when cost lines are Fixed.
-- [ ] **G12** "summary" in a file/tab name no longer marks a real statement as model-derived.
+- [x] **G11** Low/High margin delta: any part the % of revenue cost lines can't absorb goes through the Fixed cost lines as money; what still can't be applied is named on the Build model panel and the Notes sheet.
+- [x] **G12** "summary" in a file name no longer marks it model-derived ("Valuation Summary" is still caught by "valuation"); a "summary" tab is capped as model output only when it doesn't name a statement.
 - [ ] **G13** Bare "FY2024" uses the company's fiscal year-end, not December.
 - [ ] **G14** Restated figures preferred over originals; `needs_review` conflicts visible.
-- [ ] **G15** Model `unitScale` limited to MILLIONS; `Deal.ebitda` units heuristic sanity-checked.
+- [x] **G15** Model `unitScale` forced to MILLIONS; `Deal.ebitda` read as whole dollars when either deal field is above 100,000; an implied multiple outside 1–50x is ignored.
 - [ ] **G16** Fast-pass deal reader rescales deterministically and labels currency.
 
 **PR E — headcount extraction** (founder's choice)

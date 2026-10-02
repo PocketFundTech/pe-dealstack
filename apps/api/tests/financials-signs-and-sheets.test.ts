@@ -6,6 +6,7 @@ import type { ExtractionResponse } from '../src/services/extraction/extractionSc
 import { toClassificationResult } from '../src/services/extraction/normalize.js';
 import { isCashOutflowKey } from '../src/services/financialDerivations.js';
 import { scoreSheet } from '../src/services/excelFinancialExtractor.js';
+import { isDerivedModelName } from '../src/services/financialSourceAuthority.js';
 import { validateLineItems } from '../src/services/financialSchema.js';
 import { validateStatements } from '../src/services/financialValidator.js';
 
@@ -103,5 +104,21 @@ describe('sheet scoring (B2)', () => {
     expect(scoreSheet('Returns')).toBeLessThanOrEqual(40);
     expect(scoreSheet('Historical Balance Sheet')).toBeGreaterThan(scoreSheet('Balance Sheet'));
     expect(scoreSheet('BS')).toBe(70);
+  });
+
+  it('keeps a reporting tab named "summary" as a statement (G12)', () => {
+    expect(scoreSheet('Financial Summary')).toBeGreaterThanOrEqual(90);
+    expect(scoreSheet('FY24 Summary P&L')).toBeGreaterThanOrEqual(90);
+    expect(scoreSheet('Summary')).toBeLessThanOrEqual(40);       // a bare Summary tab is still model output
+    expect(scoreSheet('Valuation Summary')).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('derived-model file names (G12)', () => {
+  it.each([
+    ['SRM_Valuation_Summary.xlsx', true], ['LBO Returns.xlsx', true], ['DCF model output.xlsx', true],
+    ['Financial Summary FY24.xlsx', false], ['Executive Summary.pdf', false], ['Monthly Summary P&L.xlsx', false],
+  ])('isDerivedModelName(%s) = %s', (name, expected) => {
+    expect(isDerivedModelName(name)).toBe(expected);
   });
 });

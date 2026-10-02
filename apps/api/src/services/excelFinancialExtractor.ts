@@ -86,7 +86,10 @@ export function scoreSheet(name: string): number {
   if (maxScore > 10 && /\b(source|historical|historicals|actuals?|reported|audited|quickbooks)\b/i.test(trimmed)) {
     maxScore += 10;
   }
-  if (/\b(valuation|returns?|dcf|sensitivity|irr|output|summary)\b/i.test(trimmed)) {
+  // A "summary" tab is model output unless it names a statement ("Financial
+  // Summary", "FY24 Summary P&L" are reporting packs — fix plan G12).
+  const namesStatement = /\b(financial|income|profit|p\s*[&+]\s*l|balance|cash\s*flow|statements?)\b/i.test(trimmed);
+  if (/\b(valuation|returns?|dcf|sensitivity|irr|output)\b/i.test(trimmed) || (/\bsummary\b/i.test(trimmed) && !namesStatement)) {
     maxScore = Math.min(maxScore, 40);
   }
 

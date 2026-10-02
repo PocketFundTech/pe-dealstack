@@ -64,8 +64,11 @@ export function financialSourceAuthorityRank(doc: DocAuthorityMeta | null | unde
  * "model" alone is NOT a signal: LBO workbooks often carry the reported
  * statements on their own tabs.
  */
+// "summary" alone is NOT a signal either (fix plan G12): companies name their
+// reporting packs "Financial Summary" / "FY24 Summary P&L", and a CIM has an
+// "Executive Summary". "Valuation Summary" is still caught by "valuation".
 const DERIVED_MODEL_NAME_RE =
-  /\b(valuation|returns?|dcf|sensitivit(y|ies)|irr|model[\s_-]*output|summary|scenario[s]?)\b/i;
+  /\b(valuation|returns?|dcf|sensitivit(y|ies)|irr|model[\s_-]*output|scenario[s]?)\b/i;
 
 export function isDerivedModelName(name: string | null | undefined): boolean {
   if (!name) return false;

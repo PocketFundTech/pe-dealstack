@@ -396,5 +396,9 @@ export function resolveAssumptions(
     sameYears ? defaults.balanceDrivers : seedBalanceDrivers(history, catalogue, years), years,
   );
   merged.exitYear = Math.min(merged.exitYear, years);
+  // Every figure in the model is in millions (normaliseStatements rescales
+  // to it). A saved 'THOUSANDS' never rescaled anything — it only relabelled
+  // every caption 1000x wrong (fix plan G15).
+  merged.unitScale = 'MILLIONS';
   return merged;
 }
