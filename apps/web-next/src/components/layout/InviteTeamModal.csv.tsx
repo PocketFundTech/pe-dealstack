@@ -1,12 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import {
-  BulkRole, MAX_BULK_ROWS, ParsedRow, Stage, parseCsv,
+  BulkRole, MAX_BULK_ROWS, ParsedRow, RowResult, Stage, matchDeal, parseCsv, validateRows,
+  type DealOption,
 } from "./InviteTeamModal.csv.parse";
-import { RowStatus } from "./InviteTeamModal.csv.row";
+import { BulkInviteTable } from "./InviteTeamModal.csv.table";
 import { CsvUploadStep } from "./InviteTeamModal.csv.upload";
+
+type BulkResponse = {
+  total: number;
+  sent: number;
+  results: {
+    email: string;
+    status: "sent" | "exists" | "pending" | "error";
+    error?: string;
+    deal?: "added" | "on_accept" | "not_saved";
+  }[];
+};
 
 export function BulkCsvImportPanel({
   onBack,
@@ -20,9 +32,36 @@ export function BulkCsvImportPanel({
   const [topError, setTopError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [deals, setDeals] = useState<DealOption[]>([]);
 
-  const validRows = useMemo(() => rows.filter((r) => !r.invalid), [rows]);
-  const tooMany = validRows.length > MAX_BULK_ROWS;
+  // Deals for the per-row "Deal" selector (and to match CSV deal names).
+  useEffect(() => {
+    let cancelled = false;
+    api.get<DealOption[] | { deals: DealOption[] }>("/deals?limit=200")
+      .then((data) => {
+        if (cancelled) return;
+        const list = (Array.isArray(data) ? data : data?.deals ?? [])
+          .map((d) => ({ id: d.id, name: d.name }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setDeals(list);
+        // A file read before the deal list arrived: match its deal names now.
+        setRows((prev) => prev.some((r) => r.dealText && !r.dealId)
+          ? prev.map((r) => (r.dealText && !r.dealId ? { ...r, dealId: matchDeal(r.dealText, list) } : r))
+          : prev);
+      })
+      .catch((err) => console.warn("[bulk-invite] deals load failed:", err));
+    return () => { cancelled = true; };
+  }, []);
+
+  const issues = useMemo(() => validateRows(rows), [rows]);
+  const sendRows = useMemo(() => rows.filter((r) => r.checked && !issues.has(r.id)), [rows, issues]);
+  const checkedCount = rows.filter((r) => r.checked).length;
+  const blockingCount = rows.filter((r) => issues.has(r.id)).length;
+  const tooMany = sendRows.length > MAX_BULK_ROWS;
+
+  const updateRow = (id: string, patch: Partial<ParsedRow>) =>
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const toggleAll = (checked: boolean) => setRows((prev) => prev.map((r) => ({ ...r, checked })));
 
   const handleFile = (file: File) => {
     setSubmitError(null);
@@ -38,7 +77,7 @@ export function BulkCsvImportPanel({
     const reader = new FileReader();
     reader.onload = () => {
       const text = String(reader.result || "");
-      const { rows: parsed, topError: err } = parseCsv(text);
+      const { rows: parsed, topError: err } = parseCsv(text, deals);
       if (err) {
         setTopError(err);
         setRows([]);
@@ -61,7 +100,8 @@ export function BulkCsvImportPanel({
   };
 
   const handleSubmit = async () => {
-    if (validRows.length === 0 || tooMany) return;
+    // Only included rows with no blocking issue are sent (QA #4).
+    if (sendRows.length === 0 || tooMany || blockingCount > 0) return;
     setStage("submitting");
     setSubmitError(null);
 
@@ -69,85 +109,46 @@ export function BulkCsvImportPanel({
     // POST /api/invitations/bulk once per role group; merge results
     // back onto the originating rows.
     const groups = new Map<BulkRole, ParsedRow[]>();
-    for (const r of validRows) {
+    for (const r of sendRows) {
       const list = groups.get(r.role) ?? [];
       list.push(r);
       groups.set(r.role, list);
     }
 
-    const updated = new Map<string, ParsedRow["result"]>();
-    let hadFatalError = false;
+    const updated = new Map<string, RowResult>();
+    let firstError: string | null = null;
 
     for (const [role, group] of groups.entries()) {
       try {
-        const data = await api.post<{
-          total: number;
-          sent: number;
-          results: {
-            email: string;
-            status: "sent" | "exists" | "pending" | "error";
-            error?: string;
-          }[];
-        }>("/invitations/bulk", {
-          emails: group.map((r) => r.email),
+        const data = await api.post<BulkResponse>("/invitations/bulk", {
           role,
+          invites: group.map((r) => ({ email: r.email.trim(), dealId: r.dealId })),
         });
-        const byEmail = new Map(
-          (data.results ?? []).map((r) => [r.email.toLowerCase(), r]),
-        );
+        const byEmail = new Map((data.results ?? []).map((r) => [r.email.toLowerCase(), r]));
         for (const row of group) {
-          const r = byEmail.get(row.email.toLowerCase());
-          if (!r) {
-            updated.set(`${row.rowNumber}|${row.email}`, {
-              kind: "error",
-              error: "No response for this email",
-            });
-            continue;
-          }
-          if (r.status === "sent")
-            updated.set(`${row.rowNumber}|${row.email}`, { kind: "sent" });
-          else if (r.status === "exists")
-            updated.set(`${row.rowNumber}|${row.email}`, { kind: "exists" });
-          else if (r.status === "pending")
-            updated.set(`${row.rowNumber}|${row.email}`, { kind: "pending" });
-          else
-            updated.set(`${row.rowNumber}|${row.email}`, {
-              kind: "error",
-              error: r.error,
-            });
+          const r = byEmail.get(row.email.trim().toLowerCase());
+          if (!r) updated.set(row.id, { kind: "error", error: "No response for this email" });
+          else if (r.status === "sent") updated.set(row.id, { kind: "sent", deal: r.deal === "added" ? undefined : r.deal });
+          else if (r.status === "exists") updated.set(row.id, { kind: "exists", deal: r.deal === "added" ? "added" : undefined });
+          else if (r.status === "pending") updated.set(row.id, { kind: "pending" });
+          else updated.set(row.id, { kind: "error", error: r.error });
         }
       } catch (err) {
-        hadFatalError = true;
         const msg = err instanceof Error ? err.message : "Request failed";
-        for (const row of group) {
-          updated.set(`${row.rowNumber}|${row.email}`, {
-            kind: "error",
-            error: msg,
-          });
-        }
-        // Surface the first network/permission error to the top, but keep
-        // looping the remaining groups so the user sees per-group results.
-        if (!submitError) setSubmitError(msg);
+        firstError ??= msg;
+        for (const row of group) updated.set(row.id, { kind: "error", error: msg });
       }
     }
 
     setRows((prev) =>
-      prev.map((r) => {
-        if (r.invalid) {
-          return {
-            ...r,
-            result: { kind: "skipped", reason: r.invalid },
-          };
-        }
-        const k = `${r.rowNumber}|${r.email}`;
-        return updated.has(k) ? { ...r, result: updated.get(k) } : r;
-      }),
+      prev.map((r) =>
+        r.checked
+          ? (updated.has(r.id) ? { ...r, result: updated.get(r.id) } : r)
+          : { ...r, result: { kind: "skipped", reason: "Not selected" } },
+      ),
     );
     setStage("done");
-    // Hint that something went wrong even if a group succeeded.
-    if (hadFatalError && !submitError) {
-      setSubmitError("Some invitations could not be processed. See per-row results.");
-    }
+    if (firstError) setSubmitError(firstError);
   };
 
   const reset = () => {
@@ -176,7 +177,7 @@ export function BulkCsvImportPanel({
         </div>
         <div className="text-xs text-[#868E96]">
           {stage === "upload" && "Step 1 of 2 — Upload"}
-          {stage === "preview" && "Step 2 of 2 — Preview & Send"}
+          {stage === "preview" && "Step 2 of 2 — Review, edit & send"}
           {stage === "submitting" && "Sending..."}
           {stage === "done" && "Results"}
         </div>
@@ -189,23 +190,31 @@ export function BulkCsvImportPanel({
       {(stage === "preview" || stage === "submitting" || stage === "done") && (
         <div className="space-y-4">
           {fileName && (
-            <div className="flex items-center gap-2 text-sm text-[#868E96]">
+            <div className="flex items-center gap-2 text-sm text-[#868E96] flex-wrap">
               <span className="material-symbols-outlined text-base text-[#003366]">
                 description
               </span>
               <span className="text-[#343A40] font-medium">{fileName}</span>
               <span>·</span>
               <span>
-                {validRows.length} valid row{validRows.length !== 1 ? "s" : ""},{" "}
-                {rows.length - validRows.length} skipped
+                {checkedCount} of {rows.length} selected
+                {blockingCount > 0 && stage === "preview" && (
+                  <span className="text-red-600"> · {blockingCount} need{blockingCount === 1 ? "s" : ""} fixing</span>
+                )}
               </span>
             </div>
           )}
 
+          {stage === "preview" && (
+            <p className="text-xs text-[#868E96]">
+              Edit any cell, untick rows you don&apos;t want to invite, and pick a deal to add each person to its team.
+            </p>
+          )}
+
           {tooMany && stage === "preview" && (
             <div className="rounded-lg p-3 text-sm border bg-red-50 border-red-200 text-red-700">
-              Bulk import is limited to {MAX_BULK_ROWS} valid rows per file.
-              You have {validRows.length}. Split your CSV into smaller files.
+              Bulk invite is limited to {MAX_BULK_ROWS} people at a time. You have {sendRows.length} selected —
+              untick some rows or split the file.
             </div>
           )}
 
@@ -221,49 +230,14 @@ export function BulkCsvImportPanel({
             </div>
           )}
 
-          <div className="border border-[#EBEBEB] rounded-lg overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-[#F8F9FA] text-[#868E96]">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium w-10">#</th>
-                    <th className="px-3 py-2 text-left font-medium">Email</th>
-                    <th className="px-3 py-2 text-left font-medium">Role</th>
-                    <th className="px-3 py-2 text-left font-medium">Deal</th>
-                    <th className="px-3 py-2 text-left font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr
-                      key={`${r.rowNumber}-${r.email}`}
-                      className="border-t border-[#EBEBEB]"
-                    >
-                      <td className="px-3 py-2 text-[#868E96]">{r.rowNumber}</td>
-                      <td className="px-3 py-2 text-[#343A40] font-medium">
-                        {r.email || (
-                          <span className="text-[#868E96] italic">empty</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-[#343A40]">
-                        {r.role === "VIEWER"
-                          ? "Analyst"
-                          : r.role === "MEMBER"
-                            ? "Associate"
-                            : "Admin"}
-                      </td>
-                      <td className="px-3 py-2 text-[#868E96]">
-                        {r.deal || <span className="italic">—</span>}
-                      </td>
-                      <td className="px-3 py-2">
-                        <RowStatus row={r} stage={stage} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <BulkInviteTable
+            rows={rows}
+            issues={issues}
+            deals={deals}
+            stage={stage}
+            onChange={updateRow}
+            onToggleAll={toggleAll}
+          />
         </div>
       )}
 
@@ -290,13 +264,14 @@ export function BulkCsvImportPanel({
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={validRows.length === 0 || tooMany}
+              disabled={sendRows.length === 0 || tooMany || blockingCount > 0}
+              title={blockingCount > 0 ? "Fix or untick the highlighted rows first" : undefined}
               className="px-5 py-2.5 rounded-lg text-white font-medium text-sm shadow-lg transition-all active:scale-95 flex items-center gap-2 disabled:opacity-60"
               style={{ backgroundColor: "#003366" }}
             >
               <span className="material-symbols-outlined text-lg">send</span>
-              Send {validRows.length} invitation
-              {validRows.length === 1 ? "" : "s"}
+              Send {sendRows.length} invitation
+              {sendRows.length === 1 ? "" : "s"}
             </button>
           </>
         )}
