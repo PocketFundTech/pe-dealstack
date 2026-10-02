@@ -27,6 +27,7 @@ import hubspotImportRouter from './routes/hubspot-import.js';
 import internalRouter from './routes/internal-usage.js';
 import usageRouter from './routes/usage.js';
 import apiKeysRouter from './routes/api-keys.js';
+import webhookSubscriptionsRouter from './routes/webhook-subscriptions.js';
 import auditExportRouter from './routes/audit-export.js';
 import organizationsRouter from './routes/organizations.js';
 import orgStaffWebhookRouter from './routes/org-staff-webhook.js';
@@ -179,6 +180,12 @@ app.use(cors({
 
 // Rate limiting - per-user via auth token, fallback to IP
 const rateLimitKeyGenerator = (req: express.Request) => {
+  // API keys sent as X-API-Key get their own bucket too — otherwise every n8n
+  // Cloud customer behind the same egress IP would share one limit.
+  const apiKey = req.headers['x-api-key'];
+  if (typeof apiKey === 'string' && apiKey.startsWith('avise_sk_')) {
+    return 'user:' + apiKey.slice(-16);
+  }
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return 'user:' + authHeader.slice(-16);
@@ -413,6 +420,8 @@ app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, us
 
 // Org API keys for external tools (n8n etc.) — admin-only, session-only (see routes/api-keys.ts)
 app.use('/api/api-keys', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, apiKeysRouter);
+// Outbound webhooks (n8n/Zapier triggers) — admin-only; API keys allowed so tools can self-register
+app.use('/api/webhook-subscriptions', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, webhookSubscriptionsRouter);
 
 // Outreach pipeline-tracking board — Cicero Capital only (requireCiceroCapital
 // 403s any other org, even with a valid session and a guessed record id).

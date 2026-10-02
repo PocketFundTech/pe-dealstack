@@ -26,6 +26,7 @@ import {
   driveExportTargetFor,
 } from '../integrations/googleDrive/client.js';
 import { GoogleDriveError } from '../integrations/googleDrive/types.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -678,6 +679,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       // runs). The VDR UI already polls a folder's documents while any file
       // in it is 'processing' (see file-handlers.ts), so this is picked up
       // automatically.
+      emitWebhookEvent(req, orgId, 'document.uploaded', { ...document, dealId });
       res.status(201).json({ ...document, dealUpdated: false, updatedFields: [] });
       await runAfterResponse(req, runPostProcessing);
     } else {
@@ -685,6 +687,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       // non-Vercel deploys) — preserve the original fully-synchronous
       // behavior so the response reflects the final state.
       await runPostProcessing();
+      emitWebhookEvent(req, orgId, 'document.uploaded', { ...document, dealId });
       res.status(201).json({ ...document, dealUpdated, updatedFields });
     }
 

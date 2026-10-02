@@ -94,6 +94,9 @@ const READS = [
   '/api/templates', '/api/watchlist', '/api/graphs', '/api/integrations', '/api/integrations/activities',
   '/api/audit', '/api/audit/summary', '/api/audit/export.csv', '/api/export/deals', '/api/export/deals?format=csv',
   '/api/usage/me', '/api/ingest/pending-review',
+  '/api/deals?updatedSince=2026-01-01&limit=5', '/api/deals?limit=2&offset=1', '/api/contacts?updatedSince=2026-01-01',
+  '/api/companies?limit=5', '/api/tasks?updatedSince=2026-01-01', '/api/webhook-subscriptions/events',
+  '/api/webhook-subscriptions',
 ];
 for (const path of READS) await call('GET', path);
 
@@ -160,6 +163,7 @@ if (!READ_ONLY) {
     const taskId = idOf(task);
     if (taskId) {
       await call('GET', `/api/tasks?dealId=${dealId}`);
+      await call('GET', `/api/tasks/${taskId}`);
       await call('PATCH', `/api/tasks/${taskId}`, { body: { status: 'COMPLETED' } });
       await call('DELETE', `/api/tasks/${taskId}`, { expect: [200, 204] });
     }
@@ -168,6 +172,7 @@ if (!READ_ONLY) {
     const contact = await call('POST', '/api/contacts', { body: { firstName: 'QA', lastName: 'API Test', email, company: `${TAG} Target`, type: 'BANKER' }, expect: 201 });
     const contactId = idOf(contact);
     await call('POST', '/api/contacts', { body: { firstName: 'QA', lastName: 'Dup', email }, expect: 409, note: 'duplicate email' });
+    await call('PATCH', '/api/contacts/00000000-0000-0000-0000-000000000000', { body: { title: 'x' }, expect: 404, note: 'unknown contact' });
     if (contactId) {
       await call('GET', `/api/contacts/${contactId}`);
       await call('PATCH', `/api/contacts/${contactId}`, { body: { title: 'Managing Director' } });
@@ -177,6 +182,16 @@ if (!READ_ONLY) {
 
     await call('DELETE', `/api/deals/${dealId}`, { expect: 204 });
     await call('POST', `/api/deals/${dealId}/restore`, { expect: [200, 204] });
+  }
+
+  // Webhook subscription lifecycle (https://example.com never answers 2xx to POST; the test call just has to report it).
+  const hook = await call('POST', '/api/webhook-subscriptions', { body: { url: 'https://example.com/avise-smoke-test', events: ['deal.created'] }, expect: 201 });
+  const hookId = hook.json?.webhook?.id;
+  await call('POST', '/api/webhook-subscriptions', { body: { url: 'http://example.com/x', events: ['deal.created'] }, expect: 400, note: 'http refused' });
+  if (hookId) {
+    await call('POST', `/api/webhook-subscriptions/${hookId}/test`, { note: 'ping delivery reported' });
+    await call('PATCH', `/api/webhook-subscriptions/${hookId}`, { body: { active: false } });
+    await call('DELETE', `/api/webhook-subscriptions/${hookId}`, { expect: 204 });
   }
 
   if (RUN_AI) {

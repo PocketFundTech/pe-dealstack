@@ -50,4 +50,9 @@ export const dealsQuerySchema = z.object({
   maxDealSize: z.coerce.number().positive().optional(),
   assignedTo: z.string().uuid().optional(),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+  // For integrations that poll (n8n, Zapier): only deals changed at/after this
+  // time, and optional paging (applies only when `offset` is sent).
+  updatedSince: z.coerce.date().optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
 });

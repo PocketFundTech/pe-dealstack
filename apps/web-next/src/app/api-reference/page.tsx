@@ -53,6 +53,17 @@ const ERRORS = [
   ["503", "AI provider unavailable (AI endpoints only)", "Retry later"],
 ];
 
+const WEBHOOK_EVENTS = [
+  ["deal.created", "A deal is created in the app, by the API, or from ingest (file, text, URL, email)"],
+  ["deal.updated", "Any deal field changes"],
+  ["deal.stage_changed", "A deal moves stage; data includes previousStage"],
+  ["deal.deleted", "A deal is moved to trash"],
+  ["contact.created / contact.updated / contact.deleted", "Contact changes"],
+  ["task.created / task.updated", "Task changes"],
+  ["task.completed", "A task's status becomes COMPLETED"],
+  ["document.uploaded", "A file is added to a deal's data room"],
+];
+
 const pre = "bg-[#1e293b] rounded-lg p-4 overflow-x-auto";
 const preCode = "text-gray-300 font-mono text-[13px] leading-relaxed whitespace-pre";
 const th = "text-left py-3 px-4 font-semibold text-[#111418]";
@@ -151,6 +162,80 @@ curl -H "Authorization: Bearer avise_sk_YOUR_KEY" https://app.avise.io/api/users
             Authorization header with your key. Turn on retries for nodes that loop over many items.
           </p>
         </div>
+      </div>
+
+      {/* Webhooks */}
+      <div className="max-w-6xl mx-auto px-6 py-16">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="size-10 rounded-lg bg-violet-500/10 flex items-center justify-center text-violet-600">
+            <span className="material-symbols-outlined">webhook</span>
+          </div>
+          <h2 className="text-2xl font-bold text-[#111418]">Webhooks: get events instead of polling</h2>
+        </div>
+        <p className="text-[#64748b] mb-6">
+          Add a URL in <strong className="text-[#111418]">Settings → Webhooks</strong> (or with{" "}
+          <code className="bg-[#f1f5f9] px-1 rounded">POST /api/webhook-subscriptions</code>) and Avise POSTs each
+          event to it within seconds. In n8n, use a <strong className="text-[#111418]">Webhook</strong> trigger node
+          and paste its Production URL. URLs must be https.
+        </p>
+        <div className="rounded-xl border border-[#e2e8f0] bg-white overflow-x-auto mb-6">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="border-b border-[#e2e8f0]">
+                <th className={th}>Event</th>
+                <th className={th}>Sent when</th>
+              </tr>
+            </thead>
+            <tbody className="text-[#64748b]">
+              {WEBHOOK_EVENTS.map(([event, when], idx) => (
+                <tr key={event} className={idx < WEBHOOK_EVENTS.length - 1 ? "border-b border-[#e2e8f0]" : ""}>
+                  <td className="py-3 px-4 font-mono text-[13px] text-[#111418]">{event}</td>
+                  <td className="py-3 px-4">{when}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="min-w-0">
+            <h3 className="font-semibold text-[#111418] mb-2">What your URL receives</h3>
+            <pre className={pre}>
+              <code className={preCode}>{`POST https://your-n8n.example.com/webhook/avise
+Avise-Event: deal.stage_changed
+Avise-Delivery: 7f9c…
+Avise-Signature: t=1791000000,v1=5d41…
+
+{
+  "id": "7f9c…",
+  "event": "deal.stage_changed",
+  "createdAt": "2026-10-02T10:15:00.000Z",
+  "organizationId": "…",
+  "data": { "id": "…", "name": "Project Falcon",
+            "stage": "DUE_DILIGENCE",
+            "previousStage": "INITIAL_REVIEW", … }
+}`}</code>
+            </pre>
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-[#111418] mb-2">Verify the signature (optional, recommended)</h3>
+            <pre className={pre}>
+              <code className={preCode}>{`// Node.js — secret is the whsec_… shown when the webhook was added
+const crypto = require("crypto");
+const [t, v1] = header.split(",").map(p => p.split("=")[1]);
+const expected = crypto.createHmac("sha256", secret)
+  .update(\`\${t}.\${rawBody}\`).digest("hex");
+const valid = crypto.timingSafeEqual(Buffer.from(v1), Buffer.from(expected))
+  && Math.abs(Date.now() / 1000 - Number(t)) < 300;`}</code>
+            </pre>
+          </div>
+        </div>
+        <p className="text-sm text-[#64748b] mt-6">
+          Each event is sent once with a 5-second timeout; answer with any 2xx status. Failures show in Settings →
+          Webhooks, where you can send a test event; after 20 failures in a row the webhook is paused until you
+          resume it. Payloads carry the record&apos;s fields but not document text or nested lists — fetch
+          details from the API when you need them. To catch up after downtime, list records with{" "}
+          <code className="bg-[#f1f5f9] px-1 rounded">?updatedSince=</code> on deals, contacts, tasks or companies.
+        </p>
       </div>
 
       {/* Endpoints */}

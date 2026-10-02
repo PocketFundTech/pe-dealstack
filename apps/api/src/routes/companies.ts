@@ -16,11 +16,22 @@ const createCompanySchema = z.object({
 const updateCompanySchema = createCompanySchema.partial();
 
 // GET /api/companies - Get all companies
+const companiesQuerySchema = z.object({
+  updatedSince: z.coerce.date().optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
 router.get('/', async (req, res) => {
   try {
     const orgId = getOrgId(req);
+    const params = companiesQuerySchema.safeParse(req.query);
+    if (!params.success) {
+      return res.status(400).json({ error: 'Invalid query parameters', details: params.error.errors });
+    }
+    const { updatedSince, limit, offset = 0 } = params.data;
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('Company')
       .select(`
         *,
@@ -28,6 +39,12 @@ router.get('/', async (req, res) => {
       `)
       .eq('organizationId', orgId)
       .order('name', { ascending: true });
+    if (updatedSince) query = query.gte('updatedAt', updatedSince.toISOString());
+    if (params.data.offset !== undefined) {
+      query = query.order('id', { ascending: true }).range(offset, offset + (limit ?? 100) - 1);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
 
@@ -108,7 +125,7 @@ router.patch('/:id', async (req, res) => {
 
     const { data: company, error } = await supabase
       .from('Company')
-      .update(data)
+      .update({ ...data, updatedAt: new Date().toISOString() })
       .eq('id', id)
       .eq('organizationId', orgId)
       .select(`

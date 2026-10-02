@@ -9,7 +9,7 @@ export interface EndpointIndexGroup {
   endpoints: [HttpMethod, string][];
 }
 
-export const ENDPOINT_TOTAL = 308;
+export const ENDPOINT_TOTAL = 315;
 
 export const ENDPOINT_INDEX: EndpointIndexGroup[] = [
   {
@@ -137,6 +137,7 @@ export const ENDPOINT_INDEX: EndpointIndexGroup[] = [
     endpoints: [
       ["GET", "/api/tasks"],
       ["POST", "/api/tasks"],
+      ["GET", "/api/tasks/:id"],
       ["PATCH", "/api/tasks/:id"],
       ["DELETE", "/api/tasks/:id"],
     ],
@@ -397,6 +398,18 @@ export const ENDPOINT_INDEX: EndpointIndexGroup[] = [
       ["GET", "/api/auth/sessions"],
       ["DELETE", "/api/auth/sessions/:id"],
       ["GET", "/api/auth/workspace-email"],
+    ],
+  },
+  {
+    title: "Webhooks (outbound events)",
+    note: "Organization admins. API keys allowed, so tools can register their own trigger URLs.",
+    endpoints: [
+      ["GET", "/api/webhook-subscriptions"],
+      ["POST", "/api/webhook-subscriptions"],
+      ["PATCH", "/api/webhook-subscriptions/:id"],
+      ["DELETE", "/api/webhook-subscriptions/:id"],
+      ["POST", "/api/webhook-subscriptions/:id/test"],
+      ["GET", "/api/webhook-subscriptions/events"],
     ],
   },
   {

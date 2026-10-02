@@ -102,11 +102,10 @@ export function ApiKeysSection({ onToast }: Props) {
     }
   }
 
-  async function copyNewKey() {
-    if (!newKey) return;
+  async function copyText(text: string, label: string) {
     try {
-      await navigator.clipboard.writeText(newKey);
-      onToast("API key copied", "success");
+      await navigator.clipboard.writeText(text);
+      onToast(`${label} copied`, "success");
     } catch {
       onToast("Couldn't copy automatically — select the key and copy it manually.", "error");
     }
@@ -120,10 +119,14 @@ export function ApiKeysSection({ onToast }: Props) {
       <div className="p-6 border-b border-border-subtle">
         <h3 className="text-lg font-bold text-text-main">API Keys</h3>
         <p className="text-sm text-text-secondary mt-1">
-          Connect n8n, Zapier, Make or your own scripts to Avise. Send the key as{" "}
+          Connect n8n, Zapier, Make or your own scripts to Avise. The API key <strong>is</strong> your Bearer token:
+          send it as{" "}
           <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">Authorization: Bearer avise_sk_…</code>{" "}
-          to any <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">/api/…</code> endpoint. A key acts as you,
-          inside your organization.
+          to any <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">https://app.avise.io/api/…</code> endpoint.
+          A key acts as you, inside your organization.{" "}
+          <a href="/api-reference" target="_blank" rel="noreferrer" className="text-[#003366] font-medium hover:underline">
+            API reference
+          </a>
         </p>
       </div>
 
@@ -137,18 +140,29 @@ export function ApiKeysSection({ onToast }: Props) {
             {newKey && (
               <div className="rounded-lg border border-[#003366]/20 bg-[#003366]/5 p-4">
                 <p className="text-sm font-semibold text-text-main">Copy your new key now — you won&apos;t see it again.</p>
-                <div className="mt-3 flex items-center gap-2">
-                  <code className="flex-1 break-all rounded bg-white border border-border-subtle px-3 py-2 text-xs font-mono">
-                    {newKey}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={copyNewKey}
-                    className="shrink-0 rounded-lg bg-[#003366] px-3 py-2 text-sm font-medium text-white hover:opacity-90"
-                  >
-                    Copy
-                  </button>
-                </div>
+                {[
+                  { label: "API key", value: newKey },
+                  { label: "Authorization header", value: `Authorization: Bearer ${newKey}` },
+                ].map((row) => (
+                  <div key={row.label} className="mt-3">
+                    <span className="block text-xs text-text-secondary mb-1">{row.label}</span>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 break-all rounded bg-white border border-border-subtle px-3 py-2 text-xs font-mono">
+                        {row.value}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => copyText(row.value, row.label)}
+                        className="shrink-0 rounded-lg bg-[#003366] px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <p className="mt-3 text-xs text-text-secondary">
+                  In n8n: Credentials → Header Auth, Name <code>Authorization</code>, Value <code>Bearer &lt;key&gt;</code>.
+                </p>
                 <button
                   type="button"
                   onClick={() => setNewKey(null)}

@@ -124,6 +124,50 @@ describe('Real /api/deals handlers', () => {
       return calls;
     };
 
+    // Thenable chain: every builder call (including order/range) returns the
+    // chain, and awaiting it resolves the rows — matches supabase-js.
+    const setupPagedListMock = (returned: unknown[]) => {
+      const calls: { method: string; args: unknown[] }[] = [];
+      const chain: any = { then: (resolve: (v: unknown) => unknown) => resolve({ data: returned, error: null }) };
+      for (const m of ['select', 'eq', 'is', 'ilike', 'gte', 'lte', 'or', 'order', 'range']) {
+        chain[m] = (...args: unknown[]) => { calls.push({ method: m, args }); return chain; };
+      }
+      mockSupabase.from.mockReturnValue(chain);
+      return calls;
+    };
+
+    it('ignores limit without offset (the web app sends limit=50 and expects every deal)', async () => {
+      const calls = setupPagedListMock([{ id: 'd1' }]);
+      const app = await buildApp();
+      const res = await request(app).get('/api/deals?limit=50');
+      expect(res.status).toBe(200);
+      expect(calls.some((c) => c.method === 'range')).toBe(false);
+    });
+
+    it('pages with offset + limit, ordered stably by id', async () => {
+      const calls = setupPagedListMock([{ id: 'd3' }]);
+      const app = await buildApp();
+      const res = await request(app).get('/api/deals?offset=20&limit=10');
+      expect(res.status).toBe(200);
+      expect(calls).toContainEqual({ method: 'range', args: [20, 29] });
+      expect(calls).toContainEqual({ method: 'order', args: ['id', { ascending: true }] });
+    });
+
+    it('filters by updatedSince', async () => {
+      const calls = setupPagedListMock([]);
+      const app = await buildApp();
+      const res = await request(app).get('/api/deals?updatedSince=2026-10-01T00:00:00Z');
+      expect(res.status).toBe(200);
+      expect(calls).toContainEqual({ method: 'gte', args: ['updatedAt', '2026-10-01T00:00:00.000Z'] });
+    });
+
+    it('rejects an invalid updatedSince', async () => {
+      setupPagedListMock([]);
+      const app = await buildApp();
+      const res = await request(app).get('/api/deals?updatedSince=not-a-date');
+      expect(res.status).toBe(400);
+    });
+
     it('returns all deals (no filters)', async () => {
       const deals = [
         { id: 'd1', name: 'Apex Logistics', stage: 'DUE_DILIGENCE', status: 'ACTIVE', industry: 'Supply Chain SaaS' },

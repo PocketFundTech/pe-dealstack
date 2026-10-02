@@ -44,7 +44,7 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         description:
           "List your organization's deals (plain array, newest activity first). Deleted deals are excluded.",
         queryParams:
-          "stage, status, industry, priority, assignedTo, minDealSize, maxDealSize, search, sortBy, sortOrder",
+          "updatedSince (ISO date: only deals changed since), offset + limit (paging, limit ≤500, default 100; applies when offset is sent), stage, status, industry, priority, assignedTo, minDealSize, maxDealSize, search, sortBy, sortOrder",
       },
       {
         method: "GET",
@@ -110,7 +110,7 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         method: "GET",
         path: "/api/contacts",
         description: "Paged contact list: { contacts, total, limit, offset }. limit up to 200.",
-        queryParams: "search, type, company, tag, sortBy, sortOrder, limit, offset",
+        queryParams: "updatedSince, search, type, company, tag, sortBy, sortOrder, limit, offset",
       },
       {
         method: "POST",
@@ -150,7 +150,8 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
       {
         method: "GET",
         path: "/api/companies",
-        description: "All companies with their deals. POST with { name, industry, website } creates one.",
+        description: "Companies with their deals. POST with { name, industry, website } creates one.",
+        queryParams: "updatedSince, offset + limit (paging applies when offset is sent)",
       },
     ],
   },
@@ -164,7 +165,12 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         method: "GET",
         path: "/api/tasks",
         description: "Paged tasks: { tasks, count, limit, offset }.",
-        queryParams: "status, priority, assignedTo, dealId, limit, offset",
+        queryParams: "updatedSince, status, priority, assignedTo, dealId, limit, offset",
+      },
+      {
+        method: "GET",
+        path: "/api/tasks/:id",
+        description: "One task with its assignee and deal.",
       },
       {
         method: "POST",

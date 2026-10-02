@@ -7,6 +7,7 @@ import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -20,6 +21,7 @@ const taskQuerySchema = z.object({
   // aggregate per-assignee task counts in one call (see web-next team-performance).
   limit: z.coerce.number().int().min(1).max(500).optional().default(50),
   offset: z.coerce.number().int().min(0).optional().default(0),
+  updatedSince: z.coerce.date().optional(),
 });
 
 const createTaskSchema = z.object({
@@ -51,7 +53,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       return res.status(400).json({ error: 'Invalid query parameters', details: validation.error.errors });
     }
 
-    const { status, priority, assignedTo, dealId, limit, offset } = validation.data;
+    const { status, priority, assignedTo, dealId, limit, offset, updatedSince } = validation.data;
     const orgId = getOrgId(req);
 
     let query = supabase
@@ -63,6 +65,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     if (priority) query = query.eq('priority', priority);
     if (assignedTo) query = query.eq('assignedTo', assignedTo);
     if (dealId) query = query.eq('dealId', dealId);
+    if (updatedSince) query = query.gte('updatedAt', updatedSince.toISOString());
 
     query = query.range(offset, offset + limit - 1);
 
@@ -74,6 +77,26 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     res.json({ tasks: tasks || [], count, limit, offset });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── GET /api/tasks/:id — One task ───────────────────────────
+router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!z.string().uuid().safeParse(req.params.id).success) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    const { data: task, error } = await supabase
+      .from('Task')
+      .select('*, assignee:User!assignedTo(id, name, email, avatar, role), deal:Deal!dealId(id, name, stage)')
+      .eq('id', req.params.id)
+      .eq('organizationId', getOrgId(req))
+      .maybeSingle();
+    if (error) throw error;
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json(task);
   } catch (error) {
     next(error);
   }
@@ -173,6 +196,7 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_ASSIGN), async (req: Request
       });
     }
 
+    emitWebhookEvent(req, orgId, 'task.created', task);
     res.status(201).json(task);
   } catch (error) {
     next(error);
@@ -250,6 +274,10 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       });
     }
 
+    emitWebhookEvent(req, orgId, 'task.updated', task);
+    if (data.status === 'COMPLETED' && existing.status !== 'COMPLETED') {
+      emitWebhookEvent(req, orgId, 'task.completed', task);
+    }
     res.json(task);
   } catch (error) {
     next(error);

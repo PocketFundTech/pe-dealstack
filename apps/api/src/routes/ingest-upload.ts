@@ -19,6 +19,7 @@ import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { runInBackground } from '../utils/background.js';
 import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -82,6 +83,10 @@ router.post('/', upload.single('file'), async (req, res) => {
   if (resolved.cleanupStoragePath) {
     const storagePath = resolved.cleanupStoragePath;
     await runAfterResponse(req, () => cleanupStagingObject(storagePath));
+  }
+  const ingestedDeal = (result.body as { deal?: unknown; isUpdate?: boolean } | undefined);
+  if (result.status < 300 && ingestedDeal?.deal) {
+    emitWebhookEvent(req, req.user?.organizationId, ingestedDeal.isUpdate ? 'deal.updated' : 'deal.created', ingestedDeal.deal);
   }
   res.status(result.status).json(result.body);
 });

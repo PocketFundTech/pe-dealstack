@@ -12,6 +12,7 @@ import { runIngestFromBuffer } from './ingest-upload.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { createDealFromEmail } from '../integrations/gmail/autoCreateDeal.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 /** Runs `fn` over `items` with at most `limit` in flight at once. */
 async function mapWithConcurrency<T, R>(
@@ -136,6 +137,7 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
       attachments: processedAttachments.length,
     });
 
+    emitWebhookEvent(req, orgId, 'deal.created', { id: dealId, name: result.companyName });
     res.status(201).json({
       success: true,
       deal: { id: dealId, name: result.companyName },

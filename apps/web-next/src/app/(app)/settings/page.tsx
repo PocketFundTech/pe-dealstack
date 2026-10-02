@@ -22,6 +22,7 @@ import { FirmTeaserSection } from "./FirmTeaserSection";
 import { AiUsageSection } from "./AiUsageSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { ApiKeysSection } from "./ApiKeysSection";
+import { WebhooksSection } from "./WebhooksSection";
 import { NDATemplatesSection } from "./NDATemplatesSection";
 import { OutreachPipelineSection } from "./OutreachPipelineSection";
 
@@ -38,6 +39,7 @@ const NAV_SECTIONS = [
   { id: "firm-teaser", label: "Firm Teaser", icon: "auto_awesome" },
   { id: "integrations", label: "Integrations", icon: "extension" },
   { id: "api-keys", label: "API Keys", icon: "key" },
+  { id: "webhooks", label: "Webhooks", icon: "webhook" },
   { id: "ai-usage", label: "AI Usage", icon: "analytics" },
   { id: "outreach-pipeline", label: "Outreach Pipeline", icon: "campaign" },
 ] as const;
@@ -356,6 +358,8 @@ export default function SettingsPage() {
           <IntegrationsSection onToast={showToast} />
 
           <ApiKeysSection onToast={showToast} />
+
+          <WebhooksSection onToast={showToast} />
 
           <NDATemplatesSection />
 
