@@ -11,10 +11,21 @@ import {
 const router = Router();
 
 /**
- * Helper — fetch sessions for a user using whichever Supabase API is available.
- * Returns empty list (not error) if no path works, so the UI degrades gracefully.
+ * Fetch sessions for a user using whichever path is available. `available`
+ * is false when NONE worked — the caller must say "unavailable", not "no
+ * sessions" (QA #11: an empty 200 read as "No other active sessions").
  */
-async function fetchUserSessions(userId: string): Promise<any[]> {
+async function fetchUserSessions(userId: string): Promise<{ sessions: any[]; available: boolean }> {
+  // Path 0: SECURITY DEFINER RPC from auth-sessions-rpc-migration.sql — works
+  // without exposing the `auth` schema to PostgREST.
+  try {
+    const { data, error } = await supabase.rpc('list_user_sessions', { p_user_id: userId });
+    if (!error && Array.isArray(data)) return { sessions: data, available: true };
+    if (error) log.warn('list_user_sessions rpc unavailable', { code: error.code, message: error.message });
+  } catch (err) {
+    log.warn('list_user_sessions rpc threw', err as any);
+  }
+
   const adminAuth: any = (supabase as any).auth?.admin;
 
   // Path 1: official admin API (not present in @supabase/auth-js 2.101.x)
@@ -22,7 +33,7 @@ async function fetchUserSessions(userId: string): Promise<any[]> {
     try {
       const { data, error } = await adminAuth.listUserSessions(userId);
       if (!error && data) {
-        return data.sessions || data || [];
+        return { sessions: data.sessions || data || [], available: true };
       }
       log.warn('listUserSessions returned error', error as any);
     } catch (err) {
@@ -43,18 +54,20 @@ async function fetchUserSessions(userId: string): Promise<any[]> {
       .select('id, user_id, created_at, updated_at, user_agent, ip')
       .eq('user_id', userId)
       .order('updated_at', { ascending: false });
-    if (!error && Array.isArray(data)) return data;
+    if (!error && Array.isArray(data)) return { sessions: data, available: true };
     if (error) log.warn('auth.sessions select error', error as any);
   } catch (err) {
     log.warn('auth.sessions fallback query failed', err as any);
   }
 
-  return [];
+  return { sessions: [], available: false };
 }
 
 /**
  * GET /api/auth/sessions — list current user's active sessions.
- * Always 200 with `sessions: []` on degraded environments.
+ * 501 when no way to read sessions is available (the UI then says
+ * "Session management unavailable"). The current session — `session_id`
+ * from the caller's JWT, set by authMiddleware — is flagged `current`.
  */
 router.get('/sessions', async (req: Request, res: Response) => {
   try {
@@ -64,8 +77,12 @@ router.get('/sessions', async (req: Request, res: Response) => {
       return;
     }
 
-    const sessions = await fetchUserSessions(user.id);
-    const currentSessionId = (req as any).sessionId || null;
+    const { sessions, available } = await fetchUserSessions(user.id);
+    if (!available) {
+      res.status(501).json({ error: 'Session management unavailable', sessions: [] });
+      return;
+    }
+    const currentSessionId = req.sessionId || null;
 
     const mapped = sessions.map((s: any) => ({
       id: s.id,
@@ -102,7 +119,7 @@ router.delete('/sessions/:id', async (req: Request, res: Response) => {
     }
 
     // Verify the session belongs to this user (defends against id-guessing).
-    const ownedSessions = await fetchUserSessions(user.id);
+    const { sessions: ownedSessions } = await fetchUserSessions(user.id);
     const target = ownedSessions.find((s: any) => s.id === id);
     if (!target) {
       res.status(404).json({ error: 'Session not found' });
@@ -110,12 +127,22 @@ router.delete('/sessions/:id', async (req: Request, res: Response) => {
     }
 
     let revoked = false;
+
+    // Path 0: SECURITY DEFINER RPC (auth-sessions-rpc-migration.sql).
+    try {
+      const { data, error } = await supabase.rpc('revoke_user_session', { p_user_id: user.id, p_session_id: id });
+      if (!error && data === true) revoked = true;
+      else if (error) log.warn('revoke_user_session rpc unavailable', { code: error.code, message: error.message });
+    } catch (err) {
+      log.warn('revoke_user_session rpc threw', err as any);
+    }
+
     const adminAuth: any = (supabase as any).auth?.admin;
 
     // Path 1: admin.signOut — historical SDKs accepted a session id.
     // Current SDK accepts a JWT; calling it with an id will likely fail
     // server-side, but we attempt it harmlessly and detect non-success.
-    if (adminAuth?.signOut) {
+    if (!revoked && adminAuth?.signOut) {
       try {
         const result: any = await adminAuth.signOut(id);
         if (result && !result.error) {

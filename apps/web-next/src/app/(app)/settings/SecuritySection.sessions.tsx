@@ -116,8 +116,7 @@ export function ActiveSessions({
 
       {degraded ? (
         <div className="p-4 bg-gray-50 rounded-lg border border-border-subtle text-xs text-text-muted">
-          Session management is unavailable in this environment. (Supabase{" "}
-          <code className="font-mono">auth</code> schema is not exposed via PostgREST.)
+          Session management isn&apos;t available right now. Your sign-in is unaffected — try again later.
         </div>
       ) : loading && sessions === null ? (
         <p className="text-xs text-text-muted py-2">Loading sessions...</p>
