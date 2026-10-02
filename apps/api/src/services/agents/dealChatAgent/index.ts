@@ -560,7 +560,15 @@ export async function* runDealChatAgentStreaming(
     cleanup();
     if (internalController.signal.aborted) {
       await recordUsage(usage, 'error', servedModel);
-      yield { type: 'error', message: `Response timed out after ${timeoutMs}ms. Please try again.` };
+      // The same internal controller aborts on both a timeout AND a
+      // client-initiated Stop (opts.signal) — collapsing them into one
+      // "timed out" message told a user who just clicked Stop that the
+      // request had failed. Only call it a timeout when the deadline, not
+      // the caller, triggered the abort; a Stop needs no error event at all.
+      if (!opts.signal?.aborted) {
+        const seconds = Math.round(timeoutMs / 1000);
+        yield { type: 'error', message: `Response timed out after ${seconds}s. Please try again.` };
+      }
       return;
     }
     await recordUsage(usage, 'error', servedModel);

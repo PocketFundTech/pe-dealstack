@@ -52,7 +52,7 @@ export const ICON_NAMES = [
   "school", "science", "score", "script", "search", "search_off", "security", "send", "serif",
   "settings", "shadow", "share", "shield", "shield_lock", "shield_with_heart", "shopping_bag",
   "shopping_cart", "signature", "skeleton", "slideshow", "smart_toy", "snooze", "sort", "source",
-  "south_east", "speed", "square", "star", "start", "step", "steps", "sticky_note_2", "store",
+  "south_east", "speed", "square", "star", "start", "step", "steps", "sticky_note_2", "stop_circle", "store",
   "storefront", "stream", "style", "subject", "summarize", "sunny", "support", "swap_horiz",
   "swap_vert", "switch", "swords", "sync", "tab", "table", "table_chart", "table_view", "tag",
   "target", "task", "task_alt", "terminal", "thumb_up", "timeline", "tips_and_updates", "title",

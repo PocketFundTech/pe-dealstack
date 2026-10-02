@@ -105,6 +105,10 @@ export interface ChatMessage {
   action?: ChatAction;
   /** True while this assistant message is still streaming in (deal chat SSE). */
   streaming?: boolean;
+  /** True when the request behind this message failed outright (shows a Retry button). */
+  failed?: boolean;
+  /** The user's original text, so a failed message can be retried without retyping it. */
+  retryText?: string;
 }
 
 export interface Activity {

@@ -115,21 +115,45 @@ router.post('/:id/generate-all', async (req, res) => {
     req.on('close', () => abortController.abort());
 
     const send = (event: Record<string, unknown>) => {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      // The client may close the connection (tab close, navigation, Cancel)
+      // between one write and the next; a write after that throws and would
+      // otherwise crash this handler after we've already started persisting
+      // sections.
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        // connection already gone — nothing to do
+      }
     };
 
+    let sawDone = false;
     try {
       for await (const event of generateAllSectionsStreaming(memo.dealId, orgId, undefined, { signal: abortController.signal })) {
-        if (event.type === 'done') {
+        if (event.type === 'section_complete' || event.type === 'section_revised') {
+          // Persist each section as it finishes instead of waiting for the
+          // whole run to complete — a refresh, error, or the request's time
+          // limit used to lose every section that had already been generated.
+          await persistGeneratedSections(id, [event.section]);
+          send(event);
+        } else if (event.type === 'done') {
+          sawDone = true;
           const { completed, sections } = await persistGeneratedSections(id, event.sections);
           send({ type: 'done', success: true, completed, total: event.sections.length, sections });
         } else {
           send(event);
         }
       }
+      if (!sawDone && !abortController.signal.aborted) {
+        send({
+          type: 'error',
+          message: 'Generation ended before finishing — sections completed so far have been saved.',
+        });
+      }
     } catch (streamErr: any) {
       log.error('Generate-all streaming failed', streamErr);
-      send({ type: 'error', message: classifyAIError(streamErr.message || 'Failed to regenerate memo') });
+      if (!abortController.signal.aborted) {
+        send({ type: 'error', message: classifyAIError(streamErr.message || 'Failed to regenerate memo') });
+      }
     } finally {
       res.end();
     }

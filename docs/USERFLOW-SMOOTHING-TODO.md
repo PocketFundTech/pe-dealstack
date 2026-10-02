@@ -6,8 +6,8 @@ Line numbers are from that commit — re-check before editing, they drift.
 
 Paths: `W/` = `apps/web-next/src/`, `A/` = `apps/api/src/`.
 
-> **Status 2026-10-02:** Batch 0 ✅ (#160), Batch 1 ✅ (#158), Batch 2 ✅ (#170), live-QA follow-ups in #171.
-> **Next:** Batch 3 (stop losing work: memo "Generate all" saves per section, chat failure handling, re-auth without losing the page, unsaved-changes guard), then Batch 4.
+> **Status 2026-10-03:** Batch 0 ✅ (#160), Batch 1 ✅ (#158), Batch 2 ✅ (#170), live-QA follow-ups in #171, Batch 3 ✅ (`fix/flows-batch-3`).
+> **Next:** Batch 4 (pagination, extraction status, duplicate-deal check, mobile nav, shared Dialog).
 > Re-test with the QA account (`qa.tester@example.com`, "Avise QA Test Org") using `playwright-cli` after each batch — production must have AI credit for the AI flows.
 
 How to work this list: one batch = one PR, failing test first, tick the box when merged.
@@ -108,31 +108,32 @@ How to work this list: one batch = one PR, failing test first, tick the box when
 
 ---
 
-## Batch 3 — Stop losing users' work
+## Batch 3 — Stop losing users' work ✅ done 2026-10-03 (branch `fix/flows-batch-3`)
 
-- [ ] **Memo "Generate all" saves nothing until the very end**; full-screen overlay, no Cancel. A refresh, error or the 300s limit loses every section.
+- [x] **Memo "Generate all" saves nothing until the very end**; full-screen overlay, no Cancel. A refresh, error or the 300s limit loses every section.
   - Where: `A/routes/memos-generate.ts:122-125`; `W/app/(app)/memo-builder/section-handlers.ts:177-185, 232-237`; `memo-builder/generating-overlay.tsx:10`.
-  - Fix: persist each section on `section_complete` server-side; treat a stream that ends without `done` as an error; non-blocking progress bar with Cancel (AbortController).
-- [ ] **Chat reply that fails midway freezes, shows no error, and isn't saved.**
+  - Fix: persist each section on `section_complete`/`section_revised` server-side; an SSE stream that ends without `done` now sends an `error` frame; overlay has a Cancel button (AbortController threaded through `api.stream`'s new `opts.signal`).
+- [x] **Chat reply that fails midway freezes, shows no error, and isn't saved.**
   - Where: `A/routes/deals-chat-ai.ts:368-373, 396` (error only sent `if (!fullText)`; saves skipped on exception); `W/app/(app)/deals/[id]/deal-page-handlers.ts:386-424`.
-  - Fix: always send `{type:'error'}`; save the user message before streaming; client sets `streaming:false` in catch/finally.
-- [ ] **Chat: no Retry, no Stop, unhelpful errors.**
+  - Fix: the user's message is saved before the stream starts (not after); an `error` SSE frame is always sent (not just when nothing streamed yet); a partial reply from a mid-stream exception is now persisted with `truncated:true` instead of discarded; a generator-reported empty reply gets a real fallback sentence instead of an empty row.
+- [x] **Chat: no Retry, no Stop, unhelpful errors.**
   - Where: `deal-page-handlers.ts:408-421` (`isServerError` never matches); legacy bare 500 at `deals-chat-ai.ts:441`; timeout in raw ms at `A/services/agents/dealChatAgent/index.ts:563`; `api.stream` takes no signal (`W/lib/api.ts:289`).
-  - Fix: `classifyAIErrorObject` in the legacy catch, branch on `ApiError.status`, Retry on error bubbles, AbortSignal + Stop button, timeout in seconds.
-- [ ] **Chat history after reload:** action buttons lost (reads `msg.action`, stored in `metadata.action`), and failed replies return as empty AI bubbles.
+  - Fix: `classifyAIErrorObject` in the legacy catch; `isServerError` now checks `ApiError.status` (5xx/429); failed messages carry `failed`/`retryText` and render a Retry button; `api.stream` accepts `{signal}` and a Stop button aborts it; the dealChatAgent timeout message reports seconds and no longer fires on a user-initiated Stop (same internal controller, now distinguished by whether the external signal aborted).
+- [x] **Chat history after reload:** action buttons lost (reads `msg.action`, stored in `metadata.action`), and failed replies return as empty AI bubbles.
   - Where: `W/app/(app)/deals/[id]/page.tsx:158-167`; `A/routes/deals-chat-ai.ts:373`.
-- [ ] **Session expiry (401) redirects to /login immediately, losing work**; after login, always lands on /dashboard.
+  - Fix: `loadChatHistory` maps `metadata.action`/`metadata.failed` onto `msg.action`/`msg.failed`; the backend never saves an empty-content assistant row (falls back to an explicit "wasn't able to generate a reply" message with `metadata.failed`).
+- [x] **Session expiry (401) redirects to /login immediately, losing work**; after login, always lands on /dashboard.
   - Where: `W/lib/api.ts:74-77, 129-132, 200-203`; `W/lib/supabase/middleware.ts:65-68`; `W/app/(auth)/login/page.tsx:80, 132`.
-  - Fix: on 401, `refreshSession()` once and retry; then re-auth modal or `/login?next=<path>`; login honours same-origin `next`.
-- [ ] **No unsaved-changes protection anywhere** (0 `beforeunload` handlers).
+  - Fix: all three 401 handlers in `api.ts` try one shared `refreshSession()` + retry before redirecting; the redirect (here and in `middleware.ts`) carries `?next=<path>`; login honours a same-origin `next` after both password and MFA verification.
+- [x] **No unsaved-changes protection anywhere** (0 `beforeunload` handlers).
   - Where: `W/app/(app)/nda/FullEditPage.tsx:113`, `memo-builder/section-handlers.ts:53`, `templates/TemplateEditor.tsx`, `settings/page.tsx:397`, `deals/[id]/edit-deal-modal.tsx:186` (backdrop click discards edits).
-  - Fix: shared `useUnsavedChanges(isDirty)` hook (beforeunload + in-app link guard); dirty modals confirm before closing.
-- [ ] **Closing the upload modal mid-upload loses the result** (and invites a duplicate re-upload).
+  - Fix: new shared `useUnsavedChanges(isDirty)` hook (`W/lib/useUnsavedChanges.ts`, `beforeunload` only) wired into all four pages/panels above; `EditDealModal`'s backdrop click, X button, and Cancel button now route through a `ConfirmDialog` ("Discard changes?") when dirty instead of closing immediately.
+- [x] **Closing the upload modal mid-upload loses the result** (and invites a duplicate re-upload).
   - Where: `W/components/deal-intake/IngestDealModal.tsx:31` (Esc), `:51` (backdrop).
-  - Fix: block close while processing, or keep the form mounted and toast a link when done.
-- [ ] **Stage change wipes team avatars (and possibly scorecard) from the cached deal.**
+  - Fix: `IngestDealForm` reports its `processing` state via a new `onProcessingChange` prop; the modal blocks Escape, backdrop click, and the X button while processing, with inline copy explaining why.
+- [x] **Stage change wipes team avatars (and possibly scorecard) from the cached deal.**
   - Where: `W/app/(app)/deals/[id]/page.tsx:88-97` (`setDeal(updated)` with a PATCH response lacking `teamMembers`, `A/routes/deals-mutate.ts:212-218`).
-  - Fix: `setDeal(prev => ({ ...prev, ...updated }))` or `refetchDeal()`.
+  - Fix: both stage-change handlers (`confirmStageChange`, `selectTerminalStage`) now merge the PATCH response onto the previous cached deal instead of replacing it wholesale.
 
 ---
 

@@ -352,6 +352,13 @@ router.post('/:dealId/chat', async (req, res) => {
       let finalUpdates: any[] | undefined;
       let finalAction: any;
 
+      // Save the user's message up front — previously this only happened
+      // after a fully successful run, so an agent exception (even one before
+      // the first token streamed) silently dropped the user's own message
+      // along with the reply, and a reload showed no trace the question was
+      // ever sent.
+      await supabase.from('ChatMessage').insert({ dealId, userId, role: 'user', content: message });
+
       try {
         for await (const event of runDealChatAgentStreaming(
           { dealId, orgId: deal.organizationId, message, dealContext, history: history.slice(-10), today: getTodayIso(), userId: userId ?? undefined },
@@ -365,15 +372,20 @@ router.post('/:dealId/chat', async (req, res) => {
           send(event);
         }
 
-        await supabase.from('ChatMessage').insert({ dealId, userId, role: 'user', content: message });
+        // A generator-reported `error` event (as opposed to a thrown
+        // exception) can leave fullText empty; saving that verbatim created a
+        // ChatMessage row with no content, which reloaded as a blank AI
+        // bubble with no sign anything went wrong.
+        const savedContent = fullText || "I wasn't able to generate a reply for that — please try asking again.";
         await supabase.from('ChatMessage').insert({
           dealId,
           userId,
           role: 'assistant',
-          content: fullText,
+          content: savedContent,
           metadata: {
             model: finalModel || 'claude-sonnet-5',
             ...(truncated && { truncated: true }),
+            ...(!fullText && { failed: true }),
             ...(finalUpdates && { updates: finalUpdates }),
             ...(finalAction && { action: finalAction }),
           },
@@ -390,12 +402,23 @@ router.post('/:dealId/chat', async (req, res) => {
         // event-stream), so the client's EventSource/fetch-stream reader saw
         // a connection that opened and then closed with zero data frames —
         // no error, no text, nothing. The chat UI rendered a blank reply.
-        // Only fix once headers are already committed: emit an `error` SSE
-        // event before ending the stream, same shape the client already
-        // handles from mid-stream errors (see DealChatStreamEvent 'error').
-        if (!fullText) {
+        // Fix once headers are already committed: ALWAYS emit an `error` SSE
+        // event before ending the stream (not just when no text streamed
+        // yet), and if any partial reply was generated, persist it with
+        // truncated:true so a refresh shows what the agent got through
+        // instead of nothing.
+        if (!abortController.signal.aborted) {
           const { userMessage } = classifyAIErrorObject(streamErr);
           send({ type: 'error', message: userMessage });
+        }
+        if (fullText) {
+          await supabase.from('ChatMessage').insert({
+            dealId,
+            userId,
+            role: 'assistant',
+            content: fullText,
+            metadata: { model: finalModel || 'claude-sonnet-5', truncated: true },
+          });
         }
       } finally {
         res.end();
@@ -438,7 +461,8 @@ router.post('/:dealId/chat', async (req, res) => {
     res.json(result);
   } catch (error) {
     log.error('Error in deal chat', error);
-    res.status(500).json({ error: 'Failed to process chat message' });
+    const { statusCode, userMessage } = classifyAIErrorObject(error);
+    res.status(statusCode).json({ error: userMessage });
   }
 });
 

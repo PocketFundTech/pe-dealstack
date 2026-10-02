@@ -35,6 +35,7 @@ import {
   createAddSection,
   createDeleteSection,
   createGenerateAll,
+  createCancelGenerateAll,
 } from "./section-handlers";
 import {
   createExportPDF,
@@ -44,6 +45,7 @@ import {
   createMemoHandler,
 } from "./export-handlers";
 import { createSendMessage } from "./chat-handler";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import {
   useLoadMemos,
   useLoadMemo,
@@ -81,6 +83,11 @@ function MemoBuilderPageInner() {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [loadingMemo, setLoadingMemo] = useState(false);
   const [editingContent, setEditingContent] = useState<Record<string, string>>({});
+  // An edited section's textarea content diverges from `sections` (the
+  // last-saved state) until the user clicks Save — previously nothing
+  // warned before a reload or tab close threw that edit away.
+  const hasUnsavedSectionEdit = sections.some((s) => editingContent[s.id] !== undefined && editingContent[s.id] !== (s.content || ""));
+  useUnsavedChanges(hasUnsavedSectionEdit);
   const [generatingSection, setGeneratingSection] = useState<string | null>(null);
   const [savingSection, setSavingSection] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -196,6 +203,7 @@ function MemoBuilderPageInner() {
   });
 
   /* ---- Section actions ---- */
+  const generateAllAbortRef = useRef<AbortController | null>(null);
   const sectionDeps = {
     selectedMemo,
     sections,
@@ -217,12 +225,14 @@ function MemoBuilderPageInner() {
     setGeneratingAll,
     setGenerationStatus,
     setError,
+    generateAllAbortRef,
   };
   const handleGenerate = createGenerateSection(sectionDeps);
   const handleSaveSection = createSaveSection(sectionDeps);
   const handleAddSection = createAddSection(sectionDeps, handleGenerate);
   const handleDeleteSection = createDeleteSection(sectionDeps);
   const handleGenerateAll = createGenerateAll(sectionDeps);
+  const handleCancelGenerateAll = createCancelGenerateAll(sectionDeps);
 
   // Fire deferred /generate-all once selectedMemo matches the pending id.
   // Ref avoids re-firing on handleGenerateAll identity churn (it's recreated
@@ -302,7 +312,9 @@ function MemoBuilderPageInner() {
 
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden min-w-0">
-      {overlayStatus && <GeneratingOverlay status={overlayStatus} />}
+      {overlayStatus && (
+        <GeneratingOverlay status={overlayStatus} onCancel={generatingAll ? handleCancelGenerateAll : undefined} />
+      )}
       {/* ---- Left sidebar: memo list ---- */}
       <MemoListSidebar
         memos={memos}

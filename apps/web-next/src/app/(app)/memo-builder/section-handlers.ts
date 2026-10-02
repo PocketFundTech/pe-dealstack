@@ -4,7 +4,7 @@
 // async handler. Behavior is unchanged — same call signatures, same API
 // payloads, same side effects.
 
-import { Dispatch, SetStateAction } from "react";
+import { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { api } from "@/lib/api";
 import { Memo, MemoSection, SECTION_TYPES } from "./components";
 
@@ -29,6 +29,7 @@ interface SectionDeps {
   setGeneratingAll: Dispatch<SetStateAction<boolean>>;
   setGenerationStatus: Dispatch<SetStateAction<string | null>>;
   setError: Dispatch<SetStateAction<string | null>>;
+  generateAllAbortRef?: MutableRefObject<AbortController | null>;
 }
 
 export function createGenerateSection(deps: SectionDeps) {
@@ -154,13 +155,15 @@ export function createDeleteSection(deps: SectionDeps) {
 export function createGenerateAll(deps: SectionDeps) {
   const {
     selectedMemo, setSections, setEditingContent, setActiveSection,
-    setGeneratingAll, setGenerationStatus, setError,
+    setGeneratingAll, setGenerationStatus, setError, generateAllAbortRef,
   } = deps;
 
   return async () => {
     if (!selectedMemo) return;
     setGeneratingAll(true);
     setGenerationStatus(null);
+    const controller = new AbortController();
+    if (generateAllAbortRef) generateAllAbortRef.current = controller;
 
     const upsertSection = (generated: {
       type: string; title: string; content: string; aiGenerated: boolean;
@@ -228,12 +231,24 @@ export function createGenerateAll(deps: SectionDeps) {
         } else if (e.type === "error") {
           setError(e.message || "Failed to generate all sections");
         }
-      });
+      }, { signal: controller.signal });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate all sections");
+      // A user-initiated Cancel aborts the fetch — sections generated before
+      // the cancel were already persisted server-side, so this isn't a failure.
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setError(err instanceof Error ? err.message : "Failed to generate all sections");
+      }
     } finally {
       setGeneratingAll(false);
       setGenerationStatus(null);
+      if (generateAllAbortRef) generateAllAbortRef.current = null;
     }
+  };
+}
+
+export function createCancelGenerateAll(deps: SectionDeps) {
+  const { generateAllAbortRef } = deps;
+  return () => {
+    generateAllAbortRef?.current?.abort();
   };
 }

@@ -5,7 +5,21 @@ import type { ChatMessage } from "./components";
 vi.mock("@/lib/supabase/client", () => ({ createClient: () => ({ auth: {} }) }));
 
 const streamMock = vi.fn();
-vi.mock("@/lib/api", () => ({ api: { stream: (...args: unknown[]) => streamMock(...args) } }));
+const { MockApiError } = vi.hoisted(() => ({
+  MockApiError: class MockApiError extends Error {
+    status: number;
+    code?: string;
+    constructor(message: string, status: number, code?: string) {
+      super(message);
+      this.status = status;
+      this.code = code;
+    }
+  },
+}));
+vi.mock("@/lib/api", () => ({
+  api: { stream: (...args: unknown[]) => streamMock(...args) },
+  ApiError: MockApiError,
+}));
 
 function makeDeps() {
   let messages: ChatMessage[] = [];
@@ -112,5 +126,54 @@ describe("sendPrompt (streaming)", () => {
     await sendPrompt("hi", deps);
     expect(setChatSending).toHaveBeenNthCalledWith(1, true);
     expect(setChatSending).toHaveBeenLastCalledWith(false);
+  });
+
+  // Batch 3: Retry — a hard failure (not an SSE error event, but a rejected
+  // request) used to show one of two fixed strings with no way to resend the
+  // question without retyping it.
+  it("marks a hard failure with failed:true and the original text for Retry", async () => {
+    streamMock.mockImplementation(async () => {
+      throw new MockApiError("boom", 404);
+    });
+    const { deps, getMessages } = makeDeps();
+    await sendPrompt("what's the IRR?", deps);
+
+    const assistantMsg = getMessages().find((m) => m.role === "assistant");
+    expect(assistantMsg?.failed).toBe(true);
+    expect(assistantMsg?.retryText).toBe("what's the IRR?");
+  });
+
+  it("recognizes a real 5xx/429 ApiError as a server error, not just a specific string", async () => {
+    streamMock.mockImplementation(async () => {
+      throw new MockApiError("Internal Server Error", 500);
+    });
+    const { deps, getMessages } = makeDeps();
+    await sendPrompt("hi", deps);
+
+    const assistantMsg = getMessages().find((m) => m.role === "assistant");
+    expect(assistantMsg?.content).toBe("The server is temporarily unavailable. Please try again in a moment.");
+  });
+
+  // Batch 3: Stop — aborting should look like a clean stop, not an error.
+  it("clears streaming without an error bubble when the request is aborted (Stop)", async () => {
+    streamMock.mockImplementation(async (_path: unknown, _body: unknown, onEvent: (e: unknown) => void) => {
+      (onEvent as (e: { type: string; text: string }) => void)({ type: "text_delta", text: "partial" });
+      throw new DOMException("Aborted", "AbortError");
+    });
+    const { deps, getMessages } = makeDeps();
+    await sendPrompt("hi", deps);
+
+    const assistantMsg = getMessages().find((m) => m.role === "assistant");
+    expect(assistantMsg?.content).toBe("partial");
+    expect(assistantMsg?.streaming).toBe(false);
+    expect(assistantMsg?.failed).toBeUndefined();
+  });
+
+  it("passes an AbortSignal through to api.stream", async () => {
+    streamMock.mockImplementation(async () => {});
+    const { deps } = makeDeps();
+    await sendPrompt("hi", deps);
+    const [, , , opts] = streamMock.mock.calls[0];
+    expect((opts as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
   });
 });
