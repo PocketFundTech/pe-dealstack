@@ -22,7 +22,7 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 - **Docs:** `docs/API-KEYS.md` covers the standard and n8n setup.
 - **Tests:** `tests/api-keys.test.ts` (10) covers format, Bearer/X-API-Key, and rejection of unknown, revoked, expired, deactivated-owner and moved-org keys.
 
-**⏳ Founder to-do:** run `apps/api/api-keys-migration.sql` in Supabase (see `docs/PENDING-MIGRATIONS.md`). Until then the feature is inert.
+**Migration:** the founder ran `apps/api/api-keys-migration.sql` on 2026-10-02, and the check returned `"ApiKey"`. The feature goes live once this PR merges.
 
 ### Session 86 — October 2, 2026
 

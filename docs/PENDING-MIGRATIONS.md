@@ -1,12 +1,12 @@
-# ⏳ PENDING — `api-keys-migration.sql` (2026-10-02)
+# ✅ `api-keys-migration.sql` (2026-10-02) — RUN AND VERIFIED 2026-10-02
 
 Creates the `ApiKey` table behind **Settings → API Keys** (org API keys for n8n, Zapier and scripts; see `docs/API-KEYS.md`).
-Until it runs, the API Keys section shows "Couldn't load API keys…", key creation fails, and every `avise_sk_…` key is rejected with 401. Nothing else is affected.
+Founder ran it 2026-10-02; `to_regclass` returned `"ApiKey"`. (Before it ran, the API Keys section showed "Couldn't load API keys…", key creation fails, and every `avise_sk_…` key was rejected with 401.)
 Idempotent, safe to re-run.
 
 | # | Migration file | Adds | Run? |
 |---|---|---|---|
-| 1 | `apps/api/api-keys-migration.sql` | `ApiKey` table (hash-only storage, RLS on) | ⏳ |
+| 1 | `apps/api/api-keys-migration.sql` | `ApiKey` table (hash-only storage, RLS on) | ✅ 2026-10-02 |
 
 Verify:
 ```sql
