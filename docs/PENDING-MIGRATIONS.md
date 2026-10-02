@@ -1,12 +1,12 @@
-# ⏳ PENDING — `webhook-subscriptions-migration.sql` (2026-10-02)
+# ✅ `webhook-subscriptions-migration.sql` (2026-10-02) — RUN AND VERIFIED 2026-10-02
 
 Creates the `WebhookSubscription` table behind **Settings → Webhooks** and `/api/webhook-subscriptions` (outbound events for n8n, Zapier and Make).
-Until it runs, the Webhooks section shows "Couldn't load webhooks…" and no events are sent. Everything else works, because event emission skips quietly when the table is missing.
+Founder ran it 2026-10-02; `to_regclass` returned `"WebhookSubscription"`.
 Idempotent, safe to re-run.
 
 | # | Migration file | Adds | Run? |
 |---|---|---|---|
-| 1 | `apps/api/webhook-subscriptions-migration.sql` | `WebhookSubscription` table (RLS on) | ⏳ |
+| 1 | `apps/api/webhook-subscriptions-migration.sql` | `WebhookSubscription` table (RLS on) | ✅ 2026-10-02 |
 
 Verify:
 ```sql
