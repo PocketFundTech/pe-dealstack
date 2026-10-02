@@ -5,6 +5,23 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 88 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 17:07 IST
+
+#### Goal: public API docs that match the API-key launch, plus a repeatable endpoint test (PR #176).
+
+**1. /api-reference was wrong for integrators**
+- **Problem:** the public page predated API keys. It told integrators to use 1-hour Supabase JWTs and listed a 200/15 min rate limit (the real limit is 600). Its deal-create example had no `companyName`, so it returned a 400. Two endpoints it listed (`/api/memos/:id/generate`, `/api/users/team`) don't exist.
+- **Fix:** rewrote the page from the code. It now covers API-key auth and the key standard, n8n/Zapier/Make setup, corrected common endpoints with real request bodies, rate limits, an errors table, and a generated index of all 308 endpoints that accept a key (`endpoint-index.ts`).
+
+**2. Endpoint smoke test**
+- `apps/api/tools/api-key-smoke-test.mjs`: run `AVISE_API_KEY="$(pbpaste)" node apps/api/tools/api-key-smoke-test.mjs`.
+- It tests auth (including the rule that keys can't manage keys), ~45 read endpoints, and a full write lifecycle: company, deal, note, folder, PDF upload, the 4.5 MB limit, task, contact, duplicate 409, delete and restore. Every record it creates is removed again.
+- It writes `api-test-report.md` and never prints the key. Claude can't run it in this session (using a key is blocked as credential leakage), so the founder runs it.
+
+---
+
 ### Session 87 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 14:20 IST
