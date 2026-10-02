@@ -22,6 +22,7 @@ import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/inde
 import { maybeReactivateAfterExtraction } from '../services/agents/dealReactivation/index.js';
 import { isFinancialDoc, buildResultWarnings } from './financials-extraction-utils.js';
 import { publicErrorMessage } from '../utils/aiErrors.js';
+import { setDocExtraction, getRunProgress } from '../services/extractionProgress.js';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -91,6 +92,8 @@ const extractSchema = z.object({
   // Multi-doc continuation: restrict the batch to these documents (the
   // `pendingDocumentIds` a previous call couldn't reach in its time budget).
   documentIds: z.array(z.string().uuid()).max(200).optional(),
+  // Client-generated id for live per-document progress (QA #12).
+  runId: z.string().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/).optional(),
 });
 
 // Per-doc helper: runs slot acquire/release + runFinancialAgent for one doc
@@ -181,7 +184,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
-    const { documentId, documentType, mode, documentIds } = extractSchema.parse(req.body);
+    const { documentId, documentType, mode, documentIds, runId } = extractSchema.parse(req.body);
     const requestStartedAt = Date.now();
 
     // Resolve target documents based on mode + documentId precedence.
@@ -399,6 +402,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
       // (pendingDocumentIds). Already-extracted docs hit the extraction
       // cache on a re-run, so a continuation doesn't redo work.
       const requestDeadline = requestStartedAt + REQUEST_BUDGET_MS;
+      await setDocExtraction(docs.map((d) => d.id), runId, 'queued');
       const pending = (doc: (typeof docs)[number]): PerDocResult => ({
         id: doc.id, name: doc.name ?? 'document', status: 'pending',
         statementsStored: 0, periodsStored: 0, overallConfidence: null, hasConflicts: false,
@@ -406,8 +410,16 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
       });
       const settled = await mapWithConcurrencyLimit(docs, MAX_CONCURRENT_PER_ORG, async (doc) => {
         const startBy = requestDeadline - MIN_DOC_START_BUDGET_MS;
-        if (Date.now() > startBy) return pending(doc);
+        if (Date.now() > startBy) {
+          await setDocExtraction([doc.id], runId, 'pending');
+          return pending(doc);
+        }
+        await setDocExtraction([doc.id], runId, 'running');
         const r = await withDocTimeout(doc, Math.min(PER_DOC_BUDGET_MS, requestDeadline - Date.now()), startBy);
+        await setDocExtraction([doc.id], runId, r.status === 'completed' ? 'done' : r.status === 'pending' ? 'pending' : 'failed', {
+          periodsStored: r.periodsStored,
+          ...(r.status === 'failed' && r.error ? { error: r.error.slice(0, 200) } : {}),
+        });
         return r;
       });
       for (let i = 0; i < settled.length; i++) {
@@ -510,6 +522,23 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
     const status = err.message?.includes('Could not') || err.message?.includes('appears empty') ? 422 : 500;
     const pub = publicErrorMessage(err, 'Financial extraction failed');
     res.status(pub.statusCode ?? status).json({ error: pub.message, code: pub.code });
+  }
+});
+
+// ─── GET /api/deals/:dealId/financials/extraction-progress?runId= ──
+// Live per-document progress of an "Extract all" run (QA #12). The page
+// polls this while its extract request is in flight.
+router.get('/deals/:dealId/financials/extraction-progress', async (req, res) => {
+  try {
+    const { dealId } = req.params;
+    const runId = String(req.query.runId ?? '');
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(runId)) return res.status(400).json({ error: 'runId is required' });
+    const orgId = getOrgId(req);
+    if (!(await verifyDealAccess(dealId, orgId))) return res.status(404).json({ error: 'Deal not found' });
+    res.json(await getRunProgress(dealId, runId));
+  } catch (err: any) {
+    log.error('extraction progress error', err);
+    res.status(500).json({ error: 'Failed to read extraction progress' });
   }
 });
 

@@ -12,6 +12,18 @@
 import type { ExtractionResult } from "./deal-financials-modal";
 
 type Post = <T>(path: string, body: unknown, opts?: { signal?: AbortSignal }) => Promise<T>;
+type Get = <T>(path: string) => Promise<T>;
+
+/** Live per-document progress from GET …/financials/extraction-progress (QA #12). */
+export interface LiveProgress {
+  available: boolean;
+  total: number;
+  done: number;
+  running: string[];
+}
+
+/** How often to poll live progress while a round is in flight. */
+const PROGRESS_POLL_MS = 2_000;
 
 type RoundResult = ExtractionResult & {
   pendingDocumentIds?: string[];
@@ -32,8 +44,18 @@ const MAX_ROUNDS = 8;
 export async function runExtractAll(
   post: Post,
   dealId: string,
-  opts: { timeoutMs: number; onProgress?: (p: ExtractAllProgress) => void },
+  opts: {
+    timeoutMs: number;
+    onProgress?: (p: ExtractAllProgress) => void;
+    /** With `get`, polls per-document progress during each round. */
+    get?: Get;
+    onLiveProgress?: (p: LiveProgress) => void;
+    /** Overridable for tests. */
+    runId?: string;
+  },
 ): Promise<RoundResult> {
+  // One id for the whole run (all rounds) so progress spans continuations.
+  const runId = opts.runId ?? `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const merged: RoundResult = { documentsProcessed: [], result: { periodsStored: 0, statementsStored: 0, documentsUsed: 0, documentsFailed: 0, warnings: [], hasConflicts: false } };
   let pending: string[] | undefined;
   let total = 0;
@@ -41,15 +63,23 @@ export async function runExtractAll(
   for (let round = 1; round <= MAX_ROUNDS; round++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+    const poll = opts.get && opts.onLiveProgress
+      ? setInterval(() => {
+          opts.get!<LiveProgress>(`/deals/${dealId}/financials/extraction-progress?runId=${runId}`)
+            .then((p) => { if (p?.available && p.total > 0) opts.onLiveProgress!(p); })
+            .catch(() => { /* progress is best-effort; the round result still arrives */ });
+        }, PROGRESS_POLL_MS)
+      : null;
     let r: RoundResult;
     try {
       r = await post<RoundResult>(
         `/deals/${dealId}/financials/extract`,
-        pending ? { mode: "all_financials", documentIds: pending } : { mode: "all_financials" },
+        pending ? { mode: "all_financials", documentIds: pending, runId } : { mode: "all_financials", runId },
         { signal: controller.signal },
       );
     } finally {
       clearTimeout(timer);
+      if (poll) clearInterval(poll);
     }
 
     const finished = (r.documentsProcessed ?? []).filter((d) => d.status !== "pending");
