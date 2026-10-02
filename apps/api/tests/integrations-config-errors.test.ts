@@ -69,3 +69,16 @@ describe('Granola key check', () => {
     await expect(validateKey('k')).rejects.toThrow(/Business or Enterprise/);
   });
 });
+
+describe('Microsoft OAuth config (Outlook / Microsoft 365)', () => {
+  it('missing MS_CLIENT_ID → "Microsoft sign-in isn\'t set up", not a generic 500', async () => {
+    delete process.env.MS_CLIENT_ID;
+    const { buildMicrosoftAuthUrl } = await import('../src/integrations/microsoft/client.js');
+    expect(() => buildMicrosoftAuthUrl({ redirectUri: 'x', state: 's', scopes: [] }))
+      .toThrow("Microsoft sign-in isn't set up on this server yet");
+    try { buildMicrosoftAuthUrl({ redirectUri: 'x', state: 's', scopes: [] }); } catch (e: any) {
+      expect(e.statusCode).toBe(503);
+      expect(e.code).toBe('INTEGRATION_NOT_CONFIGURED');
+    }
+  });
+});

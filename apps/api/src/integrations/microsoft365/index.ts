@@ -22,14 +22,14 @@ import {
 } from '../microsoft/client.js';
 import { MICROSOFT365_SCOPES, listEventsBetween } from './client.js';
 import { calendarEventToIntegrationActivity, extractAttendeeEmails } from './mapper.js';
+import { appBaseUrl } from '../_platform/errors.js';
 
 const TOKEN_REFRESH_SAFETY_MS = 60 * 1000;
 const WINDOW_BACK_DAYS = 30;
 const WINDOW_FORWARD_DAYS = 30;
 
 function redirectUri(): string {
-  const base = process.env.APP_URL ?? 'http://localhost:3001';
-  return `${base}/api/integrations/oauth/microsoft365/callback`;
+  return `${appBaseUrl()}/api/integrations/oauth/microsoft365/callback`;
 }
 
 async function ensureFreshAccessToken(integration: Integration): Promise<string> {
