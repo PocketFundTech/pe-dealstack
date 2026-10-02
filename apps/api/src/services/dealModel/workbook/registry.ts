@@ -27,7 +27,8 @@ export const SCALAR_KEYS = [
   'entryMultiple', 'transactionFeesPct',
   'debtQuantum', 'interestRate', 'amortPctPerYear',
   'debt2Quantum', 'debt2InterestRate', 'debt2AmortPct',
-  'cashSweepPct', 'minCash', 'taxRate', 'exitMultiple', 'exitYear',
+  'cashSweepPct', 'minCash', 'revolverSize', 'revolverRate', 'revolverFeePct',
+  'taxRate', 'exitMultiple', 'exitYear',
   'wacc', 'dscrTarget',
 ] as const;
 export type ScalarKey = (typeof SCALAR_KEYS)[number];

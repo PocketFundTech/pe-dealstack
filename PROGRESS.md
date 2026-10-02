@@ -5,6 +5,25 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 97 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:11 IST
+
+#### Goal: fix plan Phase H2 — a revolving credit facility in the model.
+
+- **Revolver (off by default).** New assumptions `revolverSize` (money; 0 = none), `revolverRate` (% on drawn, default 8) and `revolverFeePct` (undrawn fee, default 0.5). Saved models load with it off and are unchanged.
+- **Mechanics** (`debtScheduler` in `@ai-crm/shared` and `workbook/debtSchedule.ts`, which mirror each other):
+  - The revolver is undrawn at entry.
+  - Each year it's repaid first from cash above the minimum, before the sweep, and drawn to cover a shortfall below the minimum, up to the commitment.
+  - Interest is the opening drawn balance × rate, plus the undrawn commitment × fee. Both use the opening balance, so there's no circular reference (`findCycle` test).
+  - Total interest and closing debt include it, so exit debt, DSCR, the Scenarios blocks and the Sensitivity grid follow automatically.
+- **Panel:** revolver commitment / rate / fee inputs and a "Revolver drawn" row once sized. The Notes sheet describes it.
+- **Parity:** a stressed case (heavy debt, negative early FCF) with the revolver drawn; the workbook and live preview agree on every year's draw, balance, cash and the returns.
+
+Tests: API 2470 pass, web 525 pass.
+
+---
+
 ### Session 96 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 03:06 IST

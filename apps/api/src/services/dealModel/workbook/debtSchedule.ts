@@ -13,7 +13,12 @@
 //   senior sweep = MIN(senior after mandatory, cash swept); the second
 //   tranche takes what is left. Closing cash = opening cash + levered FCF −
 //   mandatory − sweeps; opening cash in Y1 is the minimum cash funded at entry.
-// Mirrors debtScheduler in @ai-crm/shared.
+// Revolver (fix plan H2; commitment 0 = none, every row 0): undrawn at entry;
+//   interest = opening drawn × rate + (commitment − opening drawn) × fee —
+//   opening balance only, so no circular reference; repaid first from cash
+//   above the minimum (before the sweep); drawn to cover a shortfall below
+//   the minimum, up to the undrawn commitment.
+// Mirrors debtScheduler in @ai-crm/shared (numbers checked by deal-model-parity.test.ts).
 
 import type ExcelJS from 'exceljs';
 import type { ScalarKey } from './registry.js';
@@ -23,8 +28,9 @@ export const DEBT_KEYS = [
   'lfcf', 'cashOpen',
   'open1', 'mand1', 'int1',
   'open2', 'mand2', 'int2',
-  'interest', 'available', 'sweep1', 'sweep2',
-  'close1', 'close2', 'closing', 'cashClose',
+  'openR', 'intR',
+  'interest', 'repayR', 'drawR', 'available', 'sweep1', 'sweep2',
+  'close1', 'close2', 'closeR', 'closing', 'cashClose',
 ] as const;
 export type DebtKey = (typeof DEBT_KEYS)[number];
 
@@ -37,13 +43,18 @@ export const DEBT_LABELS: Record<DebtKey, string> = {
   open2: 'Second tranche — opening balance',
   mand2: 'Second tranche — mandatory amortisation',
   int2: 'Second tranche — interest (average balance)',
+  openR: 'Revolver — opening drawn',
+  intR: 'Revolver — interest on drawn + undrawn fee',
   interest: 'Total interest',
-  available: 'Cash swept (cash above minimum × sweep %)',
+  repayR: 'Revolver — repaid from cash above minimum',
+  drawR: 'Revolver — drawn to hold minimum cash',
+  available: 'Cash swept (cash above minimum, after revolver, × sweep %)',
   sweep1: 'Senior — cash sweep',
   sweep2: 'Second tranche — cash sweep',
   close1: 'Senior — closing balance',
   close2: 'Second tranche — closing balance',
-  closing: 'Total debt — closing',
+  closeR: 'Revolver — closing drawn',
+  closing: 'Total debt — closing (incl. revolver)',
   cashClose: 'Closing cash',
 };
 
@@ -67,6 +78,8 @@ export function debtFormula(k: DebtKey, y: number, d: DebtBlock): string {
   const p = colLetter(d.yearCol(y - 1));
   const r = (key: DebtKey) => `${c}${d.rows[key]}`;
   const S = d.scalar;
+  // Cash before the revolver and the sweep.
+  const pre = `${r('cashOpen')}+${r('lfcf')}-${r('mand1')}-${r('mand2')}`;
   switch (k) {
     case 'lfcf': return d.lfcf(y);
     case 'cashOpen': return y === 0 ? d.minCash : `${p}${d.rows.cashClose}`;
@@ -76,15 +89,20 @@ export function debtFormula(k: DebtKey, y: number, d: DebtBlock): string {
     case 'open2': return y === 0 ? d.second : `${p}${d.rows.close2}`;
     case 'mand2': return `MIN(${r('open2')},${d.second}*${S('debt2AmortPct')})`;
     case 'int2': return `(${r('open2')}-${r('mand2')}/2)*${S('debt2InterestRate')}`;
-    case 'interest': return `${r('int1')}+${r('int2')}`;
+    case 'openR': return y === 0 ? '0' : `${p}${d.rows.closeR}`;
+    case 'intR': return `${r('openR')}*${S('revolverRate')}+(${S('revolverSize')}-${r('openR')})*${S('revolverFeePct')}`;
+    case 'interest': return `${r('int1')}+${r('int2')}+${r('intR')}`;
+    case 'repayR': return `MIN(${r('openR')},MAX(0,${pre}-${d.minCash}))`;
+    case 'drawR': return `MIN(${S('revolverSize')}-${r('openR')},MAX(0,${d.minCash}-(${pre})))`;
     case 'available':
-      return `MAX(0,${r('cashOpen')}+${r('lfcf')}-${r('mand1')}-${r('mand2')}-${d.minCash})*${S('cashSweepPct')}`;
+      return `MAX(0,${pre}-${r('repayR')}-${d.minCash})*${S('cashSweepPct')}`;
     case 'sweep1': return `MIN(${r('open1')}-${r('mand1')},${r('available')})`;
     case 'sweep2': return `MIN(${r('open2')}-${r('mand2')},${r('available')}-${r('sweep1')})`;
     case 'close1': return `${r('open1')}-${r('mand1')}-${r('sweep1')}`;
     case 'close2': return `${r('open2')}-${r('mand2')}-${r('sweep2')}`;
-    case 'closing': return `${r('close1')}+${r('close2')}`;
-    case 'cashClose': return `${r('cashOpen')}+${r('lfcf')}-${r('mand1')}-${r('mand2')}-${r('sweep1')}-${r('sweep2')}`;
+    case 'closeR': return `${r('openR')}+${r('drawR')}-${r('repayR')}`;
+    case 'closing': return `${r('close1')}+${r('close2')}+${r('closeR')}`;
+    case 'cashClose': return `${pre}+${r('drawR')}-${r('repayR')}-${r('sweep1')}-${r('sweep2')}`;
   }
 }
 

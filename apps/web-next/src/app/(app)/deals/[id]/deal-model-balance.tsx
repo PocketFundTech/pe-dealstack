@@ -130,6 +130,7 @@ export function BalanceSection({ assumptions: a, projection, opening, currency, 
             {capexKeys.map(seriesRow)}
             {outputRow("Capex", projection?.capex, "balance-out-capex")}
             {outputRow("Levered FCF (after interest and tax)", projection?.leveredFcf, "balance-out-lfcf")}
+            {scalar("revolverSize") > 0 && outputRow("Revolver drawn (closing)", projection?.debtSchedule.map((d) => d.closeR), "balance-out-revolver")}
             {outputRow("Closing debt", projection?.debtClosing, "balance-out-debt")}
             {outputRow("Closing cash", projection?.cashClosing, "balance-out-cash")}
           </tbody>
@@ -160,9 +161,16 @@ export function BalanceSection({ assumptions: a, projection, opening, currency, 
         <label className="flex items-center gap-1.5">Cash sweep {numberInput("cashSweepPct", "Cash sweep", 5)} <span className="text-xs text-text-muted">% of cash above minimum</span></label>
         <label className="flex items-center gap-1.5">Minimum cash {numberInput("minCash", "Minimum cash", 0.1)} <span className="text-xs text-text-muted">m</span></label>
       </div>
+      <div className="mt-2 flex flex-wrap gap-5 text-sm text-text-secondary">
+        <label className="flex items-center gap-1.5">Revolver {numberInput("revolverSize", "Revolver commitment", 0.5)} <span className="text-xs text-text-muted">m (0 = none)</span></label>
+        <label className="flex items-center gap-1.5">Drawn rate {numberInput("revolverRate", "Revolver interest", 0.25)} <span className="text-xs text-text-muted">%</span></label>
+        <label className="flex items-center gap-1.5">Undrawn fee {numberInput("revolverFeePct", "Revolver undrawn fee", 0.1)} <span className="text-xs text-text-muted">%</span></label>
+      </div>
       <p className="mt-2 text-xs text-text-muted">
         Interest is on the average balance after scheduled amortisation; the sweep repays the senior tranche first,
-        from levered free cash flow above the minimum cash. Entry is cash-free, debt-free.
+        from levered free cash flow above the minimum cash. Entry is cash-free, debt-free. A revolver, if sized, is
+        drawn only to keep cash at the minimum and repaid first from spare cash; its interest and undrawn fee are on
+        the opening balance.
       </p>
     </div>
   );

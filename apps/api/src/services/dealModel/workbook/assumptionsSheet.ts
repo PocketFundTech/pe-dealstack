@@ -32,6 +32,9 @@ export function scalarCell(a: ResolvedAssumptions, key: ScalarKey): [string, num
     case 'debt2AmortPct': return ['Second tranche amortisation (% of original / yr)', pct(a.debt2AmortPct), FMT_PCT];
     case 'cashSweepPct': return ['Cash sweep (% of cash above minimum)', pct(a.cashSweepPct), FMT_PCT];
     case 'minCash': return [`Minimum cash (${money})`, a.minCash, FMT_MONEY];
+    case 'revolverSize': return [`Revolver commitment (${money}; 0 = none)`, a.revolverSize, FMT_MONEY];
+    case 'revolverRate': return ['Revolver interest rate (on drawn)', pct(a.revolverRate), FMT_PCT];
+    case 'revolverFeePct': return ['Revolver undrawn fee', pct(a.revolverFeePct), FMT_PCT];
     case 'taxRate': return ['Tax rate', pct(a.taxRate), FMT_PCT];
     case 'exitMultiple': return ['Exit multiple', a.exitMultiple, FMT_MULT];
     case 'exitYear': return ['Exit year', a.exitYear, '0'];

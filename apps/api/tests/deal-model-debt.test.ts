@@ -100,7 +100,8 @@ describe('Returns — sources & uses, two tranches, levered sweep, cash', () => 
     expect(f(r().getCell(R.cashOpen, 2).value)).toBe(`$B$${R.minCash}`);
     expect(f(r().getCell(R.cashOpen, 3).value)).toBe(`B${R.cashClose}`);
     expect(f(r().getCell(R.available, 2).value)).toBe(
-      `MAX(0,B${R.cashOpen}+B${R.lfcf}-B${R.mand1}-B${R.mand2}-$B$${R.minCash})*${reg.scalar('cashSweepPct')}`,
+      // The revolver (fix plan H2) is repaid from cash above the minimum before the sweep.
+      `MAX(0,B${R.cashOpen}+B${R.lfcf}-B${R.mand1}-B${R.mand2}-B${R.repayR}-$B$${R.minCash})*${reg.scalar('cashSweepPct')}`,
     );
     expect(f(r().getCell(R.sweep1, 2).value)).toBe(`MIN(B${R.open1}-B${R.mand1},B${R.available})`);
     expect(f(r().getCell(R.sweep2, 2).value)).toBe(`MIN(B${R.open2}-B${R.mand2},B${R.available}-B${R.sweep1})`);

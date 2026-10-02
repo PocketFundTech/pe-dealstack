@@ -79,6 +79,10 @@ export interface CalcAssumptions extends CashFlowAssumptionFields {
   cashSweepPct: number;
   /** Minimum cash balance (millions), funded at entry. */
   minCash?: number;
+  /** Revolving credit facility (fix plan H2): commitment in millions (0 / absent = none), drawn rate %, undrawn fee %. */
+  revolverSize?: number;
+  revolverRate?: number;
+  revolverFeePct?: number;
   taxRate: number;
   exitMultiple: number;
   exitYear: number;
@@ -189,6 +193,7 @@ export function projectModel(
     senior: seniorDebt, seniorRate: a.interestRate, seniorAmort: a.amortPctPerYear,
     second: secondDebt, secondRate: a.debt2InterestRate ?? 0, secondAmort: a.debt2AmortPct ?? 0,
     minCash, sweepPct: a.cashSweepPct,
+    revolver: a.revolverSize ?? 0, revolverRate: a.revolverRate ?? 0, revolverFee: a.revolverFeePct ?? 0,
   }, lfcfAt);
 
   const years = Array.from({ length: n }, (_, y) => y);
