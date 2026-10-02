@@ -32,7 +32,10 @@ function routeSegments(dir: string): string[] {
 describe("internal links", () => {
   it("only point at routes that exist", () => {
     const known = new Set(routeSegments(APP));
-    const link = /(?:href=|push\(|replace\()["'`](\/[a-zA-Z0-9_-]+)/g;
+    // Includes "." so a static file under /public (e.g. /openapi.json) keeps
+    // its extension — without it the capture stopped at "/openapi" and the
+    // existsSync(PUBLIC, segment) check below could never find the real file.
+    const link = /(?:href=|push\(|replace\()["'`](\/[a-zA-Z0-9_.-]+)/g;
     const broken: string[] = [];
     for (const file of files(SRC)) {
       for (const m of readFileSync(file, "utf8").matchAll(link)) {
