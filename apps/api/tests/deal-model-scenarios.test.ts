@@ -5,12 +5,12 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { summariseCase } from '@ai-crm/shared';
+import { summariseCase, projectModel } from '@ai-crm/shared';
 import { normaliseStatements, deriveDefaults } from '../src/services/dealModel/assumptions.js';
 import { buildLineCatalogue, baseColumnValues } from '../src/services/dealModel/lineCatalogue.js';
 import { selectBasePeriod } from '../src/services/dealModel/basePeriod.js';
 import {
-  parseCase, seedScenario, resolveCases, SCENARIO_DELTAS,
+  parseCase, seedScenario, seedScenarioDetailed, scenarioSeedNotes, resolveCases, SCENARIO_DELTAS,
 } from '../src/services/dealModel/scenarios.js';
 import { buildModelWorkbook, buildModelLayout, scenarioLayout, SHEETS, SCALAR_KEYS, RETURNS_ROWS } from '../src/services/dealModel/workbook.js';
 import { SRM_STATEMENTS, SRM_CONTEXT } from './helpers/srmModelFixture.js';
@@ -49,6 +49,43 @@ describe('seeding Low / High from Base', () => {
     expect(high.exitMultiple).toBe(base.exitMultiple + 1);
     // Base untouched.
     expect(base.lineDrivers.revenue_sales.values[0]).toBe(30);
+  });
+
+  // Fix plan G11: with cost lines set to Fixed amounts, the ±2pp used to be
+  // silently skipped — three cases with different headers, same EBITDA.
+  const allFixed = () => {
+    const a = structuredClone(base);
+    for (const k of costLines) {
+      a.lineDrivers[k] = { method: 'FIXED', values: a.lineDrivers[k].values.map((_, y) => (baseValues[k] ?? 1) * (1 + y * 0.05)) };
+    }
+    return a;
+  };
+  const marginOf = (a: typeof base) => {
+    const p = projectModel(cat.lines, baseValues, a);
+    return p.ebitda.map((e, y) => (e / p.revenue[y]) * 100);
+  };
+
+  it('applies the margin change through Fixed cost lines when there are no % of revenue costs (G11)', () => {
+    const fixedBase = allFixed();
+    const { assumptions: high, unappliedPp } = seedScenarioDetailed(fixedBase, cat.lines, 'High', baseValues);
+    expect(unappliedPp.every((u) => u < 0.01)).toBe(true);
+    // Against High's own revenue (growth +3pp) with Base's fixed costs, costs are 2pp of revenue lower.
+    const growthOnly = structuredClone(high);
+    for (const k of costLines) growthOnly.lineDrivers[k] = fixedBase.lineDrivers[k];
+    const withFixed = marginOf(growthOnly);
+    marginOf(high).forEach((m, y) => expect(m - withFixed[y]).toBeCloseTo(2, 3));
+  });
+
+  it('says how much of the margin change could not be applied', () => {
+    const tiny = allFixed();
+    for (const k of costLines) tiny.lineDrivers[k] = { method: 'FIXED', values: tiny.lineDrivers[k].values.map(() => 0.01) };
+    const notes = scenarioSeedNotes({}, tiny, cat.lines, baseValues);
+    expect(notes.join(' ')).toContain('High case');
+    expect(notes.join(' ')).toContain('could not be applied in full');
+    expect(notes.join(' ')).not.toContain('Low case'); // adding cost always works
+    expect(scenarioSeedNotes({}, base, cat.lines, baseValues)).toEqual([]);
+    // A saved case is the user's own — nothing to explain.
+    expect(scenarioSeedNotes({ Low: {}, High: {} }, tiny, cat.lines, baseValues)).toEqual([]);
   });
 
   it('never seeds an exit multiple below 0.5x', () => {

@@ -112,7 +112,7 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
     extra: [
       `Scenarios: switch the Active case on the Assumptions sheet (Low / Base / High) and the whole model follows; the Scenarios sheet shows all three at once. ` +
       `Unsaved Low / High cases were seeded from Base: revenue growth ${SCENARIO_DELTAS.Low.revenueGrowthPp}pp / +${SCENARIO_DELTAS.High.revenueGrowthPp}pp, ` +
-      `EBITDA margin ${SCENARIO_DELTAS.Low.ebitdaMarginPp}pp / +${SCENARIO_DELTAS.High.ebitdaMarginPp}pp (through the % of revenue cost lines), ` +
+      `EBITDA margin ${SCENARIO_DELTAS.Low.ebitdaMarginPp}pp / +${SCENARIO_DELTAS.High.ebitdaMarginPp}pp (through the cost lines — a separate note says so if a case's change couldn't be applied in full), ` +
       `exit multiple ${SCENARIO_DELTAS.Low.exitMultipleX}x / +${SCENARIO_DELTAS.High.exitMultipleX}x; working capital, capex and debt start equal to Base. Every case value is an editable input.`,
       ...balanceNotes(assumptions, opening),
     ] });

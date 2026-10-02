@@ -5,6 +5,25 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 94 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 00:16 IST
+
+#### Goal: post-SRM financial hardening, PR D1 — scenarios, source names, model units (fix plan Phase G, G11, G12, G15).
+
+- **G11 · Low / High cases could match Base.**
+  - *Problem:* the ±2pp EBITDA-margin delta only went through % of revenue cost lines, so with Fixed cost lines it did nothing. The three cases showed the same EBITDA while the Notes said "±2pp".
+  - *Fix:* the remainder now goes through the Fixed cost lines as money (projected revenue × pp). Anything still not applied is named on the Build model panel and the Notes sheet (`seedScenarioDetailed` / `scenarioSeedNotes`).
+- **G12 · "Summary" treated as a valuation model.** "Financial Summary" / "FY24 Summary P&L" files and tabs were classed as model-derived: processed last and losing to weaker sources. File names no longer use "summary" as a signal; a "summary" tab is capped only when it doesn't name a statement.
+- **G15 · Model units.**
+  - A saved `unitScale: THOUSANDS` relabelled every caption 1000× wrong; the model is now always in millions.
+  - `Deal.ebitda` is read as whole dollars when either deal field is above 100,000.
+  - An implied deal multiple outside 1–50× is ignored instead of becoming the default.
+
+Tests: API 2449 pass, web 524 pass.
+
+---
+
 ### Session 93 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 21:11 IST

@@ -37,7 +37,7 @@ import { buildModelWorkbook } from '../services/dealModel/workbook.js';
 import { selectBasePeriod } from '../services/dealModel/basePeriod.js';
 import { buildLineCatalogue, baseColumnValues, evaluateLine } from '../services/dealModel/lineCatalogue.js';
 import {
-  CASE_ROW_NAMES, MODEL_CASES, SCENARIO_DELTAS, parseCase, resolveCases, type CaseSet, type ModelCase,
+  CASE_ROW_NAMES, MODEL_CASES, SCENARIO_DELTAS, parseCase, resolveCases, scenarioSeedNotes, type CaseSet, type ModelCase,
 } from '../services/dealModel/scenarios.js';
 import { activeBalanceKeys, summariseCase } from '@ai-crm/shared';
 import { openingBalances } from '../services/dealModel/balanceItems.js';
@@ -61,22 +61,36 @@ function extractCompanyName(company: unknown): string | null {
   return null;
 }
 
-/** Implied entry multiple = EV / EBITDA, from the columns Deal really has. */
-function impliedEvMultiple(dealSize: unknown, ebitda: unknown): number | null {
+/** A believable EV / EBITDA multiple; outside it the two fields are in different units or one is wrong. */
+const MULTIPLE_RANGE = { min: 1, max: 50 } as const;
+
+/**
+ * Implied entry multiple = EV / EBITDA, from the columns Deal really has.
+ * Null when it's not a believable multiple (fix plan G15): deal size in
+ * millions over EBITDA in whole dollars gave 0.0001x, which then became the
+ * default entry multiple.
+ */
+export function impliedEvMultiple(dealSize: unknown, ebitda: unknown): number | null {
   if (typeof dealSize !== 'number' || typeof ebitda !== 'number') return null;
   if (!Number.isFinite(dealSize) || !Number.isFinite(ebitda) || ebitda <= 0) return null;
   const multiple = dealSize / ebitda;
-  return Number.isFinite(multiple) && multiple > 0 ? Math.round(multiple * 100) / 100 : null;
+  if (!Number.isFinite(multiple) || multiple < MULTIPLE_RANGE.min || multiple > MULTIPLE_RANGE.max) return null;
+  return Math.round(multiple * 100) / 100;
 }
+
+/** Above this a "millions" figure is really whole dollars (no deal is $100B+). */
+const WHOLE_DOLLARS_ABOVE = 100_000;
 
 /**
  * Deal.ebitda is stored in millions (AGENTS.md), but hand-entered deals
- * sometimes hold whole dollars — anything above 100,000 "millions" is
- * clearly that, so convert rather than seed a trillion-dollar entry EV.
+ * sometimes hold whole dollars. Either field above 100,000 means the record
+ * is in whole dollars — EBITDA 50,000 next to a deal size of 400,000 is
+ * $50K, not $50B.
  */
-function dealEbitdaMillions(ebitda: unknown): number | null {
+export function dealEbitdaMillions(ebitda: unknown, dealSize?: unknown): number | null {
   if (typeof ebitda !== 'number' || !Number.isFinite(ebitda) || ebitda <= 0) return null;
-  return ebitda > 100_000 ? ebitda / 1_000_000 : ebitda;
+  const wholeDollars = ebitda > WHOLE_DOLLARS_ABOVE || (typeof dealSize === 'number' && dealSize > WHOLE_DOLLARS_ABOVE);
+  return wholeDollars ? ebitda / 1_000_000 : ebitda;
 }
 
 /**
@@ -172,7 +186,7 @@ async function loadModelInputs(dealId: string, orgId: string): Promise<LoadedDea
       companyName: extractCompanyName(row.company),
       currency: (row.currency as string | null) ?? null,
       evMultiple: impliedEvMultiple(row.dealSize, row.ebitda),
-      ebitdaMillions: dealEbitdaMillions(row.ebitda),
+      ebitdaMillions: dealEbitdaMillions(row.ebitda, row.dealSize),
     },
     history: rows,
     currency,
@@ -324,7 +338,7 @@ router.get('/:dealId/model', async (req, res) => {
     const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
     const entry = entryContext(inputs, catalogue);
-    const cases = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue);
+    const cases = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue, entry.baseCol.values);
 
     res.json({
       case: which,
@@ -334,7 +348,7 @@ router.get('/:dealId/model', async (req, res) => {
       seededFromBase: which !== 'Base' && !saved[which],
       history: inputs.history,
       ...modelStructure(inputs, catalogue, entry),
-      warnings: seedWarnings(entry.seed, saved),
+      warnings: [...seedWarnings(entry.seed, saved), ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values)],
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -358,7 +372,7 @@ router.get('/:dealId/model/cases', async (req, res) => {
     const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
     const entry = entryContext(inputs, catalogue);
-    const cases = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue);
+    const cases = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue, entry.baseCol.values);
     const structure = modelStructure(inputs, catalogue, entry);
 
     res.json({
@@ -373,7 +387,7 @@ router.get('/:dealId/model/cases', async (req, res) => {
       deltas: SCENARIO_DELTAS,
       history: inputs.history,
       ...structure,
-      warnings: seedWarnings(entry.seed, saved),
+      warnings: [...seedWarnings(entry.seed, saved), ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values)],
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -446,7 +460,7 @@ router.post('/:dealId/model/export', async (req, res) => {
     const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
     const entry = entryContext(inputs, catalogue);
-    const resolved = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue);
+    const resolved = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue, entry.baseCol.values);
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
     const cases: CaseSet = { ...resolved };
     let activeCase = which;
@@ -478,6 +492,7 @@ router.post('/:dealId/model/export', async (req, res) => {
           // The EBITDA gap itself is already a CHECK note (coverNotes); add
           // why the default multiple isn't the deal record's.
           ...seedWarnings(entry.seed, saved).slice(1),
+          ...scenarioSeedNotes(saved, resolved.Base, catalogue.lines, entry.baseCol.values),
         ],
       },
     });
