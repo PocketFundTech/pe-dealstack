@@ -153,3 +153,17 @@ describe('runDeepPass source selection (B1 + A4)', () => {
     expect(active()[0].period).toBe('FY2024 (Jan - Dec 2024)');
   });
 });
+
+describe('restatements beat the figures they correct (G14)', () => {
+  it('ranks a restated period or document above an original of equal kind', async () => {
+    const { compareSources } = await import('../src/services/financialSourceSelection.js');
+    const base = { sourceKind: 'source_statement' as const, statementType: 'INCOME_STATEMENT' as const };
+    const original = { ...base, doc: { name: 'FS 2023.xlsx', type: 'FINANCIALS' }, lineItems: { revenue: 20, cogs: 12, sga: 3, net_income: 2 }, period: 'FY2023' };
+    const restatedLabel = { ...base, doc: { name: 'Audit.pdf', type: 'OTHER' }, lineItems: { revenue: 19.4 }, period: 'FY2023 (Restated)' };
+    const restatedDoc = { ...base, doc: { name: 'Restated_FS_2023.pdf', type: 'OTHER' }, lineItems: { revenue: 19.4 }, period: 'FY2023' };
+    expect(compareSources(restatedLabel as never, original as never)).toBeGreaterThan(0);
+    expect(compareSources(restatedDoc as never, original as never)).toBeGreaterThan(0);
+    // Reported still beats model-derived, restated or not.
+    expect(compareSources({ ...restatedLabel, sourceKind: 'model_derived' } as never, original as never)).toBeLessThan(0);
+  });
+});

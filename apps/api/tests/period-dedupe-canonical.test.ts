@@ -40,3 +40,14 @@ describe('dedupePeriods — canonical period keys', () => {
     expect(out).toHaveLength(1);
   });
 });
+
+describe('restatements (G14)', () => {
+  it('within one document, the restated column wins over the original', () => {
+    const out = dedupePeriods([
+      p('FY2023', { revenue: 20, ebitda: 2.5 }, 95),
+      p('FY2023 (Restated)', { revenue: 19.4, ebitda: 2.1 }, 80),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].lineItems).toMatchObject({ revenue: 19.4, ebitda: 2.1 });
+  });
+});

@@ -28,3 +28,56 @@ describe('deal-reading prompts handle Indian table scales', () => {
     }
   });
 });
+
+/** A minimal model reply in the deal reader's shape. */
+const reply = (over: Record<string, unknown>) => ({
+  companyName: { value: 'Northwind', confidence: 90, source: null },
+  industry: { value: 'Logistics', confidence: 90, source: null },
+  description: { value: 'Cold chain.', confidence: 90 },
+  currency: 'INR',
+  revenue: { value: 251.3, confidence: 90, source: 'Revenue 251.3' },
+  ebitda: { value: 30.2, confidence: 90, source: 'EBITDA 30.2' },
+  ebitdaMargin: { value: null, confidence: 0 },
+  revenueGrowth: { value: null, confidence: 0, source: null },
+  employees: { value: null, confidence: 0 },
+  foundedYear: { value: null, confidence: 0 },
+  headquarters: { value: null, confidence: 0 },
+  dealSize: { value: null, confidence: 0, source: null },
+  keyRisks: [], investmentHighlights: [], summary: 'x',
+  ...over,
+});
+
+describe('deterministic unit check on the fast read (G16)', () => {
+  it('corrects a crore figure the model failed to convert, and says so', async () => {
+    const { finalizeExtractedDealData } = await import('../src/services/aiExtractor.js');
+    const r = finalizeExtractedDealData(reply({ figuresUnit: 'CRORES', revenueAsPrinted: 251.3, ebitdaAsPrinted: 30.2 }), 50_000);
+    expect(r.revenue.value).toBeCloseTo(2513, 6);
+    expect(r.ebitda.value).toBeCloseTo(302, 6);
+    expect(r.revenue.confidence).toBeLessThanOrEqual(60);
+    expect(r.needsReview).toBe(true);
+    expect(r.reviewReasons.join(' ')).toContain('251.3 in crores');
+  });
+
+  it('leaves a correctly converted figure alone', async () => {
+    const { finalizeExtractedDealData } = await import('../src/services/aiExtractor.js');
+    const r = finalizeExtractedDealData(reply({ revenue: { value: 2513, confidence: 90, source: null }, ebitda: { value: 302, confidence: 90, source: null },
+      figuresUnit: 'CRORES', revenueAsPrinted: 251.3, ebitdaAsPrinted: 30.2 }), 50_000);
+    expect(r.revenue.value).toBe(2513);
+    expect(r.reviewReasons.join(' ')).not.toContain('crores');
+  });
+
+  it('skips the check when the model gave no printed figure (e.g. MRR annualised)', async () => {
+    const { finalizeExtractedDealData } = await import('../src/services/aiExtractor.js');
+    const r = finalizeExtractedDealData(reply({ figuresUnit: 'MILLIONS', revenueAsPrinted: null, ebitdaAsPrinted: null }), 50_000);
+    expect(r.revenue.value).toBe(251.3);
+  });
+
+  it('asks the Claude deal reader for the printed figures and their unit', async () => {
+    const { DEAL_READ_JSON_SCHEMA } = await import('../src/services/extraction/claudeDealReader.js');
+    const schema = DEAL_READ_JSON_SCHEMA as any;
+    for (const k of ['figuresUnit', 'revenueAsPrinted', 'ebitdaAsPrinted', 'dealSizeAsPrinted']) {
+      expect(schema.properties[k], k).toBeDefined();
+      expect(schema.required, k).toContain(k);
+    }
+  });
+});

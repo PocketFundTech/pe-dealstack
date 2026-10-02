@@ -26,6 +26,7 @@ import {
   type ExtractedDealData,
 } from '../aiExtractor.js';
 import { getTodayIso } from '../../utils/dates.js';
+import { RAW_UNIT_SCALES } from './extractionSchema.js';
 import { wrapDocumentContent } from '../agents/guardrails.js';
 
 const FILES_BETA = 'files-api-2025-04-14';
@@ -95,6 +96,17 @@ export const DEAL_READ_JSON_SCHEMA = {
     foundedYear: fieldSchema('number', 'Year company was founded', false),
     headquarters: fieldSchema('string', 'City, State or City, Country', false),
     dealSize: fieldSchema('number', 'Enterprise value / transaction size of THIS deal, in millions (original document currency). ONLY when the source clearly states EV / asking price / transaction value / purchase price. DO NOT extract pre/post-money valuation, market cap, fundraise size, capital raise target, valuation cap, or aspirational figures. Return null and 0 confidence if uncertain. INDIAN SCALES: a table headed "(INR crore)" / "₹ Cr" / "in crores" is in crores — multiply by 10 to get millions (251.3 crore → 2513); a lakh table — multiply by 0.1 (450 lakh → 45).'),
+    // Deterministic unit check (fix plan G16): the printed figures and their
+    // unit let finalizeExtractedDealData redo the conversion in code and
+    // correct the model's arithmetic — the deep pass already converts in
+    // code (extraction/normalize.ts SCALE_TO_MILLIONS); this fast read didn't.
+    figuresUnit: {
+      anyOf: [{ type: 'string', enum: [...RAW_UNIT_SCALES] }, { type: 'null' }],
+      description: 'How the table or text that revenue / EBITDA / deal size come from prints its numbers: UNITS (whole currency units, e.g. 36,286,000), THOUSANDS ("$ in 000s"), LAKHS, MILLIONS, CRORES ("(INR crore)", "₹ Cr"), BILLIONS. null when none of those figures was found.',
+    },
+    revenueAsPrinted: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'The revenue figure exactly as printed, before any unit conversion (251.3 under an "(INR crore)" header; 36,286 under "$ in thousands"). null when revenue is null or was calculated rather than read (e.g. MRR × 12).' },
+    ebitdaAsPrinted: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'The EBITDA figure exactly as printed, before any unit conversion. null when EBITDA is null or was calculated rather than read.' },
+    dealSizeAsPrinted: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'The deal size exactly as printed, before any unit conversion. null when deal size is null or was calculated rather than read.' },
     keyRisks: { type: 'array', items: { type: 'string' }, description: '3-5 key investment risks' },
     investmentHighlights: { type: 'array', items: { type: 'string' }, description: '3-5 positive investment points' },
     summary: { type: 'string', description: '3-4 sentence executive summary' },
@@ -102,7 +114,8 @@ export const DEAL_READ_JSON_SCHEMA = {
   required: [
     'companyName', 'industry', 'description', 'currency', 'revenue', 'ebitda',
     'ebitdaMargin', 'revenueGrowth', 'employees', 'foundedYear', 'headquarters',
-    'dealSize', 'keyRisks', 'investmentHighlights', 'summary',
+    'dealSize', 'figuresUnit', 'revenueAsPrinted', 'ebitdaAsPrinted', 'dealSizeAsPrinted',
+    'keyRisks', 'investmentHighlights', 'summary',
   ],
   additionalProperties: false,
 } as const;

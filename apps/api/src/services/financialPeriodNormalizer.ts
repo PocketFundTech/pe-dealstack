@@ -622,7 +622,11 @@ function mergeTwoPeriods(a: FinancialPeriod, b: FinancialPeriod): FinancialPerio
 
   let winner: FinancialPeriod;
   let loser: FinancialPeriod;
-  if (bConf > aConf) {
+  const restated = (p: FinancialPeriod) => /\brestated\b/i.test(p.period);
+  if (restated(a) !== restated(b)) {
+    // A restatement corrects the original — its figures win (fix plan G14).
+    winner = restated(a) ? a : b; loser = restated(a) ? b : a;
+  } else if (bConf > aConf) {
     winner = b; loser = a;
   } else if (aConf > bConf) {
     winner = a; loser = b;

@@ -55,3 +55,31 @@ describe('comparePeriods', () => {
     ]);
   });
 });
+
+describe('fiscal year-end hint (G13)', () => {
+  it('infers a June year-end from a label that states its range', async () => {
+    const { inferFiscalYearEndMonth } = await import('@ai-crm/shared');
+    expect(inferFiscalYearEndMonth(['FY2024 (Jul 2023 - Jun 2024)', 'FY2025', 'Sep 2025'])).toBe(6);
+    expect(inferFiscalYearEndMonth(['FY2024 (Jan - Dec 2024)', '2025'])).toBeNull();
+    expect(inferFiscalYearEndMonth(['2024', '2025'])).toBeNull();
+  });
+
+  it('a bare "FY2025" for a June year-end company sorts before Sep 2025, not after', async () => {
+    const { parsePeriod, comparePeriods } = await import('@ai-crm/shared');
+    const fy = parsePeriod('FY2025', { fiscalYearEndMonth: 6 })!;
+    expect(fy.endDate).toBe('2025-06-30');
+    expect(fy.canonicalKey).toBe('2025');
+    expect(comparePeriods(fy, parsePeriod('Sep 2025')!)).toBeLessThan(0);
+    // Without the hint it is December — the old behaviour.
+    expect(parsePeriod('FY2025')!.endDate).toBe('2025-12-31');
+    // A label that states its own month ignores the hint.
+    expect(parsePeriod('FY2025 (Apr 2024 - Mar 2025)', { fiscalYearEndMonth: 6 })!.endDate).toBe('2025-03-31');
+  });
+
+  it('the analysis orders a June year-end company by its own fiscal year', async () => {
+    const { prepareData } = await import('../src/services/analysis/helpers.js');
+    const row = (period: string) => ({ statementType: 'INCOME_STATEMENT', periodType: 'HISTORICAL', period, lineItems: { revenue: 1 } });
+    const data = prepareData([row('Sep 2025'), row('FY2025'), row('FY2024 (Jul 2023 - Jun 2024)')]);
+    expect(data.periods).toEqual(['2024', '2025', 'Sep 2025']);
+  });
+});

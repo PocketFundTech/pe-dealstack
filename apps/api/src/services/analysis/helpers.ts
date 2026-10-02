@@ -3,7 +3,7 @@
  * Shared utility functions used across all analysis modules.
  */
 
-import { parsePeriod, comparePeriods, isFullYear, type CanonicalPeriod } from '@ai-crm/shared';
+import { parsePeriod, comparePeriods, isFullYear, inferFiscalYearEndMonth, type CanonicalPeriod } from '@ai-crm/shared';
 import { LineItems, PreparedData } from './types.js';
 
 export function li(lineItems: LineItems, key: string): number | null {
@@ -131,7 +131,9 @@ export function prepareData(rows: any[]): PreparedData {
   const periodInfo = new Map<string, CanonicalPeriod>();
 
   const historical = rows.filter(r => r.periodType === 'HISTORICAL');
-  const parsed = historical.map(r => ({ row: r, period: parsePeriod(r.period) }));
+  // A June year-end company's bare "FY2025" ends in June, not December (G13).
+  const fiscalYearEndMonth = inferFiscalYearEndMonth(historical.map(r => r.period));
+  const parsed = historical.map(r => ({ row: r, period: parsePeriod(r.period, { fiscalYearEndMonth }) }));
 
   // A balance sheet dated at a fiscal year-end ("Dec 31, 2024") belongs to
   // that fiscal year's column.

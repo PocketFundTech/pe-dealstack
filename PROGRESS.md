@@ -5,7 +5,7 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
-### Session 95 — October 3, 2026
+### Session 96 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 03:02 IST
 
@@ -25,6 +25,26 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 **Tests:** 2,451 API tests pass.
 
+---
+
+### Session 95 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 00:47 IST
+
+#### Goal: post-SRM financial hardening, PR D2 — fiscal year-ends, restatements, fast-read units (fix plan Phase G, G13, G14, G16).
+
+- **G13 · June year-ends mis-ordered.**
+  - *Problem:* a bare "FY2025" was assumed to end in December, so a June year-end company's annual figure sorted after its own later months and quarters.
+  - *Fix:* `parsePeriod` accepts a fiscal year-end hint, and `inferFiscalYearEndMonth` reads it from labels that state a range ("FY2024 (Jul 2023 - Jun 2024)"). The analysis and the model's ordering use it.
+- **G14 · Restatements.**
+  - *Problem:* an original could beat a later restated set on document authority or line count.
+  - *Fix:* "restated" in the period label or document name now wins after the reported-vs-model check, across documents (`compareSources`) and within one document (period dedup).
+- **G16 · Fast deal read did its own unit arithmetic.**
+  - *Problem:* the headline revenue / EBITDA / deal size on upload came only from the model's arithmetic — the ₹25.1 Cr vs ₹251.3 Cr case.
+  - *Fix:* the read now also returns each figure as printed, plus its unit. `finalizeExtractedDealData` redoes the conversion with the deep pass's `SCALE_TO_MILLIONS`; a disagreement is corrected, flagged for review and capped at 60% confidence.
+  - Deal cards already label currency.
+
+Tests: API 2458 pass, web 524 pass. Phase G (G1–G16) is complete except PR E (headcount extraction) and the founder-run period-key migration from PR C.
 
 ---
 
