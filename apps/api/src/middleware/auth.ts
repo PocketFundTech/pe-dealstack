@@ -17,6 +17,8 @@ export interface AuthUser {
   emailConfirmed?: boolean;
   /** Set when the request authenticated with an Avise API key (avise_sk_…). */
   apiKeyId?: string;
+  /** Only set for API-key requests. 'read_only' keys can only GET. */
+  apiKeyScope?: 'full' | 'read_only';
 }
 
 // Extend Express Request to include user
@@ -280,6 +282,23 @@ export const enforceOrgMfaMiddleware = async (
     next(); // fail-open on errors — don't lock users out on transient bugs
   }
 };
+
+/**
+ * Read-only API key enforcement.
+ * A key created with scope 'read_only' can only make GET requests — any
+ * other verb is rejected before it reaches a route handler. Session logins
+ * and 'full' keys are unaffected. Must run after authMiddleware.
+ */
+export function enforceApiKeyScope(req: Request, res: Response, next: NextFunction): void {
+  if (req.user?.apiKeyScope === 'read_only' && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+    res.status(403).json({
+      error: 'This API key is read-only and cannot make a ' + req.method + ' request. Create a full-access key in Settings → API Keys if this integration needs to write data.',
+      code: 'API_KEY_READ_ONLY',
+    });
+    return;
+  }
+  next();
+}
 
 /**
  * Role-based access control middleware

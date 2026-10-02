@@ -23,6 +23,8 @@ export function hashApiKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
 }
 
+export type ApiKeyScope = 'full' | 'read_only';
+
 export function generateApiKey(): { key: string; keyHash: string; keyPrefix: string; lastFour: string } {
   const key = API_KEY_PREFIX + randomBytes(32).toString('base64url');
   return {
@@ -36,6 +38,7 @@ export function generateApiKey(): { key: string; keyHash: string; keyPrefix: str
 interface ApiKeyRow {
   id: string;
   organizationId: string;
+  scope: ApiKeyScope;
   expiresAt: string | null;
   revokedAt: string | null;
   lastUsedAt: string | null;
@@ -53,17 +56,51 @@ interface ApiKeyRow {
 // requests and each one shouldn't cost a write.
 const LAST_USED_WRITE_INTERVAL_MS = 60_000;
 
+/** null = not yet known; flips to false on the first "column does not exist". */
+let scopeColumnAvailable: boolean | null = null;
+
+/** Test hook. */
+export function resetApiKeyScopeProbe(): void {
+  scopeColumnAvailable = null;
+}
+
+export function isMissingColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  // 42703 = Postgres undefined_column; PGRST204 = column not in PostgREST's schema cache.
+  return error.code === '42703' || error.code === 'PGRST204' || /column .* does not exist|schema cache/i.test(error.message ?? '');
+}
+
 /**
  * Resolve a plaintext API key to the user it acts as, or null when the key is
  * unknown, revoked, expired, or its owner is no longer an active member of
  * the key's organization.
  */
 export async function resolveApiKey(key: string): Promise<AuthUser | null> {
-  const { data, error } = await supabase
+  const withScope = scopeColumnAvailable !== false;
+  const fields = withScope
+    ? 'id, organizationId, scope, expiresAt, revokedAt, lastUsedAt, user:User!userId(authId, email, name, role, organizationId, isActive)'
+    : 'id, organizationId, expiresAt, revokedAt, lastUsedAt, user:User!userId(authId, email, name, role, organizationId, isActive)';
+
+  let { data, error } = await supabase
     .from('ApiKey')
-    .select('id, organizationId, expiresAt, revokedAt, lastUsedAt, user:User!userId(authId, email, name, role, organizationId, isActive)')
+    .select(fields)
     .eq('keyHash', hashApiKey(key))
     .maybeSingle<ApiKeyRow>();
+
+  // The scope column may not exist yet (api-key-scope-migration.sql not run).
+  // Fall back once, remember it, and treat every key as 'full' until the
+  // migration runs — never let a missing column break every API key.
+  if (withScope && isMissingColumnError(error)) {
+    scopeColumnAvailable = false;
+    log.warn('ApiKey.scope column missing — run api-key-scope-migration.sql. Treating all keys as full-access.');
+    ({ data, error } = await supabase
+      .from('ApiKey')
+      .select('id, organizationId, expiresAt, revokedAt, lastUsedAt, user:User!userId(authId, email, name, role, organizationId, isActive)')
+      .eq('keyHash', hashApiKey(key))
+      .maybeSingle<ApiKeyRow>());
+  } else if (withScope && !error) {
+    scopeColumnAvailable = true;
+  }
 
   if (error) {
     log.error('API key lookup failed', error);
@@ -96,5 +133,6 @@ export async function resolveApiKey(key: string): Promise<AuthUser | null> {
     organizationId: data.organizationId,
     emailConfirmed: true,
     apiKeyId: data.id,
+    apiKeyScope: (data as { scope?: ApiKeyScope }).scope === 'read_only' ? 'read_only' : 'full',
   };
 }

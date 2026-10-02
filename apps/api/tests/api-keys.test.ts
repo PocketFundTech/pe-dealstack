@@ -20,7 +20,8 @@ vi.mock('../src/utils/logger.js', () => ({
 }));
 
 import { authMiddleware } from '../src/middleware/auth.js';
-import { generateApiKey, hashApiKey, isApiKey } from '../src/services/apiKeyService.js';
+import { generateApiKey, hashApiKey, isApiKey, resetApiKeyScopeProbe } from '../src/services/apiKeyService.js';
+import { enforceApiKeyScope } from '../src/middleware/auth.js';
 
 const ORG = '11111111-1111-1111-1111-111111111111';
 
@@ -43,7 +44,10 @@ function ctx(headers: Record<string, string>) {
   return { req, res, next };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetApiKeyScopeProbe();
+});
 
 describe('generateApiKey', () => {
   it('produces the standard avise_sk_ format with a matching hash and display parts', () => {
@@ -101,6 +105,74 @@ describe('authMiddleware with API keys', () => {
     await authMiddleware(req, res, next);
     expect(getUser).toHaveBeenCalledWith('eyJhbGciOi.jwt');
     expect(maybeSingle).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalled();
+  });
+});
+
+describe('authMiddleware carries the key\'s scope', () => {
+  it('a full-access key (scope omitted, legacy rows) resolves as full', async () => {
+    maybeSingle.mockResolvedValue({ data: keyRow(), error: null });
+    const { req, res, next } = ctx({ authorization: 'Bearer avise_sk_abc' });
+    await authMiddleware(req, res, next);
+    expect(req.user?.apiKeyScope).toBe('full');
+  });
+
+  it('a read_only key resolves with apiKeyScope "read_only"', async () => {
+    maybeSingle.mockResolvedValue({ data: keyRow({ scope: 'read_only' }), error: null });
+    const { req, res, next } = ctx({ authorization: 'Bearer avise_sk_abc' });
+    await authMiddleware(req, res, next);
+    expect(req.user?.apiKeyScope).toBe('read_only');
+  });
+
+  it('falls back to full-access when the scope column does not exist yet, instead of breaking every key', async () => {
+    maybeSingle
+      .mockResolvedValueOnce({ data: null, error: { code: '42703', message: 'column ApiKey.scope does not exist' } })
+      .mockResolvedValueOnce({ data: keyRow(), error: null });
+    const { req, res, next } = ctx({ authorization: 'Bearer avise_sk_abc' });
+    await authMiddleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(req.user?.apiKeyScope).toBe('full');
+  });
+
+  it('a session JWT login never carries apiKeyScope', async () => {
+    getUser.mockResolvedValue({ data: { user: { id: 'u', email: 'x@y.z', user_metadata: {} } }, error: null });
+    const { req, res, next } = ctx({ authorization: 'Bearer eyJhbGciOi.jwt' });
+    await authMiddleware(req, res, next);
+    expect(req.user?.apiKeyScope).toBeUndefined();
+  });
+});
+
+describe('enforceApiKeyScope middleware', () => {
+  function reqCtx(method: string, apiKeyScope?: 'full' | 'read_only') {
+    const req = { method, user: apiKeyScope ? { id: 'u', role: 'ADMIN', apiKeyScope } : { id: 'u', role: 'ADMIN' } } as unknown as Request;
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn().mockReturnThis() } as unknown as Response;
+    const next = vi.fn() as NextFunction;
+    return { req, res, next };
+  }
+
+  it.each(['GET', 'HEAD', 'OPTIONS'])('lets a read_only key through on %s', (method) => {
+    const { req, res, next } = reqCtx(method, 'read_only');
+    enforceApiKeyScope(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'PATCH', 'PUT', 'DELETE'])('blocks a read_only key on %s with 403', (method) => {
+    const { req, res, next } = reqCtx(method, 'read_only');
+    enforceApiKeyScope(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'PATCH', 'PUT', 'DELETE', 'GET'])('never blocks a full-access key on %s', (method) => {
+    const { req, res, next } = reqCtx(method, 'full');
+    enforceApiKeyScope(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'PATCH', 'PUT', 'DELETE'])('never blocks a session login (no apiKeyScope) on %s', (method) => {
+    const { req, res, next } = reqCtx(method);
+    enforceApiKeyScope(req, res, next);
     expect(next).toHaveBeenCalled();
   });
 });

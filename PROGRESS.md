@@ -5,6 +5,26 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 99 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:31 IST
+
+#### Goal: read-only API keys, so a less-trusted integration can be given a key that can never write to Avise.
+
+**What shipped:**
+- `ApiKey.scope` (`full` | `read_only`), set at creation in Settings → API Keys or via `POST /api/api-keys { scope }`. Defaults to `full`, so every key created before this change keeps working exactly as before.
+- Enforcement is one new middleware, `enforceApiKeyScope`, inserted after `authMiddleware` on every authenticated mount in `app-lite.ts`, `app-ai.ts` and `app.ts` (119 mount points, scripted insertion — session logins and `full` keys are never affected; a `read_only` key gets 403 `API_KEY_READ_ONLY` on anything but GET/HEAD/OPTIONS).
+- Settings → API Keys: an Access selector (Full access / Read-only) on create, a badge on the one-time key reveal, and a column in the key list.
+- Graceful degradation if `api-key-scope-migration.sql` hasn't run yet: `resolveApiKey`, and the list/create routes, detect the missing column once and fall back to treating every key as full-access — a key never stops working because of this change. Creating a `read_only` key specifically returns a clear 503 until the migration runs, rather than silently granting it full access.
+- `/api-reference` documents the Access field and the new 403 code.
+
+**Tests:** 265 files / 2,499 pass, including 23 new ones (scope resolution + fallback, the `enforceApiKeyScope` middleware for every HTTP verb, and the route-level create/list behavior with and without the migration).
+
+**Founder to-do:** run `apps/api/api-key-scope-migration.sql`. Until then, read-only keys can't be created (503, no silent downgrade); existing full-access keys are unaffected either way.
+
+
+---
+
 ### Session 98 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 03:11 IST

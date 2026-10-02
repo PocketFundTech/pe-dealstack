@@ -35,7 +35,8 @@ const KEY_RULES = [
   ["Format", "avise_sk_ followed by 43 letters, digits, - or _"],
   ["Header", "Authorization: Bearer avise_sk_… (or X-API-Key: avise_sk_…)"],
   ["Acts as", "The admin who created it, inside their organization only"],
-  ["Can reach", "Every endpoint below, with that admin's permissions"],
+  ["Access", "Full (read + write) or read-only, chosen at creation"],
+  ["Can reach", "Every endpoint below, with that admin's permissions — read-only keys refuse any non-GET request"],
   ["Cannot do", "Create, list or revoke API keys (sign in to Avise for that)"],
   ["Expiry", "Never, 30 days, 90 days or 1 year, chosen at creation"],
   ["Shown", "Once, at creation. Avise stores only a fingerprint of it"],
@@ -45,7 +46,7 @@ const KEY_RULES = [
 const ERRORS = [
   ["400", "A field is missing or invalid", "Read details in the response and fix the body"],
   ["401", "API key wrong, revoked or expired", "Create a new key in Settings → API Keys"],
-  ["403", "The key's owner lacks permission, or MFA_REQUIRED", "Use an admin's key, or the owner sets up 2FA"],
+  ["403", "The key's owner lacks permission, MFA_REQUIRED, or API_KEY_READ_ONLY", "Use an admin's key, the owner sets up 2FA, or use a full-access key for writes"],
   ["404", "Record not found in your organization", "Check the id"],
   ["409", "Duplicate contact email, or the deal changed since you read it", "Use existingContactId, or re-read and retry"],
   ["413", "Request body over 4.5 MB", "Use the signed upload (POST /api/uploads/sign)"],
@@ -109,8 +110,11 @@ export default function ApiReferencePage() {
           <p className="text-[#64748b] mb-4">
             An organization admin creates keys in{" "}
             <strong className="text-[#111418]">Settings → API Keys</strong>. Name each key after
-            where it will live (for example &ldquo;n8n — deal intake&rdquo;), pick an expiry, and copy
-            it when it is shown: it is never shown again. Send it on every request:
+            where it will live (for example &ldquo;n8n — deal intake&rdquo;), choose{" "}
+            <strong className="text-[#111418]">Full access</strong> or{" "}
+            <strong className="text-[#111418]">Read-only</strong> (a read-only key can GET data but any
+            write request gets a 403), pick an expiry, and copy it when it is shown: it is never shown
+            again. Send it on every request:
           </p>
           <pre className={pre}>
             <code className={preCode}>{`Authorization: Bearer avise_sk_YOUR_KEY
