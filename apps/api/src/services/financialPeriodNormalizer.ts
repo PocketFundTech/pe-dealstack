@@ -55,6 +55,7 @@
  *   - Bare "YTD Total" with mixed-year siblings — left as-is to avoid
  *     cross-year false-merges.
  */
+import { parsePeriod } from '@ai-crm/shared';
 import { log } from '../utils/logger.js';
 import type {
   ClassifiedStatement,
@@ -562,7 +563,7 @@ export function dedupePeriods(periods: FinancialPeriod[]): FinancialPeriod[] {
 
   for (const p of prepass) {
     const norm = normalizePeriodLabel(p.period);
-    const key = norm.toLowerCase();
+    const key = dedupeKey(norm);
     if (!key) continue;
 
     const seen = originals.get(key) ?? [];
@@ -578,8 +579,11 @@ export function dedupePeriods(periods: FinancialPeriod[]): FinancialPeriod[] {
     // Collision — merge.
     const existing = byKey.get(key)!;
     const merged = mergeTwoPeriods(existing, p);
-    // Preserve first-seen normalised label.
-    merged.period = firstLabel.get(key)!;
+    // Keep the more descriptive label ("FY2024 (Jan - Dec 2024)" over
+    // "2024"), else the first-seen one.
+    const label = norm.length > firstLabel.get(key)!.length ? norm : firstLabel.get(key)!;
+    firstLabel.set(key, label);
+    merged.period = label;
     byKey.set(key, merged);
   }
 
@@ -595,6 +599,18 @@ export function dedupePeriods(periods: FinancialPeriod[]): FinancialPeriod[] {
   }
 
   return Array.from(byKey.values());
+}
+
+/**
+ * Grouping key: the canonical period when the label carries a date
+ * ("2024" and "FY2024 (Jan - Dec 2024)" → "2024"; a 9-month YTD, a quarter,
+ * LTM and an estimate each stay distinct), else the normalised label. The
+ * same key the store and conflict resolution use (periodKeyOf), so one year
+ * can no longer survive dedup as two rows.
+ */
+function dedupeKey(normalisedLabel: string): string {
+  if (!normalisedLabel) return '';
+  return parsePeriod(normalisedLabel)?.canonicalKey.toLowerCase() ?? normalisedLabel.toLowerCase();
 }
 
 /** Pick a winner between two periods using the documented strategy. */

@@ -124,9 +124,14 @@ export function FinancialTable({
 
   const currency = rows[0]?.currency ?? "USD";
   const sym = getCurrencySymbol(currency);
+  // Columns can come from documents in different currencies; each cell is
+  // formatted in its own, but nothing is converted — say so instead of
+  // labelling the whole table with the first column's currency.
+  const currencies = Array.from(new Set(rows.map((r) => (r.currency ?? "USD").toUpperCase())));
+  const mixedCurrency = currencies.length > 1;
   // Cells auto-scale via formatFinancialValue, so we only label the currency
   // here. Per-cell suffixes (K/M/B/Cr/L) are applied at render time.
-  const headerLabel = sym.trim();
+  const headerLabel = mixedCurrency ? "mixed currencies" : sym.trim();
 
   const docMap = new Map<string, string>();
   rows.forEach((r) => { if (r.Document?.id) docMap.set(r.Document.id, r.Document.name ?? "Unknown document"); });
@@ -142,6 +147,11 @@ export function FinancialTable({
 
   return (
     <>
+      {mixedCurrency && (
+        <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900" role="note">
+          These columns are in different currencies ({currencies.join(", ")}). Figures are not converted, so don&apos;t compare or add them across currencies.
+        </p>
+      )}
       <div className="flex items-center justify-end mb-2 px-1">
         <label className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer select-none">
           <input

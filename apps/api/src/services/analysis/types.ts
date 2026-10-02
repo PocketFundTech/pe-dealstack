@@ -201,5 +201,9 @@ export interface AnalysisResult {
   redFlags?: RedFlag[];
   workforceMetrics?: WorkforceMetrics;
   periods: string[];
+  /** Currency every figure is in (statements are never converted). */
+  currency?: string;
+  /** Set when the deal has statements in other currencies that were left out — shown to the user. */
+  currencyNote?: string;
   analyzedAt: string;
 }

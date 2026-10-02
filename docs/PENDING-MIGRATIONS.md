@@ -1,3 +1,35 @@
+# ⏳ `financials-period-key-unique-migration.sql` (2026-10-02) — PENDING (founder runs)
+
+One active row per fiscal period (fix plan G9, PR C). "2024" and "FY2024 (Jan - Dec 2024)" are the same year (`periodKey` '2024'), but the only database guard was on the raw label, so both could stay active, giving two columns for one year.
+
+**Order matters — the SQL refuses to run until step 1 is done:**
+
+1. Backfill period keys on older rows (fills `periodKey`, changes nothing else). Run from a checkout with `apps/api/.env`:
+   ```bash
+   cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts --dry-run
+   cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts
+   ```
+2. Run `apps/api/financials-period-key-unique-migration.sql` in the Supabase SQL Editor. Where a deal has more than one active row for the same period, it:
+   - keeps one: a reported statement over a model-derived one, then the higher confidence, then the newer;
+   - flags the kept row `needs_review` and deactivates the rest (nothing is deleted);
+   - adds a unique index so it can't happen again.
+
+Idempotent, safe to re-run.
+
+| # | Migration file | Adds | Run? |
+|---|---|---|---|
+| 1 | `apps/api/scripts/backfill-statement-period-keys.ts` | `periodKey` on older rows | ⏳ |
+| 2 | `apps/api/financials-period-key-unique-migration.sql` | duplicate cleanup + `idx_financial_statement_active_period_key_unique` | ⏳ |
+
+Verify (expect 1, 0, 0):
+```sql
+select
+  (select count(*) from pg_indexes where indexname = 'idx_financial_statement_active_period_key_unique') as unique_index,
+  (select count(*) from (select 1 from "FinancialStatement" where "isActive"
+     group by "dealId", "statementType", "periodKey" having count(*) > 1) d) as duplicate_groups,
+  (select count(*) from "FinancialStatement" where "isActive" and "periodKey" is null) as active_without_key;
+```
+
 # ✅ `webhook-subscriptions-migration.sql` (2026-10-02) — RUN AND VERIFIED 2026-10-02
 
 Creates the `WebhookSubscription` table behind **Settings → Webhooks** and `/api/webhook-subscriptions` (outbound events for n8n, Zapier and Make).

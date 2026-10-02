@@ -96,6 +96,34 @@ function mergeLineItems(a: LineItems, b: LineItems): LineItems {
  * "2024" are one year) and order them chronologically. Plain string sorting
  * put FY2023 after "2025 YTD", which produced false declines and wrong CAGRs.
  */
+const currencyOf = (r: { currency?: string | null }) => (r.currency || 'USD').toUpperCase();
+
+/**
+ * One currency for the analysis (fix plan G10). Figures are never
+ * converted, so statements in another currency are left out rather than
+ * added to the main series. Main currency = the one with the most
+ * historical income-statement rows (all rows when there are none); USD,
+ * then alphabetical, breaks a tie.
+ */
+export function pickAnalysisCurrency(rows: any[]): { currency: string; rows: any[]; note?: string } {
+  const all = new Set(rows.map(currencyOf));
+  if (all.size <= 1) return { currency: [...all][0] ?? 'USD', rows };
+
+  const pl = rows.filter(r => r.statementType === 'INCOME_STATEMENT' && r.periodType === 'HISTORICAL');
+  const counts = new Map<string, number>();
+  for (const r of pl.length ? pl : rows) counts.set(currencyOf(r), (counts.get(currencyOf(r)) ?? 0) + 1);
+  const currency = [...counts.entries()].sort((a, b) =>
+    b[1] - a[1] || (a[0] === 'USD' ? -1 : b[0] === 'USD' ? 1 : a[0].localeCompare(b[0])))[0][0];
+
+  const kept = rows.filter(r => currencyOf(r) === currency);
+  const others = [...all].filter(c => c !== currency).sort();
+  const left = rows.length - kept.length;
+  const note =
+    `This deal's statements are in ${[currency, ...others].join(' and ')}. Figures are not converted between currencies, ` +
+    `so this analysis uses the ${currency} statements only and leaves out ${left} ${others.join('/')} statement period${left === 1 ? '' : 's'}.`;
+  return { currency, rows: kept, note };
+}
+
 export function prepareData(rows: any[]): PreparedData {
   const income = new Map<string, LineItems>();
   const balance = new Map<string, LineItems>();

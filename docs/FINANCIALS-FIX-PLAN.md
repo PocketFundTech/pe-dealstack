@@ -120,8 +120,8 @@ Three read-only audits after A–F merged (extraction correctness, model correct
 - [ ] **G8** Model route returns specific codes for known failure causes.
 
 **PR C — duplicate periods & mixed currency** (needs a founder-run migration)
-- [ ] **G9** Same fiscal year stored twice under different labels ("2024" vs "FY2024 (Jan - Dec 2024)") — dedupe on canonical period + unique index on `periodKey`.
-- [ ] **G10** Mixed-currency statements flagged on financials/analysis instead of silently added together.
+- [x] **G9** Same fiscal year stored twice under different labels ("2024" vs "FY2024 (Jan - Dec 2024)"): dedup now keys on the canonical period (keeping the more descriptive label), the deep pass compares rows written earlier in the same run, and the conflict list / resolve / resolve-all group versions by canonical period. DB guard: `financials-period-key-unique-migration.sql` (⏳ founder runs, after the period-key backfill — see `docs/PENDING-MIGRATIONS.md`).
+- [x] **G10** Mixed currencies: the analysis uses the main currency's statements only and says which it left out (`currencyNote`, shown on the Analysis section); the statements table says when its columns are in different currencies instead of labelling all of them with the first one's.
 
 **PR D — scenarios + lower priority**
 - [ ] **G11** Low/High margin delta no longer silently does nothing when cost lines are Fixed.
