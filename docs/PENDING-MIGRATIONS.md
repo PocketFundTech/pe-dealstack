@@ -1,4 +1,4 @@
-# 🔴 `auth-sessions-rpc-migration.sql` (2026-10-02) — PENDING
+# ✅ `auth-sessions-rpc-migration.sql` (2026-10-02) — RUN AND VERIFIED 2026-10-02
 
 QA #11: **Settings → Security → Active sessions** was always empty. This adds two `SECURITY DEFINER` functions,
 `list_user_sessions` and `revoke_user_session`. They are callable by `service_role` only, so the API can read and revoke
@@ -7,7 +7,7 @@ the panel says "Session management isn't available right now".
 
 | File | Fixes | Run? |
 |---|---|---|
-| `apps/api/auth-sessions-rpc-migration.sql` | Active sessions list + "This device" + sign out other sessions | ☐ |
+| `apps/api/auth-sessions-rpc-migration.sql` | Active sessions list + "This device" + sign out other sessions | ☑ 2026-10-02 |
 
 Verify: `select proname from pg_proc where proname in ('list_user_sessions','revoke_user_session');` returns 2 rows.
 
