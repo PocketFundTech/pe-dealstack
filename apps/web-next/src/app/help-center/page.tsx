@@ -85,6 +85,19 @@ const CATEGORIES: Category[] = [
         a: "Avise supports PDF, Word (.docx), Excel (.xlsx, .csv), plain text (.txt), and email (.eml) files. Maximum file size is 50MB. Excel files with multiple rows are processed as bulk imports, creating one deal per row.",
       },
       {
+        q: "Can I bring data in from Notion, Airtable, OneDrive, SharePoint or Xero?",
+        a: (
+          <>
+            There are no direct integrations with those tools yet — export to CSV or Excel and import it.{" "}
+            <strong>Deals:</strong> Deals → <strong>Import Deals</strong> (up to 500 rows, 5MB; AI maps your
+            columns and flags duplicates). <strong>Contacts:</strong> Contacts → <strong>Import from CSV</strong>{" "}
+            (up to 500 rows). <strong>Documents</strong> (OneDrive / SharePoint files): download them and upload to
+            the deal&apos;s data room. To export: Notion — ⋯ → Export → CSV; Airtable — view menu → Download CSV;
+            SharePoint / Excel Online — File → Save as → Download a copy; Xero — export the report to Excel.
+          </>
+        ),
+      },
+      {
         q: "How do deal stages work?",
         a: (
           <>

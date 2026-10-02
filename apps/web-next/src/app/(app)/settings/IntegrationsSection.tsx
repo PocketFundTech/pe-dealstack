@@ -195,6 +195,13 @@ export function IntegrationsSection({ onToast }: Props) {
       </div>
 
       <div className="p-6">
+        {/* QA #21: tools without a connector yet — point at the CSV route. */}
+        <p className="mb-4 text-xs text-text-muted">
+          Using Notion, Airtable, OneDrive, SharePoint or Xero? Export to CSV or Excel and use{" "}
+          <span className="font-semibold text-text-main">Deals → Import Deals</span> or{" "}
+          <span className="font-semibold text-text-main">Contacts → Import from CSV</span>.{" "}
+          <a href="/help-center" className="font-semibold text-primary hover:underline">How to export</a>
+        </p>
         {loading ? (
           <p className="text-sm text-text-muted">Loading integrations...</p>
         ) : (
