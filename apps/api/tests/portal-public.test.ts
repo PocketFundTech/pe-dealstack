@@ -38,7 +38,13 @@ function tableMock() {
         // inserting, to detect a first-ever view — mirror that with a live
         // count off recordedViews so the mock stays correct as it grows.
         select: () => ({ eq: async () => ({ count: recordedViews.length, error: null }) }),
-        insert: async (row: any) => { recordedViews.push(row); return { error: null }; },
+        insert: async (row: any) => {
+          // Slow write, like a real network round-trip: the response must not
+          // go out before this lands (QA #25b — on Vercel it was killed).
+          await new Promise((r) => setTimeout(r, 25));
+          recordedViews.push(row);
+          return { error: null };
+        },
       };
     }
     if (table === 'Deal') {
@@ -141,6 +147,7 @@ describe('GET /api/public/portal/:token', () => {
     expect(res.body.share.sharedBy).toBe('Acme Capital');
     expect(res.body.financials).toHaveLength(1);
     expect(res.body.documents).toHaveLength(1);
+    // Recorded BEFORE the response was sent (the insert takes 25ms).
     expect(recordedViews).toHaveLength(1);
     // whitelist check — internal fields never leak
     expect(res.body.deal.aiThesis).toBeUndefined();
