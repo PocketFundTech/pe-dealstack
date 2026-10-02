@@ -14,6 +14,7 @@ import { getSignedDownloadUrl } from '../utils/storage.js';
 import { log } from '../utils/logger.js';
 import { sendDocumentViewedEmail } from '../services/documentViewedEmail.js';
 import { recordDocumentDownload } from '../services/documentActivity.js';
+import { runInBackground } from '../utils/background.js';
 
 const router = Router();
 
@@ -82,11 +83,15 @@ async function notifyShareCreatorOfFirstView(share: ShareRow): Promise<void> {
 
 /**
  * Record a portal view and, only for a share's very first view, notify its
- * creator by email. Entirely fire-and-forget from the route handler's
- * perspective — the page response never awaits this, and every failure
- * (count query, insert, or the email itself) just logs.
+ * creator by email. Never throws: every failure (count query, insert, or
+ * the email itself) just logs.
  */
 async function recordViewAndNotify(share: ShareRow, userAgent: string | null): Promise<void> {
+  // The view row is written BEFORE the response (awaited by the caller):
+  // as a fire-and-forget promise it was killed when Vercel froze the
+  // function after res.json, so share view counts never moved (QA #25b).
+  // Only the first-view email runs in the background (runInBackground keeps
+  // the invocation alive via waitUntil).
   try {
     const { count, error: countError } = await supabase
       .from('DealShareView')
@@ -104,7 +109,7 @@ async function recordViewAndNotify(share: ShareRow, userAgent: string | null): P
     }
 
     if (isFirstView) {
-      await notifyShareCreatorOfFirstView(share);
+      runInBackground('share-first-view-email', notifyShareCreatorOfFirstView(share));
     }
   } catch (error) {
     log.warn('portal view tracking failed', { error });
@@ -118,10 +123,10 @@ router.get('/:token', async (req, res) => {
     if (!resolved.share) return res.status(resolved.status!).json({ error: resolved.error });
     const share = resolved.share;
 
-    // Record the view (fire-and-forget — a failed insert never blocks the page).
-    // First-ever view for this share also emails the share's creator — see
-    // recordViewAndNotify.
-    void recordViewAndNotify(share, (req.headers['user-agent'] as string | undefined) ?? null);
+    // Record the view before responding (never throws — a failed insert
+    // never blocks the page). First-ever view also emails the share's
+    // creator, in the background — see recordViewAndNotify.
+    await recordViewAndNotify(share, (req.headers['user-agent'] as string | undefined) ?? null);
 
     const { data: deal } = await supabase
       .from('Deal')
