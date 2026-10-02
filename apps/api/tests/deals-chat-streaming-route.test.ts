@@ -128,6 +128,48 @@ describe('POST /api/deals/:dealId/chat — DEAL_CHAT_ENGINE=streaming', () => {
     expect(res.text).toContain('"type":"error"');
     expect(res.text.length).toBeGreaterThan(0);
   });
+
+  // Batch 3: previously the user's own message was only saved AFTER a fully
+  // successful run, so an exception thrown before the first yield (the exact
+  // scenario above) silently dropped the user's question too — a reload
+  // showed no trace it was ever asked.
+  it('saves the user message even when the agent throws before any yield', async () => {
+    process.env.DEAL_CHAT_ENGINE = 'streaming';
+    runDealChatAgentStreaming.mockReturnValue((async function* () {
+      throw new Error('agent exploded');
+      // eslint-disable-next-line no-unreachable
+      yield { type: 'text_delta', text: 'never reached' };
+    })());
+
+    const app = await buildApp();
+    await request(app).post('/api/deals/deal-1/chat').send({ message: 'what is the EBITDA?' });
+
+    const userRow = insertedRows.find((r) => r.role === 'user');
+    expect(userRow).toBeDefined();
+    expect(userRow.content).toBe('what is the EBITDA?');
+  });
+
+  // Batch 3: a mid-stream exception (not a generator-reported error event)
+  // used to skip persistence entirely for any text already streamed, and
+  // only sent an `error` SSE frame when NOTHING had streamed yet — so a
+  // partial reply vanished with no explanation and nothing saved to re-show
+  // on reload.
+  it('persists a partial reply and still sends an error frame when the agent throws mid-stream', async () => {
+    process.env.DEAL_CHAT_ENGINE = 'streaming';
+    runDealChatAgentStreaming.mockReturnValue((async function* () {
+      yield { type: 'text_delta', text: 'Revenue grew ' };
+      throw new Error('connection reset');
+    })());
+
+    const app = await buildApp();
+    const res = await request(app).post('/api/deals/deal-1/chat').send({ message: 'hi' });
+
+    expect(res.text).toContain('"type":"error"');
+    const assistantRow = insertedRows.find((r) => r.role === 'assistant');
+    expect(assistantRow).toBeDefined();
+    expect(assistantRow.content).toBe('Revenue grew ');
+    expect(assistantRow.metadata.truncated).toBe(true);
+  });
 });
 
 describe('POST /api/deals/:dealId/chat — DEAL_CHAT_ENGINE unset (legacy)', () => {

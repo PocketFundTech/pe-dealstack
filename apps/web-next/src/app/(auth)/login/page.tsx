@@ -29,6 +29,18 @@ const STATS = [
 
 const MFA_DIGIT_COUNT = 6;
 
+// A 401 elsewhere in the app redirects here with `?next=<path>` so re-login
+// returns the user to what they were doing instead of always landing on
+// /dashboard. Only a same-origin relative path is honored — a `next`
+// pointing at an absolute or protocol-relative URL could redirect a freshly
+// authenticated session off-site.
+function getSafeNextPath(): string | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("next");
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+  return raw;
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -82,7 +94,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/dashboard");
+    router.push(getSafeNextPath() ?? "/dashboard");
   };
 
   const handleMfaDigitChange = (index: number, raw: string) => {
@@ -135,7 +147,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/dashboard");
+    router.push(getSafeNextPath() ?? "/dashboard");
   };
 
   const handleMfaBack = async () => {

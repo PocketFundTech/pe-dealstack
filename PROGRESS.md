@@ -5,6 +5,29 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 102 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 04:25 IST
+
+#### Goal: Smooth Flows Batch 3 — stop losing users' work (`docs/USERFLOW-SMOOTHING-TODO.md`).
+
+All 7 items in the batch, one branch (`fix/flows-batch-3`):
+
+- **Memo "Generate all"** now persists each section to the DB as soon as it completes (`section_complete`/`section_revised`), not only at the very end — a refresh, error, or the 300s limit no longer loses finished sections. A stream that ends without a `done` event sends an `error` frame. The overlay has a Cancel button, threaded through a new `opts.signal` on `api.stream`.
+- **Deal chat failures**: the user's own message is saved before the stream starts (previously only after full success, so an early exception dropped the question too); an `error` SSE frame is always sent, not just when nothing streamed yet; a mid-stream exception now persists whatever text had streamed (`truncated:true`) instead of discarding it; an empty generator-reported reply gets a real fallback sentence + `metadata.failed` instead of an empty DB row.
+- **Chat Retry/Stop**: `isServerError` was matching a string (`"API error 5"`) `ApiError` never produces — fixed to check `ApiError.status`. Failed messages now carry `failed`/`retryText` and render a Retry button; a new Stop button aborts the in-flight request via `AbortController`; the legacy (non-streaming) route's bare 500 now uses `classifyAIErrorObject`; `dealChatAgent`'s internal timeout message reports seconds (was raw ms) and no longer fires on a user-initiated Stop (same internal `AbortController` used for both — now distinguished by whether the *external* signal aborted).
+- **Chat history reload**: `loadChatHistory` now maps `metadata.action`/`metadata.failed` onto the message (previously dropped — action buttons vanished on every reload).
+- **Session expiry (401)**: all three 401 sites in `api.ts` try one shared `refreshSession()` + retry before redirecting; the redirect (here and in `middleware.ts`) carries `?next=<path>`; the login page honours a same-origin `next` after both password and MFA verification, instead of always landing on `/dashboard`.
+- **Unsaved-changes guard**: new shared `useUnsavedChanges(isDirty)` hook (`beforeunload`), wired into the NDA full editor, memo section editor, template editor, and settings page. `EditDealModal`'s backdrop click / X / Cancel now confirm via `ConfirmDialog` when dirty instead of discarding silently.
+- **Upload modal mid-upload**: `IngestDealForm` reports its `processing` state via a new `onProcessingChange` prop; the modal blocks Escape/backdrop/X while processing.
+- **Stage change cache wipe**: `confirmStageChange` and `selectTerminalStage` now merge the PATCH response onto the previous cached deal instead of replacing it wholesale (was wiping `teamMembers`/scorecard fields the PATCH response doesn't echo back).
+
+Fixed two pre-existing-but-now-exercised gaps found while testing: iconFont subset test needed `stop_circle` added; `api.test.ts`'s 401 test needed a `pathname`/`search` stub and a mocked `refreshSession` to match the new retry-then-redirect flow.
+
+Tests: API 2492 pass (3 new/updated files: memo generate-all per-section persistence + no-done error, deal-chat partial-save + always-error, dealChatAgent seconds + Stop-vs-timeout). Web-next 541 pass (new `useUnsavedChanges.test.ts`, `edit-deal-modal.test.tsx`; extended `deal-page-handlers.test.ts`, `section-handlers.test.ts`, `api.test.ts`).
+
+---
+
 ### Session 101 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 03:44 IST

@@ -89,9 +89,29 @@ describe('runDealChatAgentStreaming bounds', () => {
     const elapsed = Date.now() - start;
     const errorEvent = events.find((e) => e.type === 'error');
     expect(errorEvent).toBeDefined();
-    expect(errorEvent.message).toMatch(/timed out/i);
+    // Batch 3: this used to read "timed out after 150ms" (the raw env var
+    // value) — meaningless to a user staring at a stuck chat. It's now
+    // reported in whole seconds.
+    expect(errorEvent.message).toMatch(/timed out after \d+s/i);
+    expect(errorEvent.message).not.toMatch(/\dms/);
     expect(events.find((e) => e.type === 'done')).toBeUndefined();
     expect(elapsed).toBeLessThan(2000);
+  });
+
+  // Batch 3: a user clicking Stop aborts the SAME external signal the
+  // timeout watches internally, so the two used to be indistinguishable —
+  // every Stop showed "Response timed out... please try again" even though
+  // nothing had failed. Only the deadline firing should produce that message.
+  it('yields no error event when the caller aborts (Stop), unlike a real timeout', async () => {
+    shouldHang = true;
+    nextRunnerIterations = [[{ type: 'message_start', message: { usage: { input_tokens: 0 } } }]];
+    const { runDealChatAgentStreaming } = await import('../src/services/agents/dealChatAgent/index.js');
+    const controller = new AbortController();
+    const gen = runDealChatAgentStreaming({ dealId: 'd1', orgId: 'o1', message: 'hi', dealContext: '' }, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 20);
+    const events = await drain(gen);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'done')).toBeUndefined();
   });
 
   it('stops after the iteration cap and yields an error event', async () => {

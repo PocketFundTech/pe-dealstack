@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { OUTREACH_ALLOWED_ORG_SLUGS } from "@/lib/constants";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import { USERS_ME_KEY } from "./settings-api-keys";
 import { SecuritySection } from "./SecuritySection";
 import { type PrefsState } from "./PreferencesSection";
@@ -104,6 +105,7 @@ export default function SettingsPage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  useUnsavedChanges(hasChanges);
   const [activeSection, setActiveSection] = useState<string>("general");
 
   const [name, setName] = useState("");

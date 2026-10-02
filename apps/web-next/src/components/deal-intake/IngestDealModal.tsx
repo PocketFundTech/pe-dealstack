@@ -10,7 +10,7 @@
 // apps/(app)/deals/[id]/edit-deal-modal.tsx for consistency.
 // ---------------------------------------------------------------------------
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { IngestDealForm } from "./IngestDealForm";
 import type { DealOption } from "@/app/(app)/deal-intake/components";
@@ -24,11 +24,20 @@ interface IngestDealModalProps {
 }
 
 export function IngestDealModal({ open, onClose, preselectedDeal = null }: IngestDealModalProps) {
+  // True while the form has an upload/extraction request in flight. Closing
+  // the modal mid-request used to abandon the result entirely — the files
+  // looked un-uploaded on reopen, so the natural next step was to re-upload
+  // them and create a duplicate deal/document.
+  const [isProcessing, setIsProcessing] = useState(false);
+  const requestClose = () => {
+    if (!isProcessing) onClose();
+  };
+
   // Escape to close + body scroll lock while open.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") requestClose();
     };
     document.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
@@ -37,7 +46,8 @@ export function IngestDealModal({ open, onClose, preselectedDeal = null }: Inges
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
     };
-  }, [open, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, onClose, isProcessing]);
 
   if (!open) return null;
   if (typeof document === "undefined") return null;
@@ -48,7 +58,7 @@ export function IngestDealModal({ open, onClose, preselectedDeal = null }: Inges
       data-modal-overlay
       style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) requestClose();
       }}
     >
       <div className="rounded-xl shadow-2xl w-full max-w-3xl mx-4 overflow-hidden bg-surface-card border border-border-subtle flex flex-col max-h-[88vh]">
@@ -64,15 +74,18 @@ export function IngestDealModal({ open, onClose, preselectedDeal = null }: Inges
             <div className="min-w-0">
               <h3 className="text-base font-bold text-text-main truncate">Ingest Deal Data</h3>
               <p className="text-xs text-text-muted truncate">
-                Upload a document or paste text to create or update a deal.
+                {isProcessing
+                  ? "Processing — please wait for this to finish before closing."
+                  : "Upload a document or paste text to create or update a deal."}
               </p>
             </div>
           </div>
           <button
             type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-md text-text-muted hover:bg-background-body transition-colors shrink-0"
-            title="Close"
+            onClick={requestClose}
+            disabled={isProcessing}
+            className="p-1.5 rounded-md text-text-muted hover:bg-background-body transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+            title={isProcessing ? "Please wait for processing to finish" : "Close"}
           >
             <span className="material-symbols-outlined text-[20px]">close</span>
           </button>
@@ -80,7 +93,12 @@ export function IngestDealModal({ open, onClose, preselectedDeal = null }: Inges
 
         {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-          <IngestDealForm variant="modal" onClose={onClose} preselectedDeal={preselectedDeal} />
+          <IngestDealForm
+            variant="modal"
+            onClose={onClose}
+            preselectedDeal={preselectedDeal}
+            onProcessingChange={setIsProcessing}
+          />
         </div>
       </div>
     </div>,

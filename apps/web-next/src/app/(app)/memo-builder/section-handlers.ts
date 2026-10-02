@@ -4,7 +4,7 @@
 // async handler. Behavior is unchanged — same call signatures, same API
 // payloads, same side effects.
 
-import { Dispatch, SetStateAction } from "react";
+import { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { api } from "@/lib/api";
 import { Memo, MemoSection, SECTION_TYPES } from "./components";
 
@@ -151,7 +151,7 @@ export function createDeleteSection(deps: SectionDeps) {
   };
 }
 
-export function createGenerateAll(deps: SectionDeps) {
+export function createGenerateAll(deps: SectionDeps, generateAllAbortRef?: MutableRefObject<AbortController | null>) {
   const {
     selectedMemo, setSections, setEditingContent, setActiveSection,
     setGeneratingAll, setGenerationStatus, setError,
@@ -161,6 +161,8 @@ export function createGenerateAll(deps: SectionDeps) {
     if (!selectedMemo) return;
     setGeneratingAll(true);
     setGenerationStatus(null);
+    const controller = new AbortController();
+    if (generateAllAbortRef) generateAllAbortRef.current = controller;
 
     const upsertSection = (generated: {
       type: string; title: string; content: string; aiGenerated: boolean;
@@ -228,12 +230,23 @@ export function createGenerateAll(deps: SectionDeps) {
         } else if (e.type === "error") {
           setError(e.message || "Failed to generate all sections");
         }
-      });
+      }, { signal: controller.signal });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate all sections");
+      // A user-initiated Cancel aborts the fetch — sections generated before
+      // the cancel were already persisted server-side, so this isn't a failure.
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setError(err instanceof Error ? err.message : "Failed to generate all sections");
+      }
     } finally {
       setGeneratingAll(false);
       setGenerationStatus(null);
+      if (generateAllAbortRef) generateAllAbortRef.current = null;
     }
+  };
+}
+
+export function createCancelGenerateAll(generateAllAbortRef: MutableRefObject<AbortController | null>) {
+  return () => {
+    generateAllAbortRef.current?.abort();
   };
 }

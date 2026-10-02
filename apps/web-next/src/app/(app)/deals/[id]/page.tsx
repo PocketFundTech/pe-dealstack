@@ -132,6 +132,7 @@ export default function DealDetailPage() {
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   // Activity (loaded eagerly for inline feed in Overview)
   const [activities, setActivities] = useState<Activity[]>([]);
@@ -176,10 +177,17 @@ export default function DealDetailPage() {
 
   const loadChatHistory = useCallback(async () => {
     try {
-      const data = await api.get<{ messages: ChatMessage[] } | ChatMessage[]>(
+      // The API returns raw ChatMessage rows — the action buttons a reply
+      // generated live under `metadata.action`, not a top-level `action`
+      // field, so a naive cast silently dropped them on every reload.
+      type RawChatMessage = Omit<ChatMessage, "action" | "failed"> & {
+        metadata?: { action?: ChatMessage["action"]; failed?: boolean } | null;
+      };
+      const data = await api.get<{ messages: RawChatMessage[] } | RawChatMessage[]>(
         `/deals/${dealId}/chat/history`
       );
-      setMessages(Array.isArray(data) ? data : data.messages || []);
+      const rows = Array.isArray(data) ? data : data.messages || [];
+      setMessages(rows.map((m) => ({ ...m, action: m.metadata?.action, failed: m.metadata?.failed })));
     } catch (err) {
       console.warn("[deal] loadChatHistory failed:", err);
     }
@@ -319,9 +327,14 @@ export default function DealDetailPage() {
         setMessages,
         showToast,
         loadDeal,
+        chatAbortRef,
       }),
     [dealId, chatSending, showToast, loadDeal],
   );
+
+  const stopChat = useCallback(() => {
+    chatAbortRef.current?.abort();
+  }, []);
 
   const sendMessage = async () => {
     const text = chatInput.trim();
@@ -428,6 +441,7 @@ export default function DealDetailPage() {
               chatSending={chatSending}
               onSend={sendMessage}
               onSendPrompt={sendPrompt}
+              onStop={stopChat}
               onClearChat={clearChatHistory}
               chatEndRef={chatEndRef}
             />

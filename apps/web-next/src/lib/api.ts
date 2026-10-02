@@ -60,6 +60,39 @@ function triggerMfaLockout(message: string): never {
   throw new ApiError(message, 403, "MFA_REQUIRED");
 }
 
+// A 401 used to redirect straight to /login, losing whatever the user was
+// doing (an in-progress edit, an unsaved form) even though the access token
+// is often just stale and a silent refresh would have fixed it. Try one
+// refresh — shared across concurrent 401s so a burst of requests doesn't
+// fire the refresh call N times — before giving up and redirecting.
+let refreshPromise: Promise<boolean> | null = null;
+async function refreshSessionOnce(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase.auth.refreshSession();
+        return !error && !!data.session;
+      } catch {
+        return false;
+      }
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+// Redirects to /login with `next` set to the current path, so a successful
+// re-login returns the user to what they were doing instead of /dashboard.
+function redirectToLogin(): never {
+  if (typeof window !== "undefined") {
+    const next = window.location.pathname + window.location.search;
+    window.location.href = `/login?next=${encodeURIComponent(next)}`;
+  }
+  throw new Error("Unauthorized");
+}
+
 /**
  * Read { message, code } from an error response body. Handles both the flat
  * { error: "msg", code } shape and the Express error handler's nested
@@ -75,7 +108,7 @@ function parseErrorBody(body: unknown, res: Response): { message: string; code?:
   return { message, code: typeof code === "string" ? code : undefined };
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
   if (mfaLockoutActive) {
     triggerMfaLockout("Two-factor authentication is required by your organization");
   }
@@ -87,8 +120,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
 
   if (res.status === 401) {
-    window.location.href = "/login";
-    throw new Error("Unauthorized");
+    if (!_retried && (await refreshSessionOnce())) {
+      return request<T>(path, options, true);
+    }
+    redirectToLogin();
   }
 
   // DELETE endpoints return 204 No Content with empty body
@@ -125,7 +160,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
  * 401 still triggers a /login redirect. Other status codes are the caller's
  * problem to inspect.
  */
-async function requestRaw(path: string, options: RequestInit = {}): Promise<Response> {
+async function requestRaw(path: string, options: RequestInit = {}, _retried = false): Promise<Response> {
   const headers = await getAuthHeaders();
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -133,8 +168,10 @@ async function requestRaw(path: string, options: RequestInit = {}): Promise<Resp
   });
 
   if (res.status === 401) {
-    window.location.href = "/login";
-    throw new Error("Unauthorized");
+    if (!_retried && (await refreshSessionOnce())) {
+      return requestRaw(path, options, true);
+    }
+    redirectToLogin();
   }
   return res;
 }
@@ -191,7 +228,13 @@ export type StreamEventHandler = (event: Record<string, unknown>) => void;
  * invoking `onEvent` per parsed frame. Powers the streaming deal chat and
  * live memo generation UIs.
  */
-async function requestStream(path: string, body: unknown, onEvent: StreamEventHandler): Promise<void> {
+async function requestStream(
+  path: string,
+  body: unknown,
+  onEvent: StreamEventHandler,
+  opts?: { signal?: AbortSignal },
+  _retried = false,
+): Promise<void> {
   if (mfaLockoutActive) {
     triggerMfaLockout("Two-factor authentication is required by your organization");
   }
@@ -201,11 +244,14 @@ async function requestStream(path: string, body: unknown, onEvent: StreamEventHa
     method: "POST",
     headers: { ...headers, Accept: "text/event-stream" },
     body: JSON.stringify(body),
+    signal: opts?.signal,
   });
 
   if (res.status === 401) {
-    window.location.href = "/login";
-    throw new Error("Unauthorized");
+    if (!_retried && (await refreshSessionOnce())) {
+      return requestStream(path, body, onEvent, opts, true);
+    }
+    redirectToLogin();
   }
 
   if (res.status === 404) {
@@ -287,5 +333,6 @@ export const api = {
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
-  stream: (path: string, body: unknown, onEvent: StreamEventHandler) => requestStream(path, body, onEvent),
+  stream: (path: string, body: unknown, onEvent: StreamEventHandler, opts?: { signal?: AbortSignal }) =>
+    requestStream(path, body, onEvent, opts),
 };

@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { STAGE_LABELS, STAGES } from "@/lib/constants";
 import { CURRENCY_SYMBOLS, formatCurrency, getCurrencySymbol } from "@/lib/formatters";
 import { api } from "@/lib/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import type { DealDetail } from "./deal-detail-shared";
 
 // Ported from deal-edit.js (showEditDealModal + saveDealChangesFromModal).
@@ -152,6 +154,29 @@ export function EditDealModal({
   const [description, setDescription] = useState(deal.description || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  // Backdrop clicks and the X button used to call onClose() directly,
+  // silently discarding whatever the user had typed. Now they only close
+  // immediately when nothing changed; otherwise a confirm dialog gives the
+  // user a chance to keep editing.
+  const isDirty =
+    name !== (deal.name || "") ||
+    stage !== deal.stage ||
+    industry !== (deal.industry || "") ||
+    currency !== (deal.currency || "USD") ||
+    revenue !== (deal.revenue ?? null) ||
+    ebitda !== (deal.ebitda ?? null) ||
+    dealSize !== (deal.dealSize ?? null) ||
+    irr !== (deal.irrProjected != null ? String(deal.irrProjected) : "") ||
+    mom !== (deal.mom != null ? String(deal.mom) : "") ||
+    description !== (deal.description || "");
+  useUnsavedChanges(isDirty);
+
+  const requestClose = () => {
+    if (isDirty) setShowDiscardConfirm(true);
+    else onClose();
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -183,15 +208,28 @@ export function EditDealModal({
   return (
     <div
       className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+      onClick={(e) => e.target === e.currentTarget && requestClose()}
     >
+      <ConfirmDialog
+        open={showDiscardConfirm}
+        title="Discard changes?"
+        message="You have unsaved edits to this deal. Closing now will discard them."
+        confirmLabel="Discard"
+        cancelLabel="Keep editing"
+        variant="danger"
+        onConfirm={() => {
+          setShowDiscardConfirm(false);
+          onClose();
+        }}
+        onCancel={() => setShowDiscardConfirm(false)}
+      />
       <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full my-8">
         <div className="p-5 border-b border-border-subtle flex items-center justify-between">
           <h3 className="font-bold text-text-main text-base flex items-center gap-2">
             <span className="material-symbols-outlined text-primary">edit_document</span>
             Edit Deal Details
           </h3>
-          <button onClick={onClose} className="text-text-muted hover:text-text-main transition-colors">
+          <button onClick={requestClose} className="text-text-muted hover:text-text-main transition-colors">
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
@@ -293,7 +331,7 @@ export function EditDealModal({
             {saving ? "Saving..." : "Save Changes"}
           </button>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="px-6 py-2.5 border border-border-subtle rounded-lg font-medium text-sm hover:bg-gray-50 transition-colors"
           >
             Cancel

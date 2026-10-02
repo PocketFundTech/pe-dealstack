@@ -22,6 +22,9 @@ vi.mock('../src/services/agents/memoAgent/index.js', () => ({
   generateAllSectionsStreaming: (...args: any[]) => generateAllSectionsStreaming(...args),
 }));
 
+const updateSpy = vi.fn(() => ({ eq: async () => ({ error: null }) }));
+const insertSpy = vi.fn(async () => ({ error: null }));
+
 function tableMock() {
   return (table: string) => {
     if (table === 'Memo') {
@@ -34,8 +37,8 @@ function tableMock() {
           then: (resolve: any) => resolve({ data: [] }),
           order: async () => ({ data: [{ id: 'sec-1', type: 'EXECUTIVE_SUMMARY', content: 'final', sortOrder: 1 }] }),
         }) }),
-        update: () => ({ eq: async () => ({ error: null }) }),
-        insert: async () => ({ error: null }),
+        update: updateSpy,
+        insert: insertSpy,
       };
     }
     throw new Error(`Unexpected table: ${table}`);
@@ -76,6 +79,36 @@ describe('POST /api/memos/:id/generate-all — SSE', () => {
     // The done frame is re-shaped by the route (persisted rows), not forwarded raw.
     expect(res.text).toContain('"success":true');
     expect(res.text).toContain('"sec-1"');
+  });
+
+  it('persists a section as soon as it completes, before the run finishes (Batch 3)', async () => {
+    generateAllSectionsStreaming.mockReturnValue((async function* () {
+      yield { type: 'section_complete', sectionType: 'EXECUTIVE_SUMMARY', section: { type: 'EXECUTIVE_SUMMARY', title: 'Executive Summary', content: 'draft', aiGenerated: true, aiModel: 'claude-sonnet-5' }, index: 1, total: 2 };
+      // Simulate the run dying before the second section or 'done' ever arrives
+      // (timeout, crash, etc.) — the first section must already be saved.
+      throw new Error('agent crashed mid-run');
+    })());
+
+    const app = await buildApp();
+    await request(app).post('/api/memos/memo-1/generate-all').send({});
+
+    // insertSpy fires because the mocked existing-rows select returns [] (no
+    // row for EXECUTIVE_SUMMARY yet), so persistGeneratedSections inserts it.
+    expect(insertSpy).toHaveBeenCalledTimes(1);
+    expect(insertSpy.mock.calls[0][0]).toMatchObject([{ content: 'draft' }]);
+  });
+
+  it('sends an error frame when the generator ends without a done event', async () => {
+    generateAllSectionsStreaming.mockReturnValue((async function* () {
+      yield { type: 'section_complete', sectionType: 'EXECUTIVE_SUMMARY', section: { type: 'EXECUTIVE_SUMMARY', title: 'Executive Summary', content: 'draft', aiGenerated: true }, index: 1, total: 1 };
+      // No 'done' — generator just ends (distinct from throwing).
+    })());
+
+    const app = await buildApp();
+    const res = await request(app).post('/api/memos/memo-1/generate-all').send({});
+
+    expect(res.text).toContain('"type":"error"');
+    expect(res.text).toContain('saved');
   });
 
   it('returns 503 JSON (not SSE) when Anthropic is unavailable, without opening a stream', async () => {

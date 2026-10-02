@@ -50,9 +50,14 @@ interface IngestDealFormProps {
    *  this deal pre-selected (e.g. opened from a deal's own page/menu so the
    *  user doesn't have to re-search for the deal they're already on). */
   preselectedDeal?: DealOption | null;
+  /** Reports upload/extraction-in-progress state so a wrapping modal can
+   *  block Escape/backdrop close while a request is in flight — closing used
+   *  to abandon the result and leave the files looking like they need
+   *  re-uploading. */
+  onProcessingChange?: (processing: boolean) => void;
 }
 
-export function IngestDealForm({ variant = "page", onClose, preselectedDeal = null }: IngestDealFormProps) {
+export function IngestDealForm({ variant = "page", onClose, preselectedDeal = null, onProcessingChange }: IngestDealFormProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("file");
 
   /* ---- Deal selector ---- */
@@ -75,6 +80,13 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
   /* ---- Processing ---- */
   const [processing, setProcessing] = useState(false);
   const [progressMessage, setProgressMessage] = useState("");
+
+  useEffect(() => {
+    onProcessingChange?.(processing);
+    // Only the current value matters to the caller; onProcessingChange isn't
+    // expected to be stable across renders (it's often an inline setter).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processing]);
 
   /* ---- Result ---- */
   const [result, setResult] = useState<IngestResponse | null>(null);

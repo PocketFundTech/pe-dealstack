@@ -27,6 +27,7 @@ export function ChatTab({
   chatSending,
   onSend,
   onSendPrompt,
+  onStop,
   onClearChat,
   chatEndRef,
 }: {
@@ -37,6 +38,7 @@ export function ChatTab({
   chatSending: boolean;
   onSend: () => void;
   onSendPrompt: (text: string) => void;
+  onStop?: () => void;
   onClearChat?: () => void;
   chatEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
@@ -286,6 +288,16 @@ export function ChatTab({
                   </div>
                   {/* Helpful / Copy buttons — hidden while the message is still streaming in */}
                   {!msg.streaming && <AIMessageActions content={msg.content} />}
+                  {msg.failed && msg.retryText && !chatSending && (
+                    <button
+                      type="button"
+                      onClick={() => onSendPrompt(msg.retryText!)}
+                      className="self-start text-xs font-medium text-primary hover:underline ml-1 flex items-center gap-1"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">refresh</span>
+                      Retry
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -307,6 +319,17 @@ export function ChatTab({
                 </div>
               </div>
             </div>
+          )}
+
+          {chatSending && onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="self-start ml-12 flex items-center gap-1 text-xs font-medium text-text-muted hover:text-text-main border border-border-subtle rounded-full px-3 py-1 bg-white shadow-sm"
+            >
+              <span className="material-symbols-outlined text-[14px]">stop_circle</span>
+              Stop
+            </button>
           )}
 
           <div ref={chatEndRef} />

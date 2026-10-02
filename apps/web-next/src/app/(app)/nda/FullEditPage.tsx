@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import { useToast } from "@/providers/ToastProvider";
 import { useUser } from "@/providers/UserProvider";
 import { DownloadMenu, DraftEsignHint } from "./DownloadMenu";
@@ -72,6 +73,14 @@ export function FullEditPage({ doc, onBack, onSaved }: FullEditPageProps) {
   const workspace = useWorkspaceStatus();
   const editorRef = useRef<EditorHandle | null>(null);
   const [form, setForm] = useState<FormState>(() => initialForm(doc));
+  // Snapshot of the last-saved form, so we can tell the user they're about to
+  // lose unsaved edits (tab close, reload, or navigating away) instead of
+  // silently discarding them. Updated on doc change and after each save.
+  // State, not a ref — isDirty is read during render, and a ref's `.current`
+  // read there wouldn't pick up changes without a render already in flight.
+  const [savedForm, setSavedForm] = useState<FormState>(() => initialForm(doc));
+  const isDirty = JSON.stringify(form) !== JSON.stringify(savedForm);
+  useUnsavedChanges(isDirty);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
@@ -88,6 +97,7 @@ export function FullEditPage({ doc, onBack, onSaved }: FullEditPageProps) {
   // parent state echoes on `handleSaved` don't wipe the form mid-typing.
   useEffect(() => {
     setForm(initialForm(doc));
+    setSavedForm(initialForm(doc));
     setShowSnapshot(doc.status === "SENT");
     setViewMode("edit");
     setError(null);
@@ -137,6 +147,7 @@ export function FullEditPage({ doc, onBack, onSaved }: FullEditPageProps) {
         body,
       );
       onSaved(updated);
+      setSavedForm(form);
       showToast("NDA saved", "success");
     } catch (err) {
       console.warn("[nda] save failed:", err);
@@ -162,6 +173,7 @@ export function FullEditPage({ doc, onBack, onSaved }: FullEditPageProps) {
       googleDocUrl: resp.googleDocUrl,
     };
     onSaved(updated);
+    setSavedForm(form);
     setLastSenderEmail(resp.senderEmail);
     // Include sender Gmail in the toast — multi-tenant flow means From is
     // the user's own Workspace address, not a firm-wide domain.
