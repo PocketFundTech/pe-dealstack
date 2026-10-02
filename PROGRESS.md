@@ -39,7 +39,7 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 **Tests:** 2,388 API tests pass, including 38 new tests covering webhooks, SSRF and paging. Two background-upload tests now stub the webhook module, because they count after-response jobs.
 
-**⏳ Founder to-do:** run `apps/api/webhook-subscriptions-migration.sql`.
+**Migration:** the founder ran `apps/api/webhook-subscriptions-migration.sql` on 2026-10-02, and `to_regclass` returned `"WebhookSubscription"`. Webhooks are live.
 
 ---
 
