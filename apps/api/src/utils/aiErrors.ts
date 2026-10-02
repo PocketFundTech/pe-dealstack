@@ -4,6 +4,7 @@
 
 import { AppError } from '../middleware/errorHandler.js';
 import { UserBlockedError } from '../services/usage/enforcement.js';
+import { log } from './logger.js';
 
 export type AIErrorResponse = {
   statusCode: number;
@@ -39,6 +40,22 @@ export class AIProviderUnavailableError extends AppError {
  * information" content error (2026-09-19 prod incident: OpenAI out of
  * credit → every ingest told users their CIM had no deal data).
  */
+/**
+ * One loud, greppable log line per instance when a provider says we're out
+ * of credit (QA #14 "alert the team"). There is no balance API to poll, so
+ * the first rejection is the signal. Set a Vercel log alert on
+ * `ai_quota_exhausted`.
+ */
+let quotaAlerted = false;
+function noteQuotaExhausted(detail: string): void {
+  if (quotaAlerted) return;
+  quotaAlerted = true;
+  log.error('ai_quota_exhausted: AI provider rejected a request for lack of credit — top up the account', {
+    alert: 'ai_quota_exhausted',
+    detail: detail.slice(0, 300),
+  });
+}
+
 export type ProviderRejectionReason = 'quota' | 'auth' | 'rate_limit' | 'overloaded';
 
 const QUOTA_HINTS = [
@@ -144,6 +161,7 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
   // out-of-credit 400 fall through to a generic "AI error: 400 {…}".
   const rejection = classifyProviderRejection(err);
   if (rejection) {
+    if (rejection.reason === 'quota') noteQuotaExhausted(rejection.detail);
     return {
       statusCode: 503,
       userMessage: providerUnavailableMessage(providerNameFromError(rejection.detail), rejection.reason),
@@ -260,7 +278,26 @@ export function classifyAIError(errorMsg: string): string {
     return 'Cannot reach AI service — network error. Please check your connection.';
   }
 
-  // Default: include the actual error for transparency
-  const truncated = errorMsg.length > 150 ? errorMsg.slice(0, 150) + '...' : errorMsg;
-  return `AI error: ${truncated}`;
+  // Default: never echo the raw provider text (QA #14: it showed Anthropic's
+  // JSON with the request id). Callers log the raw error themselves.
+  return 'The AI request failed. Please try again in a moment.';
+}
+
+/**
+ * For routes whose errors are a MIX of AI failures and their own useful
+ * messages ("Could not download document file"): replace only AI/provider
+ * failures with the classified message, keep everything else.
+ */
+export function publicErrorMessage(err: unknown, fallback: string): { statusCode?: number; message: string; code?: string } {
+  const isAI =
+    err instanceof UserBlockedError ||
+    err instanceof AIProviderUnavailableError ||
+    classifyProviderRejection(err) !== null ||
+    /anthropic|openai|request_id|invalid_request_error|overloaded/i.test(err instanceof Error ? err.message : String(err ?? ''));
+  if (isAI) {
+    const c = classifyAIErrorObject(err);
+    return { statusCode: c.statusCode, message: c.userMessage, code: c.code };
+  }
+  const msg = err instanceof Error ? err.message : '';
+  return { message: msg || fallback };
 }

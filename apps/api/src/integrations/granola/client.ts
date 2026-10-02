@@ -5,6 +5,7 @@ import type {
   GranolaNoteWithTranscript,
   GranolaUserInfo,
 } from './types.js';
+import { IntegrationUpstreamError } from '../_platform/errors.js';
 
 function getBaseUrl(): string {
   return process.env.GRANOLA_API_BASE ?? 'https://public-api.granola.ai';
@@ -47,13 +48,22 @@ async function granolaFetch(
 }
 
 export async function validateKey(apiKey: string): Promise<GranolaUserInfo> {
-  const res = await granolaFetch(apiKey, '/v1/me');
+  let res: Response;
+  try {
+    res = await granolaFetch(apiKey, '/v1/me');
+  } catch (err) {
+    log.warn('granola: validateKey network error', { error: err instanceof Error ? err.message : String(err) });
+    throw new IntegrationUpstreamError("Couldn't reach Granola to check the key. Please try again.");
+  }
   if (res.status === 401) throw new Error('Invalid API key');
   if (res.status === 403) {
     throw new Error('Plan not supported — Granola API requires Business or Enterprise');
   }
   if (!res.ok) {
-    throw new Error(`Granola validateKey failed: ${res.status} ${await res.text()}`);
+    // Say what Granola said (QA #6: any other status became "unexpected error").
+    const body = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 160);
+    log.warn('granola: validateKey failed', { status: res.status, body });
+    throw new IntegrationUpstreamError(`Granola couldn't verify this key (HTTP ${res.status}${body ? `: ${body}` : ''}).`);
   }
   return (await res.json()) as GranolaUserInfo;
 }

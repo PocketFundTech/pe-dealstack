@@ -1,3 +1,36 @@
+# 🔴 Two migrations PENDING — QA batch 2 (2026-10-02)
+
+Both are idempotent. The code works before and after each one runs.
+
+| # | File | Fixes | Before it runs | Run? |
+|---|---|---|---|---|
+| 1 | `apps/api/invitation-deal-migration.sql` | Bulk invite: the Deal column is saved on the invitation, and the invitee joins that deal's team on accept (QA #4) | Invites still send; the result says "deal not saved" | ☐ |
+| 2 | `apps/api/document-extraction-status-migration.sql` | Live "3/6 done · reading …" progress during Extract all (QA #12) | The label shows elapsed time only | ☐ |
+
+Verify:
+```sql
+select table_name, column_name from information_schema.columns
+ where (table_name = 'Invitation' and column_name = 'dealId')
+    or (table_name = 'Document' and column_name = 'financialExtraction');  -- 2 rows
+```
+
+---
+
+# ✅ `auth-sessions-rpc-migration.sql` (2026-10-02) — RUN AND VERIFIED 2026-10-02
+
+QA #11: **Settings → Security → Active sessions** was always empty. This adds two `SECURITY DEFINER` functions,
+`list_user_sessions` and `revoke_user_session`. They are callable by `service_role` only, so the API can read and revoke
+the user's own sessions **without exposing the `auth` schema** (this replaces OPS-2). Idempotent. The code works before it runs:
+the panel says "Session management isn't available right now".
+
+| File | Fixes | Run? |
+|---|---|---|
+| `apps/api/auth-sessions-rpc-migration.sql` | Active sessions list + "This device" + sign out other sessions | ☑ 2026-10-02 |
+
+Verify: `select proname from pg_proc where proname in ('list_user_sessions','revoke_user_session');` returns 2 rows.
+
+---
+
 # ✅ `api-keys-migration.sql` (2026-10-02) — RUN AND VERIFIED 2026-10-02
 
 Creates the `ApiKey` table behind **Settings → API Keys** (org API keys for n8n, Zapier and scripts; see `docs/API-KEYS.md`).
