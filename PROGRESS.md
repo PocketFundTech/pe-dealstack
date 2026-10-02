@@ -5,6 +5,25 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 91 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 20:47 IST
+
+#### Goal: post-SRM financial hardening, PR A — wrong numbers that look right (fix plan Phase G, G1–G4).
+
+Three read-only audits (extraction correctness, model correctness, financial AI-failure messages) found ~25 issues after fix plan A–F merged; the top ones were checked against the code. Plan in `docs/FINANCIALS-FIX-PLAN.md` → Phase G (PRs A–E). This PR is A.
+
+- **G1 · Entry multiple priced a different deal.**
+  - *Problem:* the default entry multiple is deal size ÷ the deal record's EBITDA, but the model applies it to the statements' EBITDA. On SRM (6.1 on the record vs 2.21 from the P&L) that gave a plausible-looking 5.5× on the wrong base.
+  - *Fix:* new `dealModel/entrySeed.ts`. When the two EBITDAs differ by more than 25% and the statements drive entry, the default is 5× and the API returns `warnings` naming both figures. The Build model panel shows them in an amber note, and the export's Notes sheet explains the 5×. Once Base is saved, only the EBITDA-gap warning remains.
+- **G2 · Bottom-up EBITDA carried one-off gains.** The QuickBooks-style derivation (`net_income + interest + tax + da`) now subtracts other income and adds back other expense, from printed totals or raw sub-accounts (`financialDerivations.ts`).
+- **G3 · Cash-flow signs missed nested accounts.** Raw sub-accounts under investing / financing activities (e.g. `financing_activities_equipment_loan_principal`) are now judged by their words and stored as outflows. Proceeds, sales and contributions stay positive.
+- **G4 · "Revenue per employee" was plain revenue.** It now divides by headcount (`employees`), and is omitted when there's none. The web never rendered it. Extracting headcount is PR E.
+
+Tests: 2412 API tests pass (new: `analysis-workforce.test.ts`, plus cases in the derived-EBITDA, signs, base-period and model-route suites). Web deal-page tests pass (93), including two new Build model panel warning tests.
+
+---
+
 ### Session 90 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 20:00 IST

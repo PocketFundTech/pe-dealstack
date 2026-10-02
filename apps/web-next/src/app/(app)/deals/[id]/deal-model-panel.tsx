@@ -209,6 +209,15 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
         </div>
       </div>
 
+      {model.warnings && model.warnings.length > 0 && (
+        <div className="flex gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs text-amber-900" role="note">
+          <span className="material-symbols-outlined text-[18px] text-amber-600">warning</span>
+          <ul className="flex flex-col gap-1">
+            {model.warnings.map((w) => <li key={w}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+
       {hasEntry && (
         <div className="grid grid-cols-2 gap-px border-b border-border-subtle bg-border-subtle sm:grid-cols-4">
           {[

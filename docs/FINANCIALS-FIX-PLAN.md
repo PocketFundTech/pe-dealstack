@@ -103,6 +103,37 @@ Sizes: **S** ≤ ½ day · **M** 1–2 days · **L** 3–5 days. "Mig" = needs a
 
 - [x] **F1 · Surface the qualitative red flags (M)** → **PR #165 (cash-flow flags) + #166 (customer concentration)** — customer concentration and related-party customers from the CIM/notes (the deal chat can already read documents); negative free cash flow and debt-funded capex from the (now correct) cash flow; feed both into Quality of Earnings and Key Findings.
 
+### Phase G — Post-SRM hardening (audit, 2 Oct 2026)
+
+Three read-only audits after A–F merged (extraction correctness, model correctness, financial AI-failure messages). Theme: numbers that look plausible but are wrong, and failures reported as success. Plan: `~/.claude/plans/smooth-giggling-oasis.md`. One PR per group, in this order.
+
+**PR A — wrong numbers that look right**
+- [x] **G1 · Entry multiple vs. EBITDA mismatch** — the default multiple (deal size ÷ deal-record EBITDA) was applied to the statements' EBITDA. When the two EBITDAs differ by >25% the default is now 5× and the Build model panel + Notes sheet say why, naming both figures (`dealModel/entrySeed.ts`).
+- [x] **G2 · Bottom-up EBITDA excluded one-offs** — `net_income + interest + tax + da` now subtracts other income and adds back other expense (printed totals or raw sub-accounts), so a PPP forgiveness / asset-sale gain no longer flows into entry EBITDA.
+- [x] **G3 · Cash-flow signs on nested sub-accounts** — raw accounts nested under investing / financing activities (`financing_activities_equipment_loan_principal`) are judged by their words and stored as outflows.
+- [x] **G4 · Revenue per employee** — divides by real headcount (`employees`); omitted when none. (It returned plain revenue; the web never rendered it.)
+
+**PR B — failures must say why** (financial paths only)
+- [ ] **G5** Classifiers / cross-verify / extract node surface AI provider rejections (credits, auth, rate limit) as a failed extraction with the reason, instead of "no financial data found".
+- [ ] **G6** Narrative insights stop returning a placeholder narrative on failure; the Insights tab shows the reason instead of "Loading…" forever.
+- [ ] **G7** Analysis page and Build model panel show the server's actual reason; "no financials yet" vs. a server failure look different; missing entry EBITDA explained.
+- [ ] **G8** Model route returns specific codes for known failure causes.
+
+**PR C — duplicate periods & mixed currency** (needs a founder-run migration)
+- [ ] **G9** Same fiscal year stored twice under different labels ("2024" vs "FY2024 (Jan - Dec 2024)") — dedupe on canonical period + unique index on `periodKey`.
+- [ ] **G10** Mixed-currency statements flagged on financials/analysis instead of silently added together.
+
+**PR D — scenarios + lower priority**
+- [ ] **G11** Low/High margin delta no longer silently does nothing when cost lines are Fixed.
+- [ ] **G12** "summary" in a file/tab name no longer marks a real statement as model-derived.
+- [ ] **G13** Bare "FY2024" uses the company's fiscal year-end, not December.
+- [ ] **G14** Restated figures preferred over originals; `needs_review` conflicts visible.
+- [ ] **G15** Model `unitScale` limited to MILLIONS; `Deal.ebitda` units heuristic sanity-checked.
+- [ ] **G16** Fast-pass deal reader rescales deterministically and labels currency.
+
+**PR E — headcount extraction** (founder's choice)
+- [ ] **G17** Extract period-end headcount (`employees`, never unit-scaled), keep it out of the P&L table and model lines, show revenue per employee in Analysis. Extraction schema version bump.
+
 ### Checks before / alongside the fixes
 
 - [ ] **V1 · Confirm on the SRM deal's stored data** (needs a founder SQL run — Claude Code can't read production data):

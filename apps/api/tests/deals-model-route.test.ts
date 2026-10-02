@@ -148,6 +148,32 @@ describe('GET /api/deals/:dealId/model', () => {
     expect(res.body.history).toHaveLength(2);
   });
 
+  it('ignores the deal-record multiple when its EBITDA disagrees with the statements (SRM: 6.1 vs 2.21)', async () => {
+    // Deal record: size 33.55 / EBITDA 6.1 → 5.5x. Statements: EBITDA 2.21.
+    // 5.5x on 2.21 would be a different deal than the one on the record, so
+    // the default falls back to 5x and both figures are named.
+    dealRow = { ...dealRow, dealSize: 33.55, ebitda: 6.1 };
+    statements = [stmt('2023', 20.9, 1.9), stmt('2024', 27.3, 2.21)];
+    const app = await buildApp();
+    for (const path of ['/api/deals/deal-1/model', '/api/deals/deal-1/model/cases']) {
+      const res = await request(app).get(path);
+      expect(res.status).toBe(200);
+      const a = path.endsWith('cases') ? res.body.cases.find((c: { case: string }) => c.case === 'Base').assumptions : res.body.assumptions;
+      expect(a.entryMultiple).toBe(5);
+      const text = res.body.warnings.join(' ');
+      expect(text).toContain('2.21');
+      expect(text).toContain('6.10');
+      expect(text).toContain('5.0x');
+    }
+  });
+
+  it('keeps the deal-record multiple and warns nothing when the two EBITDAs agree', async () => {
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model');
+    expect(res.body.assumptions.entryMultiple).toBe(5.5);
+    expect(res.body.warnings).toEqual([]);
+  });
+
   it('returns the saved assumptions once they exist', async () => {
     modelRow = { id: 'model-1', name: 'Base case', assumptions: { entryMultiple: 7 } };
     const app = await buildApp();
@@ -290,6 +316,20 @@ describe('POST /api/deals/:dealId/model/export', () => {
     // xlsx is a zip — first two bytes are PK.
     expect(res.body.slice(0, 2).toString()).toBe('PK');
     expect(res.body.length).toBeGreaterThan(2000);
+  });
+
+  it('explains on the Notes sheet why the default multiple is not the deal record\'s', async () => {
+    dealRow = { ...dealRow, dealSize: 33.55, ebitda: 6.1 };
+    statements = [stmt('2023', 20.9, 1.9), stmt('2024', 27.3, 2.21)];
+    const app = await buildApp();
+    const res = await request(app).post('/api/deals/deal-1/model/export').send({}).buffer(true).parse(binaryParser);
+    expect(res.status).toBe(200);
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.body as never);
+    const notes = JSON.stringify(wb.getWorksheet('Notes')!.getSheetValues());
+    expect(notes).toContain('not the deal record');
+    expect(notes).toContain('the deal record says 6.10');
   });
 
   it('names the file after the deal', async () => {

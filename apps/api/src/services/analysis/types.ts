@@ -168,6 +168,7 @@ export interface RedFlag {
 }
 
 export interface WorkforceMetrics {
+  /** Revenue (millions, statement currency) per period-end employee; null where headcount is missing. */
   revenuePerEmployee: { period: string; value: number | null }[];
   trend: 'improving' | 'declining' | 'stable' | 'insufficient';
 }

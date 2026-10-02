@@ -40,6 +40,7 @@ import {
 } from '../services/dealModel/scenarios.js';
 import { activeBalanceKeys, summariseCase } from '@ai-crm/shared';
 import { openingBalances } from '../services/dealModel/balanceItems.js';
+import { entrySeed, type EntrySeed } from '../services/dealModel/entrySeed.js';
 
 const router = Router();
 
@@ -161,8 +162,32 @@ async function loadModelInputs(dealId: string, orgId: string): Promise<LoadedDea
   };
 }
 
-function dealSeed(inputs: LoadedDeal) {
-  return { evMultiple: inputs.deal.evMultiple, currency: inputs.currency };
+type Catalogue = ReturnType<typeof buildLineCatalogue>;
+
+/** Base period + entry seed: everything the defaults and the panel read about entry. */
+function entryContext(inputs: LoadedDeal, catalogue: Catalogue) {
+  const base = selectBasePeriod(inputs.history);
+  const baseCol = baseColumnValues(catalogue, inputs.history, base, inputs.deal.ebitdaMillions);
+  const seed = entrySeed({
+    impliedMultiple: inputs.deal.evMultiple,
+    dealEbitda: inputs.deal.ebitdaMillions,
+    statementsEbitda: baseCol.entrySource === 'base' ? evaluateLine(catalogue.lines, baseCol.values, 'ebitda') : null,
+    entrySource: baseCol.entrySource,
+  });
+  return { base, baseCol, seed };
+}
+
+function dealSeed(inputs: LoadedDeal, seed: EntrySeed) {
+  return { evMultiple: seed.evMultiple, currency: inputs.currency };
+}
+
+/**
+ * Warnings for the panel. entrySeed lists the EBITDA gap first and the
+ * "default multiple ignored" note second; once Base is saved, the multiple
+ * is the user's own and only the gap still matters.
+ */
+function seedWarnings(seed: EntrySeed, saved: SavedCases): string[] {
+  return saved.Base ? seed.warnings.slice(0, 1) : seed.warnings;
 }
 
 /**
@@ -170,9 +195,8 @@ function dealSeed(inputs: LoadedDeal) {
  * last full year) — the panel's driver table and preview read these rather
  * than guessing from history.
  */
-function modelStructure(inputs: LoadedDeal, catalogue: ReturnType<typeof buildLineCatalogue>) {
-  const base = selectBasePeriod(inputs.history);
-  const baseCol = baseColumnValues(catalogue, inputs.history, base, inputs.deal.ebitdaMillions);
+function modelStructure(inputs: LoadedDeal, catalogue: Catalogue, entry: ReturnType<typeof entryContext>) {
+  const { base, baseCol } = entry;
   return {
     lines: catalogue.lines,
     baseValues: baseCol.values,
@@ -230,7 +254,7 @@ function sendModelError(res: Parameters<typeof router.get>[1] extends never ? ne
  */
 function withEdits(
   base: ReturnType<typeof resolveAssumptions>, body: unknown, inputs: LoadedDeal,
-  catalogue: ReturnType<typeof buildLineCatalogue>,
+  catalogue: Catalogue, seed: EntrySeed,
 ) {
   const edits = (body && typeof body === 'object' ? body : {}) as Partial<ModelAssumptions>;
   const merged: Partial<ModelAssumptions> = { ...base, ...edits };
@@ -239,7 +263,7 @@ function withEdits(
   // …and pre-E3 scalar NWC / capex edits.
   if (!edits.balanceDrivers && (edits.nwcPctRevenue !== undefined || edits.capexPctRevenue !== undefined)) delete merged.balanceDrivers;
   const parsed = coherentAssumptions.safeParse(merged);
-  return parsed.success ? resolveAssumptions(parsed.data, inputs.history, dealSeed(inputs), catalogue) : base;
+  return parsed.success ? resolveAssumptions(parsed.data, inputs.history, dealSeed(inputs, seed), catalogue) : base;
 }
 
 // GET /api/deals/:dealId/model?case=
@@ -257,7 +281,8 @@ router.get('/:dealId/model', async (req, res) => {
 
     const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
-    const cases = resolveCases(saved, inputs.history, dealSeed(inputs), catalogue);
+    const entry = entryContext(inputs, catalogue);
+    const cases = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue);
 
     res.json({
       case: which,
@@ -266,7 +291,8 @@ router.get('/:dealId/model', async (req, res) => {
       // Low / High never saved: seeded from Base with SCENARIO_DELTAS.
       seededFromBase: which !== 'Base' && !saved[which],
       history: inputs.history,
-      ...modelStructure(inputs, catalogue),
+      ...modelStructure(inputs, catalogue, entry),
+      warnings: seedWarnings(entry.seed, saved),
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -289,8 +315,9 @@ router.get('/:dealId/model/cases', async (req, res) => {
 
     const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
-    const cases = resolveCases(saved, inputs.history, dealSeed(inputs), catalogue);
-    const structure = modelStructure(inputs, catalogue);
+    const entry = entryContext(inputs, catalogue);
+    const cases = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue);
+    const structure = modelStructure(inputs, catalogue, entry);
 
     res.json({
       cases: MODEL_CASES.map((c) => ({
@@ -304,6 +331,7 @@ router.get('/:dealId/model/cases', async (req, res) => {
       deltas: SCENARIO_DELTAS,
       history: inputs.history,
       ...structure,
+      warnings: seedWarnings(entry.seed, saved),
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -375,16 +403,17 @@ router.post('/:dealId/model/export', async (req, res) => {
 
     const saved = await loadSavedCases(dealId, orgId);
     const catalogue = buildLineCatalogue(inputs.history);
-    const resolved = resolveCases(saved, inputs.history, dealSeed(inputs), catalogue);
+    const entry = entryContext(inputs, catalogue);
+    const resolved = resolveCases(saved, inputs.history, dealSeed(inputs, entry.seed), catalogue);
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
     const cases: CaseSet = { ...resolved };
     let activeCase = which;
     if (body.cases && typeof body.cases === 'object') {
       const edits = body.cases as Partial<Record<ModelCase, unknown>>;
-      for (const c of MODEL_CASES) if (edits[c]) cases[c] = withEdits(resolved[c], edits[c], inputs, catalogue);
+      for (const c of MODEL_CASES) if (edits[c]) cases[c] = withEdits(resolved[c], edits[c], inputs, catalogue, entry.seed);
       activeCase = parseCase(body.activeCase) ?? which;
     } else {
-      cases[which] = withEdits(resolved[which], body, inputs, catalogue);
+      cases[which] = withEdits(resolved[which], body, inputs, catalogue, entry.seed);
     }
 
     const buffer = await buildModelWorkbook({
@@ -400,9 +429,14 @@ router.post('/:dealId/model/export', async (req, res) => {
         sourceDocuments: inputs.documentNames,
         generatedAt: new Date().toISOString(),
         fallbackEntryEbitda: inputs.deal.ebitdaMillions,
-        notes: inputs.history.length < 2
-          ? ['Only one historical period was available — growth assumptions are defaults, not derived.']
-          : [],
+        notes: [
+          ...(inputs.history.length < 2
+            ? ['Only one historical period was available — growth assumptions are defaults, not derived.']
+            : []),
+          // The EBITDA gap itself is already a CHECK note (coverNotes); add
+          // why the default multiple isn't the deal record's.
+          ...seedWarnings(entry.seed, saved).slice(1),
+        ],
       },
     });
 

@@ -285,18 +285,25 @@ export function computeCostStructure(data: PreparedData): CostStructure | undefi
   return { periods: csPeriods, breakEvenRevenue, operatingLeverage };
 }
 
+/**
+ * Revenue (millions) ÷ period-end headcount (`employees`). Periods without
+ * headcount stay null; with no headcount at all the metric is omitted — it
+ * used to return plain revenue under this label.
+ */
 export function computeWorkforceMetrics(data: PreparedData): WorkforceMetrics | undefined {
   const { income, periods } = data;
 
-  const revenues = periods.map(p => ({
-    period: p,
-    value: li(income.get(p) ?? {}, 'revenue'),
-  }));
+  const perEmployee = periods.map(p => {
+    const inc = income.get(p) ?? {};
+    const revenue = li(inc, 'revenue');
+    const employees = li(inc, 'employees');
+    return { period: p, value: revenue != null && employees ? Math.round((revenue / employees) * 1e6) / 1e6 : null };
+  });
 
-  if (!revenues.some(r => r.value != null)) return undefined;
+  if (!perEmployee.some(r => r.value != null)) return undefined;
 
   return {
-    revenuePerEmployee: revenues,
-    trend: comparableTrend(data, revenues),
+    revenuePerEmployee: perEmployee,
+    trend: comparableTrend(data, perEmployee),
   };
 }
