@@ -4,7 +4,17 @@
  */
 
 const activeExtractions = new Map<string, number>(); // orgId → count
-export const MAX_CONCURRENT_PER_ORG = 2;
+/**
+ * How many financial extractions run at once per org (per instance).
+ * QA #12: at 2, six documents took three waves (2m44s). Default 4; set
+ * EXTRACTION_CONCURRENCY in Vercel (1–8) to tune without a code change —
+ * lower it if Anthropic rate-limit (429) errors appear.
+ */
+export function extractionConcurrency(raw: string | undefined = process.env.EXTRACTION_CONCURRENCY): number {
+  const n = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(n) ? Math.min(8, Math.max(1, n)) : 4;
+}
+export const MAX_CONCURRENT_PER_ORG = extractionConcurrency();
 
 /**
  * Try to acquire an extraction slot for an organization.

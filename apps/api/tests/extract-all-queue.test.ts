@@ -6,8 +6,16 @@
 import { describe, it, expect } from 'vitest';
 import { extractionOrder, isDerivedModelName } from '../src/services/financialSourceAuthority.js';
 import {
-  acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot, getActiveCount,
+  acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot, getActiveCount, MAX_CONCURRENT_PER_ORG,
 } from '../src/services/agents/financialAgent/concurrency.js';
+
+/** Take every slot for an org (the cap is configurable — EXTRACTION_CONCURRENCY). */
+function fillSlots(org: string) {
+  for (let i = 0; i < MAX_CONCURRENT_PER_ORG; i++) expect(acquireExtractionSlot(org)).toBe(true);
+}
+function drainSlots(org: string) {
+  for (let i = 0; i < MAX_CONCURRENT_PER_ORG; i++) releaseExtractionSlot(org);
+}
 import { withDealWriteLock } from '../src/services/financialExtractionOrchestrator.js';
 
 describe('document order', () => {
@@ -35,22 +43,18 @@ describe('document order', () => {
 describe('waiting for an extraction slot', () => {
   it('waits for a slot to free up instead of failing', async () => {
     const org = 'org-queue-test';
-    expect(acquireExtractionSlot(org)).toBe(true);
-    expect(acquireExtractionSlot(org)).toBe(true);
+    fillSlots(org);
     setTimeout(() => releaseExtractionSlot(org), 50);
     await expect(acquireExtractionSlotBy(org, Date.now() + 2_000, 10)).resolves.toBe(true);
-    releaseExtractionSlot(org);
-    releaseExtractionSlot(org);
+    drainSlots(org);
     expect(getActiveCount(org)).toBe(0);
   });
 
   it('gives up at the deadline', async () => {
     const org = 'org-queue-deadline';
-    acquireExtractionSlot(org);
-    acquireExtractionSlot(org);
+    fillSlots(org);
     await expect(acquireExtractionSlotBy(org, Date.now() + 30, 10)).resolves.toBe(false);
-    releaseExtractionSlot(org);
-    releaseExtractionSlot(org);
+    drainSlots(org);
   });
 });
 
