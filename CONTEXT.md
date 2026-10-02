@@ -1,4 +1,4 @@
-# CONTEXT — where things stand (updated 3 Oct 2026, 00:59 IST)
+# CONTEXT — where things stand (updated 3 Oct 2026, 04:10 IST)
 
 The one-page handoff for whoever picks up next (person or agent). The detailed day-by-day log is
 [`PROGRESS.md`](PROGRESS.md); working rules are in [`CLAUDE.md`](CLAUDE.md).
@@ -40,6 +40,11 @@ None from the financials work — everything below is merged.
   - **#183 (C)**: one active row per canonical period (dedup, conflict resolution, DB index), and analysis uses one currency.
   - **#184 (D1)**: Low/High margin delta through Fixed costs; "summary" names; model always in millions.
   - **#185 (D2)**: fiscal year-end hint for bare "FY2025"; restatements win; the fast deal read's units are re-checked in code.
+- **Financials Phase H — model extras while AI credit is out** (founder's pick, 3 Oct 2026; plan: FINANCIALS-FIX-PLAN.md → Phase H):
+  - **#188 (H1)**: a parity test checks every cached workbook value against the live preview (`projectModel`/`summariseCase`). Found and fixed a real bug: `INDEX` over another sheet's range cached as 0, so exported-model previews showed exit EV 0 / IRR "n/a" until opened in Excel with editing enabled.
+  - **#189 (H2)**: a revolving credit facility — off by default (commitment 0). Draws only to hold minimum cash, repaid first from spare cash before the sweep, interest on the opening drawn balance + fee on the undrawn commitment (no circularity).
+  - **#191 (H3)**: an integrated balance sheet with a balance check. Entry uses a goodwill plug (founder's choice): goodwill = entry EV − net working capital − PP&E − other net operating assets bought; fees expensed at close; no dividends during the hold. New `Balance Sheet` sheet in the workbook + a read-only panel section with a "Balances" / "Check off by …" badge.
+  - **H4 (per-account label/order)** is the only item left in Phase H — held until AI credit is back, since it needs an extraction schema change.
 - Earlier the same week: token/cost work (#145, #149, #150, #154–#156), uploads (#151), bugs (#152), icon font (#153).
 
 ## Migrations
@@ -62,12 +67,12 @@ The app works before and after; the SQL cleans up existing duplicate periods and
 ## What's next (engineering)
 1. After credit is back:
    - Re-run the live QA checks that failed only on credit: Excel re-extract on "Northwind Cold Chain", PDF upload, model entry/IRR, data-room insights.
-   - Check the Phase G warnings show (Build model panel, Analysis currency note).
+   - Check the Phase G warnings show (Build model panel, Analysis currency note) and the Phase H Balance Sheet section renders and balances on a real deal.
    - Then re-extract SRM and have Pushkar re-test.
    - While credit is still out, #182 is verifiable: extraction should say the AI provider is out of credits, not "no financial data".
-2. **Financials PR E — headcount extraction** (founder's choice; G17 in the plan). Held until credit is back, because it changes the extraction prompt and bumps `EXTRACTION_SCHEMA_VERSION`.
+2. **Financials H4 / PR E — headcount extraction + per-account label/order** (founder's choice; G17/H4 in the plan). Held until credit is back, because both change the extraction prompt and bump `EXTRACTION_SCHEMA_VERSION`. Founder's design choices already recorded: headcount extracted (not deferred); labels/order stored as `<key>_label`/`<key>_order` inside `lineItems` (no migration), not a separate `lineItemMeta` column.
 3. Smooth Flows **Batch 3** (stop losing work) → **Batch 4** (pagination, extraction status, public large uploads, mobile nav, shared Dialog).
-4. Financials deferred items: integrated balance sheet + balance check, revolver, per-account source label/row order.
+4. Financials deferred items remaining: none — integrated BS, balance check and revolver all shipped in Phase H (#188–#191).
 
 ## Testing on production
 QA login `qa.tester@example.com` (ADMIN) in its own org **"Avise QA Test Org"**; password in the session scratchpad
@@ -94,3 +99,16 @@ QA login `qa.tester@example.com` (ADMIN) in its own org **"Avise QA Test Org"**;
 - **Two PRs that both add a top entry to `PROGRESS.md` conflict.** Rebase the second onto `main`, keep both entries, newest first.
 - **`apps/web-next` icon-font test scans for icon names.** Any new Material icon must be in `src/lib/iconFont.ts`, and
   string literals inside `material-symbols-outlined` spans count as icon names.
+- **fast-formula-parser's `INDEX` loses the sheet** when it resolves a range reference, so `INDEX(OtherSheet!C5:G5,1,n)` reads the
+  *formula's own* sheet instead — silently caches as 0/blank. `calc.ts` overrides `INDEX` the same way it already overrides
+  `CHOOSE`/`MATCH`, resolving the range through the sheet-aware lookup. Any new cross-sheet `INDEX`/lookup formula should be
+  covered by `tests/deal-model-parity.test.ts` (workbook vs. live-preview numbers), not just a formula-shape test — that's
+  exactly what caught this one.
+- **Merging own PRs when green is authorized** (founder, 3 Oct 2026, while away) — full CI + local `apps/api` + `apps/web-next`
+  suites green first, `gh pr merge --merge --admin` (branch protection needs an approving review; admin bypasses it on purpose).
+  Start the next PR from fresh `origin/main` each time.
+- **A PR can go from green to `CONFLICTING`/`DIRTY` between opening and merging** if another PR merges into `main` first
+  (happened between #189 and #190). Re-fetch and check `gh pr view <n> --json mergeable,mergeStateStatus` right before merging,
+  not just when CI first passes. If a rebase tries to replay a branch's own prior commits (already on `main` under a different
+  merge-commit SHA) and conflicts, don't fight it — diff the branch's unique changes against its old base
+  (`git diff <old-base> <branch-tip> -- apps packages`), branch fresh off `origin/main`, and re-apply the diff instead.
