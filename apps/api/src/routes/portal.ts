@@ -29,6 +29,7 @@ interface ShareRow {
   expiresAt: string | null;
   revokedAt: string | null;
   createdBy: string | null;
+  createdAt?: string | null;
 }
 
 /**
@@ -44,7 +45,7 @@ function extractCompanyName(company: unknown): string | null {
 async function resolveShare(token: string): Promise<{ share?: ShareRow; status?: number; error?: string }> {
   const { data: share } = await supabase
     .from('DealShare')
-    .select('id, dealId, organizationId, label, includeFinancials, includeDocuments, includeMemos, expiresAt, revokedAt, createdBy')
+    .select('id, dealId, organizationId, label, includeFinancials, includeDocuments, includeMemos, expiresAt, revokedAt, createdBy, createdAt')
     .eq('token', token)
     .single();
 
@@ -159,7 +160,8 @@ router.get('/:token', async (req, res) => {
     const payload: Record<string, unknown> = {
       share: {
         label: share.label,
-        sharedBy: org?.name ?? 'a Avise user',
+        sharedBy: org?.name ?? 'an Avise user',
+        sharedAt: share.createdAt ?? null,
         includeFinancials: share.includeFinancials,
         includeDocuments: share.includeDocuments,
         includeMemos: share.includeMemos,
