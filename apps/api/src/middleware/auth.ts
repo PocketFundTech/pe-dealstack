@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getCachedOrgMfa, setCachedOrgMfa } from './authContextCache.js';
+import { isApiKey, resolveApiKey } from '../services/apiKeyService.js';
 
 // User type for authenticated requests
 export interface AuthUser {
@@ -14,6 +15,8 @@ export interface AuthUser {
   user_metadata?: Record<string, unknown>;
   /** True when Supabase has confirmed the user owns `email`. */
   emailConfirmed?: boolean;
+  /** Set when the request authenticated with an Avise API key (avise_sk_…). */
+  apiKeyId?: string;
 }
 
 // Extend Express Request to include user
@@ -35,6 +38,28 @@ export async function authMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
+    // Avise API key (external tools like n8n): `X-API-Key: avise_sk_…` or
+    // `Authorization: Bearer avise_sk_…`. Acts as the admin who created it.
+    const xApiKey = req.headers['x-api-key'];
+    const bearer = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.substring(7)
+      : undefined;
+    const apiKey = typeof xApiKey === 'string' ? xApiKey : isApiKey(bearer) ? bearer : undefined;
+    if (apiKey) {
+      const keyUser = isApiKey(apiKey) ? await resolveApiKey(apiKey) : null;
+      if (!keyUser) {
+        log.warn('API key rejected', { ip: req.ip, url: req.originalUrl });
+        res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Invalid, revoked or expired API key. Create a new one in Settings → API Keys.',
+        });
+        return;
+      }
+      req.user = keyUser;
+      next();
+      return;
+    }
+
     // Get the Authorization header
     const authHeader = req.headers.authorization;
 

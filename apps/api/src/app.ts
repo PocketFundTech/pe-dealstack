@@ -62,6 +62,7 @@ import adminSecurityRouter from './routes/admin-security.js';
 import adminSecurityDashboardRouter from './routes/admin-security-dashboard.js';
 import internalRouter from './routes/internal-usage.js';
 import usageRouter from './routes/usage.js';
+import apiKeysRouter from './routes/api-keys.js';
 import managedAgentsWebhooksRouter from './routes/managed-agents-webhooks.js';
 import cronSignalScanRouter from './routes/cron-signal-scan.js';
 import hubspotImportRouter from './routes/hubspot-import.js';
@@ -495,6 +496,9 @@ app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageCon
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
 app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);
+
+// Org API keys for external tools (n8n etc.) — admin-only, session-only (see routes/api-keys.ts)
+app.use('/api/api-keys', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, apiKeysRouter);
 // Outreach pipeline-tracking board — Cicero Capital only (requireCiceroCapital
 // 403s any other org, even with a valid session and a guessed record id).
 app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachRouter);

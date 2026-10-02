@@ -1,3 +1,18 @@
+# ✅ `api-keys-migration.sql` (2026-10-02) — RUN AND VERIFIED 2026-10-02
+
+Creates the `ApiKey` table behind **Settings → API Keys** (org API keys for n8n, Zapier and scripts; see `docs/API-KEYS.md`).
+Founder ran it 2026-10-02; `to_regclass` returned `"ApiKey"`. (Before it ran, the API Keys section showed "Couldn't load API keys…", key creation fails, and every `avise_sk_…` key was rejected with 401.)
+Idempotent, safe to re-run.
+
+| # | Migration file | Adds | Run? |
+|---|---|---|---|
+| 1 | `apps/api/api-keys-migration.sql` | `ApiKey` table (hash-only storage, RLS on) | ✅ 2026-10-02 |
+
+Verify:
+```sql
+select to_regclass('public."ApiKey"');  -- not null
+```
+
 # ✅ 2026-09-29 → 2026-10-01 BATCH — ALL THREE RUN AND VERIFIED (2026-10-02)
 
 The founder ran all three in the Supabase SQL Editor on 2026-10-02 and the combined check passed:

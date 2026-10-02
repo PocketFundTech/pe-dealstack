@@ -21,6 +21,7 @@ import { CriteriaSection } from "./CriteriaSection";
 import { FirmTeaserSection } from "./FirmTeaserSection";
 import { AiUsageSection } from "./AiUsageSection";
 import { IntegrationsSection } from "./IntegrationsSection";
+import { ApiKeysSection } from "./ApiKeysSection";
 import { NDATemplatesSection } from "./NDATemplatesSection";
 import { OutreachPipelineSection } from "./OutreachPipelineSection";
 
@@ -36,6 +37,7 @@ const NAV_SECTIONS = [
   { id: "criteria", label: "Investment Criteria", icon: "grading" },
   { id: "firm-teaser", label: "Firm Teaser", icon: "auto_awesome" },
   { id: "integrations", label: "Integrations", icon: "extension" },
+  { id: "api-keys", label: "API Keys", icon: "key" },
   { id: "ai-usage", label: "AI Usage", icon: "analytics" },
   { id: "outreach-pipeline", label: "Outreach Pipeline", icon: "campaign" },
 ] as const;
@@ -352,6 +354,8 @@ export default function SettingsPage() {
           <FirmTeaserSection />
 
           <IntegrationsSection onToast={showToast} />
+
+          <ApiKeysSection onToast={showToast} />
 
           <NDATemplatesSection />
 

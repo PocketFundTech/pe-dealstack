@@ -5,6 +5,25 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 87 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 14:20 IST
+
+#### Goal: standard API keys so n8n and other tools can connect to Avise (PR `feat/api-keys`).
+
+**Problem:** Avise had no way for an external tool to call its API. Every request needed a browser login token that expires after about an hour, so n8n couldn't be connected. The only "API key" endpoint was inbound: users pasting *their* Granola or other keys into Avise.
+
+**Fix: org API keys, one standard for all of them**
+- **Format:** `avise_sk_` + 43 random URL-safe characters. Sent as `Authorization: Bearer avise_sk_…` or `X-API-Key`.
+- **Storage:** only the SHA-256 hash is stored, plus a display prefix and last 4 characters. The full key is shown once.
+- **Scope:** a key acts as the admin who created it, inside their org only. It stops working when revoked or expired, or when that admin is deactivated or moves org.
+- **Management:** new **Settings → API Keys** section (admin-only): create with name and expiry (never / 30d / 90d / 1y), list with last-used date, revoke. A key can't create or revoke keys.
+- **How:** `authMiddleware` recognises `avise_sk_` keys before the Supabase JWT check, so every existing `/api/*` endpoint works with a key and no route changes were needed. New `/api/api-keys` routes are mounted in `app-lite` and `app.ts`.
+- **Docs:** `docs/API-KEYS.md` covers the standard and n8n setup.
+- **Tests:** `tests/api-keys.test.ts` (10) covers format, Bearer/X-API-Key, and rejection of unknown, revoked, expired, deactivated-owner and moved-org keys.
+
+**Migration:** the founder ran `apps/api/api-keys-migration.sql` on 2026-10-02, and the check returned `"ApiKey"`. The feature goes live once this PR merges.
+
 ### Session 86 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 00:11 IST
