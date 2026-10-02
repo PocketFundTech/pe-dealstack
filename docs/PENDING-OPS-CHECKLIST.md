@@ -119,7 +119,7 @@ Filled in as each feature ships. Each row references the PR + feature.
   `OAUTH_STATE_SECRET` (32+ chars). Register `${APP_URL}/api/integrations/oauth/{gmail,google_calendar}/callback` in Google Cloud
   and publish the OAuth app. Until then Settings says "Google sign-in isn't set up on this server yet" (QA #6).
 - [ ] **OPS-QA-3 — Granola**: confirm `DATA_ENCRYPTION_KEY` is set in prod and the tester's Granola plan has API access.
-- [ ] **OPS-QA-4 — Run `apps/api/auth-sessions-rpc-migration.sql`** (QA #11). Replaces OPS-2: no need to expose `auth`.
+- [x] **OPS-QA-4 — Run `apps/api/auth-sessions-rpc-migration.sql`** (QA #11). ✅ Run and verified 2026-10-02. Replaces OPS-2: no need to expose `auth`.
 - [ ] **OPS-QA-5 — Vercel log alert** on `ai_quota_exhausted` (logged once per instance on the first out-of-credit rejection).
 - [ ] Optional: `EXTRACTION_CONCURRENCY` (default 4). Lower it if Anthropic 429s appear during "Extract all".
 
