@@ -38,6 +38,12 @@ export interface BalanceItems {
   ltDebt?: number;
   /** total_debt, else short- + long-term debt. */
   debt?: number;
+  /** Totals and purchase-accounting items for the integrated balance sheet (fix plan H3). */
+  totalAssets?: number;
+  totalLiabilities?: number;
+  totalEquity?: number;
+  goodwill?: number;
+  intangibles?: number;
   /** Capex magnitudes (≥ 0): total, and the split when reported. */
   capex?: number;
   capexMaintenance?: number;
@@ -72,6 +78,11 @@ export function readBalanceItems(statementType: string, li: Record<string, unkno
     set('ltDebt', first(li, scaled, ['long_term_debt']));
     const total = first(li, scaled, ['total_debt']);
     set('debt', total ?? (out.stDebt !== undefined || out.ltDebt !== undefined ? r3((out.stDebt ?? 0) + (out.ltDebt ?? 0)) : undefined));
+    set('totalAssets', first(li, scaled, ['total_assets']));
+    set('totalLiabilities', first(li, scaled, ['total_liabilities']));
+    set('totalEquity', first(li, scaled, ['total_equity', 'shareholders_equity', 'stockholders_equity']));
+    set('goodwill', first(li, scaled, ['goodwill']));
+    set('intangibles', first(li, scaled, ['intangibles', 'intangible_assets']));
   } else if (statementType === 'CASH_FLOW') {
     const parts = Object.keys(li)
       .filter((k) => k !== 'capex' && !/_(source|pct|label|order)$/.test(k) && CAPEX_PART_RE.test(k))
@@ -148,8 +159,28 @@ export function openingBalances(history: HistoricalRow[]): OpeningBalances {
   if (!row) return {};
   const b = row.balance!;
   const out: OpeningBalances = { period: row.period };
-  for (const k of ['ar', 'inventory', 'ap', 'cash', 'debt'] as const) if (b[k] !== undefined) out[k] = b[k];
+  for (const k of ['ar', 'inventory', 'ap', 'cash', 'debt', 'ppe'] as const) if (b[k] !== undefined) out[k] = b[k];
+  const otherNet = otherNetOperatingAssets(b);
+  if (otherNet !== undefined) out.otherNet = otherNet;
   return out;
+}
+
+/**
+ * Everything on the seller's balance sheet the model doesn't carry line by
+ * line — other assets less other liabilities — so the integrated balance
+ * sheet (fix plan H3) starts from the real net assets, not just working
+ * capital and PP&E. Cash and debt are refinanced at entry; the seller's
+ * goodwill and intangibles are replaced by the deal's own goodwill. Needs
+ * total assets and total liabilities (or total equity); else undefined (0).
+ */
+export function otherNetOperatingAssets(b: BalanceItems): number | undefined {
+  if (b.totalAssets === undefined) return undefined;
+  const liabilities = b.totalLiabilities ?? (b.totalEquity !== undefined ? b.totalAssets - b.totalEquity : undefined);
+  if (liabilities === undefined) return undefined;
+  const otherAssets = b.totalAssets - (b.cash ?? 0) - (b.ar ?? 0) - (b.inventory ?? 0) - (b.ppe ?? 0)
+    - (b.goodwill ?? 0) - (b.intangibles ?? 0);
+  const otherLiabilities = liabilities - (b.debt ?? 0) - (b.ap ?? 0);
+  return r3(otherAssets - otherLiabilities);
 }
 
 /** Pad with the last value, or truncate, to `years` entries. */

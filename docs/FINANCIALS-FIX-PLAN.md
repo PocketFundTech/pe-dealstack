@@ -140,7 +140,7 @@ Founder decisions: entry balance sheet uses a **goodwill plug** (fees expensed a
 
 - [x] **H1 · Workbook = live preview, by the numbers.** A parity test compares every cached workbook value (entry, each projected year, interest, cash, levered FCF, exit, IRR / MoM, the Scenarios summary, the Sensitivity centre) with `projectModel` / `summariseCase`. It found `INDEX` over another sheet cached as 0, so previews of the export showed exit EV 0 and IRR "n/a"; `calc.ts` now resolves `INDEX` itself.
 - [x] **H2 · Revolving credit facility.** Off by default (commitment 0 = model unchanged). Draws only to hold minimum cash, repaid first from cash above it (before the sweep), interest on opening drawn + fee on undrawn (no circularity). Shared calculator + workbook (Returns and every Scenarios block), panel inputs, Notes; parity-tested with the revolver drawn.
-- [ ] **H3 · Integrated balance sheet + balance check.** Entry balance sheet with goodwill plug; PP&E roll-forward (capex − D&A); working capital from the drivers; debt and revolver from the schedule; retained earnings from net income; a check row that must be 0 every year (workbook and preview).
+- [x] **H3 · Integrated balance sheet + balance check.** Entry: purchase accounting with a goodwill plug (entry EV less NWC, PP&E and other net operating assets bought); fees expensed at close; no dividends. Each year: PP&E rolls with capex − D&A, debt from the schedule (incl. revolver), equity by net income, goodwill and other net assets held. A check row (must be 0) in both the shared calculator and the new workbook Balance Sheet sheet; the panel shows a balances/off-by badge.
 - [ ] **H4 · Per-account label and order** (needs AI credit — extraction schema bump).
 
 ### Checks before / alongside the fixes
