@@ -37,12 +37,26 @@ function tableMock() {
         // recordViewAndNotify() counts existing views for this share before
         // inserting, to detect a first-ever view — mirror that with a live
         // count off recordedViews so the mock stays correct as it grows.
-        select: () => ({ eq: async () => ({ count: recordedViews.length, error: null }) }),
+        // Count query (first-view check) and the 60s same-browser dedupe query.
+        select: (_cols: string, opts?: { count?: string }) => {
+          const f: Record<string, any> = {};
+          const b: any = {
+            eq: (k: string, v: any) => { f[k] = v; return b; },
+            gte: (_k: string, v: string) => { f.since = v; return b; },
+            limit: () => b,
+            then: (res: any, rej: any) => Promise.resolve(
+              opts?.count
+                ? { count: recordedViews.length, error: null }
+                : { data: recordedViews.filter((r) => r.userAgent === f.userAgent && (!f.since || r.viewedAt >= f.since)), error: null },
+            ).then(res, rej),
+          };
+          return b;
+        },
         insert: async (row: any) => {
           // Slow write, like a real network round-trip: the response must not
           // go out before this lands (QA #25b — on Vercel it was killed).
           await new Promise((r) => setTimeout(r, 25));
-          recordedViews.push(row);
+          recordedViews.push({ ...row, viewedAt: new Date().toISOString() });
           return { error: null };
         },
       };
@@ -152,6 +166,15 @@ describe('GET /api/public/portal/:token', () => {
     // whitelist check — internal fields never leak
     expect(res.body.deal.aiThesis).toBeUndefined();
     expect(res.body.deal.scorecard).toBeUndefined();
+  });
+
+  it('counts a quick repeat open from the same browser once (refresh / double fetch)', async () => {
+    const app = await buildApp();
+    await request(app).get('/api/public/portal/tok').set('User-Agent', 'Chrome-A');
+    await request(app).get('/api/public/portal/tok').set('User-Agent', 'Chrome-A');
+    expect(recordedViews).toHaveLength(1);
+    await request(app).get('/api/public/portal/tok').set('User-Agent', 'Safari-B');
+    expect(recordedViews).toHaveLength(2);
   });
 
   it('omits disabled sections entirely', async () => {

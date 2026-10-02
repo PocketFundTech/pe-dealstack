@@ -86,6 +86,9 @@ async function notifyShareCreatorOfFirstView(share: ShareRow): Promise<void> {
  * creator by email. Never throws: every failure (count query, insert, or
  * the email itself) just logs.
  */
+/** A repeat open from the same browser within this window is one view (refreshes, double fetches). */
+const VIEW_DEDUPE_WINDOW_MS = 60_000;
+
 async function recordViewAndNotify(share: ShareRow, userAgent: string | null): Promise<void> {
   // The view row is written BEFORE the response (awaited by the caller):
   // as a fire-and-forget promise it was killed when Vercel froze the
@@ -99,6 +102,18 @@ async function recordViewAndNotify(share: ShareRow, userAgent: string | null): P
       .eq('shareId', share.id);
     if (countError) log.warn('portal view count failed', { error: countError });
     const isFirstView = !countError && (count ?? 0) === 0;
+
+    if (!isFirstView && userAgent) {
+      const since = new Date(Date.now() - VIEW_DEDUPE_WINDOW_MS).toISOString();
+      const { data: recent } = await supabase
+        .from('DealShareView')
+        .select('id')
+        .eq('shareId', share.id)
+        .eq('userAgent', userAgent)
+        .gte('viewedAt', since)
+        .limit(1);
+      if (recent && recent.length > 0) return; // same viewer, moments ago
+    }
 
     const { error: insertError } = await supabase
       .from('DealShareView')
