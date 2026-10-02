@@ -59,12 +59,27 @@ export interface SourceCandidate {
   doc: DocAuthorityMeta | null | undefined;
   statementType: StatementType;
   lineItems: Record<string, unknown> | null | undefined;
+  /** Period label as printed — "FY2023 (Restated)" marks a restatement. */
+  period?: string | null;
 }
 
-/** > 0: `a` should be active; < 0: `b`; 0: genuine tie. */
+/** A restatement — by the period label or the document's name ("FY2023 (Restated)", "Restated FS 2023.pdf"). */
+export function isRestated(c: Pick<SourceCandidate, 'period' | 'doc'>): boolean {
+  return /\brestated\b/i.test(c.period ?? '') || /\brestated\b/i.test((c.doc?.name ?? '').replace(/[_.-]/g, ' '));
+}
+
+/**
+ * > 0: `a` should be active; < 0: `b`; 0: genuine tie.
+ * Reported statement over model-derived; then a restatement over the
+ * figures it corrects (fix plan G14 — without it an original could beat a
+ * later restated set on authority or line count); then document authority;
+ * then completeness.
+ */
 export function compareSources(a: SourceCandidate, b: SourceCandidate): number {
   const kind = (c: SourceCandidate) => (c.sourceKind === 'source_statement' ? 1 : 0);
   if (kind(a) !== kind(b)) return kind(a) - kind(b);
+  const restated = Number(isRestated(a)) - Number(isRestated(b));
+  if (restated !== 0) return restated;
   const rank = financialSourceAuthorityRank(a.doc) - financialSourceAuthorityRank(b.doc);
   if (rank !== 0) return rank;
   return completenessScore(a.statementType, a.lineItems) - completenessScore(b.statementType, b.lineItems);

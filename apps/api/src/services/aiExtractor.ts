@@ -7,6 +7,7 @@ import { log } from '../utils/logger.js';
 import { wrapDocumentContent } from './agents/guardrails.js';
 import { getTodayIso } from '../utils/dates.js';
 import { recordUsageEvent } from './usage/trackedLLM.js';
+import { SCALE_TO_MILLIONS } from './extraction/normalize.js';
 import type { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 
 // getModel() (llm.ts's bare escape hatch) has no `operation` label / usage
@@ -395,6 +396,40 @@ export async function extractDealDataFromText(
  * nothing about document substance there, so the short-doc cap and its
  * review flags are skipped.
  */
+const UNIT_WORDS: Record<keyof typeof SCALE_TO_MILLIONS, string> = {
+  UNITS: 'whole units', THOUSANDS: 'thousands', LAKHS: 'lakhs', MILLIONS: 'millions', CRORES: 'crores', BILLIONS: 'billions',
+};
+
+/**
+ * Fix plan G16: redo the model's unit conversion in code. When the reply
+ * carries the printed figure and the unit it's printed in (Claude deal
+ * reader), the millions value must equal printed × scale; a model that
+ * didn't convert (251.3 crore kept as 251.3 — live QA 2026-10-01) or
+ * converted wrong is corrected, flagged for review and capped at 60%
+ * confidence. Replies without those fields are left as they are.
+ */
+function reconcilePrintedUnits(extracted: any, result: ExtractedDealData): string[] {
+  const unit = extracted?.figuresUnit as keyof typeof SCALE_TO_MILLIONS | null | undefined;
+  const factor = unit ? SCALE_TO_MILLIONS[unit] : undefined;
+  if (!factor) return [];
+  const reasons: string[] = [];
+  const fields = [['revenue', 'revenueAsPrinted', 'Revenue'], ['ebitda', 'ebitdaAsPrinted', 'EBITDA'], ['dealSize', 'dealSizeAsPrinted', 'Deal size']] as const;
+  for (const [key, printedKey, label] of fields) {
+    const printed = extracted?.[printedKey];
+    const field = result[key];
+    if (typeof printed !== 'number' || !Number.isFinite(printed) || typeof field.value !== 'number') continue;
+    const expected = Number((printed * factor).toPrecision(12));
+    if (expected === 0 || Math.abs(field.value - expected) / Math.abs(expected) <= 0.01) continue;
+    reasons.push(
+      `${label} corrected to ${formatExtractedValue(expected)}: the document prints ${printed} in ${UNIT_WORDS[unit!]}, ` +
+      `which the AI had converted to ${formatExtractedValue(field.value)}. Verify against the source.`,
+    );
+    field.value = expected;
+    field.confidence = Math.min(field.confidence, 60);
+  }
+  return reasons;
+}
+
 export function finalizeExtractedDealData(
   extracted: any,
   sourceLen: number,
@@ -443,7 +478,7 @@ export function finalizeExtractedDealData(
 
   // Calculate overall confidence and determine if review is needed
   const confidenceScores: number[] = [];
-  const reviewReasons: string[] = [];
+  const reviewReasons: string[] = [...reconcilePrintedUnits(extracted, result)];
 
   // Per-field review reasons. Avoid embedding the raw "(N% confidence)"
   // parenthetical — when the per-field score is 0, the legacy phrasing

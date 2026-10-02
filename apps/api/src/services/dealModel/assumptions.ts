@@ -15,7 +15,7 @@
 // destroy trust in the model faster than a wrong one.
 
 import { z } from 'zod';
-import { parsePeriod, comparePeriods, type PeriodKind } from '@ai-crm/shared';
+import { parsePeriod, comparePeriods, inferFiscalYearEndMonth, type PeriodKind } from '@ai-crm/shared';
 import { comparePeriodChronologically } from '../../utils/periodChrono.js';
 import { computeDerivedFields } from '../financialDerivations.js';
 import type { LineDriver } from '@ai-crm/shared';
@@ -219,11 +219,13 @@ export function normaliseStatements(statements: StatementLike[]): NormalisedFina
     target.balance = { ...items, ...target.balance };
   }
 
+  // A June year-end company's bare "FY2025" ends in June, not December (G13).
+  const fye = { fiscalYearEndMonth: inferFiscalYearEndMonth(statements.map((s) => s.period)) };
   const rows: HistoricalRow[] = [...byKey.values()]
     .map(({ _key: _k, _count: _c, ...row }) => row)
     .sort((a, b) => {
-      const pa = parsePeriod(a.period);
-      const pb = parsePeriod(b.period);
+      const pa = parsePeriod(a.period, fye);
+      const pb = parsePeriod(b.period, fye);
       return pa && pb ? comparePeriods(pa, pb) : comparePeriodChronologically(a.period, b.period);
     });
 

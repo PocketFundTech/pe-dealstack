@@ -126,10 +126,10 @@ Three read-only audits after A–F merged (extraction correctness, model correct
 **PR D — scenarios + lower priority**
 - [x] **G11** Low/High margin delta: any part the % of revenue cost lines can't absorb goes through the Fixed cost lines as money; what still can't be applied is named on the Build model panel and the Notes sheet.
 - [x] **G12** "summary" in a file name no longer marks it model-derived ("Valuation Summary" is still caught by "valuation"); a "summary" tab is capped as model output only when it doesn't name a statement.
-- [ ] **G13** Bare "FY2024" uses the company's fiscal year-end, not December.
-- [ ] **G14** Restated figures preferred over originals; `needs_review` conflicts visible.
+- [x] **G13** A bare "FY2025" uses the fiscal year-end the deal's own labels state (`inferFiscalYearEndMonth`, e.g. "FY2024 (Jul 2023 - Jun 2024)" → June) in the analysis and model ordering, instead of December.
+- [x] **G14** A restatement ("restated" in the period label or document name) beats the figures it corrects, across documents (`compareSources`) and within one (period dedup). `needs_review` conflicts were already shown in the statements table.
 - [x] **G15** Model `unitScale` forced to MILLIONS; `Deal.ebitda` read as whole dollars when either deal field is above 100,000; an implied multiple outside 1–50x is ignored.
-- [ ] **G16** Fast-pass deal reader rescales deterministically and labels currency.
+- [x] **G16** The fast deal read also returns each figure as printed plus its unit; code redoes the conversion and corrects the model (flagged for review, confidence ≤ 60%) when it disagrees. Deal cards already label currency.
 
 **PR E — headcount extraction** (founder's choice)
 - [ ] **G17** Extract period-end headcount (`employees`, never unit-scaled), keep it out of the P&L table and model lines, show revenue per employee in Analysis. Extraction schema version bump.

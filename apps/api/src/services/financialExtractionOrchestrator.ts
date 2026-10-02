@@ -247,6 +247,7 @@ async function runDeepPassUnlocked(
           // — never by which document wrote first.
           const incoming: SourceCandidate = {
             sourceKind: incomingKind, doc: incomingDoc, statementType: stmt.statementType, lineItems: periodData.lineItems,
+            period: periodData.period,
           };
           const best = others
             .map((r) => ({ row: r, cand: candidateFromRow(r, stmt.statementType, docMetaById) }))

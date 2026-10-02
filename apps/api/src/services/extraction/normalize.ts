@@ -57,7 +57,7 @@ function protectedKeysFor(parent: string | null | undefined): ReadonlySet<string
 }
 import type { ExtractionResponse, RawStatement } from './extractionSchema.js';
 
-const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
+export const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
   UNITS: 1 / 1_000_000,
   THOUSANDS: 1 / 1_000,
   LAKHS: 1 / 10, // 1 lakh = 100,000
