@@ -118,6 +118,9 @@ Filled in as each feature ships. Each row references the PR + feature.
 - [ ] **OPS-QA-2 — Google OAuth env in Vercel prod** (same as OPS-8): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APP_URL`,
   `OAUTH_STATE_SECRET` (32+ chars). Register `${APP_URL}/api/integrations/oauth/{gmail,google_calendar}/callback` in Google Cloud
   and publish the OAuth app. Until then Settings says "Google sign-in isn't set up on this server yet" (QA #6).
+- [ ] **OPS-QA-2b — Microsoft OAuth (Outlook / Microsoft 365), if offering them**: `MS_CLIENT_ID`, `MS_CLIENT_SECRET`,
+  `MS_TENANT` (default `common`) in Vercel prod, and register `${APP_URL}/api/integrations/oauth/{outlook,microsoft365}/callback`
+  on the Azure app. Until then the cards say "Microsoft sign-in isn't set up on this server yet". Both are untested end to end.
 - [ ] **OPS-QA-3 — Granola**: confirm `DATA_ENCRYPTION_KEY` is set in prod and the tester's Granola plan has API access.
 - [x] **OPS-QA-4 — Run `apps/api/auth-sessions-rpc-migration.sql`** (QA #11). ✅ Run and verified 2026-10-02. Replaces OPS-2: no need to expose `auth`.
 - [ ] **OPS-QA-5 — Vercel log alert** on `ai_quota_exhausted` (logged once per instance on the first out-of-credit rejection).

@@ -19,7 +19,8 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   { id: "gmail",           name: "Gmail",           desc: "Sync deal-related emails",               icon: "mail",        available: true },
   { id: "google_calendar", name: "Google",           desc: "Drive files, Calendar & NDA docs",       icon: "workspaces",  available: true },
   { id: "outlook",         name: "Outlook",          desc: "Sync deal-related emails",              icon: "mail",        available: true },
-  { id: "microsoft365",    name: "Microsoft 365",    desc: "Calendar events + OneDrive files",      icon: "workspaces",  available: true },
+  // OneDrive file import isn't built yet (only calendar) — don't promise it.
+  { id: "microsoft365",    name: "Microsoft 365",    desc: "Sync calendar events",                  icon: "workspaces",  available: true },
   { id: "fireflies",       name: "Fireflies",       desc: "Auto-import meeting transcripts",        icon: "mic",         available: false },
   { id: "otter",           name: "Otter",           desc: "Auto-import meeting transcripts",        icon: "graphic_eq",  available: false },
 ];

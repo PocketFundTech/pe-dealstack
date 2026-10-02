@@ -28,6 +28,7 @@ import {
 } from './mapper.js';
 import { shouldSkipForAI } from './preFilter.js';
 import { uploadEmailAttachmentsToDeal } from './attachments.js';
+import { appBaseUrl } from '../_platform/errors.js';
 
 const DEFAULT_BACKFILL_DAYS = 90;
 const TOKEN_REFRESH_SAFETY_MS = 60 * 1000;
@@ -39,12 +40,11 @@ const DEFAULT_CLASSIFIER_CAP_PER_RUN = Number(
 );
 
 function redirectUri(): string {
-  const base = process.env.APP_URL ?? 'http://localhost:3001';
   // The callback route resolves the provider from the URL segment, so each
   // provider uses its own path (mirrors gmail's /oauth/gmail/callback). Both
   // this and microsoft365's path must be registered as redirect URIs on the
   // single shared Azure app.
-  return `${base}/api/integrations/oauth/outlook/callback`;
+  return `${appBaseUrl()}/api/integrations/oauth/outlook/callback`;
 }
 
 async function ensureFreshAccessToken(integration: Integration): Promise<string> {
