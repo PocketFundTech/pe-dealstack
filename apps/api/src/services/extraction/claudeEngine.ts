@@ -24,6 +24,7 @@ import {
 } from './extractionSchema.js';
 import { getTodayIso } from '../../utils/dates.js';
 import { toClassificationResult } from './normalize.js';
+import { toProviderUnavailable } from '../../utils/aiErrors.js';
 
 const FILES_BETA = 'files-api-2025-04-14';
 // GA server tool (no beta header required) — supported by both extraction
@@ -173,6 +174,9 @@ export async function extractWithClaude(
         fileName: input.fileName,
       });
     } catch (err) {
+      // Text mode would hit the same provider wall — say so now.
+      const unavailable = toProviderUnavailable(err, 'Anthropic');
+      if (unavailable) throw unavailable;
       log.warn('claudeEngine: container-mode spreadsheet extraction failed — falling back to text mode', {
         fileName: input.fileName,
         err: err instanceof Error ? err.message : String(err),
@@ -221,6 +225,9 @@ async function runExtraction(
         betas: [FILES_BETA],
       } as never)) as { id: string };
     } catch (err) {
+      // Out of credit / bad key: the reason, not a null "couldn't extract".
+      const unavailable = toProviderUnavailable(err, 'Anthropic');
+      if (unavailable) throw unavailable;
       log.error('claudeEngine: spreadsheet upload failed', err, { fileName });
       return null;
     }
@@ -248,6 +255,8 @@ async function runExtraction(
         betas: [FILES_BETA],
       } as never)) as { id: string };
     } catch (err) {
+      const unavailable = toProviderUnavailable(err, 'Anthropic');
+      if (unavailable) throw unavailable;
       log.error('claudeEngine: file upload failed', err, { fileName });
       return null;
     }

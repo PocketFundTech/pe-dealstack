@@ -14,12 +14,14 @@ import {
   MODEL_CASES, balanceDriversOf, projectModel, summariseCase,
   type BalanceDrivers, type BalanceSeriesKey, type DriverMethod, type ModelCase,
 } from "@ai-crm/shared";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { describeLoadError } from "@/lib/errorMessage";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
 import { useToast } from "@/providers/ToastProvider";
 import { DriverTable } from "./deal-model-driver-table";
 import { CaseTabs, ScenarioSummary } from "./deal-model-scenarios";
 import { BalanceSection } from "./deal-model-balance";
+import { LoadErrorState, NoFinancialsState, NoticeBar, entryNotice, returnsGapReason } from "./deal-model-notices";
 import {
   SCALAR_GROUPS, convertDriver, fmtMoney,
   type Assumptions, type CasesResponse, type ModelStructure, type ScalarKey,
@@ -38,27 +40,29 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
   const [active, setActive] = useState<ModelCase>("Base");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [blocked, setBlocked] = useState<string | null>(null);
+  // A real load failure, as the sentence to show (the server's reason when it
+  // gave one). "No financials yet" is a 200 with no history — not an error.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const assumptions = cases?.[active] ?? null;
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await api.get<CasesResponse>(`/deals/${dealId}/model/cases`);
-        const { cases: list, ...structure } = res;
-        setModel(structure);
-        setCases(byCase((c) => list.find((x) => x.case === c)!.assumptions));
-        setSaved(byCase((c) => !!list.find((x) => x.case === c)?.saved));
-      } catch (err) {
-        // Either no financials yet or the migration hasn't run — both are
-        // empty states the user can act on, not errors to shout about.
-        console.warn("deal model load failed", err);
-        setBlocked(err instanceof Error ? err.message : "Could not load model inputs");
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await api.get<CasesResponse>(`/deals/${dealId}/model/cases`);
+      const { cases: list, ...structure } = res;
+      setModel(structure);
+      setCases(byCase((c) => list.find((x) => x.case === c)!.assumptions));
+      setSaved(byCase((c) => !!list.find((x) => x.case === c)?.saved));
+    } catch (err) {
+      console.warn("deal model load failed", err);
+      setLoadError(describeLoadError(err, "The model inputs could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
   }, [dealId]);
+
+  useEffect(() => { void load(); }, [load]);
 
   const projection = useMemo(() => {
     if (!assumptions || !model?.lines?.length) return null;
@@ -139,7 +143,7 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || "Export failed");
+        throw new ApiError(typeof body.error === "string" ? body.error : res.statusText, res.status, body.code);
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -152,7 +156,7 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
       link.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "Couldn't build the model", "error");
+      showToast(describeLoadError(err, "The model couldn't be built."), "error");
     } finally {
       setBusy(false);
     }
@@ -162,19 +166,12 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
     return <div className="h-32 animate-pulse rounded-xl bg-gray-100" />;
   }
 
-  if (blocked || !assumptions || !model) {
-    return (
-      <div className="rounded-xl border border-dashed border-border-subtle px-6 py-8 text-center">
-        <span className="material-symbols-outlined text-2xl text-text-muted">table_chart</span>
-        <p className="mt-2 text-sm font-medium text-text-main">No model yet</p>
-        <p className="mt-1 text-xs text-text-muted">
-          {blocked ?? "Extract this deal's financials and the model builds from them."}
-        </p>
-      </div>
-    );
-  }
+  if (loadError) return <LoadErrorState message={loadError} onRetry={() => void load()} />;
+  if (!assumptions || !model || model.history.length === 0) return <NoFinancialsState />;
 
   const hasEntry = projection && model.base?.entrySource !== "missing";
+  const entry = entryNotice(model);
+  const returnsGap = hasEntry ? returnsGapReason(projection) : null;
 
   return (
     <div className="rounded-xl border border-border-subtle bg-white">
@@ -210,20 +207,20 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
       </div>
 
       {model.warnings && model.warnings.length > 0 && (
-        <div className="flex gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs text-amber-900" role="note">
-          <span className="material-symbols-outlined text-[18px] text-amber-600">warning</span>
+        <NoticeBar tone="warn">
           <ul className="flex flex-col gap-1">
             {model.warnings.map((w) => <li key={w}>{w}</li>)}
           </ul>
-        </div>
+        </NoticeBar>
       )}
+      {entry && <NoticeBar tone={entry.tone}><p>{entry.text}</p></NoticeBar>}
 
       {hasEntry && (
         <div className="grid grid-cols-2 gap-px border-b border-border-subtle bg-border-subtle sm:grid-cols-4">
           {[
             { label: "Entry EV", value: fmtMoney(projection.entryEv, model.currency) },
             { label: "Equity cheque", value: fmtMoney(projection.equity, model.currency) },
-            { label: "MoM", value: projection.mom ? `${projection.mom.toFixed(1)}x` : "—" },
+            { label: "MoM", value: projection.mom !== null ? `${projection.mom.toFixed(1)}x` : "—" },
             { label: "IRR", value: projection.irr !== null ? `${(projection.irr * 100).toFixed(0)}%` : "—" },
           ].map((m) => (
             <div key={m.label} className="bg-white px-4 py-3">
@@ -233,6 +230,7 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
           ))}
         </div>
       )}
+      {returnsGap && <NoticeBar tone="info"><p>{returnsGap}</p></NoticeBar>}
 
       {summaries && (
         <div className="border-b border-border-subtle px-5 py-3">

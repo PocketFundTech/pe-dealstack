@@ -32,6 +32,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { SystemMessage, HumanMessage, type AIMessageChunk } from '@langchain/core/messages';
 import { log } from '../utils/logger.js';
+import { AIProviderUnavailableError } from '../utils/aiErrors.js';
 import { getChatAnthropicAuthFields } from './anthropic.js';
 import { recordUsageEvent } from './usage/trackedLLM.js';
 import {
@@ -130,15 +131,24 @@ export async function classifyFinancialsCrossVerified(
     log.warn('Cross-verify: Claude extraction threw', { reason: String(claudeResult.reason) });
   }
 
+  // A side that was rejected by its provider (out of credit, bad key, rate
+  // limit) — kept so the user hears that reason, not "no financial data".
+  const gptDown = gptResult.status === 'rejected' && gptResult.reason instanceof AIProviderUnavailableError ? gptResult.reason : null;
+  const claudeDown = claudeResult.status === 'rejected' && claudeResult.reason instanceof AIProviderUnavailableError ? claudeResult.reason : null;
+
   // Fall-throughs when one or both fail.
-  if (!gpt && !claude) return null;
+  if (!gpt && !claude) {
+    const down = gptDown ?? claudeDown;
+    if (down) throw down;
+    return null;
+  }
   if (!gpt) {
     log.info('Cross-verify: only Claude succeeded, skipping reconciliation');
-    return tagCrossVerifyOnlyOne(claude!, 'claude');
+    return tagCrossVerifyOnlyOne(claude!, 'claude', gptDown);
   }
   if (!claude) {
     log.info('Cross-verify: only GPT succeeded, skipping reconciliation');
-    return tagCrossVerifyOnlyOne(gpt, 'gpt');
+    return tagCrossVerifyOnlyOne(gpt, 'gpt', claudeDown);
   }
 
   // Both succeeded — find disagreements.
@@ -570,12 +580,18 @@ function mergeAgreeing(
 function tagCrossVerifyOnlyOne(
   result: ClassificationResult,
   side: 'gpt' | 'claude',
+  /** Why the other side failed, when its provider rejected the request. */
+  otherDown: AIProviderUnavailableError | null = null,
 ): ClassificationResult {
+  const failed = side === 'gpt' ? 'Claude' : 'GPT';
+  const used = side === 'gpt' ? 'GPT' : 'Claude';
   return {
     ...result,
     warnings: [
       ...result.warnings,
-      `cross-verify: ${side === 'gpt' ? 'Claude extraction failed; using GPT only' : 'GPT extraction failed; using Claude only'}`,
+      otherDown
+        ? `Figures were read by one AI model only (${used}), so they were not cross-checked: ${otherDown.message}`
+        : `cross-verify: ${failed} extraction failed; using ${used} only`,
     ],
   };
 }

@@ -23,6 +23,8 @@ import { MODEL_INSIGHTS } from '../utils/aiModels.js';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import type { IndustryBenchmark, PortfolioSummary } from './agentMemory.js';
+import { toProviderUnavailable } from '../utils/aiErrors.js';
+import { AppError } from '../middleware/errorHandler.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -135,7 +137,7 @@ export async function getCachedInsights(
 ): Promise<InsightsResult | null> {
   // L1 fast path
   const fromMemory = memoryGet(dealId, analysisHash);
-  if (fromMemory) return fromMemory;
+  if (fromMemory && !isLegacyPlaceholder(fromMemory)) return fromMemory;
 
   // L3 durable
   try {
@@ -147,7 +149,8 @@ export async function getCachedInsights(
       .single();
 
     const insights = (data?.insights as InsightsResult | undefined) ?? null;
-    if (insights) memorySet(dealId, analysisHash, insights);
+    if (!insights || isLegacyPlaceholder(insights)) return null;
+    memorySet(dealId, analysisHash, insights);
     return insights;
   } catch (err) {
     // Cache miss / DB error — caller will regenerate. Log so persistent failures are visible.
@@ -371,7 +374,7 @@ export async function generateNarrativeInsights(
   memory: MemoryContext,
 ): Promise<InsightsResult> {
   if (!isAIEnabled() || !openai) {
-    return fallbackInsights();
+    throw new AppError('AI insights are not set up on this server: no AI provider key is configured. Contact your administrator.', 503, 'AI_NOT_CONFIGURED');
   }
 
   const condensed = condenseAnalysis(analysisResult);
@@ -465,19 +468,23 @@ Return JSON:
     return parsed;
   } catch (err) {
     log.error('narrativeInsights: AI generation failed', err);
-    return fallbackInsights();
+    // Never a stand-in narrative: the Insights tab shows the reason instead.
+    const unavailable = toProviderUnavailable(err, 'OpenAI');
+    if (unavailable) throw unavailable;
+    if (err instanceof SyntaxError || (err instanceof Error && /Empty AI response|Invalid response structure/.test(err.message))) {
+      throw new AppError('The AI returned an incomplete answer for these insights. Click Regenerate to try again.', 502, 'AI_BAD_RESPONSE');
+    }
+    throw err;
   }
 }
 
-// ─── Fallback ────────────────────────────────────────────────
+/**
+ * The stand-in narrative older code returned — and cached — whenever
+ * generation failed. A cached copy is treated as a miss so the deal gets
+ * real insights once the AI is reachable again.
+ */
+const LEGACY_PLACEHOLDER_SUMMARY = 'AI insights are currently unavailable. Review the quantitative analysis above for key metrics.';
 
-function fallbackInsights(): InsightsResult {
-  return {
-    modules: {},
-    executiveSummary: 'AI insights are currently unavailable. Review the quantitative analysis above for key metrics.',
-    topThreeRisks: [],
-    topThreeStrengths: [],
-    diligencePriorities: [],
-    generatedAt: new Date().toISOString(),
-  };
+function isLegacyPlaceholder(insights: InsightsResult): boolean {
+  return insights.executiveSummary === LEGACY_PLACEHOLDER_SUMMARY && Object.keys(insights.modules ?? {}).length === 0;
 }

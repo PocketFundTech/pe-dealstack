@@ -66,7 +66,7 @@ function tableMock() {
         select: () => chain,
         eq: () => chain,
         order: () => chain,
-        then: (resolve: any) => resolve({ data: statements, error: null }),
+        then: (resolve: any) => resolve(statementsError ? { data: null, error: statementsError } : { data: statements, error: null }),
       };
       return chain;
     }
@@ -114,6 +114,8 @@ function binaryParser(res: any, cb: (err: Error | null, body: Buffer) => void) {
   res.on('end', () => cb(null, Buffer.concat(chunks)));
 }
 
+let statementsError: { message: string; code?: string } | null = null;
+
 function stmt(period: string, revenue: number, ebitda: number, extra: Record<string, unknown> = {}) {
   return {
     statementType: 'INCOME_STATEMENT', period, periodType: 'HISTORICAL',
@@ -134,6 +136,7 @@ beforeEach(() => {
   modelRow = null;
   modelRows = null;
   upserted = null;
+  statementsError = null;
   mockSupabase.from.mockImplementation(tableMock());
 });
 
@@ -172,6 +175,15 @@ describe('GET /api/deals/:dealId/model', () => {
     const res = await request(app).get('/api/deals/deal-1/model');
     expect(res.body.assumptions.entryMultiple).toBe(5.5);
     expect(res.body.warnings).toEqual([]);
+  });
+
+  it('a failed statements read is a 503 with the reason — not an empty "no financials" model', async () => {
+    statementsError = { message: 'connection terminated', code: '08006' };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('MODEL_DB_ERROR');
+    expect(res.body.error).toContain("financial statements");
   });
 
   it('returns the saved assumptions once they exist', async () => {
@@ -497,5 +509,16 @@ describe('balance sheet + cash flow (fix plan E3)', () => {
       ...got.assumptions, balanceDrivers: { ...got.assumptions.balanceDrivers, dso: [40, 40] },
     });
     expect(bad.status).toBe(400);
+  });
+});
+
+describe('modelErrorResponse', () => {
+  it('an unknown failure says it is on our side and carries a reference', async () => {
+    const { modelErrorResponse } = await import('../src/routes/deals-model.js');
+    const { status, body } = modelErrorResponse(new TypeError("Cannot read properties of undefined (reading 'values')"));
+    expect(status).toBe(500);
+    expect(body.code).toBe('MODEL_BUILD_FAILED');
+    expect(body.error).toContain('not a problem with your data');
+    expect(body.error).toContain(body.ref!);
   });
 });

@@ -114,10 +114,10 @@ Three read-only audits after A–F merged (extraction correctness, model correct
 - [x] **G4 · Revenue per employee** — divides by real headcount (`employees`); omitted when none. (It returned plain revenue; the web never rendered it.)
 
 **PR B — failures must say why** (financial paths only)
-- [ ] **G5** Classifiers / cross-verify / extract node surface AI provider rejections (credits, auth, rate limit) as a failed extraction with the reason, instead of "no financial data found".
-- [ ] **G6** Narrative insights stop returning a placeholder narrative on failure; the Insights tab shows the reason instead of "Loading…" forever.
-- [ ] **G7** Analysis page and Build model panel show the server's actual reason; "no financials yet" vs. a server failure look different; missing entry EBITDA explained.
-- [ ] **G8** Model route returns specific codes for known failure causes.
+- [x] **G5** Classifiers / cross-verify / extract node / Claude engine uploads surface AI provider rejections (credits, auth, rate limit) as a failed extraction with the reason, instead of "no financial data found". One side down in cross-verify → the other side's figures, with a warning that they weren't cross-checked.
+- [x] **G6** Narrative insights stop returning (and caching) a placeholder narrative on failure; a cached placeholder is now a cache miss; the Insights tab shows the reason with Retry instead of "Loading…" forever.
+- [x] **G7** Analysis page and Build model panel show the server's actual reason (`lib/errorMessage.ts`); "no financials yet" vs. a load failure look different; missing entry EBITDA, a deal-record entry EBITDA and blank IRR / MoM are explained; MoM 0.0x no longer shows "—".
+- [x] **G8** Model route: a failed database read is a 503 `MODEL_DB_ERROR` with the reason (it used to look like "deal not found" or "no statements"); anything else is `MODEL_BUILD_FAILED` with a support reference. Ingest-time deal-field AI failures are not persisted on the Document (no column or screen shows document AI status; the interactive intake already returns the reason).
 
 **PR C — duplicate periods & mixed currency** (needs a founder-run migration)
 - [x] **G9** Same fiscal year stored twice under different labels ("2024" vs "FY2024 (Jan - Dec 2024)"): dedup now keys on the canonical period (keeping the more descriptive label), the deep pass compares rows written earlier in the same run, and the conflict list / resolve / resolve-all group versions by canonical period. DB guard: `financials-period-key-unique-migration.sql` (⏳ founder runs, after the period-key backfill — see `docs/PENDING-MIGRATIONS.md`).
