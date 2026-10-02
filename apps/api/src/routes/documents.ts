@@ -9,6 +9,7 @@ import { getSignedDownloadUrl, extractStoragePath, downloadFileBuffer } from '..
 // Sub-routers
 import documentsUploadRouter from './documents-upload.js';
 import documentsSharingRouter from './documents-sharing.js';
+import { recordDocumentDownload } from '../services/documentActivity.js';
 
 const router = Router();
 
@@ -329,7 +330,7 @@ router.get('/documents/:id/download', async (req, res) => {
 
     const { data: doc, error: fetchError } = await supabase
       .from('Document')
-      .select('fileUrl, name, mimeType, fileSize')
+      .select('fileUrl, name, mimeType, fileSize, dealId')
       .eq('id', id)
       .single();
 
@@ -366,6 +367,9 @@ router.get('/documents/:id/download', async (req, res) => {
         AuditLog.documentDownloaded(req, id, doc.name, {
           watermarked: true,
         }).catch(() => {});
+        await recordDocumentDownload({
+          dealId: doc.dealId, documentId: id, documentName: doc.name, by: viewerEmail, via: 'app', watermarked: true,
+        });
 
         const safeName = (doc.name ?? 'document.pdf').replace(/"/g, '');
         res.setHeader('Content-Type', 'application/pdf');
@@ -397,6 +401,9 @@ router.get('/documents/:id/download', async (req, res) => {
           ? 'size_limit'
           : 'fallback',
     }).catch(() => {});
+    await recordDocumentDownload({
+      dealId: doc.dealId, documentId: id, documentName: doc.name, by: viewerEmail, via: 'app', watermarked: false,
+    });
 
     return res.json({
       url: signedUrl,

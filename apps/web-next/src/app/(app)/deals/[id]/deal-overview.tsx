@@ -392,6 +392,8 @@ function AddNoteSection({ dealId, onNoteAdded }: { dealId: string; onNoteAdded: 
 
 const ACTIVITY_ICONS: Record<string, { icon: string; color: string; bg: string }> = {
   DOCUMENT_UPLOADED: { icon: "upload_file", color: "text-blue-600", bg: "bg-blue-100" },
+  DOCUMENT_DOWNLOADED: { icon: "download", color: "text-sky-600", bg: "bg-sky-100" },
+  DOCUMENT_ADDED: { icon: "link", color: "text-blue-600", bg: "bg-blue-100" },
   STAGE_CHANGED: { icon: "swap_horiz", color: "text-purple-600", bg: "bg-purple-100" },
   NOTE_ADDED: { icon: "sticky_note_2", color: "text-amber-600", bg: "bg-amber-100" },
   MEETING_SCHEDULED: { icon: "event", color: "text-green-600", bg: "bg-green-100" },

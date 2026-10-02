@@ -13,6 +13,7 @@ import { supabase } from '../supabase.js';
 import { getSignedDownloadUrl } from '../utils/storage.js';
 import { log } from '../utils/logger.js';
 import { sendDocumentViewedEmail } from '../services/documentViewedEmail.js';
+import { recordDocumentDownload } from '../services/documentActivity.js';
 
 const router = Router();
 
@@ -229,7 +230,7 @@ router.get('/:token/documents/:documentId/download', async (req, res) => {
 
     const { data: doc } = await supabase
       .from('Document')
-      .select('id, dealId, fileUrl')
+      .select('id, dealId, fileUrl, name')
       .eq('id', req.params.documentId)
       .single();
     if (!doc || doc.dealId !== share.dealId || !doc.fileUrl) {
@@ -239,6 +240,11 @@ router.get('/:token/documents/:documentId/download', async (req, res) => {
     const signedUrl = await getSignedDownloadUrl(doc.fileUrl);
     if (!signedUrl) return res.status(500).json({ error: 'Failed to prepare download' });
 
+    // QA #19: share-link downloads were not logged anywhere.
+    await recordDocumentDownload({
+      dealId: doc.dealId, documentId: doc.id, documentName: doc.name,
+      by: share.label || 'share link', via: 'share_link',
+    });
     res.redirect(302, signedUrl);
   } catch (error: any) {
     log.error('Portal download failed', { error: error.message });
