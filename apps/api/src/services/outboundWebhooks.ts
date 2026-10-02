@@ -126,17 +126,23 @@ export async function deliverWebhook(
 export function emitWebhookEvent(req: Request, organizationId: string | undefined, event: WebhookEvent, data: unknown): void {
   if (!organizationId) return;
   void runAfterResponse(req, async () => {
-    const { data: subs, error } = await supabase
-      .from('WebhookSubscription')
-      .select('id, url, secret, failureCount')
-      .eq('organizationId', organizationId)
-      .eq('active', true)
-      .contains('events', [event]);
-    if (error) {
-      // Table missing before the migration runs, or a transient error: skip quietly.
-      log.debug('Webhook subscription lookup skipped', { event, error: error.message });
-      return;
+    // Never let a webhook problem surface as an unhandled rejection: when no
+    // after-response hook exists (local dev, tests) this runs inline.
+    try {
+      const { data: subs, error } = await supabase
+        .from('WebhookSubscription')
+        .select('id, url, secret, failureCount')
+        .eq('organizationId', organizationId)
+        .eq('active', true)
+        .contains('events', [event]);
+      if (error) {
+        // Table missing before the migration runs, or a transient error: skip quietly.
+        log.debug('Webhook subscription lookup skipped', { event, error: error.message });
+        return;
+      }
+      await Promise.all((subs ?? []).map((sub) => deliverWebhook(sub as Subscription, event, organizationId, data)));
+    } catch (err) {
+      log.warn('Webhook emit failed', { event, error: err instanceof Error ? err.message : String(err) });
     }
-    await Promise.all((subs ?? []).map((sub) => deliverWebhook(sub as Subscription, event, organizationId, data)));
-  });
+  }).catch(() => {});
 }
