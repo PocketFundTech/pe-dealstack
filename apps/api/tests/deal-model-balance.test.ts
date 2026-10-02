@@ -26,6 +26,8 @@ describe('reading the balance sheet and cash flow (normaliseStatements)', () => 
     expect(history[1].balance).toEqual({
       ar: 3.6, inventory: 1.1, ap: 2.2, ppe: 7, cash: 0.9, stDebt: 0.6, ltDebt: 4, debt: 4.6,
       capex: 1.6, capexGrowth: 0.7, capexMaintenance: 0.9,
+      // Totals the integrated balance sheet reads (fix plan H3).
+      totalAssets: 12.6, totalEquity: 5.8,
     });
   });
 
@@ -50,7 +52,12 @@ describe('reading the balance sheet and cash flow (normaliseStatements)', () => 
   });
 
   it('takes the opening balances from the latest FULL year, never the YTD', () => {
-    expect(opening).toEqual({ period: 'FY2024 (Jan - Dec 2024)', ar: 3.6, inventory: 1.1, ap: 2.2, cash: 0.9, debt: 4.6 });
+    expect(opening).toEqual({
+      period: 'FY2024 (Jan - Dec 2024)', ar: 3.6, inventory: 1.1, ap: 2.2, cash: 0.9, debt: 4.6,
+      // PP&E and other net operating assets feed the integrated balance sheet (fix plan H3):
+      // other assets = 12.6 − 0.9 − 3.6 − 1.1 − 7 = 0; other liabilities = (12.6−5.8) − 4.6 − 2.2 = 0.
+      ppe: 7, otherNet: 0,
+    });
   });
 });
 

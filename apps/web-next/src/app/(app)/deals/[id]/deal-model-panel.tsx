@@ -21,6 +21,7 @@ import { useToast } from "@/providers/ToastProvider";
 import { DriverTable } from "./deal-model-driver-table";
 import { CaseTabs, ScenarioSummary } from "./deal-model-scenarios";
 import { BalanceSection } from "./deal-model-balance";
+import { BalanceSheetSection } from "./deal-model-balance-sheet";
 import { LoadErrorState, NoFinancialsState, NoticeBar, entryNotice, returnsGapReason } from "./deal-model-notices";
 import {
   SCALAR_GROUPS, convertDriver, fmtMoney,
@@ -280,6 +281,17 @@ export function DealModelPanel({ dealId }: { dealId: string }) {
             onScalar={set}
           />
         </div>
+
+        {hasEntry && (
+          <div className="md:col-span-2">
+            <BalanceSheetSection
+              assumptions={assumptions}
+              projection={projection}
+              opening={model.opening}
+              currency={model.currency}
+            />
+          </div>
+        )}
 
         <div className="md:col-span-2">
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
