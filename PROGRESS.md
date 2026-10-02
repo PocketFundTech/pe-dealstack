@@ -5,6 +5,21 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 96 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:06 IST
+
+#### Goal: model extras while AI credit is out (fix plan Phase H). H1: prove the workbook and the live preview give the same numbers.
+
+- **H1 · Parity test + INDEX fix.** New `tests/deal-model-parity.test.ts` checks cached workbook values against `projectModel` / `summariseCase` on four cases: defaults, two tranches + minimum cash, revenue basis + absolute debt, and % of revenue working capital. It checks entry, every projected year, the debt / cash schedule, exit, IRR / MoM, the Scenarios summary and the Sensitivity centre.
+  - *Problem it found:* `INDEX` over a range on another sheet was cached as 0. The library resolved the reference against the formula's own sheet, so previews of the export (Protected View, Quick Look) showed exit EV 0 and IRR "n/a". Excel was right once editing was enabled.
+  - *Fix:* `calc.ts` resolves `INDEX` itself, through the sheet-aware range lookup.
+  - The XML readers moved to `tests/helpers/xlsxXml.ts`.
+
+Tests: API 2462 pass.
+
+---
+
 ### Session 95 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 00:47 IST

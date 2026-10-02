@@ -66,6 +66,26 @@ const RAW_FUNCTIONS: Record<string, (...params: Param[]) => unknown> = {
     if (i < 1 || i > values.length) throw FormulaError.VALUE;
     return H.accept(values[i - 1]);
   },
+  // INDEX is also on the context list, and gets its arguments UNRESOLVED.
+  // The built-in returned a reference that lost its sheet, so
+  // INDEX(Projections!C5:G5,1,n) on Returns read Returns!C5:G5 — blank — and
+  // exit EBITDA / EV / IRR were cached as 0 / "n/a" (found by the
+  // workbook-vs-preview parity test). This resolves the range through our
+  // own onRange (sheet-aware) and returns the value. The workbook only uses
+  // the value form: INDEX(row range, 1, n).
+  INDEX: (context, range, rowNum, colNum) => {
+    const ctx = context as unknown as { utils: { extractRefValue: (x: unknown) => { val: unknown } } };
+    const num = (p: unknown, dflt: number) =>
+      p == null ? dflt : Math.trunc(H.accept({ value: ctx.utils.extractRefValue(p).val } as Param, Types.NUMBER) as number);
+    const val = ctx.utils.extractRefValue(range).val;
+    const rows = Array.isArray(val) ? (val as unknown[][]) : [[val]];
+    let r = num(rowNum, 1);
+    let c = num(colNum, 1);
+    // Excel: INDEX(one-row range, n) is the n-th column.
+    if (colNum == null && rows.length === 1) { c = r; r = 1; }
+    if (r < 1 || c < 1 || r > rows.length || c > (rows[r - 1]?.length ?? 0)) throw FormulaError.REF;
+    return rows[r - 1][c - 1] ?? 0;
+  },
   // Exact match only (match type 0) — the only form the workbook writes.
   MATCH: (lookup, range) => {
     const want = H.accept(lookup);
