@@ -21,6 +21,7 @@ import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
 import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { maybeReactivateAfterExtraction } from '../services/agents/dealReactivation/index.js';
 import { isFinancialDoc, buildResultWarnings } from './financials-extraction-utils.js';
+import { publicErrorMessage } from '../utils/aiErrors.js';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -507,7 +508,8 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
   } catch (err: any) {
     log.error('POST financials extract error', err);
     const status = err.message?.includes('Could not') || err.message?.includes('appears empty') ? 422 : 500;
-    res.status(status).json({ error: err.message ?? 'Financial extraction failed' });
+    const pub = publicErrorMessage(err, 'Financial extraction failed');
+    res.status(pub.statusCode ?? status).json({ error: pub.message, code: pub.code });
   }
 });
 
@@ -649,7 +651,8 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
   } catch (err: any) {
     log.error('POST document extract-financials error', err);
     const status = err.message?.includes('Could not') || err.message?.includes('appears empty') ? 422 : 500;
-    res.status(status).json({ error: err.message ?? 'Financial extraction failed' });
+    const pub = publicErrorMessage(err, 'Financial extraction failed');
+    res.status(pub.statusCode ?? status).json({ error: pub.message, code: pub.code });
   }
 });
 

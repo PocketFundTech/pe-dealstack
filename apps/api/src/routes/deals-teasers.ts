@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
+import { publicErrorMessage } from '../utils/aiErrors.js';
 
 const router = Router();
 
@@ -63,7 +64,8 @@ router.post('/:id/teasers', async (req, res) => {
     if (message.startsWith('Profile not found')) {
       return res.status(404).json({ error: 'Profile not found' });
     }
-    res.status(500).json({ error: 'Failed to generate deal teaser', message });
+    const pub = publicErrorMessage(error, 'Failed to generate deal teaser');
+    res.status(pub.statusCode ?? 500).json({ error: pub.statusCode ? pub.message : 'Failed to generate deal teaser', code: pub.code });
   }
 });
 
