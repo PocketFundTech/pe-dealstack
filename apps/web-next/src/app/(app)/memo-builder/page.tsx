@@ -225,14 +225,17 @@ function MemoBuilderPageInner() {
     setGeneratingAll,
     setGenerationStatus,
     setError,
-    generateAllAbortRef,
   };
   const handleGenerate = createGenerateSection(sectionDeps);
   const handleSaveSection = createSaveSection(sectionDeps);
   const handleAddSection = createAddSection(sectionDeps, handleGenerate);
   const handleDeleteSection = createDeleteSection(sectionDeps);
-  const handleGenerateAll = createGenerateAll(sectionDeps);
-  const handleCancelGenerateAll = createCancelGenerateAll(sectionDeps);
+  // Wrapped so the ref only flows into createGenerateAll/createCancelGenerateAll
+  // inside an invocation (event handler), never as part of the render-time
+  // call itself — react-hooks/refs flags a ref passed directly into a
+  // function call made synchronously during render.
+  const handleGenerateAll = () => createGenerateAll(sectionDeps, generateAllAbortRef)();
+  const handleCancelGenerateAll = () => createCancelGenerateAll(generateAllAbortRef)();
 
   // Fire deferred /generate-all once selectedMemo matches the pending id.
   // Ref avoids re-firing on handleGenerateAll identity churn (it's recreated

@@ -31,7 +31,6 @@ function makeDeps() {
     setGeneratingAll,
     setGenerationStatus,
     setError,
-    generateAllAbortRef,
   } as unknown as GenerateAllDeps;
   return { deps, getSections: () => sections, setGeneratingAll, setGenerationStatus, setError, generateAllAbortRef };
 }
@@ -52,8 +51,8 @@ describe("createGenerateAll (streaming)", () => {
       });
     });
 
-    const { deps, getSections } = makeDeps();
-    await createGenerateAll(deps)();
+    const { deps, getSections, generateAllAbortRef } = makeDeps();
+    await createGenerateAll(deps, generateAllAbortRef)();
 
     const sections = getSections();
     expect(sections).toHaveLength(1);
@@ -75,8 +74,8 @@ describe("createGenerateAll (streaming)", () => {
       });
     });
 
-    const { deps, getSections } = makeDeps();
-    await createGenerateAll(deps)();
+    const { deps, getSections, generateAllAbortRef } = makeDeps();
+    await createGenerateAll(deps, generateAllAbortRef)();
 
     const sections = getSections();
     expect(sections).toHaveLength(1);
@@ -100,8 +99,8 @@ describe("createGenerateAll (streaming)", () => {
       });
     });
 
-    const { deps, getSections } = makeDeps();
-    await createGenerateAll(deps)();
+    const { deps, getSections, generateAllAbortRef } = makeDeps();
+    await createGenerateAll(deps, generateAllAbortRef)();
 
     const sections = getSections();
     expect(sections).toHaveLength(1);
@@ -116,8 +115,8 @@ describe("createGenerateAll (streaming)", () => {
       onEvent({ type: "done", success: true, completed: 1, total: 1, sections: [] });
     });
 
-    const { deps, setGenerationStatus } = makeDeps();
-    await createGenerateAll(deps)();
+    const { deps, setGenerationStatus, generateAllAbortRef } = makeDeps();
+    await createGenerateAll(deps, generateAllAbortRef)();
 
     const calls = setGenerationStatus.mock.calls.map((c: unknown[]) => c[0] as string | null);
     expect(calls.some((s) => s?.includes("executive summary"))).toBe(true);
@@ -129,15 +128,15 @@ describe("createGenerateAll (streaming)", () => {
     streamMock.mockImplementation(async (_path: string, _body: unknown, onEvent: OnEvent) => {
       onEvent({ type: "error", message: "LLM is not available. Check API key configuration." });
     });
-    const { deps, setError } = makeDeps();
-    await createGenerateAll(deps)();
+    const { deps, setError, generateAllAbortRef } = makeDeps();
+    await createGenerateAll(deps, generateAllAbortRef)();
     expect(setError).toHaveBeenCalledWith("LLM is not available. Check API key configuration.");
   });
 
   it("sets generatingAll(true) then (false) around the call, and clears generationStatus in finally", async () => {
     streamMock.mockImplementation(async () => {});
-    const { deps, setGeneratingAll, setGenerationStatus } = makeDeps();
-    await createGenerateAll(deps)();
+    const { deps, setGeneratingAll, setGenerationStatus, generateAllAbortRef } = makeDeps();
+    await createGenerateAll(deps, generateAllAbortRef)();
     expect(setGeneratingAll).toHaveBeenNthCalledWith(1, true);
     expect(setGeneratingAll).toHaveBeenLastCalledWith(false);
     expect(setGenerationStatus).toHaveBeenLastCalledWith(null);
@@ -150,8 +149,8 @@ describe("createGenerateAll (streaming)", () => {
     streamMock.mockImplementation(async () => {
       throw new DOMException("Aborted", "AbortError");
     });
-    const { deps, setError } = makeDeps();
-    await createGenerateAll(deps)();
+    const { deps, setError, generateAllAbortRef } = makeDeps();
+    await createGenerateAll(deps, generateAllAbortRef)();
     expect(setError).not.toHaveBeenCalled();
   });
 
@@ -161,16 +160,16 @@ describe("createGenerateAll (streaming)", () => {
       capturedSignal = opts.signal;
     });
     const { deps, generateAllAbortRef } = makeDeps();
-    await createGenerateAll(deps)();
+    await createGenerateAll(deps, generateAllAbortRef)();
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
     expect(generateAllAbortRef.current).toBeNull();
   });
 
   it("createCancelGenerateAll aborts the ref's controller", () => {
-    const { deps, generateAllAbortRef } = makeDeps();
+    const { generateAllAbortRef } = makeDeps();
     generateAllAbortRef.current = new AbortController();
     const abortSpy = vi.spyOn(generateAllAbortRef.current, "abort");
-    createCancelGenerateAll(deps)();
+    createCancelGenerateAll(generateAllAbortRef)();
     expect(abortSpy).toHaveBeenCalled();
   });
 });

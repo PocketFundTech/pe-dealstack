@@ -29,7 +29,6 @@ interface SectionDeps {
   setGeneratingAll: Dispatch<SetStateAction<boolean>>;
   setGenerationStatus: Dispatch<SetStateAction<string | null>>;
   setError: Dispatch<SetStateAction<string | null>>;
-  generateAllAbortRef?: MutableRefObject<AbortController | null>;
 }
 
 export function createGenerateSection(deps: SectionDeps) {
@@ -152,10 +151,10 @@ export function createDeleteSection(deps: SectionDeps) {
   };
 }
 
-export function createGenerateAll(deps: SectionDeps) {
+export function createGenerateAll(deps: SectionDeps, generateAllAbortRef?: MutableRefObject<AbortController | null>) {
   const {
     selectedMemo, setSections, setEditingContent, setActiveSection,
-    setGeneratingAll, setGenerationStatus, setError, generateAllAbortRef,
+    setGeneratingAll, setGenerationStatus, setError,
   } = deps;
 
   return async () => {
@@ -246,9 +245,8 @@ export function createGenerateAll(deps: SectionDeps) {
   };
 }
 
-export function createCancelGenerateAll(deps: SectionDeps) {
-  const { generateAllAbortRef } = deps;
+export function createCancelGenerateAll(generateAllAbortRef: MutableRefObject<AbortController | null>) {
   return () => {
-    generateAllAbortRef?.current?.abort();
+    generateAllAbortRef.current?.abort();
   };
 }
