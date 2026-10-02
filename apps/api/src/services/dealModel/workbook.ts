@@ -43,6 +43,7 @@ import { writeProjections } from './workbook/projections.js';
 import { writeReturns } from './workbook/returns.js';
 import { writeSensitivity } from './workbook/sensitivity.js';
 import { writeCover, writeNotes } from './workbook/coverNotes.js';
+import { fillCachedResults } from './workbook/calc.js';
 import { SHEETS, type WorkbookContext } from './workbook/xlsx.js';
 
 export { SHEETS, type WorkbookContext };
@@ -116,8 +117,10 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
       ...balanceNotes(assumptions, opening),
     ] });
 
-  // No cached results are written; make Excel / Sheets compute on open so
-  // previews don't show blanks.
+  // Every formula carries its computed value, so previews and Protected View
+  // show numbers (calc.ts); Excel / Sheets still recompute on open.
+  const uncached = fillCachedResults(wb);
+  if (uncached.length) console.warn(`[dealModel] ${uncached.length} workbook formulas left uncached, e.g. ${uncached.slice(0, 5).join(', ')}`);
   wb.calcProperties.fullCalcOnLoad = true;
   for (const sheet of wb.worksheets) sheet.properties.showGridLines = false;
 
