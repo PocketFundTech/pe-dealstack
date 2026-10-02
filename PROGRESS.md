@@ -5,6 +5,26 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 100 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:44 IST
+
+#### Goal: a one-click OpenAPI import for n8n/Postman, so integrators don't hand-configure 315 endpoints.
+
+**What shipped:**
+- `apps/api/tools/generate-openapi.ts` generates an OpenAPI 3.1 spec from `endpoint-index.ts` (the same list the public docs page renders) — one source of truth, no hand-duplicated endpoint list to drift.
+- Published at `https://app.avise.io/openapi.json` (a static file under `apps/web-next/public/`, so it needs no auth and no route change — bypasses the auth middleware the same way `favicon.svg` does, any path with a dot is excluded).
+- 315 operations, matching `ENDPOINT_TOTAL` exactly. 45 of the most-used ones (deals, contacts, tasks, documents, ingest, memos, webhooks…) carry hand-written summaries and real request-body examples; the rest get an auto-generated summary and path-parameter descriptions, so nothing is left blank.
+- Both auth methods declared (`bearerAuth`, `apiKeyHeader`), and the 403 response documents the new `API_KEY_READ_ONLY` code from the read-only-keys work.
+- Validated with Redocly's linter (clean except 4 harmless "ambiguous path" warnings — a real, harmless property of a few `/api/invitations/*` routes, not a spec defect) and round-tripped through `openapi-to-postmanv2`: 315 Postman requests in, 315 out.
+- `/api-reference` links to it from the hero and the n8n/Postman setup section.
+- New test `openapi-spec.test.ts`: fails if a route is added to `endpoint-index.ts` without regenerating the spec (verified it actually catches a removed operation, not just passing vacuously).
+
+**Tests:** 266 files / 2,493 pass.
+
+
+---
+
 ### Session 99 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 03:50 IST
