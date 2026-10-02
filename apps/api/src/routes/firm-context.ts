@@ -12,6 +12,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
+import { publicErrorMessage } from '../utils/aiErrors.js';
 
 const router = Router();
 
@@ -41,8 +42,8 @@ router.post('/generate', async (req, res) => {
     res.json(ctx);
   } catch (error) {
     log.error('firm-context: generate failed', error);
-    const message = error instanceof Error ? error.message : 'Failed to generate firm context';
-    res.status(500).json({ error: 'Failed to generate firm context', message });
+    const pub = publicErrorMessage(error, 'Failed to generate firm context');
+    res.status(pub.statusCode ?? 500).json({ error: pub.statusCode ? pub.message : 'Failed to generate firm context', code: pub.code });
   }
 });
 

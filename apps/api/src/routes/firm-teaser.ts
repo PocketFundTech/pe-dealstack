@@ -11,6 +11,7 @@ import { log } from '../utils/logger.js';
 import { extractTextFromPDF, upload } from './ingest-shared.js';
 import { extractTextFromExcel, isExcelFile } from '../services/excelFinancialExtractor.js';
 import type { TeaserProfile } from '../services/firmTeaserService.js';
+import { publicErrorMessage } from '../utils/aiErrors.js';
 
 const router = Router();
 
@@ -137,8 +138,8 @@ router.post('/extract-context', upload.single('file'), async (req, res) => {
     res.json({ text, filename, chars: text.length });
   } catch (error) {
     log.error('firm-teaser: extract-context failed', error);
-    const message = error instanceof Error ? error.message : 'Failed to extract document text';
-    res.status(500).json({ error: 'Failed to extract document text', message });
+    const pub = publicErrorMessage(error, 'Failed to extract document text');
+    res.status(pub.statusCode ?? 500).json({ error: pub.statusCode ? pub.message : 'Failed to extract document text', code: pub.code });
   }
 });
 
@@ -158,8 +159,8 @@ router.post('/generate-prompt', async (req, res) => {
     res.json({ systemPrompt });
   } catch (error) {
     log.error('firm-teaser: generate-prompt failed', error);
-    const message = error instanceof Error ? error.message : 'Failed to generate system prompt';
-    res.status(500).json({ error: 'Failed to generate system prompt', message });
+    const pub = publicErrorMessage(error, 'Failed to generate system prompt');
+    res.status(pub.statusCode ?? 500).json({ error: pub.statusCode ? pub.message : 'Failed to generate system prompt', code: pub.code });
   }
 });
 

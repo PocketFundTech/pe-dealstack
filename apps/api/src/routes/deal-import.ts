@@ -12,6 +12,7 @@ import {
   validateDealRow,
 } from '../services/dealImportMapper.js';
 import type { ColumnMapping } from '../services/dealImportMapper.js';
+import { publicErrorMessage } from '../utils/aiErrors.js';
 
 const router = Router();
 
@@ -89,7 +90,8 @@ router.post('/analyze', upload.single('file'), async (req: Request, res: Respons
     });
   } catch (error: any) {
     log.error('Deal import analyze error', error);
-    res.status(500).json({ error: error.message || 'Failed to analyze import data' });
+    const pub = publicErrorMessage(error, 'Failed to analyze import data');
+    res.status(pub.statusCode ?? 500).json({ error: pub.message, code: pub.code });
   }
 });
 
@@ -324,7 +326,8 @@ router.post('/', async (req: Request, res: Response) => {
     res.status(201).json({ success: true, ...results });
   } catch (error: any) {
     log.error('Deal import error', error);
-    res.status(500).json({ error: error.message || 'Failed to import deals' });
+    const pub = publicErrorMessage(error, 'Failed to import deals');
+    res.status(pub.statusCode ?? 500).json({ error: pub.message, code: pub.code });
   }
 });
 
