@@ -91,11 +91,20 @@ export function IntegrationsSection({ onToast }: Props) {
     const label = PROVIDER_CATALOG.find((p) => p.id === provider)?.name ?? provider;
     if (status === "connected") onToast(`${label} connected`, "success");
     else if (status === "cancelled") onToast(`${label} connection cancelled`, "info");
-    else if (status === "error") onToast(`${label} could not be connected. Please try again.`, "error");
+    else if (status === "error") {
+      const reason = search.get("reason");
+      onToast(
+        reason === "INTEGRATION_NOT_CONFIGURED"
+          ? `${label} isn't set up on this server yet. Please contact your administrator.`
+          : `${label} could not be connected. Please try again.`,
+        "error",
+      );
+    }
     // Drop the one-shot result from the URL so a refresh doesn't repeat the toast.
     const url = new URL(window.location.href);
     url.searchParams.delete("integrations");
     url.searchParams.delete("provider");
+    url.searchParams.delete("reason");
     window.history.replaceState(window.history.state, "", url.toString());
     // Reload list so the connected status badge appears.
     load();

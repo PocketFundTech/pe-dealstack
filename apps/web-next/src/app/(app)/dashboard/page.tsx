@@ -165,7 +165,9 @@ export default function DashboardPage() {
       await addTask({ ...input, assignedTo: userId });
     } catch (err) {
       console.warn("[dashboard] add task failed:", err);
-      showNotice({ message: "Couldn't add that task. Your text is still in the box.", tone: "error" });
+      // Show the API's reason (e.g. a permission message) instead of a generic line.
+      const reason = err instanceof Error && err.message ? ` ${err.message}` : "";
+      showNotice({ message: `Couldn't add that task.${reason} Your text is still in the box.`, tone: "error" });
       throw err;
     }
   }, [addTask, userId, showNotice]);

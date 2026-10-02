@@ -198,23 +198,17 @@ export default function SettingsPage() {
     }
   };
 
-  const [confirmAction, setConfirmAction] = useState<"discard" | "deactivate" | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"discard" | null>(null);
 
   const handleCancel = () => {
     if (!hasChanges) return;
     setConfirmAction("discard");
   };
 
-  const handleDeactivate = () => {
-    setConfirmAction("deactivate");
-  };
-
   const executeConfirm = () => {
     if (confirmAction === "discard") {
       if (profile) applyProfile(profile);
       setHasChanges(false);
-    } else if (confirmAction === "deactivate") {
-      showToast("Account deactivation is not available in this version", "error");
     }
     setConfirmAction(null);
   };
@@ -363,22 +357,9 @@ export default function SettingsPage() {
 
           {showOutreachPipeline && <OutreachPipelineSection />}
 
-          {/* Deactivate Account */}
-          <div className="flex items-center justify-between p-4 bg-red-50 border border-red-200 rounded-lg">
-            <div>
-              <h4 className="text-sm font-bold text-red-700">Deactivate Professional Account</h4>
-              <p className="text-xs text-red-600/80">
-                Temporarily disable your analyst profile and data access.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleDeactivate}
-              className="px-4 py-2 bg-white border border-red-200 text-red-600 text-xs font-bold rounded-lg hover:bg-red-50 transition-colors shadow-sm"
-            >
-              Deactivate
-            </button>
-          </div>
+          {/* QA #16: "Deactivate account" was a stub (confirm → "not available"
+              toast). Hidden until self-deactivation is built; admins can still
+              deactivate a user (DELETE /api/users/:id, which sets isActive=false). */}
 
           {hasChanges && (
             <div className="text-xs text-amber-600 font-medium flex items-center gap-1.5 justify-end">
@@ -391,14 +372,10 @@ export default function SettingsPage() {
 
       <ConfirmDialog
         open={!!confirmAction}
-        title={confirmAction === "deactivate" ? "Deactivate Account" : "Discard Changes"}
-        message={
-          confirmAction === "deactivate"
-            ? "Are you sure you want to deactivate your account? This will disable your profile and data access."
-            : "Discard all unsaved changes? This cannot be undone."
-        }
-        confirmLabel={confirmAction === "deactivate" ? "Deactivate" : "Discard"}
-        variant={confirmAction === "deactivate" ? "danger" : "default"}
+        title="Discard Changes"
+        message="Discard all unsaved changes? This cannot be undone."
+        confirmLabel="Discard"
+        variant="default"
         onConfirm={executeConfirm}
         onCancel={() => setConfirmAction(null)}
       />

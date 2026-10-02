@@ -241,7 +241,7 @@ router.delete('/:id', requirePermission(PERMISSIONS.USER_DELETE), async (req: Re
     // Get user email before deleting for audit log (scoped to org)
     const { data: userToDelete } = await supabase
       .from('User')
-      .select('email')
+      .select('email, authId')
       .eq('id', id)
       .eq('organizationId', orgId)
       .single();
@@ -262,6 +262,8 @@ router.delete('/:id', requirePermission(PERMISSIONS.USER_DELETE), async (req: Re
         .update({ isActive: false, updatedAt: new Date().toISOString() })
         .eq('id', id)
         .eq('organizationId', orgId);
+      // Take effect now on this instance, not after the 30s cache TTL.
+      if (userToDelete?.authId) invalidateUserContext(String(userToDelete.authId));
 
       if (error) throw error;
     }

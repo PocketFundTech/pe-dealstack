@@ -6,6 +6,7 @@ import { Router } from 'express';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { scoreDeal, CriteriaNotConfiguredError } from '../services/agents/dealScorecard/index.js';
 import { log } from '../utils/logger.js';
+import { publicErrorMessage } from '../utils/aiErrors.js';
 
 const router = Router();
 
@@ -26,7 +27,10 @@ router.post('/:dealId/scorecard', async (req, res) => {
       });
     }
     log.error('Deal scorecard failed', { error: error.message });
-    res.status(500).json({ error: `Failed to score deal: ${error.message}` });
+    // QA #14: never echo the provider's raw error (it carried Anthropic's
+    // JSON and request id) — classify it into a user-facing message.
+    const pub = publicErrorMessage(error, 'Unknown error');
+    res.status(pub.statusCode ?? 500).json({ error: `Couldn't score this deal: ${pub.message}`, code: pub.code });
   }
 });
 

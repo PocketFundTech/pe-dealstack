@@ -24,7 +24,21 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthUser;
+      /** Supabase session id from the verified JWT (`session_id` claim). */
+      sessionId?: string;
     }
+  }
+}
+
+/** `session_id` claim of an already-verified Supabase JWT, if present. */
+export function sessionIdFromJwt(token: string): string | undefined {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return undefined;
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { session_id?: unknown };
+    return typeof claims.session_id === 'string' ? claims.session_id : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -120,6 +134,9 @@ export async function authMiddleware(
       user_metadata: user.user_metadata as Record<string, unknown> | undefined,
       emailConfirmed: Boolean(user.email_confirmed_at),
     };
+    // getUser() just verified this token, so reading its claims is safe.
+    // Lets Settings → Security flag "This device" (QA #11).
+    req.sessionId = sessionIdFromJwt(token);
 
     next();
   } catch (error) {
