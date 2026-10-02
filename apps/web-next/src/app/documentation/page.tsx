@@ -93,6 +93,10 @@ const FEATURE_GUIDES: FeatureGuide[] = [
         body: "Excel or CSV files containing multiple deals can be imported in bulk via the deal-import flow (up to 500 deals per file) with AI-assisted column mapping and duplicate detection.",
       },
       {
+        heading: "Coming from Notion, Airtable, OneDrive, SharePoint or Xero",
+        body: "These tools aren't direct integrations yet. Export your pipeline or contacts to CSV / Excel and use Deals → Import Deals (up to 500 rows, AI column mapping) or Contacts → Import from CSV. Files from OneDrive or SharePoint can be downloaded and uploaded to a deal's data room; Xero reports can be exported to Excel and uploaded for financial extraction.",
+      },
+      {
         heading: "Text Paste",
         body: "Paste deal content directly — from emails, Slack messages, WhatsApp forwards, or meeting notes. Minimum 50 characters required. Select the source type for better AI extraction context.",
       },
