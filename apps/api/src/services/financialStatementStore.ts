@@ -58,6 +58,7 @@ export function candidateFromRow(
     doc,
     statementType,
     lineItems: row.lineItems,
+    period: row.period,
   };
 }
 

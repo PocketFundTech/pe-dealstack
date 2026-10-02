@@ -74,11 +74,21 @@ function findYear(upper: string): number | null {
   return null;
 }
 
+export interface ParsePeriodOptions {
+  /**
+   * The company's fiscal year-end month (1-12), for labels that don't state
+   * one: a bare "FY2025" otherwise ends in December, which mis-orders a June
+   * year-end company's annual figures against its quarters and months.
+   * See inferFiscalYearEndMonth.
+   */
+  fiscalYearEndMonth?: number | null;
+}
+
 /**
  * Parse a period label into a canonical period, or null when it carries no
  * usable date (e.g. "Current", "ARR (Annualised)").
  */
-export function parsePeriod(label: string | null | undefined): CanonicalPeriod | null {
+export function parsePeriod(label: string | null | undefined, opts: ParsePeriodOptions = {}): CanonicalPeriod | null {
   if (!label) return null;
   const s = label.trim();
   if (!s) return null;
@@ -112,6 +122,7 @@ export function parsePeriod(label: string | null | undefined): CanonicalPeriod |
 
   const year = endYear ?? findYear(u);
   if (year == null) return null;
+  const fye = opts.fiscalYearEndMonth && opts.fiscalYearEndMonth >= 1 && opts.fiscalYearEndMonth <= 12 ? opts.fiscalYearEndMonth : null;
 
   const build = (kind: PeriodKind, months: number | null, month: number | null, key: string): CanonicalPeriod => ({
     label: s,
@@ -123,7 +134,7 @@ export function parsePeriod(label: string | null | undefined): CanonicalPeriod |
   });
   const mon = (m: number) => MONTH_ABBR[m - 1];
 
-  if (isEst) return build('EST', 12, endMonth, `${year}E`);
+  if (isEst) return build('EST', 12, endMonth ?? fye, `${year}E`);
   if (isLtm) return build('LTM', 12, endMonth, endMonth ? `LTM ${mon(endMonth)} ${year}` : `LTM ${year}`);
   if (isYtd) {
     return build('YTD', rangeMonths ?? (endMonth && tokens.length === 1 ? endMonth : null), endMonth,
@@ -149,7 +160,26 @@ export function parsePeriod(label: string | null | undefined): CanonicalPeriod |
   // fiscal year ("FY2024 ended Mar 2024"), in which case the month is the FYE.
   const namesFy = /\b(FY|CY|FISCAL|YEAR|ANNUAL)\b|\bFY\s?'?\d/.test(u);
   if (endMonth != null && !namesFy) return build('M', 1, endMonth, `${mon(endMonth)} ${year}`);
-  return build('FY', 12, endMonth, `${year}`);
+  return build('FY', 12, endMonth ?? fye, `${year}`);
+}
+
+/**
+ * The fiscal year-end month the labels themselves state, from full years
+ * with a non-December end ("FY2024 (Jul 2023 - Jun 2024)" → 6), or null
+ * when none say (calendar-year companies, or nothing to go on). Pass it to
+ * parsePeriod for the labels that don't state one.
+ */
+export function inferFiscalYearEndMonth(labels: Array<string | null | undefined>): number | null {
+  const counts = new Map<number, number>();
+  for (const label of labels) {
+    const p = parsePeriod(label);
+    if (!p || p.kind !== 'FY' || p.months !== 12) continue;
+    const month = Number(p.endDate.slice(5, 7));
+    if (month !== 12) counts.set(month, (counts.get(month) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  for (const [month, n] of counts) if (best === null || n > counts.get(best)!) best = month;
+  return best;
 }
 
 /** True for a full fiscal year (the only periods growth/CAGR should compare). */
