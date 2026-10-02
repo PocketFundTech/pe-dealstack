@@ -5,6 +5,28 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 93 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 21:11 IST
+
+#### Goal: post-SRM financial hardening, PR C — one fiscal year stored twice, and mixed currencies added together (fix plan Phase G, G9–G10).
+
+- **G9 · One fiscal year stored twice.**
+  - *Problem:* `dedupePeriods` grouped labels with its own synonym table, which doesn't understand range labels. A document printing "2024" and "FY2024 (Jan - Dec 2024)" kept both. The only database guard was a unique index on the raw label.
+  - *Dedup:* it now keys on the canonical period (`parsePeriod`), the same key the store and conflict resolution use. It keeps the more descriptive label, while a 9-month YTD, quarters, LTM and estimates stay separate.
+  - *Deep pass:* rows written earlier in the same run now count when checking for an active row for the period.
+  - *Conflicts:* the conflict list, resolve and resolve-all group versions by canonical period. A pick across labels deactivates every version of that year first.
+  - *DB guard:* `financials-period-key-unique-migration.sql` deactivates existing duplicates (keeps the reported, higher-confidence, newer one, flagged `needs_review`) and adds a unique index on `(dealId, statementType, periodKey)` for active rows. It refuses to run until the period-key backfill has filled every active row. **Pending: founder runs backfill, then SQL** (`docs/PENDING-MIGRATIONS.md`).
+- **G10 · Mixed currencies added together.**
+  - The analysis now uses the main currency's statements only, and `currencyNote` says what it left out. It's shown on the Analysis section.
+  - The statements table says when its columns are in different currencies. It used to label the whole table with the first column's currency.
+
+Tests:
+- API: 2420 pass. New suites: `period-dedupe-canonical`, `analysis-mixed-currency`, plus a canonical-period resolve case.
+- Web: 513 pass. New suite: `deal-financials-table-currency`.
+
+---
+
 ### Session 91 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 20:47 IST

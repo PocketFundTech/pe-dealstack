@@ -4,6 +4,14 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { refreshDealCache } from '../services/dealCacheWriteback.js';
+import { periodKeyOf } from '../services/financialSourceSelection.js';
+
+/**
+ * Versions of one period are grouped by canonical period (fix plan G9) —
+ * "2024" and "FY2024 (Jan - Dec 2024)" are the same year — matching the
+ * extraction's conflict logic and the one-active-row-per-period index.
+ */
+const rowPeriodKey = (row: { period: string; periodKey?: string | null }) => row.periodKey ?? periodKeyOf(row.period);
 
 const router = Router();
 
@@ -27,19 +35,20 @@ router.get('/deals/:dealId/financials/conflicts', async (req, res) => {
 
     if (error) throw error;
 
-    // Group by (statementType, period)
+    // Group by (statementType, canonical period)
     const conflicts = new Map<string, any[]>();
     for (const row of rows ?? []) {
-      const key = `${row.statementType}|${row.period}`;
+      const key = `${row.statementType}|${rowPeriodKey(row)}`;
       if (!conflicts.has(key)) conflicts.set(key, []);
       conflicts.get(key)!.push(row);
     }
 
-    const result = Array.from(conflicts.entries()).map(([key, versions]) => {
-      const [statementType, period] = key.split('|');
+    const result = Array.from(conflicts.values()).map((versions) => {
+      // Show the active version's label (else the first) for the period.
+      const shown = versions.find((v) => v.isActive) ?? versions[0];
       return {
-        statementType,
-        period,
+        statementType: shown.statementType as string,
+        period: shown.period as string,
         versions: versions.map(v => ({
           id: v.id,
           documentId: v.documentId,
@@ -86,15 +95,16 @@ router.post('/deals/:dealId/financials/resolve', async (req, res) => {
     const user = (req as any).user;
     const { statementType, period, chosenVersionId, customLineItems } = resolveSchema.parse(req.body);
 
-    // Get all versions for this conflict
-    const { data: versions, error } = await supabase
+    // Every version of this period, whatever label each document used for it.
+    const { data: rowsOfType, error } = await supabase
       .from('FinancialStatement')
-      .select('id, isActive')
+      .select('id, isActive, period, periodKey')
       .eq('dealId', dealId)
-      .eq('statementType', statementType)
-      .eq('period', period);
+      .eq('statementType', statementType);
+    const key = periodKeyOf(period);
+    const versions = (rowsOfType ?? []).filter((r: { period: string; periodKey?: string | null }) => rowPeriodKey(r) === key);
 
-    if (error || !versions?.length) {
+    if (error || !versions.length) {
       return res.status(404).json({ error: 'No versions found for this period' });
     }
 
@@ -171,10 +181,10 @@ router.post('/deals/:dealId/financials/resolve-all', async (req, res) => {
     if (error) throw error;
     if (!rows?.length) return res.json({ resolved: 0 });
 
-    // Group by (statementType, period)
+    // Group by (statementType, canonical period)
     const groups = new Map<string, any[]>();
     for (const row of rows) {
-      const key = `${row.statementType}|${row.period}`;
+      const key = `${row.statementType}|${rowPeriodKey(row)}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(row);
     }

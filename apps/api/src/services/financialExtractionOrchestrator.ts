@@ -222,11 +222,16 @@ async function runDeepPassUnlocked(
       .eq('dealId', input.dealId)
       .eq('statementType', stmt.statementType)
       .eq('isActive', true);
+    // Kept current through the loop: rows written earlier in THIS run are
+    // compared too, so two labels for one period from the same document
+    // can't both end up active (dedup should already have merged them —
+    // this is the backstop).
+    let active = (activeRows ?? []) as ActiveRow[];
 
     for (const periodData of stmt.periods) {
       try {
         const periodKey = periodKeyOf(periodData.period);
-        const matching = ((activeRows ?? []) as ActiveRow[]).filter(
+        const matching = active.filter(
           (r) => (r.periodKey ?? periodKeyOf(r.period)) === periodKey,
         );
         const incomingDocId = input.documentId ?? null;
@@ -262,9 +267,11 @@ async function runDeepPassUnlocked(
 
           if (incomingWins) {
             // Deactivate every active row for this period first (respects the
-            // one-active-per-period partial unique index), then the upsert
+            // one-active-per-period partial unique indexes), then the upsert
             // below installs the incoming row as active.
-            await deactivateRows([...others, ...staleSameDoc].map((r) => r.id));
+            const ids = [...others, ...staleSameDoc].map((r) => r.id);
+            await deactivateRows(ids);
+            active = active.filter((r) => !ids.includes(r.id));
           } else {
             // Existing source stays active. Flag for review only on a true tie.
             await supabase
@@ -273,7 +280,9 @@ async function runDeepPassUnlocked(
               .eq('id', best.row.id);
           }
         } else if (staleSameDoc.length > 0) {
-          await deactivateRows(staleSameDoc.map((r) => r.id));
+          const ids = staleSameDoc.map((r) => r.id);
+          await deactivateRows(ids);
+          active = active.filter((r) => !ids.includes(r.id));
         }
 
         // Upsert (not insert) so a re-extraction of the same document updates
@@ -309,6 +318,12 @@ async function runDeepPassUnlocked(
         if (data?.id) {
           statementIds.push(data.id);
           idLabels.push(`${stmt.statementType}:${periodData.period}`);
+          if (isActive && !active.some((r) => r.id === data.id)) {
+            active.push({
+              ...(data as Partial<ActiveRow>), id: data.id, documentId: incomingDocId,
+              period: periodData.period, periodKey, lineItems: periodData.lineItems, sourceKind: incomingKind,
+            } as ActiveRow);
+          }
         }
         periodsStored++;
       } catch (err) {

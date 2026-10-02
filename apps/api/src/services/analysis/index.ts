@@ -5,7 +5,7 @@
 
 import { log } from '../../utils/logger.js';
 import { AnalysisResult } from './types.js';
-import { prepareData } from './helpers.js';
+import { prepareData, pickAnalysisCurrency } from './helpers.js';
 import { computeQoEFlags, computeQoEScore, generateQoESummary } from './qoeAnalysis.js';
 import { computeRatios, computeDuPont } from './ratioAnalysis.js';
 import {
@@ -42,7 +42,9 @@ export async function analyzeFinancials(dealId: string, rows: any[], options: An
   }
   log.info('Starting financial analysis', { dealId, rowCount: rows.length });
 
-  const data = prepareData(rows);
+  // One currency only — mixed currencies used to be added together.
+  const single = pickAnalysisCurrency(rows);
+  const data = prepareData(single.rows);
 
   // All analysis modules read from `data` (immutable) and write to independent outputs.
   // Group into parallel batches for throughput:
@@ -114,6 +116,8 @@ export async function analyzeFinancials(dealId: string, rows: any[], options: An
     redFlags,
     workforceMetrics,
     periods: data.periods,
+    currency: single.currency,
+    ...(single.note ? { currencyNote: single.note } : {}),
     analyzedAt: new Date().toISOString(),
   };
 }

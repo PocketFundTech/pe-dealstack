@@ -224,6 +224,13 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
                 ))}
               </div>
 
+              {analysis?.currencyNote && (
+                <p className="mb-4 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="note">
+                  <span className="material-symbols-outlined text-[16px] text-amber-600">warning</span>
+                  {analysis.currencyNote}
+                </p>
+              )}
+
               {/* Tab panels — order matches legacy TABS array exactly */}
               {activeTab === "overview"   && <OverviewPanel analysis={analysis} />}
               {activeTab === "deepdive"   && <DeepDivePanel analysis={analysis} />}

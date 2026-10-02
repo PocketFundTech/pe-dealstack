@@ -169,6 +169,8 @@ export interface DuPontDecomposition {
 /** Full response from GET /deals/:id/financials/analysis */
 export interface AnalysisData {
   hasData: boolean;
+  /** Set when statements in other currencies were left out of the analysis. */
+  currencyNote?: string;
   qoe: QoEScore;
   ratios: RatioGroup[];
   duPont?: DuPontDecomposition;
