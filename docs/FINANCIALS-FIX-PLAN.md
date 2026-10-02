@@ -139,7 +139,7 @@ Three read-only audits after A–F merged (extraction correctness, model correct
 Founder decisions: entry balance sheet uses a **goodwill plug** (fees expensed at close, no dividends during the hold); account labels / order stored **inside lineItems** (`<key>_label`, `<key>_order`); revolver **off by default** (size 0).
 
 - [x] **H1 · Workbook = live preview, by the numbers.** A parity test compares every cached workbook value (entry, each projected year, interest, cash, levered FCF, exit, IRR / MoM, the Scenarios summary, the Sensitivity centre) with `projectModel` / `summariseCase`. It found `INDEX` over another sheet cached as 0, so previews of the export showed exit EV 0 and IRR "n/a"; `calc.ts` now resolves `INDEX` itself.
-- [ ] **H2 · Revolving credit facility.** Draws only to hold minimum cash, repaid first from spare cash, interest + undrawn fee on the opening balance (no circularity). Both implementations, parity-tested.
+- [x] **H2 · Revolving credit facility.** Off by default (commitment 0 = model unchanged). Draws only to hold minimum cash, repaid first from cash above it (before the sweep), interest on opening drawn + fee on undrawn (no circularity). Shared calculator + workbook (Returns and every Scenarios block), panel inputs, Notes; parity-tested with the revolver drawn.
 - [ ] **H3 · Integrated balance sheet + balance check.** Entry balance sheet with goodwill plug; PP&E roll-forward (capex − D&A); working capital from the drivers; debt and revolver from the schedule; retained earnings from net income; a check row that must be 0 every year (workbook and preview).
 - [ ] **H4 · Per-account label and order** (needs AI credit — extraction schema bump).
 

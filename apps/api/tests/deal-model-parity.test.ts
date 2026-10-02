@@ -24,6 +24,9 @@ const CASES: Array<[string, ResolvedAssumptions]> = [
   ['defaults', base],
   ['two tranches, minimum cash, partial sweep', { ...base, debt2Quantum: 1, debt2AmortPct: 2, debt2InterestRate: 13, minCash: 0.5, cashSweepPct: 60 }],
   ['revenue entry basis, absolute debt, higher exit', { ...base, entryBasis: 'REVENUE', entryMultiple: 0.9, debtQuantumMode: 'ABSOLUTE', debtQuantum: 8, exitMultiple: 7, exitYear: 4 }],
+  ['revolver drawn (heavy debt, negative early FCF)', {
+    ...base, debtQuantumMode: 'ABSOLUTE', debtQuantum: 25, interestRate: 15, minCash: 1, revolverSize: 6, revolverRate: 9, revolverFeePct: 0.5,
+  }],
   ['% of revenue working capital, single capex', {
     ...base, balanceDrivers: { ...base.balanceDrivers, nwcMethod: 'PCT_REVENUE', capexMethod: 'TOTAL' },
   }],
@@ -34,8 +37,9 @@ describe.each(CASES)('workbook = live preview (%s)', (_name, assumptions) => {
     const layout = buildModelLayout({ assumptions, history });
     const baseCol = baseColumnValues(layout.catalogue, history, selectBasePeriod(history));
     const p = projectModel(layout.catalogue.lines, baseCol.values, layout.assumptions, layout.opening);
-    // The fixture is a normal deal: returns must actually be computed, so the IRR checks below always run.
-    expect(p.irr).not.toBeNull();
+    // Normal deals must actually compute returns, so the IRR checks below run.
+    if (!_name.startsWith('revolver')) expect(p.irr).not.toBeNull();
+    if (_name.startsWith('revolver')) expect(p.debtSchedule.some((d) => d.drawR > 0)).toBe(true);
 
     const { sheets } = await readWorkbookXml(await buildModelWorkbook({ assumptions, history, context: SRM_CONTEXT }));
     const ret = sheets.get(SHEETS.returns)!;
@@ -60,6 +64,8 @@ describe.each(CASES)('workbook = live preview (%s)', (_name, assumptions) => {
       const rc = colLetter(2 + y);
       close(ret, `${rc}${R.interest}`, d.interest, `Y${y + 1} interest`);
       close(ret, `${rc}${R.cashClose}`, d.cashClose, `Y${y + 1} closing cash`);
+      close(ret, `${rc}${R.drawR}`, d.drawR, `Y${y + 1} revolver drawn`);
+      close(ret, `${rc}${R.closeR}`, d.closeR, `Y${y + 1} revolver closing`);
       close(proj, `${col}${layout.registry.pl.lfcf}`, d.lfcf, `Y${y + 1} levered FCF`);
     }
 

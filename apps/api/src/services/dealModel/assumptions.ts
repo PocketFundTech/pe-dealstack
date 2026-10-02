@@ -287,6 +287,10 @@ export const assumptionsSchema = z.object({
   debt2InterestRate: z.number().min(0).max(50).optional(),
   debt2AmortPct: z.number().min(0).max(100).optional(),
   minCash: z.number().min(0).max(1e7).optional(),
+  /** Revolving credit facility (fix plan H2): commitment (money), drawn rate %, undrawn fee %. Absent = none. */
+  revolverSize: z.number().min(0).max(1e7).optional(),
+  revolverRate: z.number().min(0).max(50).optional(),
+  revolverFeePct: z.number().min(0).max(10).optional(),
   taxRate: z.number().min(0).max(60),
   // Exit & discounting
   exitMultiple: z.number().positive().max(100),
@@ -303,7 +307,8 @@ export type ModelAssumptions = z.infer<typeof assumptionsSchema>;
 const DEFAULT_PROJECTION_YEARS = 5;
 
 type LegacyKeys = 'revenueGrowthPct' | 'ebitdaMarginPct' | 'daPctRevenue' | 'capexPctRevenue' | 'nwcPctRevenue';
-type CompletedKeys = 'lineDrivers' | 'balanceDrivers' | 'debt2Quantum' | 'debt2InterestRate' | 'debt2AmortPct' | 'minCash';
+type CompletedKeys = 'lineDrivers' | 'balanceDrivers' | 'debt2Quantum' | 'debt2InterestRate' | 'debt2AmortPct' | 'minCash'
+  | 'revolverSize' | 'revolverRate' | 'revolverFeePct';
 
 /** Assumptions with a driver for every line of the deal's catalogue, and every E3 field filled. */
 export type ResolvedAssumptions = Omit<ModelAssumptions, LegacyKeys | CompletedKeys> & {
@@ -313,6 +318,9 @@ export type ResolvedAssumptions = Omit<ModelAssumptions, LegacyKeys | CompletedK
   debt2InterestRate: number;
   debt2AmortPct: number;
   minCash: number;
+  revolverSize: number;
+  revolverRate: number;
+  revolverFeePct: number;
 };
 
 export interface DealSeed {
@@ -352,6 +360,10 @@ export function deriveDefaults(
     debt2AmortPct: 0,
     cashSweepPct: 50,
     minCash: 0,
+    // No revolver unless the user sizes one (0 = none, the model is unchanged).
+    revolverSize: 0,
+    revolverRate: 8,
+    revolverFeePct: 0.5,
 
     projectionYears,
     lineDrivers: seedLineDrivers(history, catalogue, projectionYears),

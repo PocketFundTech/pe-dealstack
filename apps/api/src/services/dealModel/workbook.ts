@@ -142,6 +142,9 @@ function balanceNotes(a: ResolvedAssumptions, opening: OpeningBalances): string[
     `Entry is cash-free, debt-free: existing net debt from ${bs} is refinanced at entry (Returns, sources & uses), so the equity cheque is EV + fees + minimum cash − new debt.`,
     'Debt: a senior tranche and an optional second tranche (both sized at entry), with mandatory amortisation and a year-end cash sweep of levered FCF (after interest and tax) above the minimum cash — senior first. ' +
       'Interest is charged on the average balance after scheduled amortisation (opening − mandatory / 2), so it never depends on that year\'s sweep: no circular reference and no iterative calculation is needed. ' +
-      'Closing cash below zero means a funding shortfall (no revolver is modelled). The integrated balance sheet is not modelled.',
+      (a.revolverSize > 0
+        ? `A revolver of ${a.revolverSize} (${a.revolverRate}% on drawn, ${a.revolverFeePct}% undrawn fee) is drawn only to hold the minimum cash and repaid first from cash above it; interest and fee are on the opening drawn balance. Closing cash below the minimum means a shortfall the revolver couldn't cover.`
+        : 'No revolver is sized (Assumptions → Revolver commitment); closing cash below zero means a funding shortfall.') +
+        ' The integrated balance sheet is not modelled.',
   ];
 }
