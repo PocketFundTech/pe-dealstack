@@ -83,6 +83,10 @@ export interface OpeningBalances {
   ap?: number;
   cash?: number;
   debt?: number;
+  /** Net PP&E — the integrated balance sheet's opening fixed assets (fix plan H3). */
+  ppe?: number;
+  /** Other assets less other liabilities (not cash, debt, working capital, PP&E, goodwill or intangibles). */
+  otherNet?: number;
 }
 
 export const DAYS_IN_YEAR = 365;

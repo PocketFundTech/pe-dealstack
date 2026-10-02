@@ -44,6 +44,7 @@ import { writeReturns } from './workbook/returns.js';
 import { writeSensitivity } from './workbook/sensitivity.js';
 import { writeCover, writeNotes } from './workbook/coverNotes.js';
 import { fillCachedResults } from './workbook/calc.js';
+import { writeBalanceSheet } from './workbook/balanceSheet.js';
 import { SHEETS, type WorkbookContext } from './workbook/xlsx.js';
 
 export { SHEETS, type WorkbookContext };
@@ -106,6 +107,7 @@ export async function buildModelWorkbook(input: BuildModelInput): Promise<Buffer
   const checks = writeHistoricals(wb.addWorksheet(SHEETS.historicals), history, catalogue, registry, context);
   writeProjections(wb.addWorksheet(SHEETS.projections), assumptions, registry, base, baseCol, opening, context);
   writeReturns(wb.addWorksheet(SHEETS.returns), assumptions, registry, base, baseCol, opening, context);
+  writeBalanceSheet(wb.addWorksheet(SHEETS.balanceSheet), registry, opening, context);
   writeSensitivity(wb.addWorksheet(SHEETS.sensitivity), assumptions, registry);
   writeScenarios(scenarioSheet, cases, registry, context);
   writeNotes(wb.addWorksheet(SHEETS.notes), { ctx: context, history, base, baseCol, cat: catalogue, reg: registry, checks,
@@ -145,6 +147,6 @@ function balanceNotes(a: ResolvedAssumptions, opening: OpeningBalances): string[
       (a.revolverSize > 0
         ? `A revolver of ${a.revolverSize} (${a.revolverRate}% on drawn, ${a.revolverFeePct}% undrawn fee) is drawn only to hold the minimum cash and repaid first from cash above it; interest and fee are on the opening drawn balance. Closing cash below the minimum means a shortfall the revolver couldn't cover.`
         : 'No revolver is sized (Assumptions → Revolver commitment); closing cash below zero means a funding shortfall.') +
-        ' The integrated balance sheet is not modelled.',
+        ' Balance Sheet: net assets at closing and each year — purchase accounting with goodwill as the plug (entry EV less the net working capital, PP&E and other net operating assets bought), transaction fees expensed at close, PP&E rolled with capex less D&A, equity grown by net income (no dividends). Its check row must be 0 every year.',
   ];
 }

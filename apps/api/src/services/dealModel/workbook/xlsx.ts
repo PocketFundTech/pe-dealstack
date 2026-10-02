@@ -9,6 +9,7 @@ export const SHEETS = {
   historicals: 'Historicals',
   projections: 'Projections',
   returns: 'Returns',
+  balanceSheet: 'Balance Sheet',
   sensitivity: 'Sensitivity',
   notes: 'Notes',
 } as const;

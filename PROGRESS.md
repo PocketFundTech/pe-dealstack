@@ -5,7 +5,7 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
-### Session 99 — October 3, 2026
+### Session 100 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 03:31 IST
 
@@ -22,6 +22,23 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 **Founder to-do:** run `apps/api/api-key-scope-migration.sql`. Until then, read-only keys can't be created (503, no silent downgrade); existing full-access keys are unaffected either way.
 
+---
+
+### Session 99 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:50 IST
+
+#### Goal: fix plan Phase H3 — an integrated balance sheet with a balance check.
+
+- **Entry (closing date), purchase accounting with a goodwill plug** (founder's choice): goodwill = entry EV − net working capital − PP&E − other net operating assets bought; transaction fees are expensed at close (reduce opening equity, not capitalised); no dividends during the hold.
+- **Each projected year:** PP&E rolls with capex − D&A; debt is the schedule's closing balance (including the revolver); equity grows by net income; goodwill and other net assets are held flat.
+- **New extraction read:** `total_assets`, `total_liabilities`/`total_equity`, `goodwill`, `intangibles` on the balance sheet (`balanceItems.ts`), reduced to one `otherNetOperatingAssets` figure (other assets − other liabilities) and PP&E, both carried in `OpeningBalances`.
+- **Shared calculator:** new `projectBalanceSheet` in `@ai-crm/shared` (`dealModelBalance.ts`) — balances by construction (Δnet assets = net income + Δdebt, since levered FCF ties cash to net income and ΔNWC/capex).
+- **Workbook:** a new Balance Sheet sheet, right after Returns, built from the same Projections and Returns cells — no new circular references.
+- **Panel:** a read-only Balance Sheet section with entry + every projected year, and a "Balances" / "Check off by …" badge.
+- **Parity:** goodwill, PP&E, debt, equity and the check row are checked between the workbook and the live preview, across all five parity cases (including the revolver drawn).
+
+Tests: API 2487 pass, web 527 pass.
 
 ---
 
