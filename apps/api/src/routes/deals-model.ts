@@ -20,6 +20,7 @@
 // MANUALLY per the repo's Supabase-migrations convention).
 
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
@@ -121,21 +122,38 @@ interface LoadedDeal {
 }
 
 /** Load + normalise everything the model needs. Throws UnitMismatchError. */
+/**
+ * A database read or write failed. Kept apart from "not found" and "no
+ * financials": a failed statements read used to come back as an empty
+ * model, which the panel explained as "this deal has no statements".
+ */
+class ModelDbError extends Error {
+  constructor(what: string, readonly detail: unknown) {
+    super(`Couldn't ${what} — the database didn't respond as expected. Retry in a moment.`);
+    this.name = 'ModelDbError';
+  }
+}
+
+/** PostgREST "no rows" from .single() — a real not-found, not a failure. */
+const NO_ROWS = 'PGRST116';
+
 async function loadModelInputs(dealId: string, orgId: string): Promise<LoadedDeal | null> {
-  const { data: deal } = await supabase
+  const { data: deal, error: dealError } = await supabase
     .from('Deal')
     .select('id, name, currency, dealSize, ebitda, company:Company(name)')
     .eq('id', dealId)
     .eq('organizationId', orgId)
     .single();
+  if (dealError && (dealError as { code?: string }).code !== NO_ROWS) throw new ModelDbError("load this deal", dealError);
   if (!deal) return null;
 
-  const { data: statements } = await supabase
+  const { data: statements, error: statementsError } = await supabase
     .from('FinancialStatement')
     .select('statementType, period, periodType, currency, unitScale, isActive, lineItems')
     .eq('dealId', dealId)
     .eq('isActive', true)
     .order('period', { ascending: true });
+  if (statementsError) throw new ModelDbError("load this deal's financial statements", statementsError);
 
   const { rows, currency } = normaliseStatements(statements ?? []);
 
@@ -218,11 +236,14 @@ type SavedCases = Partial<Record<ModelCase, Partial<ModelAssumptions>>>;
 
 /** Every saved case for the deal, keyed Low / Base / High. */
 async function loadSavedCases(dealId: string, orgId: string): Promise<SavedCases> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('DealModel')
     .select('name, assumptions')
     .eq('dealId', dealId)
     .eq('organizationId', orgId);
+  // Silently falling back to defaults would show (and let the user save
+  // over) a model that isn't theirs.
+  if (error) throw new ModelDbError('load the saved model cases', error);
   const out: SavedCases = {};
   for (const row of (data ?? []) as Array<{ name?: string; assumptions?: Partial<ModelAssumptions> }>) {
     const c = MODEL_CASES.find((x) => CASE_ROW_NAMES[x] === row.name);
@@ -238,13 +259,34 @@ function requestedCase(req: { query: Record<string, unknown> }, res: any): Model
   return c;
 }
 
-function sendModelError(res: Parameters<typeof router.get>[1] extends never ? never : any, error: unknown) {
+/**
+ * Status + body for a model-route failure: the specific reason when we know
+ * it, else a server-side failure with a reference the user can quote (it
+ * used to be a flat "Failed to build the model" for everything).
+ */
+export function modelErrorResponse(error: unknown): { status: number; body: { error: string; code: string; ref?: string } } {
   if (error instanceof UnitMismatchError) {
-    return res.status(error.status).json({ error: error.message, code: error.code });
+    return { status: error.status, body: { error: error.message, code: error.code } };
   }
-  const message = error instanceof Error ? error.message : String(error);
-  log.error('Deal model failed', { error: message });
-  return res.status(500).json({ error: 'Failed to build the model' });
+  if (error instanceof ModelDbError) {
+    log.error('Deal model: database error', { error: error.message, detail: error.detail });
+    return { status: 503, body: { error: error.message, code: 'MODEL_DB_ERROR' } };
+  }
+  const ref = randomUUID().slice(0, 8);
+  log.error('Deal model failed', { ref, error: error instanceof Error ? error.stack ?? error.message : String(error) });
+  return {
+    status: 500,
+    body: {
+      error: `The model couldn't be built because of an error on our side, not a problem with your data. Retry; if it keeps happening, contact support with reference ${ref}.`,
+      code: 'MODEL_BUILD_FAILED',
+      ref,
+    },
+  };
+}
+
+function sendModelError(res: Parameters<typeof router.get>[1] extends never ? never : any, error: unknown) {
+  const { status, body } = modelErrorResponse(error);
+  return res.status(status).json(body);
 }
 
 /**
@@ -370,7 +412,7 @@ router.put('/:dealId/model', async (req, res) => {
       )
       .select()
       .single();
-    if (error) throw error;
+    if (error) throw new ModelDbError(`save the ${which} case`, error);
 
     res.json({ success: true, model: data });
   } catch (error) {

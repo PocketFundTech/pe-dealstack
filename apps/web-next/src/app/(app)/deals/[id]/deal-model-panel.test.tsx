@@ -11,7 +11,10 @@ import { BASE_VALUES, LINES, OPENING, assumptions, casesResponse, seeded } from 
 
 const get = vi.fn();
 const put = vi.fn();
-vi.mock("@/lib/api", () => ({ api: { get: (...a: unknown[]) => get(...a), put: (...a: unknown[]) => put(...a) } }));
+vi.mock("@/lib/api", async (orig) => ({
+  ...(await orig<typeof import("@/lib/api")>()),
+  api: { get: (...a: unknown[]) => get(...a), put: (...a: unknown[]) => put(...a) },
+}));
 const showToast = vi.fn();
 vi.mock("@/providers/ToastProvider", () => ({ useToast: () => ({ showToast }) }));
 const authFetchRaw = vi.fn();

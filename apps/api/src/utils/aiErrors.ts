@@ -111,6 +111,18 @@ export function classifyProviderRejection(
 }
 
 /**
+ * A provider rejection as an AIProviderUnavailableError (already-wrapped
+ * errors pass through), or null for any other failure. For call sites that
+ * otherwise swallow errors into a null "no data" result — rethrow what this
+ * returns so the user hears "credits exhausted", not "nothing found".
+ */
+export function toProviderUnavailable(err: unknown, provider: string): AIProviderUnavailableError | null {
+  if (err instanceof AIProviderUnavailableError) return err;
+  const rejection = classifyProviderRejection(err);
+  return rejection ? new AIProviderUnavailableError(provider, rejection) : null;
+}
+
+/**
  * Classify an unknown error (Error object or string) into a structured
  * HTTP response descriptor. Handles UserBlockedError as a 403 so callers
  * don't need to import enforcement.ts themselves.
@@ -212,6 +224,18 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
     userMessage: classifyAIError(msg),
     code: 'AI_ERROR',
   };
+}
+
+/**
+ * Route helper: an AppError we raised on purpose (it already carries a
+ * specific message, status and code) passes straight through; anything
+ * else is classified by classifyAIErrorObject.
+ */
+export function aiErrorResponse(err: unknown): AIErrorResponse {
+  if (err instanceof AppError && !(err instanceof AIProviderUnavailableError)) {
+    return { statusCode: err.statusCode, userMessage: err.message, code: err.code };
+  }
+  return classifyAIErrorObject(err);
 }
 
 /** Classify an AI/LLM error into a specific user-facing message */

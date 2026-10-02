@@ -45,6 +45,7 @@ import {
   type ClassifyOptions,
 } from './financialClassifier.js';
 import { recordAnthropicMessageUsage } from './usage/trackedAnthropic.js';
+import { toProviderUnavailable } from '../utils/aiErrors.js';
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -251,6 +252,9 @@ export async function classifyFinancialsWithClaude(
       durationMs: Date.now() - start,
       metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
     });
+    // A provider rejection is a reason the user needs, not an empty result.
+    const unavailable = toProviderUnavailable(err, 'Anthropic');
+    if (unavailable) throw unavailable;
     return null;
   }
 }

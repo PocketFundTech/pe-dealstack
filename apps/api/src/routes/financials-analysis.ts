@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
+import { aiErrorResponse } from '../utils/aiErrors.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { analyzeFinancials } from '../services/analysis/index.js';
 import { getConcentrationFacts } from '../services/analysis/customerConcentrationReader.js';
@@ -156,7 +157,10 @@ router.get('/deals/:dealId/financials/insights', async (req, res) => {
     res.json({ hasData: true, insights, fromCache });
   } catch (err) {
     log.error('GET financials insights error', err);
-    res.status(500).json({ error: 'Failed to generate insights' });
+    // Specific reason (out of credit, bad AI answer, no key…) — the
+    // Insights tab shows it instead of a stand-in narrative.
+    const { statusCode, userMessage, code } = aiErrorResponse(err);
+    res.status(statusCode).json({ error: userMessage, code });
   }
 });
 
@@ -221,7 +225,8 @@ router.post('/deals/:dealId/financials/insights/regenerate', async (req, res) =>
     res.json({ hasData: true, insights, fromCache: false });
   } catch (err) {
     log.error('POST financials insights regenerate error', err);
-    res.status(500).json({ error: 'Failed to regenerate insights' });
+    const { statusCode, userMessage, code } = aiErrorResponse(err);
+    res.status(statusCode).json({ error: userMessage, code });
   }
 });
 

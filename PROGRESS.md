@@ -27,6 +27,38 @@ Tests:
 
 ---
 
+### Session 92 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 20:59 IST
+
+#### Goal: post-SRM financial hardening, PR B — failures must say why (fix plan Phase G, G5–G8).
+
+- **G5 · "No financial data found" when the AI was out of credit.**
+  - *Problem:* both classifiers caught every error and returned null. Cross-verify returned null when both did, and the extract node turned that into a "completed" run with 0 periods. With prod out of credit, every extraction blamed the document.
+  - *Fix, provider rejections:* `toProviderUnavailable()` (`utils/aiErrors.ts`) turns a provider rejection (credits, bad key, rate limit, overloaded) into `AIProviderUnavailableError`. The GPT and Claude classifiers and the Claude engine's uploads now throw it.
+  - *Fix, cross-verify:* when both sides are rejected, it throws. When only one is, it uses the other side and adds a warning that the figures weren't cross-checked.
+  - *Fix, extract node:* it remembers a rejection swallowed by a per-sheet or per-chunk catch and fails the run with the reason. It also skips Vision, which would hit the same wall. The existing `humanizeExtractionError` then turns that into "The AI provider account is out of credits…".
+- **G6 · AI Insights showed a stand-in narrative, and cached it.**
+  - *Problem:* any failure returned "AI insights are currently unavailable…" as a successful result. It was cached, so it outlived the outage.
+  - *Fix:* failures now throw with the reason. `AI_BAD_RESPONSE` asks the user to Regenerate, and `AI_NOT_CONFIGURED` covers a missing key.
+  - A cached placeholder is now treated as a miss. The insights routes use the new `aiErrorResponse()`.
+- **G7 · Vague or missing explanations on the deal page.**
+  - The Analysis section shows the server's reason (new `lib/errorMessage.ts → describeLoadError`) instead of "Something went wrong".
+  - The Insights tab shows the failure reason with Retry instead of "Loading…" forever.
+  - In the Build model panel (new `deal-model-notices.tsx`):
+    - A load failure, with its reason and Retry, now looks different from "no financials yet".
+    - Missing entry EBITDA, and entry EBITDA taken from the deal record, are both explained.
+    - A blank IRR or MoM is explained (zero equity cheque, or equity wiped out at exit).
+    - MoM 0.0x no longer shows "—".
+- **G8 · Model route errors.**
+  - A failed Deal, statements or saved-case read used to look like "deal not found", or like a deal with no statements (and defaults the user could save over). It is now a 503 `MODEL_DB_ERROR` with the reason.
+  - Anything unknown is a 500 `MODEL_BUILD_FAILED` with a support reference.
+  - Ingest-time deal-field AI failures are not persisted: no column or screen shows document AI status.
+
+Tests: API 2429 pass (new: `financial-provider-rejection`, `extract-node-provider-down`, `narrative-insights-failure`, plus model-route DB-error and `modelErrorResponse` cases). Web 522 pass (new: `deal-analysis-errors`, `deal-model-panel-states`). `tsc` is clean apart from the pre-existing missing `api/dist` bundles.
+
+---
+
 ### Session 91 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 20:47 IST

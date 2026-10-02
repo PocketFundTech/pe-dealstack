@@ -7,6 +7,7 @@ import { MAX_TEXT_LENGTH } from './agents/financialAgent/config.js';
 import { validateLineItems } from './financialSchema.js';
 import { wrapDocumentContent } from './agents/guardrails.js';
 import { computeDerivedFields, normalizeCashFlowSigns, normalizeIncomeStatementSigns } from './financialDerivations.js';
+import { toProviderUnavailable } from '../utils/aiErrors.js';
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -266,6 +267,10 @@ export async function classifyFinancials(
 
     return result;
   } catch (error) {
+    // Out of credit / bad key / rate limit is not "no financials in this
+    // document" — throw it so the extraction fails with that reason.
+    const unavailable = toProviderUnavailable(error, 'OpenAI');
+    if (unavailable) throw unavailable;
     log.error('Financial classifier error', error);
     return null;
   }

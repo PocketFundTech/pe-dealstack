@@ -25,7 +25,33 @@ import {
 //     - Due Diligence Priorities (checklist)
 // ---------------------------------------------------------------------------
 
-export function AIInsightsPanel({ insights }: { insights: NarrativeInsights | null }) {
+export function AIInsightsPanel({
+  insights, error = null, onRetry,
+}: {
+  insights: NarrativeInsights | null;
+  /** Why generation failed (out of credit, bad AI answer…). Set → no "Loading…". */
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  if (!insights && error) {
+    return (
+      <AnalysisCard className="text-center">
+        <span className="material-symbols-outlined text-[40px] text-red-300 block mb-3">error_outline</span>
+        <h3 className="text-sm font-semibold text-gray-600 mb-1.5">AI insights unavailable</h3>
+        <p className="text-xs text-gray-500 leading-relaxed max-w-sm mx-auto" role="alert">{error}</p>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            className="mt-4 text-xs font-semibold text-white px-4 py-2 rounded-lg"
+            style={{ backgroundColor: BANKER_BLUE }}
+          >
+            Retry
+          </button>
+        )}
+      </AnalysisCard>
+    );
+  }
+
   if (!insights) {
     return (
       <AnalysisCard className="text-center" >
