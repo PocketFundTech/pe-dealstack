@@ -144,10 +144,17 @@ curl -H "Authorization: Bearer avise_sk_YOUR_KEY" https://app.avise.io/api/users
             </tbody>
           </table>
         </div>
-        <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+        <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800 mb-4">
           <strong>Keep keys secret.</strong> A key is as powerful as the admin who created it. Store it
           only in your tool&apos;s credential store, use one key per integration, and revoke it in
           Settings the moment it may have leaked. It stops working on the next request.
+        </div>
+        <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+          <strong>Call it from a server, not a browser.</strong> Avise&apos;s API only accepts requests
+          from Avise&apos;s own web app, so a key used directly in client-side JavaScript on another site
+          will be blocked by CORS — and even if it weren&apos;t, anyone who opened that page&apos;s
+          developer tools could read the key out of it. Call the API from your backend, an automation
+          platform (n8n, Zapier, Make) or a script, and have your own server hand data to the browser.
         </div>
       </div>
 
