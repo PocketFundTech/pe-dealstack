@@ -7,6 +7,7 @@ import { useUser } from "@/providers/UserProvider";
 interface ApiKey {
   id: string;
   name: string;
+  scope: "full" | "read_only";
   keyPrefix: string;
   lastFour: string;
   createdAt: string;
@@ -24,6 +25,11 @@ const EXPIRY_OPTIONS: { label: string; days: number | null }[] = [
   { label: "30 days", days: 30 },
   { label: "90 days", days: 90 },
   { label: "1 year", days: 365 },
+];
+
+const SCOPE_OPTIONS: { label: string; value: "full" | "read_only"; hint: string }[] = [
+  { label: "Full access", value: "full", hint: "Can read and write — create, edit and delete data" },
+  { label: "Read-only", value: "read_only", hint: "Can only read data — any write request is refused" },
 ];
 
 function formatDate(iso: string | null): string {
@@ -46,8 +52,10 @@ export function ApiKeysSection({ onToast }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
+  const [scope, setScope] = useState<"full" | "read_only">("full");
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
+  const [newKeyScope, setNewKeyScope] = useState<"full" | "read_only">("full");
 
   const load = useCallback(async () => {
     try {
@@ -79,10 +87,13 @@ export function ApiKeysSection({ onToast }: Props) {
       const res = await api.post<{ apiKey: ApiKey; key: string }>("/api-keys", {
         name: name.trim(),
         expiresInDays: expiryDays,
+        scope,
       });
       setNewKey(res.key);
+      setNewKeyScope(scope);
       setKeys((prev) => [res.apiKey, ...prev]);
       setName("");
+      setScope("full");
     } catch (err) {
       onToast(err instanceof Error ? err.message : "Couldn't create the API key. Please try again.", "error");
     } finally {
@@ -139,7 +150,16 @@ export function ApiKeysSection({ onToast }: Props) {
           <>
             {newKey && (
               <div className="rounded-lg border border-[#003366]/20 bg-[#003366]/5 p-4">
-                <p className="text-sm font-semibold text-text-main">Copy your new key now — you won&apos;t see it again.</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold text-text-main">Copy your new key now — you won&apos;t see it again.</p>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                      newKeyScope === "read_only" ? "bg-sky-50 text-sky-700" : "bg-emerald-50 text-emerald-700"
+                    }`}
+                  >
+                    {newKeyScope === "read_only" ? "Read-only" : "Full access"}
+                  </span>
+                </div>
                 {[
                   { label: "API key", value: newKey },
                   { label: "Authorization header", value: `Authorization: Bearer ${newKey}` },
@@ -185,6 +205,21 @@ export function ApiKeysSection({ onToast }: Props) {
                 />
               </label>
               <label className="text-sm">
+                <span className="block text-text-secondary mb-1">Access</span>
+                <select
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value as "full" | "read_only")}
+                  className="rounded-lg border border-border-subtle px-3 py-2 text-sm bg-white"
+                  title={SCOPE_OPTIONS.find((o) => o.value === scope)?.hint}
+                >
+                  {SCOPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
                 <span className="block text-text-secondary mb-1">Expires</span>
                 <select
                   value={expiryDays ?? ""}
@@ -207,6 +242,10 @@ export function ApiKeysSection({ onToast }: Props) {
                 {creating ? "Creating…" : "Create key"}
               </button>
             </div>
+            <p className="text-xs text-text-secondary">
+              {SCOPE_OPTIONS.find((o) => o.value === scope)?.hint}. Give a less-trusted tool (a BI dashboard, a
+              reporting script) a read-only key so it can never create, edit or delete anything in Avise.
+            </p>
 
             {loading ? (
               <div className="text-text-secondary py-2 text-sm">Loading…</div>
@@ -221,6 +260,7 @@ export function ApiKeysSection({ onToast }: Props) {
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wide text-text-secondary border-b border-border-subtle">
                     <th className="py-2">Name</th>
+                    <th className="py-2">Access</th>
                     <th className="py-2">Key</th>
                     <th className="py-2">Last used</th>
                     <th className="py-2">Expires</th>
@@ -234,6 +274,15 @@ export function ApiKeysSection({ onToast }: Props) {
                     return (
                       <tr key={k.id} className="border-b border-border-subtle/40">
                         <td className="py-2 font-medium text-text-main">{k.name}</td>
+                        <td className="py-2">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                              k.scope === "read_only" ? "bg-sky-50 text-sky-700" : "bg-gray-100 text-text-secondary"
+                            }`}
+                          >
+                            {k.scope === "read_only" ? "Read-only" : "Full access"}
+                          </span>
+                        </td>
                         <td className="py-2 font-mono text-xs text-text-secondary">
                           {k.keyPrefix}…{k.lastFour}
                         </td>

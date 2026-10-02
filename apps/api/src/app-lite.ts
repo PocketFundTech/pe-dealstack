@@ -75,7 +75,7 @@ import outreachSettingsRouter from './routes/outreach-settings.js';
 import welcomeEmailRouter from './routes/welcome-email.js';
 import accountSecurityRouter from './routes/account-security.js';
 import { supabase } from './supabase.js';
-import { authMiddleware, enforceOrgMfaMiddleware } from './middleware/auth.js';
+import { authMiddleware, enforceOrgMfaMiddleware, enforceApiKeyScope } from './middleware/auth.js';
 import { orgMiddleware, requireCiceroCapital } from './middleware/orgScope.js';
 import { usageContextMiddleware } from './middleware/usageContext.js';
 import { staffAccessLogger } from './middleware/staffAccessLogger.js';
@@ -288,7 +288,7 @@ app.use('/api/public/welcome-email', welcomeEmailRouter);
 // Account-security emails (password-changed, new-device login) — any
 // logged-in user must reach these even mid-MFA-lockout, so authMiddleware
 // only, no orgMiddleware/enforceOrgMfaMiddleware.
-app.use('/api/account/security', authMiddleware, accountSecurityRouter);
+app.use('/api/account/security', authMiddleware, enforceApiKeyScope, accountSecurityRouter);
 // NOTE: /api/cron/* routers are deliberately NOT mounted in this bundle.
 // pickBundle (apps/web-next/src/lib/api-routing.ts) sends every /api/cron/*
 // path to the AI bundle, so they live in app-ai.ts only.
@@ -339,107 +339,107 @@ app.use('/api/webhooks/clay-enrichment', outreachClayEnrichmentWebhookRouter);
 // ========================================
 // Protected Routes (require authentication + org resolution)
 // ========================================
-app.use('/api/deals/import', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealImportRouter);
+app.use('/api/deals/import', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealImportRouter);
 // access-timeline mounted BEFORE the generic dealsRouter so /:dealId/access-timeline matches first
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealAccessTimelineRouter);
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTrashRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealAccessTimelineRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTrashRouter);
 // financials-timeseries mounted BEFORE dealsRouter so /:dealId/financials/timeseries matches first
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsFinancialsTimeseriesRouter);
 // Share-link CRUD (/:dealId/shares) — the public read side lives at
 // /api/public/portal above.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsShareRouter);
 // Doc-request CRUD (/:dealId/doc-requests) — literal segment, so mount
 // BEFORE the generic dealsRouter. Public fulfilment side is above.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocRequestsRouter);
 // Deal model (/:dealId/model, /:dealId/model/export) — literal segment,
 // mount BEFORE the generic dealsRouter. No LLM call, so it stays in lite.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsModelRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsModelRouter);
 // Reactivations: literal /reactivations + /:dealId/rescore — mount BEFORE
 // the generic dealsRouter or /:id swallows 'reactivations'.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsReactivationsRouter);
 // Firm-teaser per-deal routes: literal /:id/teasers shape — mount BEFORE the
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
-app.use('/api/deals', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsRouter);
-app.use('/api/firm-teaser', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmTeaserRouter);
-app.use('/api/firm-context', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmContextRouter);
-app.use('/api/companies', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, companiesRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, activitiesRouter);
-app.use('/api/documents', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsAlertsRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsRouter);
-app.use('/api/uploads', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, uploadsSignRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dataRoomsRouter);
-app.use('/api/users', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
-app.use('/api/notifications', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
-app.use('/api/templates', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, templatesRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsRouter);
+app.use('/api/firm-teaser', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmTeaserRouter);
+app.use('/api/firm-context', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmContextRouter);
+app.use('/api/companies', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, companiesRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, activitiesRouter);
+app.use('/api/documents', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsAlertsRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, documentsRouter);
+app.use('/api/uploads', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, uploadsSignRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, foldersRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dataRoomsRouter);
+app.use('/api/users', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usersRouter);
+app.use('/api/notifications', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, notificationsRouter);
+app.use('/api/templates', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, templatesRouter);
 // CustomGraph CRUD — /api/graphs and /api/deals/:dealId/graphs
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, graphsRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, graphsRouter);
 // Authenticated invitation routes (list, create, revoke, resend)
-app.use('/api/invitations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, invitationsRouter);
+app.use('/api/invitations', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, invitationsRouter);
 // audit-export must be mounted BEFORE the generic auditRouter so /export.csv matches first
-app.use('/api/audit', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditExportRouter);
-app.use('/api/audit', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditRouter);
+app.use('/api/audit', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditExportRouter);
+app.use('/api/audit', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, auditRouter);
 // staff-access-webhook router mounted BEFORE generic organizationsRouter so /me/staff-access-webhook matches first
 // Investment criteria (GET/PATCH /criteria) — must precede the generic
 // organizationsRouter for the same specific-before-generic reason as the
 // staff-access-webhook mount below.
 // NDA playbook (GET/PATCH /nda-playbook) — literal path, so mount before
 // the generic organizationsRouter for the same reason as criteria.
-app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationNdaPlaybookRouter);
-app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
-app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, orgStaffWebhookRouter);
-app.use('/api/organizations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationsRouter);
-app.use('/api/tasks', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, tasksRouter);
-app.use('/api/export', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, exportRouter);
-app.use('/api/contacts', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, contactsRouter);
-app.use('/api/watchlist', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, watchlistRouter);
+app.use('/api/organizations', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationNdaPlaybookRouter);
+app.use('/api/organizations', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationCriteriaRouter);
+app.use('/api/organizations', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, orgStaffWebhookRouter);
+app.use('/api/organizations', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, organizationsRouter);
+app.use('/api/tasks', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, tasksRouter);
+app.use('/api/export', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, exportRouter);
+app.use('/api/contacts', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, contactsRouter);
+app.use('/api/watchlist', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, watchlistRouter);
 // hubspot import mounted BEFORE the generic integrationsRouter so /hubspot/* isn't
 // swallowed by integrationsRouter's /:provider/connect catch-all.
-app.use('/api/integrations/hubspot', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, hubspotImportRouter);
-app.use('/api/integrations', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, integrationsRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
+app.use('/api/integrations/hubspot', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, hubspotImportRouter);
+app.use('/api/integrations', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, integrationsRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentsRouter);
 // NDA review router lives in BOTH bundles: POST /deals/:id/nda-reviews runs
 // the model (ai bundle), but GET /nda-reviews/:id just reads a saved row and
 // pickBundle sends it to lite. One implementation, mounted twice — mounting
 // it only in app-ai would 404 every read in production.
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
-app.use('/api', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, ndaReviewRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocEsignRouter);
+app.use('/api', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, legalDocumentTemplatesRouter);
 
 // Admin security: dashboard router mounted BEFORE the isolation-test router (different paths but ordered for clarity)
-app.use('/api/admin/security', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityDashboardRouter);
-app.use('/api/admin/security', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityRouter);
+app.use('/api/admin/security', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityDashboardRouter);
+app.use('/api/admin/security', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, adminSecurityRouter);
 
 // Auth-scoped self-service routes (MFA bypass active for /api/auth/* in middleware)
-app.use('/api/auth', authMiddleware, authSessionsRouter);
-app.use('/api/auth', authMiddleware, authWorkspaceEmailRouter);
+app.use('/api/auth', authMiddleware, enforceApiKeyScope, authSessionsRouter);
+app.use('/api/auth', authMiddleware, enforceApiKeyScope, authWorkspaceEmailRouter);
 
 // User-facing usage rollup (org-scoped)
-app.use('/api/usage', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);
+app.use('/api/usage', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, usageRouter);
 
 // Org API keys for external tools (n8n etc.) — admin-only, session-only (see routes/api-keys.ts)
-app.use('/api/api-keys', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, apiKeysRouter);
+app.use('/api/api-keys', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, apiKeysRouter);
 // Outbound webhooks (n8n/Zapier triggers) — admin-only; API keys allowed so tools can self-register
-app.use('/api/webhook-subscriptions', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, webhookSubscriptionsRouter);
+app.use('/api/webhook-subscriptions', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, webhookSubscriptionsRouter);
 
 // Outreach pipeline-tracking board — Cicero Capital only (requireCiceroCapital
 // 403s any other org, even with a valid session and a guessed record id).
-app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachRouter);
+app.use('/api/outreach', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachRouter);
 // Reply.io send/campaigns/sync-replies routes — split into their own file
 // to keep routes/outreach.ts under this repo's 500-line convention (see
 // AGENTS.md). Same base path + middleware chain as outreachRouter above.
-app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachReplyIoRouter);
+app.use('/api/outreach', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachReplyIoRouter);
 // Private Circle CSV import — same base path + middleware chain, own file
 // for the same 500-line reason as outreachReplyIoRouter above.
-app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachImportRouter);
+app.use('/api/outreach', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachImportRouter);
 // Per-org pipeline settings (stale threshold, auto-advance toggles) — same
 // base path + middleware chain, own file for the same 500-line reason.
-app.use('/api/outreach', authMiddleware, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachSettingsRouter);
+app.use('/api/outreach', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, requireCiceroCapital, outreachSettingsRouter);
 
 // Internal admin (Pocket Fund team only — gate is inside the router via requireInternalAdmin)
 // Note: NO orgMiddleware — internal routes intentionally query across orgs.
-app.use('/api/internal', authMiddleware, internalRouter);
+app.use('/api/internal', authMiddleware, enforceApiKeyScope, internalRouter);
 
 // Register integration providers (must execute before any request)
 registerProvider(granolaProvider);
