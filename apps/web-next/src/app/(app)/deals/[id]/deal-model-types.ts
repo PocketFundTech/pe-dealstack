@@ -43,7 +43,8 @@ export interface CasesResponse extends ModelStructure {
 export type ScalarKey =
   | "entryMultiple" | "transactionFeesPct" | "debtQuantum" | "interestRate"
   | "amortPctPerYear" | "debt2Quantum" | "debt2InterestRate" | "debt2AmortPct"
-  | "cashSweepPct" | "minCash" | "taxRate" | "exitMultiple" | "exitYear" | "wacc" | "dscrTarget";
+  | "cashSweepPct" | "minCash" | "revolverSize" | "revolverRate" | "revolverFeePct"
+  | "taxRate" | "exitMultiple" | "exitYear" | "wacc" | "dscrTarget";
 
 export const SCALAR_GROUPS: Array<{ title: string; fields: Array<{ key: ScalarKey; label: string; suffix: string; step?: number }> }> = [
   {

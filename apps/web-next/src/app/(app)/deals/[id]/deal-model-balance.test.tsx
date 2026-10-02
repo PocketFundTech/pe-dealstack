@@ -44,6 +44,17 @@ describe("DealModelPanel — working capital, capex and debt (E3)", () => {
     expect(within(screen.getByTestId("balance-out-lfcf")).getByText(expected.leveredFcf[1].toFixed(1))).toBeInTheDocument();
   });
 
+  it("sizes a revolver: inputs, a drawn row, and the preview uses it (H2)", async () => {
+    await renderPanel();
+    expect(screen.getByLabelText("Revolver commitment")).toHaveValue(0);
+    expect(screen.queryByTestId("balance-out-revolver")).toBeNull(); // no revolver row until it's sized
+    fireEvent.change(screen.getByLabelText("Revolver commitment"), { target: { value: "4" } });
+    const changed = { ...assumptions(), revolverSize: 4 };
+    const p = projectModel(LINES, BASE_VALUES, changed, OPENING);
+    await waitFor(() => expect(screen.getByTestId("balance-out-revolver")).toBeInTheDocument());
+    expect(within(screen.getByTestId("balance-out-debt")).getByText(p.debtClosing[0].toFixed(1))).toBeInTheDocument();
+  });
+
   it("moves ΔNWC and the active case's IRR when DSO changes — same arithmetic as the workbook", async () => {
     await renderPanel();
     fireEvent.change(screen.getByLabelText("DSO Y1"), { target: { value: "90" } });

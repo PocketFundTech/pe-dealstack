@@ -25,8 +25,14 @@
 //   swept cash = MAX(0, opening cash + levered FCF − mandatory − minimum
 //                cash) × sweep %, senior first, then the second tranche
 //   closing cash = opening cash + levered FCF − mandatory − sweep
-// Opening cash is the minimum cash, funded at entry (a use of funds); a
-// negative closing cash is a funding shortfall (no revolver is modelled).
+// Opening cash is the minimum cash, funded at entry (a use of funds).
+//
+// Revolver (fix plan H2, optional — size 0 = none): undrawn at entry.
+//   interest   = opening drawn × rate + (size − opening drawn) × undrawn fee
+//                (opening balance only, so still no circular reference)
+//   repaid     = MIN(opening drawn, cash above the minimum) — before the sweep
+//   drawn      = MIN(size − opening drawn, shortfall below the minimum)
+// A negative closing cash is a shortfall the revolver couldn't cover.
 // Percentages are percent numbers (5 = 5%), money in millions.
 
 export type NwcMethod = 'DAYS' | 'PCT_REVENUE';
@@ -112,6 +118,8 @@ export interface DebtYear {
   cashOpen: number;
   open1: number; mand1: number; int1: number; sweep1: number; close1: number;
   open2: number; mand2: number; int2: number; sweep2: number; close2: number;
+  /** Revolver: opening drawn, interest + undrawn fee, repaid, drawn, closing drawn. */
+  openR: number; intR: number; repayR: number; drawR: number; closeR: number;
   lfcf: number;
   available: number;
   interest: number;
@@ -123,6 +131,8 @@ export interface DebtTerms {
   senior: number; seniorRate: number; seniorAmort: number;
   second: number; secondRate: number; secondAmort: number;
   minCash: number; sweepPct: number;
+  /** Revolver commitment (0 = none), drawn rate % and undrawn fee %. */
+  revolver?: number; revolverRate?: number; revolverFee?: number;
 }
 
 /**
@@ -133,6 +143,7 @@ export interface DebtTerms {
 export function debtScheduler(t: DebtTerms, lfcfAt: (y: number) => number) {
   const pct = (v: number) => v / 100;
   const done: DebtYear[] = [];
+  const revolver = Math.max(0, t.revolver ?? 0);
 
   const opening = (y: number) => {
     const prev = y > 0 ? ensure(y - 1) : null;
@@ -140,10 +151,12 @@ export function debtScheduler(t: DebtTerms, lfcfAt: (y: number) => number) {
     const open2 = prev ? prev.close2 : t.second;
     const mand1 = Math.min(open1, t.senior * pct(t.seniorAmort));
     const mand2 = Math.min(open2, t.second * pct(t.secondAmort));
+    const openR = prev ? prev.closeR : 0;
     return {
       cashOpen: prev ? prev.cashClose : t.minCash,
       open1, mand1, int1: (open1 - mand1 / 2) * pct(t.seniorRate),
       open2, mand2, int2: (open2 - mand2 / 2) * pct(t.secondRate),
+      openR, intR: openR * pct(t.revolverRate ?? 0) + (revolver - openR) * pct(t.revolverFee ?? 0),
     };
   };
 
@@ -151,23 +164,27 @@ export function debtScheduler(t: DebtTerms, lfcfAt: (y: number) => number) {
     for (let i = done.length; i <= y; i++) {
       const o = opening(i);
       const lfcf = lfcfAt(i);
-      const available = Math.max(0, o.cashOpen + lfcf - o.mand1 - o.mand2 - t.minCash) * pct(t.sweepPct);
+      const pre = o.cashOpen + lfcf - o.mand1 - o.mand2;
+      const repayR = Math.min(o.openR, Math.max(0, pre - t.minCash));
+      const drawR = Math.min(revolver - o.openR, Math.max(0, t.minCash - pre));
+      const available = Math.max(0, pre - repayR - t.minCash) * pct(t.sweepPct);
       const sweep1 = Math.min(o.open1 - o.mand1, available);
       const sweep2 = Math.min(o.open2 - o.mand2, available - sweep1);
       const close1 = o.open1 - o.mand1 - sweep1;
       const close2 = o.open2 - o.mand2 - sweep2;
+      const closeR = o.openR + drawR - repayR;
       done.push({
-        ...o, lfcf, available, sweep1, sweep2, close1, close2,
-        interest: o.int1 + o.int2,
-        closing: close1 + close2,
-        cashClose: o.cashOpen + lfcf - o.mand1 - o.mand2 - sweep1 - sweep2,
+        ...o, lfcf, repayR, drawR, available, sweep1, sweep2, close1, close2, closeR,
+        interest: o.int1 + o.int2 + o.intR,
+        closing: close1 + close2 + closeR,
+        cashClose: pre + drawR - repayR - sweep1 - sweep2,
       });
     }
     return done[y];
   }
 
   return {
-    interestAt: (y: number) => { const o = opening(y); return o.int1 + o.int2; },
+    interestAt: (y: number) => { const o = opening(y); return o.int1 + o.int2 + o.intR; },
     year: ensure,
   };
 }
