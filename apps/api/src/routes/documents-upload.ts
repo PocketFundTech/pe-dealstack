@@ -26,6 +26,7 @@ import {
   driveExportTargetFor,
 } from '../integrations/googleDrive/client.js';
 import { GoogleDriveError } from '../integrations/googleDrive/types.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -672,6 +673,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
     };
 
     const afterResponseHook = (req as RequestWithAfterResponse).runAfterResponse;
+    emitWebhookEvent(req, orgId, 'document.uploaded', { ...document, dealId });
     if (needsAiWork && typeof afterResponseHook === 'function') {
       // Response first: the client sees status 'processing' and no
       // dealUpdated/updatedFields yet (those land once the deferred merge

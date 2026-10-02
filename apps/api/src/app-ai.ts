@@ -134,6 +134,12 @@ app.use(cors({
 
 // Rate limiting - per-user via auth token, fallback to IP
 const rateLimitKeyGenerator = (req: express.Request) => {
+  // API keys sent as X-API-Key get their own bucket too — otherwise every n8n
+  // Cloud customer behind the same egress IP would share one limit.
+  const apiKey = req.headers['x-api-key'];
+  if (typeof apiKey === 'string' && apiKey) {
+    return 'user:' + apiKey.slice(-16);
+  }
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return 'user:' + authHeader.slice(-16);

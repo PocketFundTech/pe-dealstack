@@ -21,6 +21,9 @@ import request from 'supertest';
 // ─── Mocks ──────────────────────────────────────────────────────────────
 
 const mockSupabase = { from: vi.fn(), storage: { from: vi.fn() } };
+// Webhook delivery schedules its own after-response job; out of scope here.
+vi.mock('../src/services/outboundWebhooks.js', () => ({ emitWebhookEvent: vi.fn() }));
+
 vi.mock('../src/supabase.js', () => ({ supabase: mockSupabase }));
 
 vi.mock('../src/utils/logger.js', () => ({

@@ -102,6 +102,7 @@ router.get('/', async (req, res) => {
     // Deal size range filters
     if (params.minDealSize) query = query.gte('dealSize', params.minDealSize);
     if (params.maxDealSize) query = query.lte('dealSize', params.maxDealSize);
+    if (params.updatedSince) query = query.gte('updatedAt', params.updatedSince.toISOString());
 
     // Text search across multiple fields
     if (params.search) {
@@ -113,6 +114,10 @@ router.get('/', async (req, res) => {
     const sortField = params.sortBy || 'updatedAt';
     const ascending = params.sortOrder === 'asc';
     query = query.order(sortField, { ascending, nullsFirst: false });
+    if (params.limit) {
+      const offset = params.offset ?? 0;
+      query = query.range(offset, offset + params.limit - 1);
+    }
 
     const { data, error } = await query;
 

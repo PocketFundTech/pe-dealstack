@@ -14,6 +14,7 @@ import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const subRouter = Router();
 
@@ -275,6 +276,7 @@ subRouter.post('/text', async (req, res) => {
 
     log.info('Text ingest complete', { dealId: deal.id, isUpdate });
 
+    emitWebhookEvent(req, orgId, isUpdate ? 'deal.updated' : 'deal.created', { ...deal, company: company || deal.company });
     res.status(isUpdate ? 200 : 201).json({
       success: true,
       isUpdate,

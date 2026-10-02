@@ -17,6 +17,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
+// Webhook delivery schedules its own after-response job; out of scope here.
+vi.mock('../src/services/outboundWebhooks.js', () => ({ emitWebhookEvent: vi.fn() }));
+
 vi.mock('../src/utils/logger.js', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));

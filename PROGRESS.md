@@ -5,6 +5,38 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 89 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 17:55 IST
+
+#### Goal: close the API gaps that block real n8n/Zapier integrations (PR `feat/api-webhooks-and-gaps`).
+
+**1. Outbound webhooks (new)**
+- **Problem:** Avise couldn't tell other tools when something happened. n8n "triggers" had to poll everything every few minutes.
+- **Fix:** added the `WebhookSubscription` table, `/api/webhook-subscriptions` (list, create, update, delete, test, events), and **Settings → Webhooks**.
+- **Events:** 11 in total — `deal.created/updated/stage_changed/deleted`, `contact.created/updated/deleted`, `task.created/updated/completed`, `document.uploaded`. They fire from the app, from the API and from all ingest paths.
+- **Delivery:** HMAC-signed (`Avise-Signature: t=…,v1=…`), runs after the response is sent, one attempt with a 5 s timeout. Failures show in Settings.
+- **URL rules:** https only, and private-network URLs are refused.
+- **Who can manage them:** admins. API keys are allowed here, so tools can register their own URLs.
+
+**2. Polling support:** `updatedSince` on deals, contacts, tasks and companies; optional `limit`/`offset` on deals and companies. Responses keep the same shape, so the app is unaffected.
+
+**3. Bugs fixed:**
+- `PATCH /api/contacts/:id` on an unknown id now returns 404 instead of 500.
+- Keys sent as `X-API-Key` are now rate-limited per key instead of per IP; on n8n Cloud, unrelated users were sharing one limit.
+
+**4. New endpoint:** `GET /api/tasks/:id`.
+
+**5. Settings → API Keys:** the new-key box now shows the full `Authorization: Bearer …` header with its own copy button. Founder question: "where do users get the Bearer token?" Answer: the API key is the Bearer token.
+
+**6. Docs:** /api-reference gains a Webhooks section (events, payload, signature verification), the new query params, and the regenerated index (315 endpoints). The smoke test covers the new endpoints too.
+
+**Tests:** 2,356 API tests pass, including 14 new webhook tests. Two background-upload tests now stub the webhook module, because they count after-response jobs.
+
+**⏳ Founder to-do:** run `apps/api/webhook-subscriptions-migration.sql`.
+
+---
+
 ### Session 88 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 17:07 IST
