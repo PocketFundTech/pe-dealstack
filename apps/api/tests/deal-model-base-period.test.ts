@@ -11,6 +11,7 @@ import { normaliseStatements, deriveDefaults } from '../src/services/dealModel/a
 import { selectBasePeriod } from '../src/services/dealModel/basePeriod.js';
 import { buildModelWorkbook, buildModelLayout, SHEETS, RETURNS_ROWS } from '../src/services/dealModel/workbook.js';
 import type { HistoricalRow } from '../src/services/dealModel/assumptions.js';
+import { entrySeed } from '../src/services/dealModel/entrySeed.js';
 
 /** Registry rows for a history — addresses are generated (fix plan E1). */
 const rowsFor = (history: HistoricalRow[]) => buildModelLayout({ assumptions: deriveDefaults(history), history }).registry;
@@ -128,6 +129,17 @@ describe('workbook entry values (D2)', () => {
     const PL = rowsFor(rows).pl.row;
     expect(wb.getWorksheet(SHEETS.projections)!.getRow(PL.total_opex).getCell(2).value).toBeCloseTo(27.3 - 2.21, 6);
     expect(JSON.stringify(wb.getWorksheet(SHEETS.notes)!.getSheetValues())).toContain('the deal record says 6.10');
+  });
+
+  it('entrySeed drops the deal multiple only when the EBITDAs disagree and the statements drive entry', async () => {
+    const gap = entrySeed({ impliedMultiple: 5.5, dealEbitda: 6.1, statementsEbitda: 2.21, entrySource: 'base' });
+    expect(gap.evMultiple).toBeNull();
+    expect(gap.warnings).toHaveLength(2);
+    const close = entrySeed({ impliedMultiple: 5.5, dealEbitda: 2.3, statementsEbitda: 2.21, entrySource: 'base' });
+    expect(close).toEqual({ evMultiple: 5.5, warnings: [] });
+    // Entry EBITDA IS the deal record's (no EBITDA in the statements): the multiple is consistent.
+    const fromDeal = entrySeed({ impliedMultiple: 5.5, dealEbitda: 6.1, statementsEbitda: null, entrySource: 'deal' });
+    expect(fromDeal).toEqual({ evMultiple: 5.5, warnings: [] });
   });
 
   it('honours entryBasis REVENUE and debtQuantumMode ABSOLUTE', async () => {

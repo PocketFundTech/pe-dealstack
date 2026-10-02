@@ -6,6 +6,7 @@ import type { BasePeriod } from '../basePeriod.js';
 import type { BaseColumn, LineCatalogue } from '../lineCatalogue.js';
 import type { Registry } from './registry.js';
 import { SHEETS, type WorkbookContext } from './xlsx.js';
+import { EBITDA_GAP_THRESHOLD, ebitdaGap } from '../entrySeed.js';
 
 export function writeCover(sheet: ExcelJS.Worksheet, ctx: WorkbookContext) {
   sheet.columns = [{ width: 26 }, { width: 60 }];
@@ -45,9 +46,8 @@ export function writeCover(sheet: ExcelJS.Worksheet, ctx: WorkbookContext) {
 function ebitdaGapNote(base: BasePeriod | null, ctx: WorkbookContext, reg: Registry): string[] {
   const own = base?.row.ebitda;
   const deal = ctx.fallbackEntryEbitda;
-  if (typeof own !== 'number' || typeof deal !== 'number' || own <= 0 || deal <= 0) return [];
-  const gap = Math.abs(deal - own) / own;
-  if (gap < 0.25) return [];
+  const gap = ebitdaGap(own, deal);
+  if (gap === null || gap < EBITDA_GAP_THRESHOLD || typeof own !== 'number' || typeof deal !== 'number') return [];
   return [
     `CHECK: base-period EBITDA from the statements is ${own.toFixed(2)}${base?.row.ebitdaDerived ? ' (derived)' : ''}, ` +
     `but the deal record says ${deal.toFixed(2)} — a ${Math.round(gap * 100)}% difference (e.g. adjusted vs reported EBITDA). ` +

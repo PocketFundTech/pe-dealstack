@@ -43,6 +43,25 @@ describe('Claude path derives missing income-statement fields', () => {
     expect(li.ebitda_source).toBe('derived: net_income + interest_expense + tax + da');
   });
 
+  it('bottom-up EBITDA strips other income / adds back other expense (one-offs are not operating)', () => {
+    // Net income includes a 0.4 one-off gain (e.g. PPP forgiveness) and a 0.1 other expense.
+    const li = itemsOf(incomeStatement([
+      item('revenue', 20), item('net_income', 1.4), item('interest_expense', 0.5), item('tax', 0.3), item('da', 0.7),
+      item('other_income', 0.4), item('other_expense', 0.1),
+    ]));
+    expect(li.ebitda).toBeCloseTo(2.6); // 1.4 + 0.5 + 0.3 + 0.7 − 0.4 + 0.1
+    expect(li.ebitda_source).toBe('derived: net_income + interest_expense + tax + da - other_income + other_expense');
+  });
+
+  it('bottom-up EBITDA uses raw other-income sub-accounts when no total is printed', () => {
+    const li = itemsOf(incomeStatement([
+      item('revenue', 20), item('net_income', 1.4), item('interest_expense', 0.5), item('tax', 0.3), item('da', 0.7),
+      { ...item('ppp_loan_forgiveness', 0.4), parent: 'other_income' } as ReturnType<typeof item>,
+    ]));
+    expect(li.ebitda).toBeCloseTo(2.5);
+    expect(String(li.ebitda_source)).toContain('- other_income');
+  });
+
   it('never overwrites a reported EBITDA', () => {
     const li = itemsOf(incomeStatement([item('revenue', 20), item('ebitda', 3), item('ebit', 2.1), item('da', 0.7)]));
     expect(li.ebitda).toBe(3);

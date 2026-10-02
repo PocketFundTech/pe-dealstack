@@ -30,6 +30,8 @@ export interface ModelStructure {
   opening?: OpeningBalances;
   currency: string;
   unitScale: string;
+  /** Plain-language reasons the defaults need a second look (e.g. deal-record vs statements EBITDA). */
+  warnings?: string[];
 }
 
 /** GET /deals/:id/model/cases (fix plan E2). */

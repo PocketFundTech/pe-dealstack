@@ -25,6 +25,18 @@ type Items = Record<string, number | string | null | undefined>;
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
+/** A standard line's printed total, else the sum of its raw sub-accounts (`<key>_<label>`), else null. */
+function totalOrChildren(li: Items, key: string): number | null {
+  if (typeof li[key] === 'number') return li[key] as number;
+  let sum: number | null = null;
+  for (const [k, value] of Object.entries(li)) {
+    if (k.startsWith(`${key}_`) && !k.endsWith('_source') && !k.endsWith('_pct') && typeof value === 'number') {
+      sum = (sum ?? 0) + value;
+    }
+  }
+  return sum;
+}
+
 export function computeDerivedFields(li: Items): void {
   const v = (k: string): number | null => (typeof li[k] === 'number' ? (li[k] as number) : null);
   const setDerived = (key: string, value: number, formula: string) => {
@@ -47,9 +59,17 @@ export function computeDerivedFields(li: Items): void {
       setDerived('ebitda', v('gross_profit')! - v('total_opex')!, 'gross_profit - total_opex');
     } else if (v('net_income') !== null && v('da') !== null
       && (v('interest_expense') !== null || v('tax') !== null)) {
-      // QuickBooks-style statements: build up from the bottom line.
-      setDerived('ebitda', v('net_income')! + (v('interest_expense') ?? 0) + (v('tax') ?? 0) + v('da')!,
-        'net_income + interest_expense + tax + da');
+      // QuickBooks-style statements: build up from the bottom line. Net income
+      // also carries non-operating items (a one-off gain such as PPP loan
+      // forgiveness or an asset sale, or a one-off loss); left in, they flow
+      // into entry EBITDA → EV → debt → IRR looking like ordinary EBITDA.
+      const otherIncome = totalOrChildren(li, 'other_income');
+      const otherExpense = totalOrChildren(li, 'other_expense');
+      let value = v('net_income')! + (v('interest_expense') ?? 0) + (v('tax') ?? 0) + v('da')!;
+      let formula = 'net_income + interest_expense + tax + da';
+      if (otherIncome !== null) { value -= otherIncome; formula += ' - other_income'; }
+      if (otherExpense !== null) { value += otherExpense; formula += ' + other_expense'; }
+      setDerived('ebitda', value, formula);
     }
   }
 
@@ -76,11 +96,25 @@ export function computeDerivedFields(li: Items): void {
 const OUTFLOW_KEY_RE =
   /^(capex|capital_expenditures?|acquisitions?|debt_repayments?|repayments?_of_(debt|borrowings|loans?)|principal_repayments?|dividends?(_paid)?|(owner|shareholder|member|partner)?_?distributions?|share_repurchases?|stock_buybacks?|purchases?_of_(property|equipment|ppe|fixed_assets|investments))(_|$)/;
 
+// Raw sub-accounts the extractor nests under the investing / financing
+// subtotals (nestedLineItemKey: "Equipment Loan Principal" →
+// financing_activities_equipment_loan_principal) don't start with a standard
+// outflow key, so they're judged by the words in the account name.
+const NESTED_FLOW_PARENTS = ['investing_activities_', 'financing_activities_'];
+const OUTFLOW_WORD_RE =
+  /(^|_)(purchases?|purchased|payments?|repayments?|repaid|principal|distributions?|dividends?|buybacks?|repurchases?|capex|acquisitions?|paid)(_|$)/;
+const INFLOW_WORD_RE =
+  /(^|_)(proceeds|sales?|sold|received|issuances?|issued|borrowings?|contributions?|disposals?|refunds?)(_|$)/;
+
 /** True for a cash-flow line that is by definition a use of cash. */
 export function isCashOutflowKey(key: string): boolean {
   if (key.endsWith('_source') || key.endsWith('_pct') || key.endsWith('_ratio') || key.endsWith('_multiple')) return false;
   if (/proceeds|net_|_net$|received/.test(key)) return false;
-  return OUTFLOW_KEY_RE.test(key);
+  if (OUTFLOW_KEY_RE.test(key)) return true;
+  const parent = NESTED_FLOW_PARENTS.find((p) => key.startsWith(p));
+  if (!parent) return false;
+  const account = key.slice(parent.length);
+  return !INFLOW_WORD_RE.test(account) && OUTFLOW_WORD_RE.test(account);
 }
 
 /** Flip positive outflows to negative in place; returns one warning per flip. */

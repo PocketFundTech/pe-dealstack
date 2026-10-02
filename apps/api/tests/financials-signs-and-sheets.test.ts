@@ -37,11 +37,30 @@ describe('cash-flow sign pass (B4)', () => {
     expect(r.warnings.some(w => w.includes('owner_distributions stored as an outflow'))).toBe(true);
   });
 
+  it('flips a positive-printed raw outflow nested under financing activities', () => {
+    const r = toClassificationResult(cashFlow([
+      item('operating_cf', 2.0),
+      { ...item('equipment_loan_principal', 0.6), parent: 'financing_activities' } as ReturnType<typeof item>,
+      { ...item('loan_proceeds', 1.0), parent: 'financing_activities' } as ReturnType<typeof item>,
+    ]));
+    const li = r.statements[0].periods[0].lineItems;
+    expect(li.financing_activities_equipment_loan_principal).toBe(-0.6);
+    expect(li.financing_activities_loan_proceeds).toBe(1.0);
+    expect(r.warnings.some(w => w.includes('financing_activities_equipment_loan_principal stored as an outflow'))).toBe(true);
+  });
+
   it.each([
     ['capex', true], ['capex_maintenance', true], ['dividends_paid', true], ['distributions', true],
     ['acquisitions', true], ['share_repurchases', true], ['purchase_of_equipment', true],
     ['capex_source', false], ['proceeds_from_sale_of_equipment', false], ['net_change_cash', false],
     ['operating_cf', false], ['capex_pct', false],
+    // Raw QuickBooks sub-accounts nested under the investing / financing subtotals.
+    ['financing_activities_equipment_loan_principal', true], ['financing_activities_loan_payments', true],
+    ['financing_activities_owner_distributions', true], ['investing_activities_purchase_of_building', true],
+    ['investing_activities_building_purchase', true], ['investing_activities_truck_purchased', true],
+    ['financing_activities_loan_proceeds', false], ['investing_activities_sale_of_truck', false],
+    ['financing_activities_owner_contributions', false], ['financing_activities', false],
+    ['investing_activities_net', false], ['financing_activities_equipment_loan_principal_source', false],
   ])('isCashOutflowKey(%s) = %s', (key, expected) => {
     expect(isCashOutflowKey(key)).toBe(expected);
   });

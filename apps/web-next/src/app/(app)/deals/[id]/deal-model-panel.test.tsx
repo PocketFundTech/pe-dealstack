@@ -117,6 +117,18 @@ describe("DealModelPanel — Low / Base / High (E2)", () => {
     expect(screen.getByRole("tab", { name: "Low •" })).toBeInTheDocument();
   });
 
+  it("shows the server's warnings about the defaults (deal-record vs statements EBITDA)", async () => {
+    const warning = "The deal record's EBITDA (6.10) differs from the base-period EBITDA in the statements (2.21) by 176%.";
+    get.mockResolvedValue({ ...casesResponse(), warnings: [warning] });
+    await renderPanel();
+    expect(screen.getByRole("note")).toHaveTextContent(warning);
+  });
+
+  it("shows no warning box when there is nothing to flag", async () => {
+    await renderPanel();
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
   it("downloads all three cases, opened on the active one", async () => {
     authFetchRaw.mockResolvedValue({ ok: false, json: async () => ({ error: "stop here" }) });
     await renderPanel();

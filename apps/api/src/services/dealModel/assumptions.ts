@@ -20,6 +20,7 @@ import { comparePeriodChronologically } from '../../utils/periodChrono.js';
 import { computeDerivedFields } from '../financialDerivations.js';
 import type { LineDriver } from '@ai-crm/shared';
 import { buildLineCatalogue, type LineCatalogue } from './lineCatalogue.js';
+import { DEFAULT_ENTRY_MULTIPLE } from './entrySeed.js';
 import { seedLineDrivers, resolveLineDrivers } from './drivers.js';
 import type { BalanceDrivers } from '@ai-crm/shared';
 import { readBalanceItems, resolveBalanceDrivers, seedBalanceDrivers, type BalanceItems } from './balanceItems.js';
@@ -332,7 +333,7 @@ export function deriveDefaults(
   catalogue: LineCatalogue = buildLineCatalogue(history),
 ): ResolvedAssumptions {
   const projectionYears = DEFAULT_PROJECTION_YEARS;
-  const entryMultiple = deal.evMultiple && deal.evMultiple > 0 ? deal.evMultiple : 5;
+  const entryMultiple = deal.evMultiple && deal.evMultiple > 0 ? deal.evMultiple : DEFAULT_ENTRY_MULTIPLE;
 
   return {
     entryMultiple,
