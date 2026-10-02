@@ -1,4 +1,4 @@
-# CONTEXT — where things stand (updated 2 Oct 2026, 00:30 IST)
+# CONTEXT — where things stand (updated 3 Oct 2026, 00:59 IST)
 
 The one-page handoff for whoever picks up next (person or agent). The detailed day-by-day log is
 [`PROGRESS.md`](PROGRESS.md); working rules are in [`CLAUDE.md`](CLAUDE.md).
@@ -15,9 +15,7 @@ One Vercel project `pocket-funds-projects/pe-dealstack` serves `deals.avise.io` 
    `vercel logs --environment production --since 1h --query "credit balance"`.
 
 ## Open PRs
-| PR | What | State |
-|---|---|---|
-| #171 | AI out-of-credit errors say so (shared classifier); crore/lakh table headers on deal reads; data room uses app-wide toasts; period-key backfill script; this file + doc updates | CI green, ready to merge |
+None from the financials work — everything below is merged.
 
 ## Recently shipped (all on `main`)
 - **Smooth Flows** user-flow fixes — Batch 1 (#158), Batch 0 (#160), Batch 2 onboarding/invites/auth (#170).
@@ -27,12 +25,29 @@ One Vercel project `pocket-funds-projects/pe-dealstack` serves `deals.avise.io` 
   canonical periods + account parents (#164), cash-flow red flags (#165), customer concentration from the CIM (#166),
   every P&L line + Low/Base/High scenarios + working capital/capex/debt (#169, carrying #167 + #168).
   Plan + notes: [`docs/FINANCIALS-FIX-PLAN.md`](docs/FINANCIALS-FIX-PLAN.md), [`docs/FINANCIALS-INVESTIGATION-NOTES.md`](docs/FINANCIALS-INVESTIGATION-NOTES.md).
+- **Financials Phase G — post-SRM hardening (G1–G16)**, from three audits after A–F (plan: FINANCIALS-FIX-PLAN.md → Phase G):
+  - **#173**: the model .xlsx carries a computed value for every formula, so it no longer opens blank in Protected View or previews. QA guide: `docs/MODEL-EXPORT-TESTING-GUIDE.md`.
+  - **#181 (A)**:
+    - entry multiple vs deal-record EBITDA mismatch → 5× plus a warning;
+    - bottom-up EBITDA strips other income / expense;
+    - nested cash-flow signs;
+    - revenue per employee divides by headcount.
+  - **#182 (B)**:
+    - provider rejections (out of credit) fail extraction with the reason instead of "no financial data";
+    - no placeholder AI insights;
+    - Analysis / Build model panel show real reasons;
+    - model route DB errors are explicit.
+  - **#183 (C)**: one active row per canonical period (dedup, conflict resolution, DB index), and analysis uses one currency.
+  - **#184 (D1)**: Low/High margin delta through Fixed costs; "summary" names; model always in millions.
+  - **#185 (D2)**: fiscal year-end hint for bare "FY2025"; restatements win; the fast deal read's units are re-checked in code.
 - Earlier the same week: token/cost work (#145, #149, #150, #154–#156), uploads (#151), bugs (#152), icon font (#153).
 
 ## Migrations
-All pending SQL was run and verified by the founder on 2026-10-02: `usage-cost-accuracy-migration.sql`,
-`deal-stage-cleanup.sql`, `financials-source-period-migration.sql`. Nothing pending.
-Optional: `cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts --dry-run` then without the flag.
+**Pending (founder runs, in this order)** — from #183, steps + verify query in [`docs/PENDING-MIGRATIONS.md`](docs/PENDING-MIGRATIONS.md):
+1. `cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts --dry-run`, then without the flag.
+2. `apps/api/financials-period-key-unique-migration.sql` in the Supabase SQL Editor (refuses to run before step 1).
+3. Verify query → expect 1, 0, 0.
+The app works before and after; the SQL cleans up existing duplicate periods and adds the guard index.
 
 ## Waiting on the founder
 - Top up Anthropic (and OpenAI, or keep moving features to Claude).
@@ -45,10 +60,14 @@ Optional: `cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts --dr
   real address, rotate the QA account password after testing.
 
 ## What's next (engineering)
-1. After credit is back: re-run the live QA checks that failed only on credit — Excel re-extract on "Northwind Cold Chain",
-   PDF upload, model entry/IRR, data-room insights.
-2. Smooth Flows **Batch 3** (stop losing work) → **Batch 4** (pagination, extraction status, public large uploads, mobile nav, shared Dialog).
-3. Financials deferred items: integrated balance sheet + balance check, revolver, per-account source label/row order.
+1. After credit is back:
+   - Re-run the live QA checks that failed only on credit: Excel re-extract on "Northwind Cold Chain", PDF upload, model entry/IRR, data-room insights.
+   - Check the Phase G warnings show (Build model panel, Analysis currency note).
+   - Then re-extract SRM and have Pushkar re-test.
+   - While credit is still out, #182 is verifiable: extraction should say the AI provider is out of credits, not "no financial data".
+2. **Financials PR E — headcount extraction** (founder's choice; G17 in the plan). Held until credit is back, because it changes the extraction prompt and bumps `EXTRACTION_SCHEMA_VERSION`.
+3. Smooth Flows **Batch 3** (stop losing work) → **Batch 4** (pagination, extraction status, public large uploads, mobile nav, shared Dialog).
+4. Financials deferred items: integrated balance sheet + balance check, revolver, per-account source label/row order.
 
 ## Testing on production
 QA login `qa.tester@example.com` (ADMIN) in its own org **"Avise QA Test Org"**; password in the session scratchpad
@@ -67,3 +86,11 @@ QA login `qa.tester@example.com` (ADMIN) in its own org **"Avise QA Test Org"**;
 - Vitest 4: a throwing `vi.fn` behind a route's dynamic `import()` can fail a test even when caught — use plain functions.
 - Automated production DB reads/writes from Claude Code are blocked by the safety classifier; give the founder paste-ready SQL
   plus one combined verification query instead.
+- **ExcelJS drops a cached formula result of exactly `0`** in its `cell.value` getter/setter (truthy copy). Write results via
+  `cell.model.result`, and test the raw sheet XML, not `cell.value` (`dealModel/workbook/calc.ts`).
+- **fast-formula-parser:**
+  - A parser instance is not reentrant; use one instance per recursion depth (see `calc.ts`).
+  - `CHOOSE` / `INDEX` / `IF` get a leading context argument even when overridden.
+- **Two PRs that both add a top entry to `PROGRESS.md` conflict.** Rebase the second onto `main`, keep both entries, newest first.
+- **`apps/web-next` icon-font test scans for icon names.** Any new Material icon must be in `src/lib/iconFont.ts`, and
+  string literals inside `material-symbols-outlined` spans count as icon names.
