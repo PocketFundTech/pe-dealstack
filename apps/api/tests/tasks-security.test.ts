@@ -16,8 +16,9 @@ vi.mock('../src/services/auditLog.js', () => ({
   AuditLog: { log: vi.fn() },
 }));
 vi.mock('../src/middleware/rbac.js', () => ({
-  PERMISSIONS: { DEAL_ASSIGN: 'deal.assign', ADMIN_SETTINGS: 'admin.settings' },
+  PERMISSIONS: { DEAL_ASSIGN: 'deal.assign', TASK_CREATE: 'task.create', ADMIN_SETTINGS: 'admin.settings' },
   requirePermission: () => (_req: any, _res: any, next: any) => next(),
+  hasPermission: () => true,
 }));
 vi.mock('../src/routes/notifications.js', () => ({
   createNotification: vi.fn(async () => {}),
