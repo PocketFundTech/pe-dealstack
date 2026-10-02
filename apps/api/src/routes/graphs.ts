@@ -75,15 +75,15 @@ router.get('/graphs', async (req, res) => {
   try {
     const orgId = getOrgId(req);
 
-    // Join Deal so the cross-deal cards can show deal/company labels
-    // without an extra round-trip. `target` on the wire is actually
-    // Company.name (lives on a separate table joined via Deal's FK —
-    // mirrors memos-list.ts:60). We flatten company.name back into a
-    // top-level `target` field before responding so the frontend
-    // contract (GraphWithDeal.deal) stays unchanged.
+    // Deal/company labels are fetched in a second query instead of a
+    // PostgREST embed: the embed needs a CustomGraph.dealId → Deal FK, which
+    // foreign-keys-migration.sql adds only conditionally, and without it the
+    // embed fails and this whole list 500s. `target` on the wire is
+    // Company.name, flattened so the frontend contract (GraphWithDeal.deal)
+    // stays unchanged.
     const { data, error } = await supabase
       .from('CustomGraph')
-      .select('*, deal:Deal(id, projectName:name, company:Company(name))')
+      .select('*')
       .eq('organizationId', orgId)
       .order('updatedAt', { ascending: false });
 
@@ -94,20 +94,22 @@ router.get('/graphs', async (req, res) => {
       throw error;
     }
 
-    const rows = (data ?? []).map((row: Record<string, unknown>) => {
-      const dealRaw = row.deal as
-        | { id: string; projectName: string | null; company?: { name: string | null } | null }
-        | null;
-      if (!dealRaw) return { ...row, deal: null };
-      return {
-        ...row,
-        deal: {
-          id: dealRaw.id,
-          projectName: dealRaw.projectName ?? null,
-          target: dealRaw.company?.name ?? null,
-        },
-      };
-    });
+    const graphs = (data ?? []) as Record<string, unknown>[];
+    const dealIds = [...new Set(graphs.map((g) => g.dealId).filter(Boolean))] as string[];
+    const dealsById = new Map<string, { id: string; projectName: string | null; target: string | null }>();
+    if (dealIds.length > 0) {
+      const { data: deals, error: dealsError } = await supabase
+        .from('Deal')
+        .select('id, name, company:Company(name)')
+        .eq('organizationId', orgId)
+        .in('id', dealIds);
+      if (dealsError) throw dealsError;
+      for (const d of (deals ?? []) as unknown as { id: string; name: string | null; company?: { name: string | null } | null }[]) {
+        dealsById.set(String(d.id), { id: d.id, projectName: d.name ?? null, target: d.company?.name ?? null });
+      }
+    }
+
+    const rows = graphs.map((row) => ({ ...row, deal: dealsById.get(String(row.dealId)) ?? null }));
     res.json(rows);
   } catch (err) {
     log.error('GET /api/graphs error', err);

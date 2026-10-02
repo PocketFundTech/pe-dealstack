@@ -5,6 +5,24 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 90 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 20:00 IST
+
+#### Goal: live API smoke test against production, then fix what it found.
+
+**Smoke test result:** 120 of 122 passed, run against app.avise.io with a real admin key ("PocketFund" org). It covered auth, keys-can't-manage-keys, ~50 reads, a full write lifecycle (company, deal, note, folder, PDF upload, 413 at 5 MB, task, contact, duplicate 409, delete/restore), the new filters, `GET /api/tasks/:id` and the webhook subscription lifecycle.
+
+**1. `GET /api/graphs` returned 500 "Failed to fetch graphs"** (cross-deal graphs list)
+- **Root cause:** the list joined `deal:Deal(…)` in a single PostgREST query. That join needs a `CustomGraph.dealId → Deal` foreign key, which `foreign-keys-migration.sql` adds only conditionally. The per-deal route doesn't join, so it worked.
+- **Fix:** fetch the graphs, then fetch their deal and company labels in one org-scoped `Deal … in(ids)` query. The response shape is unchanged. New test: `graphs-list-route.test.ts`.
+
+**2. `GET /api/integrations/activities` returned 400** — this was correct behaviour, because the endpoint requires `dealId` or `contactId`. The smoke script now passes `dealId`.
+
+**Note:** the smoke test's deal ends up soft-deleted in Trash as "QA-API-TEST … Deal".
+
+---
+
 ### Session 89 — October 2, 2026
 
 #### Timestamp: October 2, 2026 — 17:55 IST

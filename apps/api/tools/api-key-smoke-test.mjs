@@ -91,7 +91,7 @@ const READS = [
   '/api/documents/alerts', '/api/memos', '/api/legal-documents', '/api/legal-document-templates',
   '/api/conversations', '/api/ai/status', '/api/ai/email-templates', `/api/notifications?userId=${userId}`,
   '/api/invitations', '/api/firm-context', '/api/firm-teaser', '/api/onboarding/status',
-  '/api/templates', '/api/watchlist', '/api/graphs', '/api/integrations', '/api/integrations/activities',
+  '/api/templates', '/api/watchlist', '/api/graphs', '/api/integrations',
   '/api/audit', '/api/audit/summary', '/api/audit/export.csv', '/api/export/deals', '/api/export/deals?format=csv',
   '/api/usage/me', '/api/ingest/pending-review',
   '/api/deals?updatedSince=2026-01-01&limit=5', '/api/deals?limit=2&offset=1', '/api/contacts?updatedSince=2026-01-01',
@@ -132,6 +132,7 @@ if (!READ_ONLY) {
       'legal-documents', 'nda-reviews', 'model', 'model/cases', 'graphs', 'access-timeline', 'chat/history', 'ai-cache']) {
       await call('GET', `/api/deals/${dealId}/${sub}`);
     }
+    await call('GET', `/api/integrations/activities?dealId=${dealId}`);
     await call('GET', `/api/deals/${dealId}/team`);
     await call('GET', `/api/deals/${dealId}/teasers`);
     await call('GET', `/api/memos?dealId=${dealId}`);
