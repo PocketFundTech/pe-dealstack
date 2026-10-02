@@ -40,7 +40,10 @@ Passed (no action): #1, #2, #3, #5, #8, #18, #20, #22, #26.
 
 ---
 
-## Batch 1 — this PR (P0 / P1 code fixes, all S)
+## Batch 1 — this PR (P0 / P1 code fixes, all S) — ✅ implemented in PR #174
+
+Decisions taken: any role except Viewer creates its own tasks (assigning others still needs `DEAL_ASSIGN`); deactivate is
+hidden (self-deactivation later) and `isActive` is now enforced; extraction concurrency is `EXTRACTION_CONCURRENCY`, default 4.
 
 ### #10 Tasks don't save (P0)
 - **Cause**: `POST /api/tasks` uses `requirePermission(PERMISSIONS.DEAL_ASSIGN)` (`A/routes/tasks.ts:84`). Only ADMIN / PARTNER /
