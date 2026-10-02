@@ -8,7 +8,7 @@
  * change both, or this fails.
  */
 import { describe, it, expect } from 'vitest';
-import { projectModel, summariseCase, MODEL_CASES } from '@ai-crm/shared';
+import { projectModel, projectBalanceSheet, summariseCase, MODEL_CASES } from '@ai-crm/shared';
 import { normaliseStatements, deriveDefaults, type ResolvedAssumptions } from '../src/services/dealModel/assumptions.js';
 import { buildModelWorkbook, buildModelLayout, scenarioLayout, SHEETS, RETURNS_ROWS as R } from '../src/services/dealModel/workbook.js';
 import { baseColumnValues } from '../src/services/dealModel/lineCatalogue.js';
@@ -90,5 +90,18 @@ describe.each(CASES)('workbook = live preview (%s)', (_name, assumptions) => {
 
     // Sensitivity: the centre cell is the live case's IRR (same entry and exit multiple).
     if (p.irr !== null) close(sheets.get(SHEETS.sensitivity)!, 'D7', p.irr, 'sensitivity centre IRR');
+
+    // Balance Sheet: goodwill, PP&E, debt and the check (must be 0) for every column.
+    const bsSheet = sheets.get(SHEETS.balanceSheet)!;
+    const bs = projectBalanceSheet(p, layout.assumptions, layout.opening);
+    const bsCol = (col: string, c: { goodwill: number; ppe: number; debt: number; equity: number; check: number }, what: string) => {
+      close(bsSheet, `${col}8`, c.goodwill, `${what} goodwill`); // row B.goodwill = 8
+      close(bsSheet, `${col}7`, c.ppe, `${what} PP&E`); // row B.ppe = 7
+      close(bsSheet, `${col}12`, c.debt, `${what} debt`); // row B.debt = 12
+      close(bsSheet, `${col}13`, c.equity, `${what} equity`); // row B.equity = 13
+      close(bsSheet, `${col}16`, c.check, `${what} balance check`); // row B.check = 16
+    };
+    bsCol('B', bs.entry, 'entry BS');
+    bs.years.forEach((y, i) => bsCol(colLetter(3 + i), y, `Y${i + 1} BS`));
   });
 });

@@ -61,7 +61,7 @@ describe('workbook structure', () => {
   it('has every sheet a banker expects, in order', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual([
       SHEETS.cover, SHEETS.assumptions, SHEETS.scenarios, SHEETS.historicals,
-      SHEETS.projections, SHEETS.returns, SHEETS.sensitivity, SHEETS.notes,
+      SHEETS.projections, SHEETS.returns, SHEETS.balanceSheet, SHEETS.sensitivity, SHEETS.notes,
     ]);
   });
 
