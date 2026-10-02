@@ -6,12 +6,26 @@ import type { ParsedRow, Stage } from "./InviteTeamModal.csv.parse";
 // Extracted from InviteTeamModal.csv.tsx so the parent module stays under the
 // 500-line cap.
 
-export function RowStatus({ row, stage }: { row: ParsedRow; stage: Stage }) {
-  if (row.invalid) {
+export function RowStatus({
+  row,
+  stage,
+  issue,
+  dealName,
+}: {
+  row: ParsedRow;
+  stage: Stage;
+  /** Blocking validation problem for this row (validateRows). */
+  issue?: string;
+  dealName?: string;
+}) {
+  if (stage === "preview" && !row.checked) {
+    return <span className="text-[#868E96] text-xs">Skipped</span>;
+  }
+  if (issue && stage === "preview") {
     return (
       <span className="inline-flex items-center gap-1 text-red-600 text-xs">
         <span className="material-symbols-outlined text-sm">error</span>
-        {row.invalid}
+        {issue}
       </span>
     );
   }
@@ -37,6 +51,8 @@ export function RowStatus({ row, stage }: { row: ParsedRow; stage: Stage }) {
       <span className="inline-flex items-center gap-1 text-green-700 text-xs">
         <span className="material-symbols-outlined text-sm">check_circle</span>
         Invitation sent
+        {r.deal === "on_accept" && dealName && ` · joins ${dealName} on accept`}
+        {r.deal === "not_saved" && " · deal not saved (pending update)"}
       </span>
     );
   if (r.kind === "exists")
@@ -44,6 +60,7 @@ export function RowStatus({ row, stage }: { row: ParsedRow; stage: Stage }) {
       <span className="inline-flex items-center gap-1 text-[#868E96] text-xs">
         <span className="material-symbols-outlined text-sm">person</span>
         Already on the team
+        {r.deal === "added" && dealName && ` · added to ${dealName}`}
       </span>
     );
   if (r.kind === "pending")

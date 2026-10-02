@@ -36,9 +36,9 @@ export function CsvUploadStep({
 analyst1@firm.com,ANALYST,
 partner@firm.com,ASSOCIATE,Project Atlas`}</pre>
             <div className="text-[#868E96] text-xs mt-2">
-              Up to {MAX_BULK_ROWS} valid rows per import. Deal names in CSV
-              are shown for reference but cannot be auto-attached during
-              bulk import.
+              Up to {MAX_BULK_ROWS} people per import. Deal names are matched to
+              your deals (you can change them in the next step); each person is
+              added to that deal&apos;s team when they join.
             </div>
           </div>
         </div>

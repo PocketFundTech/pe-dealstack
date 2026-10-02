@@ -8,6 +8,7 @@ import { createInviteeSession } from '../services/inviteSession.js';
 import {
   loadAcceptableInvitation,
   markInvitationAccepted,
+  applyInvitationDeal,
   notifyAdminsOfJoin,
   escapeLike,
   passwordProblem,
@@ -167,6 +168,7 @@ router.post('/accept/:token', async (req: Request, res: Response, next: NextFunc
     }
 
     await markInvitationAccepted(invitation.id);
+    await applyInvitationDeal(invitation, newUser.id);
 
     await AuditLog.log(req, {
       action: 'INVITATION_ACCEPTED',

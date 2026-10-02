@@ -7,6 +7,7 @@ import { log } from '../utils/logger.js';
 import {
   loadAcceptableInvitation,
   markInvitationAccepted,
+  applyInvitationDeal,
   notifyAdminsOfJoin,
 } from '../services/invitationAccept.js';
 
@@ -144,6 +145,7 @@ router.post('/join/:token', authMiddleware, async (req: Request, res: Response, 
     }
 
     await markInvitationAccepted(invitation.id);
+    if (userId) await applyInvitationDeal(invitation, userId);
     // Drop the warm-lambda org cache so the next request sees the new org.
     invalidateUserContext(authUser.id);
 
