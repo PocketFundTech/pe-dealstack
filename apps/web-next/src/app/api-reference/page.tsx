@@ -89,12 +89,25 @@ export default function ApiReferencePage() {
             Connect n8n, Zapier, Make or your own scripts to Avise. Create an API
             key in Settings and send it as a Bearer token.
           </p>
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-[#e2e8f0] font-mono text-sm">
-            <span className="text-[#64748b]">Base URL:</span>
-            <span className="text-primary font-semibold">
-              https://app.avise.io/api
-            </span>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-[#e2e8f0] font-mono text-sm">
+              <span className="text-[#64748b]">Base URL:</span>
+              <span className="text-primary font-semibold">
+                https://app.avise.io/api
+              </span>
+            </div>
+            <a
+              href="/openapi.json"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-[#e2e8f0] text-sm font-semibold text-[#111418] hover:border-primary transition-colors"
+            >
+              <span className="material-symbols-outlined text-base text-primary">download</span>
+              OpenAPI spec
+            </a>
           </div>
+          <p className="text-xs text-[#64748b] mt-3">
+            Import <code className="bg-white px-1 rounded">https://app.avise.io/openapi.json</code> into Postman,
+            Insomnia or n8n to generate every request below automatically.
+          </p>
         </div>
       </div>
 
@@ -135,10 +148,17 @@ curl -H "Authorization: Bearer avise_sk_YOUR_KEY" https://app.avise.io/api/users
             </tbody>
           </table>
         </div>
-        <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+        <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800 mb-4">
           <strong>Keep keys secret.</strong> A key is as powerful as the admin who created it. Store it
           only in your tool&apos;s credential store, use one key per integration, and revoke it in
           Settings the moment it may have leaked. It stops working on the next request.
+        </div>
+        <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+          <strong>Call it from a server, not a browser.</strong> Avise&apos;s API only accepts requests
+          from Avise&apos;s own web app, so a key used directly in client-side JavaScript on another site
+          will be blocked by CORS — and even if it weren&apos;t, anyone who opened that page&apos;s
+          developer tools could read the key out of it. Call the API from your backend, an automation
+          platform (n8n, Zapier, Make) or a script, and have your own server hand data to the browser.
         </div>
       </div>
 
@@ -164,6 +184,14 @@ curl -H "Authorization: Bearer avise_sk_YOUR_KEY" https://app.avise.io/api/users
           <p className="text-sm text-[#64748b]">
             Zapier (Webhooks by Zapier), Make (HTTP module) and Postman work the same way: add the
             Authorization header with your key. Turn on retries for nodes that loop over many items.
+          </p>
+          <p className="text-sm text-[#64748b] mt-3">
+            Faster setup: import{" "}
+            <a href="/openapi.json" className="text-primary font-medium hover:underline">
+              https://app.avise.io/openapi.json
+            </a>{" "}
+            into Postman (File → Import → Link) or n8n’s OpenAPI importer to get every endpoint below as a
+            ready-made request — just add your key.
           </p>
         </div>
       </div>
