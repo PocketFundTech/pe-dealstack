@@ -5,6 +5,28 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 97 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:02 IST
+
+#### Goal: test every safely-testable API endpoint against production and check each one is actually used.
+
+**Live test (`--extended --ai`, real admin key, PocketFund org):** 215 of 224 checks passed. Coverage went from about 100 to about 205 of the 315 key-accessible endpoints. Every record the test created was cleaned up.
+
+**Failures, by cause:**
+1. **Real bug, fixed here — creating or duplicating a memo template returned 500 for every user, in the app too.** `POST /api/templates` and `/:id/duplicate` wrote the Supabase auth UUID into `MemoTemplate.createdBy`, but the column references `User.id` (`MemoTemplate_createdBy_fkey`). They now resolve the internal id via `resolveUserId`. New test: `templates-create-owner.test.ts`.
+2. **Legacy `/api/conversations/*` (6 endpoints):** `GET /:id`, `GET` and `POST /:id/messages` return 500 "Database error". No screen calls these (deal chat and memo chat use their own routes), and a conversation with no deal is readable by ID across orgs. **Recommended: remove them.** That deletion was blocked in auto mode, so it's left for the founder to decide.
+3. **Test expectations corrected (not bugs):** legal-doc export returns 409 "Google Workspace not connected" (correct, the org has no Google integration). Legal-template DELETE returns 204. NDA review rejects the test's fake PDF with 400.
+4. **Transient:** two "fetch failed" network blips (`/api/firm-context`, `/api/documents/:id`). Both answered normally on retest.
+
+**Safety:** the extended run never sends emails or e-signatures, never invites users, and never writes org settings. The firm-context and firm-teaser "write back the same value" checks were removed, because a misread response shape could have wiped real settings.
+
+**Usage audit:** about 245 of 315 endpoints are called by web-next. Of the ~70 that aren't, most are API-only but useful (company, user and activity detail, trash and restore, deal import, contact insights, audit summary). About 10–15 look like leftovers (old AI routes, debug endpoints, `/api/conversations`).
+
+**Tests:** 2,451 API tests pass.
+
+---
+
 ### Session 96 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 03:06 IST

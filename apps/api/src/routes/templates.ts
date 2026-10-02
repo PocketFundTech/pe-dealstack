@@ -6,6 +6,7 @@ import { AuditLog } from '../services/auditLog.js';
 import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import templateSectionsRouter from './templates-sections.js';
+import { resolveUserId } from './notifications.js';
 
 const router = Router();
 
@@ -134,9 +135,11 @@ router.post('/', async (req, res) => {
     }
 
     const orgId = getOrgId(req);
+    // createdBy references User.id (MemoTemplate_createdBy_fkey), not the
+    // Supabase auth UUID in req.user.id — passing the auth id failed the FK.
     const templateData = {
       ...validation.data,
-      createdBy: user?.id,
+      createdBy: user?.id ? await resolveUserId(user.id) : null,
       usageCount: 0,
       organizationId: orgId,
     };
@@ -281,7 +284,7 @@ router.post('/:id/duplicate', async (req, res) => {
         isGoldStandard: false,
         isActive: true,
         permissions: original.permissions,
-        createdBy: user?.id,
+        createdBy: user?.id ? await resolveUserId(user.id) : null,
         usageCount: 0,
         organizationId: orgId,
       })
