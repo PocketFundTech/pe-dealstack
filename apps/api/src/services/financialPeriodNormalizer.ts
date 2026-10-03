@@ -62,7 +62,26 @@ import type {
   FinancialPeriod,
   PeriodType,
   StatementType,
+  UnitScale,
 } from './financialClassifier.js';
+
+const UNIT_SCALE_MULTIPLIER: Record<UnitScale, number> = {
+  ACTUALS: 1,
+  THOUSANDS: 1_000,
+  MILLIONS: 1_000_000,
+  BILLIONS: 1_000_000_000,
+};
+
+/** Multiply every monetary line item by `factor`; `_pct` ratios and `_source` citations are left alone. */
+export function rescalePeriod(period: FinancialPeriod, factor: number): FinancialPeriod {
+  if (factor === 1) return period;
+  const lineItems: Record<string, number | null> = {};
+  for (const [key, value] of Object.entries(period.lineItems)) {
+    const monetary = typeof value === 'number' && !key.endsWith('_pct') && !key.endsWith('_source');
+    lineItems[key] = monetary ? value * factor : value;
+  }
+  return { ...period, lineItems };
+}
 
 // ─── Public types ────────────────────────────────────────────
 
@@ -737,9 +756,9 @@ export function dedupeStatementPeriods(
  *      confidence values winning per key. That's exactly the behaviour we
  *      want when two sibling statements describe different facets of the
  *      same period.
- *   4. Merge `unitScale` / `currency` from the first occurrence — these are
- *      already deterministic per file (the LLM doesn't switch units mid-
- *      document) so first-wins is fine.
+ *   4. Take `unitScale` / `currency` from the first occurrence, converting
+ *      every sibling's values into that scale first — scale is detected per
+ *      sheet/chunk, so siblings from one workbook can disagree.
  *
  * Logs a per-merge info line when a `statementType` had >1 source statement.
  */
@@ -763,9 +782,18 @@ export function mergeStatementsBySameType(
     }
 
     // Multiple statements of the same type — concatenate periods then dedup.
+    // Siblings can carry different scales (unit detection is per sheet/chunk),
+    // so convert every sibling into the first one's scale before merging.
+    const targetScale = group[0].unitScale;
     const allPeriods: FinancialPeriod[] = [];
     for (const s of group) {
-      for (const p of s.periods) allPeriods.push(p);
+      const factor = UNIT_SCALE_MULTIPLIER[s.unitScale] / UNIT_SCALE_MULTIPLIER[targetScale];
+      if (factor !== 1) {
+        log.warn(`Statement merge: converting ${statementType} sibling from ${s.unitScale} to ${targetScale}`, {
+          statementType, from: s.unitScale, to: targetScale, sheetName: s.sheetName,
+        });
+      }
+      for (const p of s.periods) allPeriods.push(rescalePeriod(p, factor));
     }
     const dedupedPeriods = dedupeStatementPeriods(statementType, allPeriods);
 
@@ -780,7 +808,7 @@ export function mergeStatementsBySameType(
       },
     );
 
-    // First-wins for unitScale/currency — see header comment.
+    // Values were converted to targetScale above; currency stays first-wins.
     merged.push({
       statementType,
       unitScale: group[0].unitScale,
