@@ -24,7 +24,7 @@
 // maintenance + growth) — are the Base case's in every case, so the
 // workbook has one layout.
 
-import { MODEL_CASES, projectModel, type LineDriver, type ModelCase, type ModelLine } from '@ai-crm/shared';
+import { MODEL_CASES, projectModel, type CaseSummary, type LineDriver, type ModelCase, type ModelLine } from '@ai-crm/shared';
 import type { HistoricalRow, ModelAssumptions, ResolvedAssumptions } from './assumptions.js';
 import { resolveAssumptions, type DealSeed } from './assumptions.js';
 import type { LineCatalogue } from './lineCatalogue.js';
@@ -145,6 +145,28 @@ export function scenarioSeedNotes(
     );
   }
   return notes;
+}
+
+// Above these, a buyout's returns are almost always a data error (most often
+// a thousands-vs-millions unit mismatch in the extracted history), not a deal.
+const IMPLAUSIBLE_IRR = 1; // 100%
+const IMPLAUSIBLE_MOM = 20;
+
+/** A panel / workbook warning when the case's returns are too high to be real. */
+export function implausibleReturnsNote(summary: Pick<CaseSummary, 'irr' | 'mom'>): string | null {
+  const { irr, mom } = summary;
+  const irrBad = irr !== null && irr > IMPLAUSIBLE_IRR;
+  const momBad = mom !== null && mom > IMPLAUSIBLE_MOM;
+  if (!irrBad && !momBad) return null;
+  const figures = [
+    irr !== null ? `${Math.round(irr * 100).toLocaleString('en-US')}% IRR` : null,
+    mom !== null ? `${Math.round(mom).toLocaleString('en-US')}x MoM` : null,
+  ].filter(Boolean).join(' and ');
+  return (
+    `These returns (${figures}) are not realistic for a buyout — check the source financials before relying on them. ` +
+    `The usual cause is a unit mismatch (figures in thousands read as millions, or the reverse) in one or more historical periods; ` +
+    `see the Validation Flags on the Financial Statements panel.`
+  );
 }
 
 /** Saved Low / High forced onto the Base case's structure (one workbook layout). */

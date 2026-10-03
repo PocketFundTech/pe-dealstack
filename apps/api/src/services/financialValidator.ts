@@ -17,6 +17,25 @@ const SCALE_TO_DOLLARS: Record<string, number> = {
   MILLIONS: 1_000_000,
   BILLIONS: 1_000_000_000,
 };
+// A thousands-vs-millions mismatch between adjacent periods shows up as a
+// ratio of 1,000 (or 1,000,000) x (1 + real growth). Treat it as a scale
+// break when the implied real growth stays within -50%..+100%.
+const SCALE_BREAK_MIN = 0.5;
+const SCALE_BREAK_MAX = 2;
+const SCALE_BREAK_FACTORS: Array<[number, string]> = [
+  [1_000, '~1,000x'],
+  [1_000_000, '~1,000,000x'],
+];
+export function unitScaleBreakFactor(prev: number, curr: number): string | null {
+  const ratio = curr / prev;
+  const within = (implied: number) => implied >= SCALE_BREAK_MIN && implied <= SCALE_BREAK_MAX;
+  for (const [factor, label] of SCALE_BREAK_FACTORS) {
+    if (within(ratio / factor)) return `up ${label}`;
+    if (within(ratio * factor)) return `down ${label}`;
+  }
+  return null;
+}
+
 function toActualDollars(value: number | null, unitScale?: UnitScale | string | null): number | null {
   if (value == null || !Number.isFinite(value)) return null;
   const mult = SCALE_TO_DOLLARS[unitScale ?? 'ACTUALS'] ?? 1;
@@ -514,6 +533,20 @@ function checkYoYGrowth(
       const curr = sorted[i];
       const prevRev = prev.lineItems['revenue'] ?? null;
       const currRev = curr.lineItems['revenue'] ?? null;
+
+      if (prevRev !== null && currRev !== null && prevRev > 0 && currRev > 0) {
+        const factor = unitScaleBreakFactor(prevRev, currRev);
+        if (factor !== null) {
+          checks.push({
+            check: 'unit_scale_break',
+            passed: false,
+            severity: 'error',
+            message: `Revenue changes ${factor} from ${prev.period} to ${curr.period} (${fmtVal(prevRev, unitScale)} → ${fmtVal(currRev, unitScale)}) — almost certainly a unit mismatch (thousands vs millions) in the source, not real growth. Check the units of both periods before relying on them.`,
+            period: curr.period,
+          });
+          continue;
+        }
+      }
 
       if (prevRev !== null && currRev !== null && prevRev > 0) {
         const growth = pct(currRev - prevRev, prevRev);
