@@ -509,7 +509,7 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
                   </div>
                 );
               })}
-              <div className="pt-1 text-xs text-text-muted">
+              <div className="pt-1 text-xs text-text-muted" data-testid="hubspot-job-status">
                 Status: <span className="font-semibold">{job.status}</span>
                 {job.currentObject ? ` (syncing ${job.currentObject})` : ""}
                 {job.error ? ` — ${job.error}` : ""}

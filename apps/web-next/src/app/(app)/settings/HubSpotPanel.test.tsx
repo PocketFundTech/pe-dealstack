@@ -68,10 +68,13 @@ describe("HubSpotPanel", () => {
 
     render(<HubSpotPanel onToast={() => {}} />);
 
-    // Match the full "Status: completed" text, not just /completed/i — that
-    // regex alone would also match the inner <span>{job.status}</span>,
-    // which RTL treats as two separate matches and throws on.
-    expect(await screen.findByText(/status:\s*completed/i)).toBeInTheDocument();
+    // RTL's default text matcher only joins an element's direct text-node
+    // children, skipping nested elements — so "Status: " (text node) and
+    // "completed" (inside a <span>) never concatenate into one matchable
+    // string via getByText. Query the status line by testid and check its
+    // full textContent directly instead.
+    const status = await screen.findByTestId("hubspot-job-status");
+    expect(status).toHaveTextContent(/status:\s*completed/i);
     expect(post).not.toHaveBeenCalled();
   });
 
