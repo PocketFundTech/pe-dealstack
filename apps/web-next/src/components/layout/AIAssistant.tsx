@@ -11,7 +11,6 @@ import {
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { api, NotFoundError } from "@/lib/api";
 import { useToast } from "@/providers/ToastProvider";
-import { STORAGE_KEYS } from "@/lib/storageKeys";
 import {
   buildHistoryPayload,
   detectContext,
@@ -23,53 +22,10 @@ import {
   type ChatContext,
   type ChatMessage,
   type ChatResponse,
-  type ContextType,
   type MutationPayload,
 } from "./ai-assistant-shared";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
-
-// ── Persistence ──────────────────────────────────────────────────────────────
-// Per-context history bucket so deal/portfolio/contacts/memo conversations
-// don't bleed into each other when the user moves between pages.
-
-const MAX_PERSISTED_MESSAGES = 40;
-
-type HistoryStore = Partial<Record<ContextType, ChatMessage[]>>;
-
-function historyKey(): string {
-  return STORAGE_KEYS.aiAssistantHistory;
-}
-
-function loadHistory(ctx: ChatContext): ChatMessage[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(historyKey());
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as HistoryStore;
-    const bucket = parsed?.[ctx.type];
-    if (!Array.isArray(bucket)) return [];
-    return bucket.filter(
-      (m) =>
-        m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string",
-    );
-  } catch (err) {
-    console.warn("[layout/AIAssistant] failed to load chat history:", err);
-    return [];
-  }
-}
-
-function saveHistory(ctx: ChatContext, messages: ChatMessage[]) {
-  if (typeof window === "undefined") return;
-  try {
-    const raw = window.localStorage.getItem(historyKey());
-    const parsed: HistoryStore = raw ? JSON.parse(raw) : {};
-    parsed[ctx.type] = messages.slice(-MAX_PERSISTED_MESSAGES);
-    window.localStorage.setItem(historyKey(), JSON.stringify(parsed));
-  } catch (err) {
-    // Quota or parse error — history is best-effort.
-    console.warn("[layout/AIAssistant] failed to save chat history:", err);
-  }
-}
+import { clearHistory, historyBucket, loadHistory, saveHistory } from "./AIAssistant.history";
 
 // Friendly progress labels for known tool names. Unknown tools fall back to a
 // title-cased version so the indicator is never empty.
@@ -146,27 +102,44 @@ export function AIAssistant() {
 
   // Track which context's history is currently loaded so we re-hydrate when
   // the user navigates between contexts while the drawer is open.
-  const loadedCtxRef = useRef<ContextType | null>(null);
+  const loadedCtxRef = useRef<string | null>(null); // history bucket (type, or deal:<id>)
   const hidden = isHiddenRoute(pathname);
 
-  // Hydrate messages for the active context (load persisted history, prepend
-  // welcome if empty). Runs whenever context.type changes.
+  // Hydrate messages for the active conversation (load persisted history,
+  // prepend welcome if empty). Runs whenever the bucket (type / deal) changes.
   useEffect(() => {
-    if (loadedCtxRef.current === context.type) return;
+    if (loadedCtxRef.current === historyBucket(context)) return;
     const persisted = loadHistory(context);
     if (persisted.length > 0) {
       setMessages(persisted);
     } else {
       setMessages([{ role: "assistant", content: getWelcomeMessage(context) }]);
     }
-    loadedCtxRef.current = context.type;
+    loadedCtxRef.current = historyBucket(context);
   }, [context]);
 
   // Persist on every change (cheap; bucket is small).
   useEffect(() => {
-    if (loadedCtxRef.current !== context.type) return;
+    if (loadedCtxRef.current !== historyBucket(context)) return;
     saveHistory(context, messages);
   }, [messages, context]);
+
+  // Clear this conversation (5 Oct testing, item 19 — the drawer had no
+  // clear control). In a deal the drawer uses the deal chat, whose history
+  // also lives on the server, so clear that too.
+  const clearConversation = useCallback(async () => {
+    if (context.type === "deal" && context.dealId) {
+      try {
+        await api.delete(`/deals/${context.dealId}/chat/history`);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : "Couldn't clear the chat", "error");
+        return;
+      }
+    }
+    clearHistory(context);
+    setMessages([{ role: "assistant", content: getWelcomeMessage(context) }]);
+    showToast("Chat cleared", "success");
+  }, [context, showToast]);
 
   // Keyboard shortcuts: Shift+Space toggle, Escape close.
   const toggleDrawer = useCallback(() => setIsOpen((v) => !v), []);
@@ -487,6 +460,7 @@ export function AIAssistant() {
           inputValue={inputValue}
           setInputValue={setInputValue}
           onClose={closeDrawer}
+          onClear={isLoading ? undefined : () => void clearConversation()}
           onSend={handleSend}
           onSendPrompt={handleSendPrompt}
           onActionClick={handleActionClick}

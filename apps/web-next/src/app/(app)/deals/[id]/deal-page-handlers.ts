@@ -471,13 +471,19 @@ export interface ClearChatHistoryDeps {
   dealId: string;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   showToast: ShowToast;
+  /** In-flight reply, if any — stopped first so it can't re-save messages after the clear. */
+  chatAbortRef?: MutableRefObject<AbortController | null>;
 }
 
 export async function clearChatHistory(deps: ClearChatHistoryDeps): Promise<void> {
-  const { dealId, setMessages, showToast } = deps;
+  const { dealId, setMessages, showToast, chatAbortRef } = deps;
+  // 5 Oct testing, item 19: a reply still streaming wrote its messages after
+  // the DELETE, so the "cleared" chat came back on reload.
+  chatAbortRef?.current?.abort();
   try {
     await api.delete(`/deals/${dealId}/chat/history`);
     setMessages([]);
+    showToast("Chat cleared", "success");
   } catch (err) {
     showToast(
       err instanceof Error ? err.message : "Failed to clear chat history",

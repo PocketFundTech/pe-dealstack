@@ -179,7 +179,9 @@ app.use('/api/ai', aiLimiter);
 app.use('/api/memos/*/chat', aiLimiter);
 app.use('/api/memos/*/sections/*/generate', aiLimiter);
 // Deal chat invokes a LangGraph ReAct agent — see app.ts for rationale.
-app.use('/api/deals/*/chat', aiLimiter);
+// Only sending a message costs AI — loading or clearing history (GET /
+// DELETE /chat/history) must not eat the 10/min AI budget (5 Oct, item 19).
+app.use('/api/deals/*/chat', (req, res, next) => (req.method === 'POST' ? aiLimiter(req, res, next) : next()));
 // Task 4.1b: remaining LangGraph / multi-call LLM endpoints — mirror app.ts.
 app.use('/api/deals/*/generate-thesis', aiLimiter);
 app.use('/api/deals/*/analyze-risks', aiLimiter);
