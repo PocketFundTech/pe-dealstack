@@ -5,6 +5,101 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 72 — October 5, 2026
+
+#### Timestamp: October 05, 2026 — 13:48 IST
+
+#### Goal: A live HubSpot import (thousands of companies/contacts) went invisible in the UI after a page reload, with no way to tell whether it was still running or see what a past import had done.
+
+#### Root cause
+
+`HubSpotPanel` (`apps/web-next/.../settings/IntegrationsSection.tsx`) only ever checked
+`GET /integrations/hubspot/connect` on mount — it never fetched the org's `ImportJob`
+history. The progress card, and the client-side loop that drives `/continue` to actually
+advance the import past each ~3.5-minute serverless request window, existed only in the
+one browser tab's React state. Confirmed via direct read of the `ImportJob` row that the
+import kept progressing for hours server-side (companies: 3,837 processed; contacts
+climbing past 2,300) with zero visible UI state once the tab was reloaded.
+
+#### Fix (branch `fix/ingest-provider-rejection`)
+
+- `GET /api/integrations/hubspot/import/latest` (new) — returns the org's most recent
+  HubSpot `ImportJob`, or `null`. Registered before `GET /import/:id` so Express doesn't
+  match "latest" as the `:id` param.
+- `HubSpotPanel` now calls it on mount: a `running` job resumes polling + the `/continue`
+  drive loop; a terminal job's final per-object counts render as a persistent "last
+  import" summary. Refactored the poll/continue logic (previously only inline in
+  `startImport()`) into shared `pollJobOnce`/`startPolling`/`driveContinue` helpers so both
+  the manual-start and mount-resume paths use identical completion/toast handling.
+- Tests: 2 new backend tests (`hubspot-routes.test.ts`, both green — full API suite 1883
+  passed, 2 pre-existing unrelated `dealChatAgent*-bounds` timing flakes). 3 new frontend
+  tests (`HubSpotPanel.test.tsx`) — **could not execute**: a pre-existing, repo-wide
+  duplicate-React-copies issue (`npm ls react` shows both `react@19.2.4` and
+  `react@19.3.0` resolving) breaks React Testing Library's hook calls for every component
+  test in `apps/web-next`, including untouched files (`ConfirmDialog.test.tsx` fails
+  identically). Verified the frontend change via `tsc --noEmit` (clean) and manual review
+  instead.
+
+#### Known follow-ups (not in this fix)
+
+- **Frontend component test suite is broken repo-wide** (duplicate React versions —
+  `react@19.2.4` vs `react@19.3.0`) — likely related to the `installCommand` lockfile-wipe
+  issue flagged in Session 71. Needs a dependency-tree fix before any RTL-based test can
+  run; worth prioritizing since it silently blocks verification for every future frontend PR.
+- No dedicated "Companies" page exists in `apps/web-next` — imported Company records
+  (HubSpot auto-creates one per contact/website domain, so counts routinely run 4-10x
+  actual Deal counts) are only visible if linked to a Deal. `GET /api/companies` already
+  exists and is unused by the frontend. Discussed with founder as a separate follow-up,
+  not built yet.
+- Per-record import failures (companies/contacts failure rate was running 12-20% on this
+  org's import) are only logged server-side (`[hubspot] record {id} failed: ...`), not
+  surfaced anywhere in the UI or stored on the job row. Worth adding structured failure
+  reasons if this rate turns out to be a recurring pattern rather than one portal's data
+  quality.
+
+---
+
+### Session 71 — September 19, 2026
+
+#### Timestamp: September 19, 2026 — 17:10 IST
+
+#### Goal: Every document upload in the deal-intake modal was failing ("The AI couldn't identify any deal information…" and "No valid deals found in file. Ensure you have a column named Company").
+
+#### 1. Root cause — the AI provider was rejecting every call, and the product blamed the document
+
+**Symptom:** three uploads in a row failed. Two PDFs/Word docs returned 422 *"Couldn't extract data from this document. The AI couldn't identify any deal information in the text"*; one spreadsheet returned 400 *"No valid deals found in file. Ensure you have a column named Company"*.
+
+**Root cause (reproduced locally under production-like env):**
+1. **OpenAI account has zero credits.** A direct call to `api.openai.com/v1/chat/completions` with the org key returns `429 insufficient_quota / credit_balance_exhausted` ("You have no credits remaining").
+2. **The new Vercel project (`pocket-funds-projects/pe-dealstack`, created 2026-09-17 during the deploy move) has no `ANTHROPIC_API_KEY`** — only `ANTHROPIC_API_KEY_FALLBACK`, `ANTHROPIC_OAUTH_TOKEN` and `OPENAI_API_KEY`. So `chatProvider` resolves to `openai`, every extraction goes to the out-of-credit OpenAI key, and the fallback chain was only ever built for an *Anthropic* primary — the fallback key was never consulted.
+3. `extractDealDataFromText` swallowed the 429 into `null`, and the ingest routes map `null` to the "couldn't identify any deal information" 422 — a content error for what is a billing error.
+4. **Spreadsheet case:** `IngestDealForm` sends *every* `.xlsx` in "new deal" mode to `POST /ingest/bulk`, which only understands deal-list sheets with a `Company` column. A financial model / CIM workbook therefore hit the "add a Company column" error instead of the single-document pipeline (which already supports Excel).
+
+Ruled out: dependency drift. The lockfile-less `installCommand` (`rm -rf node_modules package-lock.json && npm install`) bumped `openai` 6.25→6.49, `@langchain/openai` 1.2→1.5, `@langchain/core` 1.1→1.2, `@anthropic-ai/sdk` 0.74→0.122, `@langchain/langgraph` 1.2→1.4 — but the extraction path works with those versions locally (170 extraction tests green, live call reaches the provider). Still a reproducibility risk; see "Still pending".
+
+#### 2. Code fix (PR — `fix/ingest-provider-rejection`)
+
+- `utils/aiErrors.ts`: `classifyProviderRejection(err)` → `quota | auth | rate_limit | overloaded | null`, single source of truth. `AIProviderUnavailableError` now carries `reason` + `detail` and a user message that says *"API credits are exhausted… not a problem with your document — contact your administrator"*.
+- `services/llm.ts`: `shouldFallbackToOpenAI` delegates to the shared classifier. **Fallback chain is now built for an OpenAI primary too** — `ANTHROPIC_API_KEY_FALLBACK` is consulted when OpenAI rejects for quota/auth/rate-limit (OpenAI-direct entry is skipped since it *is* the primary).
+- `services/aiExtractor.ts`: `extractDealDataFromText(text, { throwOnProviderError })` — HTTP ingest routes opt in and get a thrown `AIProviderUnavailableError`; background callers (inbox scan, deep pass, crons) keep the `null` contract.
+- `routes/ingest-upload.ts`, `ingest-text.ts`, `ai-ingest.ts` (both routes): catch `AIProviderUnavailableError` → **503 `{ error, code: 'AI_PROVIDER_UNAVAILABLE', reason }`** with the provider detail logged.
+- `routes/ingest-email.ts` (`POST /ingest/bulk`): zero deal-list rows → hand the file to `runIngestFromBuffer` (single-document ingest) instead of the "Company column" error.
+- Tests: 4 new files / 12 tests (`ai-provider-rejection`, `ingest-provider-unavailable`, `llm-openai-primary-fallback`, `ingest-bulk-single-doc-fallback`), all verified failing before the fix. `tsc --noEmit` clean. Full API suite: 1876 passed; 2 pre-existing failures in `dealChatAgent*-bounds` (timeout-window assertions, identical on a clean checkout) and 4 load-related flakes that pass in isolation.
+
+#### 3. Founder actions required (code alone does not restore extraction)
+
+Either **add OpenAI credits** or **set a valid `ANTHROPIC_API_KEY` in the new Vercel project** (`vercel env add ANTHROPIC_API_KEY production`). With the PR merged, a valid `ANTHROPIC_API_KEY_FALLBACK` alone would also unblock extraction — but its validity can't be checked from here (sensitive var).
+
+**The Vercel project move dropped ~50 env vars.** Missing vs. what the API reads, most important first: `ANTHROPIC_API_KEY`, `CRON_SECRET` (all 7 crons 401 again), `INGEST_ENGINE` / `EXTRACTION_ENGINE` / `DEAL_CHAT_ENGINE` (all Claude-native features silently reverted to legacy), `LLM_CHAT_PROVIDER`, `EXCEL_EXTRACTION_MODE`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Drive import / Gmail), `OAUTH_STATE_SECRET`, `RESEND_FROM_EMAIL`, `OPENROUTER_API_KEY`, `RESEARCH_ENGINE` / `SIGNAL_ENGINE` + `MANAGED_AGENTS_*`, `MS_TENANT`, `AZURE_DOC_INTEL_*`, `LLAMA_CLOUD_API_KEY`, `POCKET_FUND_STAFF_EMAILS`, `LOG_LEVEL`. Full list is in the PR description.
+
+#### Still pending
+
+- Restore the env vars above (values live with the founder / old project).
+- `vercel.json` `installCommand` deletes the lockfile on every deploy → non-reproducible builds. Now that the `htmlparser2` override is captured in the committed lockfile, switch to `npm ci`.
+- No production runtime logs were retrievable (`vercel logs` returned nothing for the window); Sentry should have the 429s — worth confirming after env restore.
+
+---
+
 ### Session 70 — August 25 – September 4, 2026
 
 #### Timestamp: September 4, 2026 — 12:59 IST
