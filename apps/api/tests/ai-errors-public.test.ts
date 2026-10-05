@@ -61,3 +61,22 @@ describe('POST /api/deals/:id/scorecard with an out-of-credit provider', () => {
     expect(res.body.error).toMatch(/^Couldn't score this deal/);
   });
 });
+
+describe('credit detection is precise (5 Oct, item 9)', () => {
+  it('a non-credit error that mentions billing is not reported as out of credit', () => {
+    const err = Object.assign(new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: billing tier does not allow this model"}}'), { status: 400 });
+    expect(classifyAIErrorObject(err).userMessage).not.toMatch(/credits are exhausted/);
+  });
+
+  it('OpenAI out-of-credit is still detected', () => {
+    const err = Object.assign(new Error('429 You exceeded your current quota, please check your plan and billing details.'), { status: 429, code: 'insufficient_quota' });
+    expect(classifyAIErrorObject(err).userMessage).toMatch(/OpenAI.*credits are exhausted/);
+  });
+
+  it('an Anthropic workspace spend limit says so, not "credits exhausted"', () => {
+    const err = Object.assign(new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified workspace API usage limits. You will regain access on 2026-11-01."}}'), { status: 400 });
+    const msg = classifyAIErrorObject(err).userMessage;
+    expect(msg).toMatch(/spending limit/);
+    expect(msg).not.toMatch(/credits are exhausted/);
+  });
+});
