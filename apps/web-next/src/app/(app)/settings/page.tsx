@@ -22,6 +22,7 @@ import { CriteriaSection } from "./CriteriaSection";
 import { FirmTeaserSection } from "./FirmTeaserSection";
 import { AiUsageSection } from "./AiUsageSection";
 import { IntegrationsSection } from "./IntegrationsSection";
+import { DeactivateAccountSection } from "./DeactivateAccountSection";
 import { ApiKeysSection } from "./ApiKeysSection";
 import { WebhooksSection } from "./WebhooksSection";
 import { NDATemplatesSection } from "./NDATemplatesSection";
@@ -363,9 +364,7 @@ export default function SettingsPage() {
 
           {showOutreachPipeline && <OutreachPipelineSection />}
 
-          {/* QA #16: "Deactivate account" was a stub (confirm → "not available"
-              toast). Hidden until self-deactivation is built; admins can still
-              deactivate a user (DELETE /api/users/:id, which sets isActive=false). */}
+          <DeactivateAccountSection />
 
           {hasChanges && (
             <div className="text-xs text-amber-600 font-medium flex items-center gap-1.5 justify-end">

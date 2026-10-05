@@ -66,6 +66,14 @@ export default function LoginPage() {
     if (showMfa) mfaInputRefs.current[0]?.focus();
   }, [showMfa]);
 
+  // Sent here by lib/api.ts after the API answered ACCOUNT_DEACTIVATED.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("deactivated") === "1") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot read of the URL on mount
+      setError("This account has been deactivated. Contact your firm admin to restore access.");
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
