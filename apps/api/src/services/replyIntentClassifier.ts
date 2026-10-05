@@ -45,9 +45,8 @@ import { makeAnthropicUsageCallback } from './usage/trackedAnthropic.js';
 
 // ─── Config ──────────────────────────────────────────────────────────
 
-/** Sonnet 4.6 — exact model ID per Anthropic SDK spec, matching
- *  claudeFinancialClassifier.ts. Do not append a date suffix. */
-const SONNET_MODEL = 'claude-sonnet-4-6';
+/** Haiku 4.5 — a single-label classification of one reply doesn't need Sonnet; ~3x cheaper. */
+const MODEL = 'claude-haiku-4-5';
 
 /** Tiny fixed output shape — a few hundred tokens is generous headroom. */
 const MAX_OUTPUT_TOKENS = 300;
@@ -61,7 +60,7 @@ function getModel(): ChatAnthropic | null {
   const authFields = getChatAnthropicAuthFields();
   if (!authFields) return null;
   cachedModel = new ChatAnthropic({
-    model: SONNET_MODEL,
+    model: MODEL,
     ...authFields,
     maxTokens: MAX_OUTPUT_TOKENS,
     temperature: 0,
@@ -200,7 +199,7 @@ export async function classifyReplyIntent(
         {
           runName: 'replyIntentClassifier',
           tags: ['outreach', 'reply-intent'],
-          callbacks: [makeAnthropicUsageCallback('reply_intent_classification', SONNET_MODEL)],
+          callbacks: [makeAnthropicUsageCallback('reply_intent_classification', MODEL)],
         },
       );
 

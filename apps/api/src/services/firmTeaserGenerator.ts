@@ -12,7 +12,11 @@ import { recordAnthropicMessageUsage } from './usage/trackedAnthropic.js';
 
 // ─── Constants (no magic strings) ───────────────────────────────────
 
-export const TEASER_MODEL = 'claude-sonnet-4-6';
+// Teasers are a short fit/partial/miss triage per profile, generated for every
+// new deal × every profile — Haiku is plenty and ~3x cheaper than Sonnet.
+export const TEASER_MODEL = 'claude-haiku-4-5';
+// Authoring a reusable profile prompt is rare and quality-sensitive.
+export const PROMPT_GEN_MODEL = 'claude-sonnet-5';
 const TEASER_MAX_TOKENS = 700;
 const PROMPT_GEN_MAX_TOKENS = 1100;
 const VALID_VERDICTS: ReadonlySet<string> = new Set(['fit', 'partial', 'miss']);
@@ -353,7 +357,7 @@ export async function generateSystemPrompt({
   let response;
   try {
     response = await anthropic.messages.create({
-      model: TEASER_MODEL,
+      model: PROMPT_GEN_MODEL,
       max_tokens: PROMPT_GEN_MAX_TOKENS,
       system,
       messages: [{ role: 'user', content: parts.join('\n') }],
@@ -361,7 +365,7 @@ export async function generateSystemPrompt({
   } catch (err) {
     await recordAnthropicMessageUsage({
       operation: 'firm_teaser_prompt_gen',
-      model: TEASER_MODEL,
+      model: PROMPT_GEN_MODEL,
       usage: null,
       status: 'error',
       durationMs: Date.now() - start,
@@ -372,7 +376,7 @@ export async function generateSystemPrompt({
 
   await recordAnthropicMessageUsage({
     operation: 'firm_teaser_prompt_gen',
-    model: TEASER_MODEL,
+    model: PROMPT_GEN_MODEL,
     usage: response.usage,
     status: 'success',
     durationMs: Date.now() - start,

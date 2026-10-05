@@ -356,6 +356,45 @@ describe('trackedClaudeMessage', () => {
   });
 });
 
+describe('effort (output_config.effort)', () => {
+  it('sends the chat role at medium effort, merged alongside a structured-output format', async () => {
+    delete process.env.AI_CHAT_EFFORT;
+    nextFinalMessage = okMessage('{}');
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({
+      operation: 'deal_scorecard',
+      role: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      outputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    });
+    expect(streamCalls[0].output_config.effort).toBe('medium');
+    expect(streamCalls[0].output_config.format.type).toBe('json_schema');
+  });
+
+  it('lets a call site override the role effort (NDA review stays high)', async () => {
+    nextFinalMessage = okMessage('{}');
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({ operation: 'nda_review', role: 'chat', messages: [{ role: 'user', content: 'hi' }], effort: 'high' });
+    expect(streamCalls[0].output_config).toEqual({ effort: 'high' });
+  });
+
+  it('sends no effort for extraction (Fable default) or Haiku', async () => {
+    nextFinalMessage = okMessage('{}');
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({ operation: 'financial_extraction', role: 'extraction', messages: [{ role: 'user', content: 'hi' }] });
+    await trackedClaudeMessage({ operation: 'deal_ingest', role: 'fast', messages: [{ role: 'user', content: 'hi' }] });
+    expect(streamCalls[0].output_config).toBeUndefined();
+    expect(streamCalls[1].output_config).toBeUndefined();
+  });
+
+  it('applies the chat effort to the deal-chat tool runner', async () => {
+    delete process.env.AI_CHAT_EFFORT;
+    const { trackedClaudeStream } = await getClient();
+    trackedClaudeStream({ operation: 'deal_chat', role: 'chat', messages: [{ role: 'user', content: 'hi' }], tools: [] });
+    expect(toolRunnerCalls[0].output_config).toEqual({ effort: 'medium' });
+  });
+});
+
 describe('trackedClaudeStream', () => {
   it('passes an AbortSignal as request options, never in the toolRunner params', async () => {
     const { trackedClaudeStream } = await getClient();

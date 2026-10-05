@@ -58,8 +58,8 @@ async function getReader() {
   return mod.readDealDocument;
 }
 
-describe('readDealDocument — PDF (native) mode', () => {
-  it('uploads the PDF, references it by file_id, and cleans up after', async () => {
+describe('readDealDocument — PDF (native) mode: no usable text layer', () => {
+  it('uploads the PDF on the ingest role (Sonnet), references it by file_id, and cleans up after', async () => {
     const read = await getReader();
     const out = await read({
       fileBuffer: Buffer.from('%PDF-fake'),
@@ -76,8 +76,8 @@ describe('readDealDocument — PDF (native) mode', () => {
     expect(req.extraBetas).toContain('files-api-2025-04-14');
     const content = req.messages[0].content;
     expect(content.some((b: any) => b.type === 'document' && b.source?.file_id === 'file_dr_1')).toBe(true);
-    // Standard-length hint for a real text layer.
-    expect(content.some((b: any) => typeof b.text === 'string' && b.text.includes('STANDARD-length'))).toBe(true);
+    // The model sees the whole file, so the native hint applies.
+    expect(content.some((b: any) => typeof b.text === 'string' && b.text.includes('COMPLETE document file is attached natively'))).toBe(true);
   });
 
   it('scanned PDF (sourceLength≈0): proceeds natively, skips the short-doc confidence cap', async () => {
@@ -118,6 +118,42 @@ describe('readDealDocument — PDF (native) mode', () => {
   });
 });
 
+describe('readDealDocument — PDF with a text layer: cheap text read', () => {
+  it('reads the extracted text on the fast role (Haiku) and never uploads the PDF', async () => {
+    const read = await getReader();
+    const text = 'Confidential Information Memorandum. FY24 revenue of $160M. ' + 'z'.repeat(20_000);
+    const out = await read({ fileBuffer: Buffer.from('%PDF-fake'), fileName: 'cim.pdf', fullText: text, sourceLength: text.length });
+    expect(out).not.toBeNull();
+    expect(uploadMock).not.toHaveBeenCalled();
+    const req = calls[0];
+    expect(req.role).toBe('fast');
+    expect(req.maxTokens).toBe(8000);
+    expect(req.extraBetas).toEqual([]);
+    const content = req.messages[0].content;
+    expect(content.some((b: any) => b.type === 'document')).toBe(false);
+    expect(content.some((b: any) => typeof b.text === 'string' && b.text.includes('STANDARD-length'))).toBe(true);
+    expect(content.some((b: any) => typeof b.text === 'string' && b.text.includes('ONLY THE FIRST'))).toBe(false);
+  });
+
+  it('sends only the first 80k chars of a long PDF and says so', async () => {
+    const read = await getReader();
+    const text = 'w'.repeat(300_000);
+    await read({ fileBuffer: Buffer.from('%PDF-fake'), fileName: 'cim.pdf', fullText: text, sourceLength: text.length });
+    const content = calls[0].messages[0].content;
+    const textBlock = content.find((b: any) => typeof b.text === 'string' && b.text.length > 10_000);
+    expect(textBlock.text.length).toBeLessThan(90_000);
+    expect(textBlock.text.length).toBeGreaterThan(79_000);
+    expect(content.some((b: any) => typeof b.text === 'string' && b.text.includes('ONLY THE FIRST ~32 PAGES'))).toBe(true);
+  });
+
+  it('falls back to the native read when the text layer is near-empty', async () => {
+    const read = await getReader();
+    await read({ fileBuffer: Buffer.from('%PDF-scan'), fileName: 'scan.pdf', fullText: '  page 1  ', sourceLength: 10 });
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(calls[0].role).toBe('ingest');
+  });
+});
+
 describe('readDealDocument — text mode', () => {
   it('sends full wrapped text without any file upload, applying the short-doc cap for teasers', async () => {
     nextText = rawResponse(); // model claims 90 confidence on revenue
@@ -126,6 +162,7 @@ describe('readDealDocument — text mode', () => {
     const out = await read({ fileName: 'teaser.docx', fullText: teaser, sourceLength: teaser.length });
     expect(out).not.toBeNull();
     expect(uploadMock).not.toHaveBeenCalled();
+    expect(calls[0].role).toBe('fast');
     // Short doc (<5000 chars): finalize caps financial-field confidence at 60.
     expect(out!.revenue.confidence).toBe(60);
     expect(out!.needsReview).toBe(true);
@@ -147,5 +184,16 @@ describe('readDealDocument — text mode', () => {
     const out = await read({ fileName: 'tiny.txt', fullText: 'hi', sourceLength: 2 });
     expect(out).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('hasUsablePdfText', () => {
+  it('judges text density per page', async () => {
+    const { hasUsablePdfText } = await import('../src/services/extraction/claudeDealReader.js');
+    expect(hasUsablePdfText('a'.repeat(50 * 2500), 50)).toBe(true); // normal CIM
+    expect(hasUsablePdfText('a'.repeat(1500), 50)).toBe(false); // 50-page scan with an OCR'd cover
+    expect(hasUsablePdfText('a'.repeat(1500), 1)).toBe(true); // short one-pager teaser
+    expect(hasUsablePdfText('a'.repeat(3000), null)).toBe(true);
+    expect(hasUsablePdfText('a'.repeat(500), null)).toBe(false);
   });
 });

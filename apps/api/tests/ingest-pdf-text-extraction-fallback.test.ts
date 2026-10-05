@@ -48,6 +48,7 @@ vi.mock('../src/services/aiExtractor.js', () => ({ extractDealDataFromText: (...
 const readDealDocument = vi.fn();
 vi.mock('../src/services/extraction/claudeDealReader.js', () => ({
   readDealDocument: (...a: any[]) => readDealDocument(...a),
+  hasUsablePdfText: () => false,
 }));
 
 vi.mock('../src/rag.js', () => ({ embedDocument: vi.fn(async () => ({ success: true, chunkCount: 0 })) }));
