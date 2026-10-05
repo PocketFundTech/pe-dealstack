@@ -3,6 +3,66 @@
  * stays under the 500-line repo cap.
  */
 
+import { classifyProviderRejection } from '../utils/aiErrors.js';
+
+// Prod incident (2026-09-28): both docs on a deal failed extraction — one
+// with a 120s agent timeout, one with an Anthropic 400 "credit balance is
+// too low" — but the multi-doc route only ever surfaced periodsStored: 0
+// with a generic "No financial data found" toast. The real reason (never
+// the user's fault in either case) was thrown away. These helpers turn a
+// raw per-doc error/agent-warning into a short, human sentence and
+// aggregate them into `result.warnings` for the response.
+
+const CREDIT_OUT_MESSAGE =
+  'The AI provider account is out of credits. This is not a problem with your documents — contact your administrator.';
+const TIMEOUT_MESSAGE =
+  'Extraction took too long and was stopped. Try again, or extract one document at a time.';
+
+/**
+ * Convert a raw per-doc extraction error string into a short, human
+ * sentence. Reuses classifyProviderRejection (aiErrors.ts) for provider
+ * billing/auth/quota rejections; falls back to a timeout-phrase check for
+ * the per-doc / agent timeout paths (those never reach classifyProviderRejection
+ * since they're thrown by our own code, not the SDK). Anything else passes
+ * through unchanged — better a raw-but-real reason than a fabricated one.
+ */
+export function humanizeExtractionError(rawError: string): string {
+  const rejection = classifyProviderRejection(new Error(rawError));
+  if (rejection?.reason === 'quota') return CREDIT_OUT_MESSAGE;
+  if (/timed out|timeout|exceeded .*(budget|ms)/i.test(rawError)) return TIMEOUT_MESSAGE;
+  return rawError;
+}
+
+/** Minimal per-doc shape buildResultWarnings needs — matches PerDocResult. */
+export interface WarningSourceDoc {
+  name: string;
+  status: 'completed' | 'failed' | 'skipped_no_slot' | 'pending';
+  error?: string;
+  warnings?: string[];
+}
+
+/**
+ * Build `result.warnings` for the multi-doc extract response: one humanized
+ * entry per failed/skipped document, plus any agent-level warnings from
+ * every document (including ones that completed successfully — e.g. "no
+ * CASH_FLOW statement found"). Document names are only prefixed when more
+ * than one document was processed, so the single-doc case reads cleanly.
+ */
+export function buildResultWarnings(docs: WarningSourceDoc[]): string[] {
+  const multi = docs.length > 1;
+  const warnings: string[] = [];
+  for (const doc of docs) {
+    if (doc.status !== 'completed') {
+      const reason = doc.error ? humanizeExtractionError(doc.error) : 'Extraction failed for this document';
+      warnings.push(multi ? `${doc.name}: ${reason}` : reason);
+    }
+    for (const w of doc.warnings ?? []) {
+      warnings.push(multi ? `${doc.name}: ${w}` : w);
+    }
+  }
+  return warnings;
+}
+
 /**
  * Filename signals that a PDF is a financial statement. Catches CIM-adjacent
  * docs that got auto-tagged OTHER because the classifier didn't have a

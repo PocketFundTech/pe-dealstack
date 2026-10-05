@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useNotificationCount } from "@/providers/NotificationCountProvider";
 import { Modal } from "./Modal";
-import { DealOptions, UserOptions, INPUT_CLS, LABEL_CLS, type SharedProps } from "./form-primitives";
+import { DealOptions, UserOptions, INPUT_CLS, LABEL_CLS, BTN_PRIMARY, BTN_SECONDARY, type SharedProps } from "./form-primitives";
 
 export function CreateTaskModal({
   open,
@@ -12,6 +12,7 @@ export function CreateTaskModal({
   deals,
   users,
   onToast,
+  prefill,
   onCreated,
 }: SharedProps & { onCreated: () => void }) {
   const { refresh: refreshNotifications } = useNotificationCount();
@@ -33,6 +34,17 @@ export function CreateTaskModal({
       setDescription("");
     }
   }, [open]);
+
+  // Opened from a row (e.g. "Nudge") — start from that context.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    /* eslint-disable react-hooks/set-state-in-effect */
+      if (prefill.dealId) setDealId(prefill.dealId);
+      if (prefill.userId) setUserId(prefill.userId);
+      if (prefill.title) setTitle(prefill.title);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, prefill]);
+
 
   const submit = async () => {
     const t = title.trim();
@@ -69,13 +81,14 @@ export function CreateTaskModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Create New Task"
+      title="Create a task"
+      subtitle="Assign work with a due date and priority."
       footer={
         <>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-main hover:bg-gray-100 rounded-lg transition-colors"
+            className={BTN_SECONDARY}
           >
             Cancel
           </button>
@@ -83,7 +96,7 @@ export function CreateTaskModal({
             type="button"
             onClick={submit}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-white bg-primary hover:bg-primary-hover rounded-lg transition-colors disabled:opacity-50"
+            className={BTN_PRIMARY}
           >
             {saving ? "Creating..." : "Create Task"}
           </button>

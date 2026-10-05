@@ -61,7 +61,7 @@ export function DraggableWidget({
       }}
       className={cn(
         "relative transition-opacity",
-        editing && "outline-2 outline-dashed outline-offset-2 outline-[#003366] rounded-lg",
+        editing && "cursor-grab rounded-lg outline-1 outline-offset-4 outline-dashed outline-(--dash-blue-3)",
         isBeingDragged && "opacity-50",
       )}
     >

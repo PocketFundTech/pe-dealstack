@@ -50,6 +50,16 @@ export interface RevenueQuality {
   organicGrowthRates: { period: string; rate: number | null }[];
   revenuePerEmployee?: number | null;
   consistencyScore: number;
+  /** Latest partial year, kept out of the full-year series above. */
+  ytd?: {
+    period: string;
+    months: number | null;
+    revenue: number;
+    basis: "prior_ytd" | "annualised_estimate";
+    comparedTo: string;
+    annualisedRevenue: number | null;
+    growthPct: number | null;
+  };
 }
 
 export interface CashFlowPeriod {
@@ -159,6 +169,8 @@ export interface DuPontDecomposition {
 /** Full response from GET /deals/:id/financials/analysis */
 export interface AnalysisData {
   hasData: boolean;
+  /** Set when statements in other currencies were left out of the analysis. */
+  currencyNote?: string;
   qoe: QoEScore;
   ratios: RatioGroup[];
   duPont?: DuPontDecomposition;

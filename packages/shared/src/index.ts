@@ -74,3 +74,11 @@ export const formatDate = (date: string | Date): string => {
     day: 'numeric',
   }).format(new Date(date));
 };
+
+// Canonical financial periods — parse + chronological ordering
+export * from './periods.js';
+
+// Deal model line structure + calculator (API summary and web preview)
+export * from './dealModel.js';
+export * from './dealModelCash.js';
+export * from './dealModelBalance.js';

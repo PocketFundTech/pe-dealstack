@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Modal } from "./Modal";
-import { DealOptions, UserOptions, INPUT_CLS, LABEL_CLS, type SharedProps } from "./form-primitives";
+import { DealOptions, UserOptions, INPUT_CLS, LABEL_CLS, BTN_PRIMARY, BTN_SECONDARY, type SharedProps } from "./form-primitives";
 
 export function AssignDealModal({
   open,
@@ -11,6 +11,7 @@ export function AssignDealModal({
   deals,
   users,
   onToast,
+  prefill,
   onAssigned,
 }: SharedProps & { onAssigned: () => void }) {
   const [dealId, setDealId] = useState("");
@@ -27,6 +28,16 @@ export function AssignDealModal({
       setNotes("");
     }
   }, [open]);
+
+  // Opened from a row (e.g. "Nudge") — start from that context.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    /* eslint-disable react-hooks/set-state-in-effect */
+      if (prefill.dealId) setDealId(prefill.dealId);
+      if (prefill.userId) setUserId(prefill.userId);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, prefill]);
+
 
   const submit = async () => {
     if (!dealId || !userId) {
@@ -52,13 +63,14 @@ export function AssignDealModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Assign Deal to Analyst"
+      title="Assign a deal"
+      subtitle="Add someone to a deal team as lead or analyst."
       footer={
         <>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-main hover:bg-gray-100 rounded-lg transition-colors"
+            className={BTN_SECONDARY}
           >
             Cancel
           </button>
@@ -66,7 +78,7 @@ export function AssignDealModal({
             type="button"
             onClick={submit}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-white bg-primary hover:bg-primary-hover rounded-lg transition-colors disabled:opacity-50"
+            className={BTN_PRIMARY}
           >
             {saving ? "Assigning..." : "Assign Deal"}
           </button>
@@ -91,10 +103,10 @@ export function AssignDealModal({
           {(["lead", "analyst"] as const).map((r) => (
             <label
               key={r}
-              className={`flex-1 flex items-center gap-2 p-3 border rounded-lg cursor-pointer transition-colors ${
+              className={`flex-1 flex items-center gap-2 rounded-md border px-3 py-2.5 text-sm cursor-pointer transition-colors ${
                 role === r
-                  ? "border-primary bg-primary-light"
-                  : "border-border-subtle hover:border-primary/50"
+                  ? "border-(--dash-blue) bg-(--dash-wash) text-(--dash-blue)"
+                  : "border-(--dash-rule-strong) hover:border-(--dash-blue-3)"
               }`}
             >
               <input
@@ -103,7 +115,7 @@ export function AssignDealModal({
                 value={r}
                 checked={role === r}
                 onChange={() => setRole(r)}
-                className="text-primary focus:ring-primary"
+                className="accent-[#003366]"
               />
               <span className="text-sm font-medium">
                 {r === "lead" ? "Lead Partner" : "Analyst"}

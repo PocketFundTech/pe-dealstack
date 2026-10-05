@@ -8,8 +8,8 @@
 // useEffect), define the handler inline in page.tsx instead.
 // ---------------------------------------------------------------------------
 
-import type { Dispatch, SetStateAction } from "react";
-import { api } from "@/lib/api";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import { api, ApiError } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
 import { pickGoogleFile, DRIVE_DOCUMENT_MIME_TYPES } from "@/lib/googlePicker";
 import {
@@ -58,6 +58,8 @@ export function openTerminalModal(deps: OpenTerminalModalDeps): void {
 export interface ConfirmStageChangeDeps {
   dealId: string;
   stageModal: { from: string; to: string } | null;
+  /** Optional "reason for stage change" typed in the stage modal. */
+  stageNote: string;
   deal: DealDetail | null;
   setStageChanging: Dispatch<SetStateAction<boolean>>;
   setStageError: Dispatch<SetStateAction<string>>;
@@ -70,6 +72,7 @@ export async function confirmStageChange(deps: ConfirmStageChangeDeps): Promise<
   const {
     dealId,
     stageModal,
+    stageNote,
     deal,
     setStageChanging,
     setStageError,
@@ -81,10 +84,15 @@ export async function confirmStageChange(deps: ConfirmStageChangeDeps): Promise<
   setStageChanging(true);
   setStageError("");
   try {
+    const note = stageNote.trim();
     const updated = await api.patch<DealDetail>(`/deals/${dealId}`, {
       stage: stageModal.to,
+      ...(note && { stageNote: note }),
     });
-    setDeal(updated);
+    // The PATCH response only carries the fields the stage-change endpoint
+    // touches — replacing the whole cached deal with it wiped teamMembers,
+    // scorecard, and anything else it doesn't echo back.
+    setDeal((prev) => (prev ? { ...prev, ...updated } : updated));
     setStageModal(null);
     loadActivities();
   } catch (err) {
@@ -118,7 +126,7 @@ export async function selectTerminalStage(
       ...(passContext?.passReason ? { passReason: passContext.passReason } : {}),
       ...(passContext?.revisitAt ? { revisitAt: passContext.revisitAt } : {}),
     });
-    setDeal(updated);
+    setDeal((prev) => (prev ? { ...prev, ...updated } : updated));
     loadActivities();
   } catch (err) {
     showToast(err instanceof Error ? err.message : "Failed to update deal stage", "error");
@@ -268,15 +276,20 @@ export interface SendPromptDeps {
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   showToast: ShowToast;
   loadDeal: () => Promise<void>;
+  /** Holds the in-flight request's AbortController so a Stop button can cancel it. */
+  chatAbortRef?: MutableRefObject<AbortController | null>;
 }
 
 export async function sendPrompt(
   text: string,
   deps: SendPromptDeps,
 ): Promise<void> {
-  const { dealId, chatSending, setChatSending, setMessages, showToast, loadDeal } = deps;
+  const { dealId, chatSending, setChatSending, setMessages, showToast, loadDeal, chatAbortRef } = deps;
   const trimmed = text.trim();
   if (!trimmed || chatSending) return;
+
+  const abortController = new AbortController();
+  if (chatAbortRef) chatAbortRef.current = abortController;
 
   const userMsg: ChatMessage = {
     id: `temp-${Date.now()}`,
@@ -392,34 +405,64 @@ export async function sendPrompt(
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
-                  ? { ...m, streaming: false, content: m.content ? `${m.content}\n\n⚠️ ${e.message}` : `⚠️ ${e.message}` }
+                  ? {
+                      ...m,
+                      streaming: false,
+                      failed: true,
+                      retryText: trimmed,
+                      content: m.content ? `${m.content}\n\n⚠️ ${e.message}` : `⚠️ ${e.message}`,
+                    }
                   : m,
               ),
             );
           } else {
             setMessages((prev) => [
               ...prev,
-              { id: assistantId, role: "assistant", content: `⚠️ ${e.message}`, createdAt: new Date().toISOString() },
+              {
+                id: assistantId,
+                role: "assistant",
+                content: `⚠️ ${e.message}`,
+                failed: true,
+                retryText: trimmed,
+                createdAt: new Date().toISOString(),
+              },
             ]);
           }
         }
       },
+      { signal: abortController.signal },
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Something went wrong";
-    const isServerError =
-      msg.includes("API error 5") || msg.includes("API error 429");
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `err-${Date.now()}`,
-        role: "assistant",
-        content: isServerError
-          ? "The server is temporarily unavailable. Please try again in a moment."
-          : `Sorry, I couldn't process your request. ${msg}`,
-      },
-    ]);
+    if (err instanceof DOMException && err.name === "AbortError") {
+      // User-initiated Stop — mark whatever partial reply exists as done,
+      // don't show an error (there isn't one).
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantId ? { ...m, streaming: false } : m)),
+      );
+    } else {
+      // `isServerError` used to match on `msg.includes("API error 5")`, a
+      // string ApiError never actually produces (its message is the server's
+      // own error text) — so this branch never fired and every failure,
+      // including real 5xx/429s, showed the same generic wording with no
+      // way to retry without retyping the question.
+      const isServerError = err instanceof ApiError && (err.status >= 500 || err.status === 429);
+      const msg = err instanceof Error ? err.message : "Something went wrong";
+      const content = isServerError
+        ? "The server is temporarily unavailable. Please try again in a moment."
+        : `Sorry, I couldn't process your request. ${msg}`;
+      if (assistantStarted) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, streaming: false, failed: true, retryText: trimmed, content } : m)),
+        );
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { id: assistantId, role: "assistant", content, failed: true, retryText: trimmed, createdAt: new Date().toISOString() },
+        ]);
+      }
+    }
   } finally {
+    if (chatAbortRef) chatAbortRef.current = null;
     setChatSending(false);
   }
 }

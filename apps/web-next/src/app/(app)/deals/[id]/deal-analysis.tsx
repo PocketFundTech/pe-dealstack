@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { api, NotFoundError } from "@/lib/api";
+import { describeLoadError } from "@/lib/errorMessage";
 import { cn } from "@/lib/cn";
 import {
   type AnalysisTab,
@@ -38,8 +39,12 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
   const [crossDoc, setCrossDoc] = useState<CrossDocData | null>(null);
   const [benchmark, setBenchmark] = useState<BenchmarkData | null>(null);
   const [insights, setInsights] = useState<NarrativeInsights | null>(null);
-  // "error" = real server/network failure (5xx, network, etc). Never set for 404.
-  const [error, setError] = useState(false);
+  // "error" = real server/network failure (5xx, network, etc), as the
+  // sentence to show — the server's own reason when it gave one. Never set for 404.
+  const [error, setError] = useState<string | null>(null);
+  // Why AI insights are missing (out of credit, bad AI answer, no key…).
+  // Without it the Insights tab said "Loading…" forever after a failure.
+  const [insightsError, setInsightsError] = useState<string | null>(null);
   // "noData" = the /analysis endpoint returned hasData=false or 404 — no analysis yet.
   const [noData, setNoData] = useState(false);
 
@@ -54,7 +59,8 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     setLoading(true);
-    setError(false);
+    setError(null);
+    setInsightsError(null);
     setNoData(false);
     try {
       // Step 1: Fetch primary analysis data (same as legacy analysis.js line 27)
@@ -90,10 +96,12 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
       if (crossDocRes.status === "fulfilled") setCrossDoc(crossDocRes.value);
       if (benchmarkRes.status === "fulfilled") setBenchmark(benchmarkRes.value);
       if (insightsRes.status === "fulfilled") setInsights(insightsRes.value.insights);
-      // Supplementary endpoint failures are non-fatal (graceful degradation)
+      else setInsightsError(describeLoadError(insightsRes.reason, "AI insights could not be generated."));
+      // Cross-doc / benchmark failures stay non-fatal: their panels already
+      // render their own empty states.
     } catch (err) {
       console.warn("[deal-analysis] loadData failed:", err);
-      setError(true);
+      setError(describeLoadError(err, "The financial analysis could not be loaded."));
     } finally {
       setLoading(false);
       inFlightRef.current = false;
@@ -200,7 +208,7 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
           {loading ? (
             <LoadingState />
           ) : error ? (
-            <ErrorState onRetry={loadData} />
+            <ErrorState message={error} onRetry={loadData} />
           ) : noData ? (
             <NoDataState />
           ) : (
@@ -224,13 +232,20 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
                 ))}
               </div>
 
+              {analysis?.currencyNote && (
+                <p className="mb-4 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="note">
+                  <span className="material-symbols-outlined text-[16px] text-amber-600">warning</span>
+                  {analysis.currencyNote}
+                </p>
+              )}
+
               {/* Tab panels — order matches legacy TABS array exactly */}
               {activeTab === "overview"   && <OverviewPanel analysis={analysis} />}
               {activeTab === "deepdive"   && <DeepDivePanel analysis={analysis} />}
               {activeTab === "cashcap"    && <CashCapitalPanel analysis={analysis} />}
               {activeTab === "valuation"  && <ValuationPanel analysis={analysis} benchmark={benchmark} />}
               {activeTab === "diligence"  && <DiligencePanel analysis={analysis} crossDoc={crossDoc} />}
-              {activeTab === "aiinsights" && <AIInsightsPanel insights={insights} />}
+              {activeTab === "aiinsights" && <AIInsightsPanel insights={insights} error={insightsError} onRetry={loadData} />}
               {activeTab === "memo"       && <MemoPanel analysis={analysis} dealId={dealId} />}
 
               {/* Footer */}
@@ -299,14 +314,12 @@ function NoDataState() {
   );
 }
 
-function ErrorState({ onRetry }: { onRetry: () => void }) {
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="text-center py-10">
       <span className="material-symbols-outlined text-4xl text-red-300 block mb-2">error_outline</span>
       <p className="text-sm font-semibold text-gray-500 mb-1">Failed to load analysis</p>
-      <p className="text-xs text-gray-400 mb-4">
-        Something went wrong loading the financial analysis. Please try again.
-      </p>
+      <p className="text-xs text-gray-500 mb-4 max-w-sm mx-auto leading-relaxed">{message}</p>
       <button
         onClick={onRetry}
         className="text-xs font-semibold text-white px-4 py-2 rounded-lg"

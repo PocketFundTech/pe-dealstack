@@ -1,94 +1,71 @@
 "use client";
 
+import Link from "next/link";
+import { cn } from "@/lib/cn";
+import { dayOffset, dueLabel } from "../dashboard/triage";
+import { isOpen, isReview } from "./admin-logic";
 import type { AdminTask } from "./types";
 
 interface Props {
   tasks: AdminTask[];
+  now: number;
   onScheduleClick: () => void;
 }
 
-// Vanilla: "reviews" are tasks with a "[Review]" prefix. Show up to 3, soonest
-// first. Matches admin-tasks.js::renderUpcomingReviews.
-export function UpcomingReviews({ tasks, onScheduleClick }: Props) {
+// "Reviews" are tasks with a "[Review]" prefix (legacy convention, kept so
+// existing reviews still show). Soonest first, up to 4.
+export function UpcomingReviews({ tasks, now, onScheduleClick }: Props) {
   const reviews = tasks
-    .filter((t) => t.title.startsWith("[Review]") && t.status !== "COMPLETED")
-    .sort((a, b) => {
-      const da = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-      const db = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-      return da - db;
-    })
-    .slice(0, 3);
+    .filter((t) => isReview(t) && isOpen(t))
+    .sort((a, b) => (a.dueDate ? new Date(a.dueDate).getTime() : Infinity) - (b.dueDate ? new Date(b.dueDate).getTime() : Infinity))
+    .slice(0, 4);
 
   return (
-    <div className="bg-gradient-to-br from-primary to-primary-hover rounded-xl shadow-lg p-5 text-white relative overflow-hidden">
-      <div className="absolute top-0 right-0 p-3 opacity-10 pointer-events-none">
-        <span className="material-symbols-outlined text-[80px]">event_available</span>
-      </div>
-      <h3 className="font-bold text-lg mb-1 relative z-10">Upcoming Reviews</h3>
-      {reviews.length === 0 ? (
-        <div className="relative z-10">
-          <p className="text-blue-200 text-sm mb-3">No upcoming reviews scheduled</p>
-          <button
-            type="button"
-            onClick={onScheduleClick}
-            className="bg-white/10 text-white text-sm font-medium py-2 px-4 rounded-lg hover:bg-white/20 transition-colors border border-white/20 flex items-center gap-2"
-          >
-            <span className="material-symbols-outlined text-[16px]">add</span>
-            Schedule Review
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-3 mt-3 relative z-10">
-          {reviews.map((r) => {
-            const title = r.title.replace("[Review] ", "");
-            const date = r.dueDate ? new Date(r.dueDate) : null;
-            const assignee = r.assignee;
-            const deal = r.deal;
-            const isOverdue = date && date < new Date();
-            const month = date
-              ? date.toLocaleDateString("en-US", { month: "short" }).toUpperCase()
-              : "";
-            const day = date ? date.getDate() : "?";
+    <section aria-labelledby="reviews-heading" className="dash-panel">
+      <header className="flex items-center justify-between gap-3 border-b border-(--dash-rule) px-5 pt-4 pb-3">
+        <h3 id="reviews-heading" className="dash-display text-lg text-(--dash-ink)">Upcoming reviews</h3>
+        <button type="button" onClick={onScheduleClick} className="dash-link text-xs">+ Schedule</button>
+      </header>
 
+      {reviews.length === 0 ? (
+        <p className="px-5 py-5 text-sm text-(--dash-ink-2)">
+          No reviews on the calendar. Schedule an IC or pipeline review and it will show here and in the reviewer&apos;s tasks.
+        </p>
+      ) : (
+        <ul className="divide-y divide-(--dash-rule)">
+          {reviews.map((r) => {
+            const title = r.title.replace(/^\[Review\]\s*/, "");
+            const date = r.dueDate ? new Date(r.dueDate) : null;
+            const late = !!r.dueDate && dayOffset(r.dueDate, now) < 0;
+            const who = r.assignee?.name || r.assignee?.email?.split("@")[0];
             return (
-              <div
-                key={r.id}
-                className="bg-white/10 backdrop-blur-sm rounded-lg p-3 border border-white/10"
-              >
-                <div className="flex items-center gap-3">
-                  {date && (
-                    <div
-                      className={`rounded-lg px-2.5 py-1.5 text-center min-w-[50px] ${
-                        isOverdue ? "bg-red-100 text-red-600" : "bg-white text-primary"
-                      }`}
-                    >
-                      <span className="block text-[10px] font-bold uppercase tracking-wide">
-                        {month}
-                      </span>
-                      <span className="block text-xl font-bold leading-none">{day}</span>
-                    </div>
+              <li key={r.id} className="flex items-center gap-4 px-5 py-3">
+                <span
+                  className={cn(
+                    "flex w-11 shrink-0 flex-col items-center rounded-md border py-1 leading-none",
+                    late ? "border-(--dash-red-wash) bg-(--dash-red-wash) text-(--dash-red)" : "border-(--dash-rule) text-(--dash-ink)",
                   )}
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm truncate">{title}</p>
-                    <p className="text-xs text-blue-200 mt-0.5">
-                      {assignee
-                        ? assignee.name || assignee.email?.split("@")[0] || "Unassigned"
-                        : "Unassigned"}
-                      {deal ? ` · ${deal.name}` : ""}
-                      {isOverdue && (
-                        <>
-                          {" · "}
-                          <span className="text-red-300 font-medium">Overdue</span>
-                        </>
-                      )}
-                    </p>
-                  </div>
+                >
+                  <span className="text-[0.625rem] font-bold uppercase tracking-wider">
+                    {date ? date.toLocaleDateString("en-US", { month: "short" }) : "TBD"}
+                  </span>
+                  <span className="dash-figure text-lg">{date ? date.getDate() : "—"}</span>
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-(--dash-ink)">
+                    {r.deal ? <Link href={`/deals/${r.deal.id}`} className="hover:text-(--dash-blue)">{title}</Link> : title}
+                  </p>
+                  <p className="truncate text-xs text-(--dash-ink-3)">
+                    {r.dueDate && <span className={late ? "font-medium text-(--dash-red)" : undefined}>{dueLabel(r.dueDate, now)}</span>}
+                    {who && ` · ${who}`}
+                    {r.deal && ` · ${r.deal.name}`}
+                  </p>
                 </div>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
-    </div>
+    </section>
   );
 }

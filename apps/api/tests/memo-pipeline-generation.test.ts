@@ -51,6 +51,30 @@ beforeEach(() => {
   delete process.env.MEMO_SECTION_TIMEOUT_MS;
 });
 
+describe('generateSection — prompt caching', () => {
+  // Every memo runs ~12 sections plus a critique, and each section re-sent the
+  // full deal context (up to ~40K chars) at full price after its own section
+  // prompt, so nothing could be cached. The context now comes first as one
+  // identical, cached block; the section instructions follow it.
+  it('sends the deal context as an identical cached first block, section instructions after', async () => {
+    trackedClaudeMessage.mockResolvedValue({ text: '<p>ok</p>', model: 'claude-sonnet-5', stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 1 } });
+    const { generateSection } = await getPipeline();
+    const ctx = baseContext();
+    await generateSection('EXECUTIVE_SUMMARY', ctx, undefined, 1);
+    await generateSection('MARKET_DYNAMICS', ctx, undefined, 2);
+
+    const [a, b] = trackedClaudeMessage.mock.calls.map((c) => c[0].messages[0].content);
+    expect(a[0]).toEqual(b[0]);
+    expect(a[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(a[0].text).toContain('## Deal Context');
+    expect(a[0].text).toContain('Test Deal');
+
+    expect(a[1].text).toContain('Executive Summary');
+    expect(a[1].text).not.toContain('## Deal Context');
+    expect(a[1].text).not.toEqual(b[1].text);
+  });
+});
+
 describe('generateSection', () => {
   it('calls trackedClaudeMessage with role memo and returns the served model as aiModel', async () => {
     trackedClaudeMessage.mockResolvedValue({
@@ -66,7 +90,9 @@ describe('generateSection', () => {
     const call = trackedClaudeMessage.mock.calls[0][0];
     expect(call.role).toBe('memo');
     expect(call.maxTokens).toBe(8000);
-    expect(call.messages).toEqual([{ role: 'user', content: expect.stringContaining('Executive Summary') }]);
+    expect(call.messages).toHaveLength(1);
+    expect(call.messages[0].role).toBe('user');
+    expect(call.messages[0].content[1].text).toContain('Executive Summary');
 
     expect(section.aiGenerated).toBe(true);
     expect(section.aiModel).toBe('claude-sonnet-5');

@@ -21,6 +21,24 @@ export async function resolveUserId(authId: string): Promise<string | null> {
   }
 }
 
+/**
+ * The web client sends the Supabase auth id; older callers send the internal
+ * User.id. Resolve either to the internal id, scoped to the caller's org.
+ * Returns null when no such user exists in this org.
+ */
+async function resolveOrgUserId(userId: string, orgId: string): Promise<string | null> {
+  for (const column of ['id', 'authId'] as const) {
+    const { data } = await supabase
+      .from('User')
+      .select('id')
+      .eq(column, userId)
+      .eq('organizationId', orgId)
+      .single();
+    if (data?.id) return data.id;
+  }
+  return null;
+}
+
 // Validation schemas
 const createNotificationSchema = z.object({
   userId: z.string().uuid(),
@@ -59,28 +77,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const { userId } = params;
     const orgId = getOrgId(req);
 
-    // Resolve userId: could be internal UUID or Supabase auth UUID
-    let internalUserId = userId;
-    const { data: targetUser } = await supabase
-      .from('User')
-      .select('id')
-      .eq('id', userId)
-      .eq('organizationId', orgId)
-      .single();
-
-    if (!targetUser) {
-      // Try resolving as Supabase auth UUID
-      const { data: authUser } = await supabase
-        .from('User')
-        .select('id')
-        .eq('authId', userId)
-        .eq('organizationId', orgId)
-        .single();
-
-      if (!authUser) {
-        return res.status(403).json({ error: 'Cannot access notifications for users outside your organization' });
-      }
-      internalUserId = authUser.id;
+    const internalUserId = await resolveOrgUserId(userId, orgId);
+    if (!internalUserId) {
+      return res.status(403).json({ error: 'Cannot access notifications for users outside your organization' });
     }
 
     let query = supabase
@@ -276,21 +275,16 @@ router.post('/mark-all-read', async (req: Request, res: Response, next: NextFunc
     const orgId = getOrgId(req);
     const { userId } = markAllReadSchema.parse(req.body);
 
-    // Defense-in-depth: verify target user belongs to this org
-    const { data: targetUser } = await supabase
-      .from('User')
-      .select('id')
-      .eq('id', userId)
-      .eq('organizationId', orgId)
-      .single();
-    if (!targetUser) {
+    // Defense-in-depth: the target user must belong to this org.
+    const internalUserId = await resolveOrgUserId(userId, orgId);
+    if (!internalUserId) {
       return res.status(403).json({ error: 'Cannot modify notifications for users outside your organization' });
     }
 
     const { error } = await supabase
       .from('Notification')
       .update({ isRead: true })
-      .eq('userId', userId)
+      .eq('userId', internalUserId)
       .eq('isRead', false);
 
     if (error) throw error;
@@ -344,21 +338,16 @@ router.delete('/', async (req: Request, res: Response, next: NextFunction) => {
     const orgId = getOrgId(req);
     const params = deleteNotificationsQuerySchema.parse(req.query);
 
-    // Defense-in-depth: verify target user belongs to this org
-    const { data: targetUser } = await supabase
-      .from('User')
-      .select('id')
-      .eq('id', params.userId)
-      .eq('organizationId', orgId)
-      .single();
-    if (!targetUser) {
+    // Defense-in-depth: the target user must belong to this org.
+    const internalUserId = await resolveOrgUserId(params.userId, orgId);
+    if (!internalUserId) {
       return res.status(403).json({ error: 'Cannot delete notifications for users outside your organization' });
     }
 
     let query = supabase
       .from('Notification')
       .delete()
-      .eq('userId', params.userId);
+      .eq('userId', internalUserId);
 
     if (params.readOnly === 'true') {
       query = query.eq('isRead', true);

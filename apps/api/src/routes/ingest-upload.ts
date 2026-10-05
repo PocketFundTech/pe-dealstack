@@ -12,12 +12,14 @@ import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { AIProviderUnavailableError } from '../utils/aiErrors.js';
-import { extractTextFromPDF, upload } from './ingest-shared.js';
+import { extractTextFromPDF, upload, resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { runInBackground } from '../utils/background.js';
 import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
+import { runAfterResponse } from '../utils/afterResponse.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -57,8 +59,17 @@ function transformDeepResultToExtractedDealData(result: DeepExtractionResult): E
 }
 
 // POST /api/ingest - Upload document and auto-create deal
+//
+// Accepts either a multipart/form-data body (legacy — multer populates
+// req.file) or a JSON body `{ storagePath, fileName, mimeType, size, ... }`
+// pointing at a file the client already uploaded directly to Supabase
+// Storage via POST /api/uploads/sign. See ingest-shared.ts#resolveUploadedFile.
 router.post('/', upload.single('file'), async (req, res) => {
-  const uploaded = req.file;
+  const resolved = await resolveUploadedFile(req);
+  if (resolved.error) {
+    return res.status(resolved.error.status).json(resolved.error.body);
+  }
+  const uploaded = resolved.file;
   if (!uploaded) {
     return res.status(400).json({ error: 'No file provided' });
   }
@@ -69,6 +80,14 @@ router.post('/', upload.single('file'), async (req, res) => {
     fileSize: uploaded.size,
     req,
   });
+  if (resolved.cleanupStoragePath) {
+    const storagePath = resolved.cleanupStoragePath;
+    await runAfterResponse(req, () => cleanupStagingObject(storagePath));
+  }
+  const ingestedDeal = (result.body as { deal?: unknown; isUpdate?: boolean } | undefined);
+  if (result.status < 300 && ingestedDeal?.deal) {
+    emitWebhookEvent(req, req.user?.organizationId, ingestedDeal.isUpdate ? 'deal.updated' : 'deal.created', ingestedDeal.deal);
+  }
   res.status(result.status).json(result.body);
 });
 
@@ -91,6 +110,32 @@ export interface IngestBufferInput {
   req: Request;
 }
 
+/** Uploads a document buffer to the `documents` storage bucket under `${dealId}/...`. */
+async function uploadDocumentToStorage(
+  dealId: string,
+  documentName: string,
+  buffer: Buffer,
+  mimeType: string,
+): Promise<{ filePath: string | null }> {
+  const timestamp = Date.now();
+  const sanitizedName = documentName.replace(/[^a-zA-Z0-9.-]/g, '_');
+  const filePath = `${dealId}/${timestamp}_${sanitizedName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('documents')
+    .upload(filePath, buffer, {
+      contentType: mimeType,
+      upsert: false,
+    });
+
+  if (uploadError) {
+    log.warn('Storage upload warning', { error: uploadError.message });
+    return { filePath: null };
+  }
+  log.debug('File uploaded to storage', { storagePath: filePath });
+  return { filePath };
+}
+
 export async function runIngestFromBuffer(
   input: IngestBufferInput,
 ): Promise<{ status: number; body: unknown }> {
@@ -100,57 +145,93 @@ export async function runIngestFromBuffer(
 
     log.info('Ingest starting', { documentName });
 
+    // Check if updating an existing deal or creating a new one. The
+    // existing-deal path knows its deal id up front (before any AI work
+    // runs), so we can verify access now and kick off the storage upload
+    // CONCURRENTLY with the AI read below — neither depends on the other's
+    // result. Resolved once `deal` exists (right after the merge call).
+    const targetDealId = req.body.dealId;
+    let concurrentUploadPromise: Promise<{ filePath: string | null }> | null = null;
+    if (targetDealId) {
+      const dealAccess = await verifyDealAccess(targetDealId, orgId);
+      if (!dealAccess) {
+        return { status: 404, body: { error: 'Deal not found' } };
+      }
+      concurrentUploadPromise = uploadDocumentToStorage(targetDealId, documentName, buffer, mimeType);
+    }
+
     // Step 1: Extract text from document
     let extractedText: string | null = null;
     let numPages: number | null = null;
+    // True when pdf-parse (and LlamaParse, if enabled) hard-failed to parse
+    // the PDF at all — e.g. modern object-stream PDFs that pdf-parse 1.1.4's
+    // bundled 2017 pdf.js can't read. Distinct from "sparse" (parsed fine,
+    // just little/no text — scanned PDFs). Only matters for INGEST_ENGINE=claude:
+    // if the native Claude read ALSO fails to recover data, Step 2 uses this
+    // to give an accurate error instead of falling through to the legacy
+    // text-based extractor with an empty string.
+    let pdfTextExtractionFailed = false;
 
     if (mimeType === 'application/pdf') {
       log.info('Step 1: Extracting text from PDF (LlamaParse → pdf-parse)', { documentName });
       const extraction = await extractTextFromPDF(buffer, documentName);
       if (!extraction) {
-        // Both layers hard-failed (encrypted / malformed). Don't 500 — give the user a hint.
-        log.error('PDF extraction failed in both layers', undefined, { documentName });
-        return {
-          status: 422,
-          body: {
-            error:
-              "Couldn't extract data from this document. The PDF may be encrypted, password-protected, or malformed — try uploading a different copy.",
-          },
-        };
-      }
-      extractedText = extraction.text.replace(/\u0000/g, '');
-      numPages = extraction.numPages;
-      log.info('PDF extracted', {
-        layer: extraction.source,
-        numPages,
-        charCount: extractedText.length,
-        sparse: extraction.sparse,
-      });
-      // Image-only one-pagers (scanned PDFs) yield ~0 chars from pdf-parse.
-      // Surface a useful 422 instead of letting the AI extractor return null.
-      if (extraction.sparse && extractedText.trim().length < 100) {
         if (!isClaudeIngestEnabled()) {
-          log.warn('PDF text too sparse for AI extraction', {
-            documentName,
-            chars: extractedText.trim().length,
-            layer: extraction.source,
-          });
+          // Legacy engine has no other way to read the document — both text
+          // layers hard-failed (encrypted / malformed). Don't 500 — give the
+          // user a hint.
+          log.error('PDF extraction failed in both layers', undefined, { documentName });
           return {
             status: 422,
             body: {
               error:
-                "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
+                "Couldn't extract data from this document. The PDF may be encrypted, password-protected, or malformed — try uploading a different copy.",
             },
           };
         }
-        // INGEST_ENGINE=claude: scanned/image-only PDFs proceed — the native
-        // reader sees the complete file regardless of text layer. Only the
-        // downstream "AI couldn't identify deal information" 422 fires if the
-        // native read ALSO fails.
-        log.info('Sparse/scanned PDF — deferring to native Claude read', {
-          documentName,
-          chars: extractedText.trim().length,
+        // INGEST_ENGINE=claude: the native reader (readDealDocument, below)
+        // reads the whole PDF via the Files API independently of our local
+        // text layer, so a pdf-parse failure alone shouldn't block the
+        // upload. Defer to it — only 422 if IT also fails to recover data.
+        pdfTextExtractionFailed = true;
+        extractedText = '';
+        numPages = null;
+        log.warn('PDF text extraction failed — deferring to native Claude read', { documentName });
+      } else {
+        extractedText = extraction.text.replace(/\u0000/g, '');
+        numPages = extraction.numPages;
+        log.info('PDF extracted', {
+          layer: extraction.source,
+          numPages,
+          charCount: extractedText.length,
+          sparse: extraction.sparse,
         });
+        // Image-only one-pagers (scanned PDFs) yield ~0 chars from pdf-parse.
+        // Surface a useful 422 instead of letting the AI extractor return null.
+        if (extraction.sparse && extractedText.trim().length < 100) {
+          if (!isClaudeIngestEnabled()) {
+            log.warn('PDF text too sparse for AI extraction', {
+              documentName,
+              chars: extractedText.trim().length,
+              layer: extraction.source,
+            });
+            return {
+              status: 422,
+              body: {
+                error:
+                  "Couldn't extract data from this document. The PDF appears to be image-only or scanned — please upload a text-based PDF, or contact support to enable OCR for this file type.",
+              },
+            };
+          }
+          // INGEST_ENGINE=claude: scanned/image-only PDFs proceed — the native
+          // reader sees the complete file regardless of text layer. Only the
+          // downstream "AI couldn't identify deal information" 422 fires if the
+          // native read ALSO fails.
+          log.info('Sparse/scanned PDF — deferring to native Claude read', {
+            documentName,
+            chars: extractedText.trim().length,
+          });
+        }
       }
     } else if (
       mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -204,6 +285,24 @@ export async function runIngestFromBuffer(
       if (!aiData) {
         log.warn('INGEST_ENGINE=claude deal read failed — falling back to legacy extractor', { documentName });
       }
+    }
+
+    // If the local PDF text layer hard-failed (pdf-parse couldn't parse the
+    // file at all) AND the native Claude read also failed to recover any
+    // data, there's no text left to hand the legacy extractor — bail out
+    // with an accurate message instead of claiming the file is malformed
+    // (pdf-parse failing doesn't mean the PDF itself is broken; this exact
+    // file may open fine elsewhere) or falling through to extractDealDataFromText('').
+    if (pdfTextExtractionFailed && !aiData) {
+      log.error('PDF text extraction failed and native Claude read did not recover data', undefined, {
+        documentName,
+      });
+      return {
+        status: 422,
+        body: {
+          error: "We couldn't read this PDF. If it's password-protected, remove the password and try again.",
+        },
+      };
     }
 
     // Legacy chain (also the fallback when the claude read returns null).
@@ -266,27 +365,30 @@ export async function runIngestFromBuffer(
       aiData.reviewReasons = [...(aiData.reviewReasons || []), ...financialCheck.warnings];
     }
 
-    // Check if updating an existing deal or creating a new one
-    const targetDealId = req.body.dealId;
+    // Deal id: known up front for the update path (verified + upload kicked
+    // off at the top of this function), created fresh below otherwise.
     let deal: any;
     let company: any;
     let isUpdate = false;
+    // Resolved from the concurrent upload (update path) or the sequential
+    // Step 5 upload below (new-deal path).
+    let fileUrl: string | null = null;
 
     if (targetDealId) {
       // ─── Update Existing Deal path ───
-      // Verify the caller's org owns this deal before merging extracted data
-      // into it (and dropping a Document row pointing at it). Without this,
-      // a client could ingest a CIM into any tenant's deal.
-      const dealAccess = await verifyDealAccess(targetDealId, orgId);
-      if (!dealAccess) {
-        return { status: 404, body: { error: 'Deal not found' } };
-      }
-
+      // Access was already verified above, before the AI read, so the
+      // storage upload could run concurrently with it.
       log.info('Ingest into existing deal', { dealId: targetDealId });
       const result = await mergeIntoExistingDeal(targetDealId, aiData, req.user?.id, documentName);
       deal = result.deal;
       company = deal.company;
       isUpdate = true;
+
+      // Resolve the upload that's been running concurrently with the AI read.
+      if (concurrentUploadPromise) {
+        const uploadResult = await concurrentUploadPromise;
+        fileUrl = uploadResult.filePath;
+      }
     } else {
       // ─── Create New Deal path (original flow) ───
       log.debug('Step 3: Creating/finding company');
@@ -394,29 +496,12 @@ export async function runIngestFromBuffer(
       }
       deal = newDeal;
       log.info('Deal created', { name: deal.name, id: deal.id, status: dealStatus });
-    }
 
-    // Step 5: Upload file to storage
-    log.debug('Step 5: Uploading file to storage');
-    let fileUrl = null;
-
-    const timestamp = Date.now();
-    const sanitizedName = documentName.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const filePath = `${deal.id}/${timestamp}_${sanitizedName}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from('documents')
-      .upload(filePath, buffer, {
-        contentType: mimeType,
-        upsert: false,
-      });
-
-    if (uploadError) {
-      log.warn('Storage upload warning', { error: uploadError.message });
-    } else {
-      // Store the storage path (not full URL) — signed URLs generated on demand
-      fileUrl = filePath;
-      log.debug('File uploaded to storage', { storagePath: filePath });
+      // Step 5: Upload file to storage. Sequential here — the new deal's id
+      // (used in the storage path) doesn't exist until just now.
+      log.debug('Step 5: Uploading file to storage');
+      const uploadResult = await uploadDocumentToStorage(deal.id, documentName, buffer, mimeType);
+      fileUrl = uploadResult.filePath;
     }
 
     // Step 6: Create document record with confidence data
@@ -545,86 +630,102 @@ export async function runIngestFromBuffer(
       log.debug('Created document', { name: document.name, id: document.id });
     }
 
-    // Step 7: Trigger RAG embedding in background
-    if (extractedText && extractedText.length > 0) {
-      log.debug('Step 7: Triggering RAG embedding');
-      embedDocument(document.id, deal.id, extractedText)
-        .then(result => {
-          if (result.success) {
-            log.debug('RAG embedding complete', { chunkCount: result.chunkCount });
-          } else {
-            log.error('RAG embedding failed', result.error);
-          }
-        })
-        .catch(err => {
-          log.error('RAG embedding error', err);
-        });
-    }
-
-    // Step 8: Log activity (only for new deals — merge already logs)
-    if (!isUpdate) {
-      await supabase.from('Activity').insert({
-        dealId: deal.id,
-        type: 'DEAL_CREATED',
-        title: `Deal created from ${docType}`,
-        description: aiData.needsReview
-          ? `New deal "${deal.name}" created with ${aiData.overallConfidence}% confidence - NEEDS REVIEW`
-          : `New deal "${deal.name}" auto-created with ${aiData.overallConfidence}% confidence`,
-        metadata: {
-          documentId: document.id,
-          documentType: docType,
-          overallConfidence: aiData.overallConfidence,
-          needsReview: aiData.needsReview,
-          reviewReasons: aiData.reviewReasons,
-        },
-      });
-
-      // Auto-assign creator as analyst (only for new deals)
-      if (req.user?.id) {
-        const internalUserId = await resolveUserId(req.user.id);
-        if (internalUserId) {
-          await supabase.from('DealTeamMember').insert({
-            dealId: deal.id,
-            userId: internalUserId,
-            role: 'MEMBER',
-          }).then(({ error }) => { if (error) log.warn('Auto-assign analyst failed', error); });
-        }
+    // Step 8: Auto-assign creator as analyst (only for new deals). Kept
+    // inline (not deferred) — the response depends on the creator being able
+    // to immediately open the deal as a team member.
+    if (!isUpdate && req.user?.id) {
+      const internalUserId = await resolveUserId(req.user.id);
+      if (internalUserId) {
+        await supabase.from('DealTeamMember').insert({
+          dealId: deal.id,
+          userId: internalUserId,
+          role: 'MEMBER',
+        }).then(({ error }) => { if (error) log.warn('Auto-assign analyst failed', error); });
       }
     }
 
-    // Audit log
-    await AuditLog.aiIngest(req, documentName, deal.id);
+    // Everything below is independent of the response body — RAG embedding,
+    // the Activity/audit log rows, the multi-doc-analysis trigger, and (for
+    // new deals) firm-teaser generation. Deferred via runAfterResponse so
+    // none of it adds latency to the client-visible response; on platforms
+    // without a post-response hook (local dev, tests, non-Vercel deploys)
+    // runAfterResponse awaits it inline, preserving the original fully
+    // synchronous behavior.
+    await runAfterResponse(req, async () => {
+      const tasks: Promise<unknown>[] = [];
 
-    // Auto-trigger multi-doc analysis if 2+ documents exist
-    const { count: docCount } = await supabase
-      .from('Document')
-      .select('id', { count: 'exact', head: true })
-      .eq('dealId', deal.id);
+      if (extractedText && extractedText.length > 0) {
+        tasks.push(
+          embedDocument(document.id, deal.id, extractedText)
+            .then(result => {
+              if (result.success) {
+                log.debug('RAG embedding complete', { chunkCount: result.chunkCount });
+              } else {
+                log.error('RAG embedding failed', result.error);
+              }
+            })
+            .catch(err => {
+              log.error('RAG embedding error', err);
+            }),
+        );
+      }
 
-    if (docCount && docCount >= 2) {
-      import('../services/multiDocAnalyzer.js')
-        .then(({ analyzeMultipleDocuments }) =>
-          analyzeMultipleDocuments(deal.id)
-        )
-        .then(result => {
+      if (!isUpdate) {
+        tasks.push(
+          (async () => {
+            const { error } = await supabase.from('Activity').insert({
+              dealId: deal.id,
+              type: 'DEAL_CREATED',
+              title: `Deal created from ${docType}`,
+              description: aiData.needsReview
+                ? `New deal "${deal.name}" created with ${aiData.overallConfidence}% confidence - NEEDS REVIEW`
+                : `New deal "${deal.name}" auto-created with ${aiData.overallConfidence}% confidence`,
+              metadata: {
+                documentId: document.id,
+                documentType: docType,
+                overallConfidence: aiData.overallConfidence,
+                needsReview: aiData.needsReview,
+                reviewReasons: aiData.reviewReasons,
+              },
+            });
+            if (error) log.warn('Activity insert failed', error);
+          })(),
+        );
+      }
+
+      tasks.push(
+        AuditLog.aiIngest(req, documentName, deal.id).catch(err => log.error('Audit log failed', err)),
+      );
+
+      await Promise.all(tasks);
+
+      // Auto-trigger multi-doc analysis if 2+ documents exist
+      const { count: docCount } = await supabase
+        .from('Document')
+        .select('id', { count: 'exact', head: true })
+        .eq('dealId', deal.id);
+
+      if (docCount && docCount >= 2) {
+        try {
+          const { analyzeMultipleDocuments } = await import('../services/multiDocAnalyzer.js');
+          const result = await analyzeMultipleDocuments(deal.id);
           if (result) log.info('Auto multi-doc analysis complete', { dealId: deal.id, conflicts: result.conflicts.length });
-        })
-        .catch(err => {
+        } catch (err) {
           log.error('Auto multi-doc analysis failed', err);
           captureAgentError(err, { context: 'multi_doc_analysis:background' });
-        });
-    }
-
-    // Auto-generate firm-teaser blurbs for newly-created deals. BLOCKS the
-    // response so the teasers are ready when the client renders the deal.
-    // Best-effort: a teaser failure must never fail ingest.
-    if (!isUpdate) {
-      try {
-        await generateTeasersForDeal({ dealId: deal.id, orgId });
-      } catch (teaserErr) {
-        log.error('Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+        }
       }
-    }
+
+      // Auto-generate firm-teaser blurbs for newly-created deals. Best-effort
+      // — never fail ingest on teaser error.
+      if (!isUpdate) {
+        try {
+          await generateTeasersForDeal({ dealId: deal.id, orgId });
+        } catch (teaserErr) {
+          log.error('Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
+        }
+      }
+    });
 
     // Background deep pass: financial-statement extraction + auto-score, so
     // the deal page fills in (financials, red flags, scorecard) without a

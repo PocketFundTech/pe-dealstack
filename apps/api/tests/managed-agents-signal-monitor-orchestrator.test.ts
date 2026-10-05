@@ -35,6 +35,22 @@ describe('runSignalMonitorViaManagedAgents', () => {
     expect(recorded[0]).toMatchObject({ operation: 'signal_monitor_managed_agent', promptTokens: 200, completionTokens: 40 });
   });
 
+  it("records the session's authoritative cost (web search + runtime included), model and server-tool usage", async () => {
+    createSessionAndDrain.mockResolvedValue({
+      status: 'completed',
+      usage: { inputTokens: 200, outputTokens: 40 },
+      costOverrideUsd: 0.37,
+      model: 'claude-sonnet-5',
+      webSearchRequests: 12,
+      activeSeconds: 95,
+    });
+    const { runSignalMonitorViaManagedAgents } = await import('../src/services/managedAgents/signalMonitorOrchestrator.js');
+
+    await runSignalMonitorViaManagedAgents('org-1');
+    expect(recorded[0]).toMatchObject({ costOverrideUsd: 0.37, model: 'claude-sonnet-5' });
+    expect(recorded[0].metadata).toMatchObject({ webSearchRequests: 12, activeSeconds: 95 });
+  });
+
   it('returns failed when the session fails', async () => {
     createSessionAndDrain.mockResolvedValue({ status: 'failed', error: 'boom', usage: { inputTokens: 0, outputTokens: 0 } });
     const { runSignalMonitorViaManagedAgents } = await import('../src/services/managedAgents/signalMonitorOrchestrator.js');

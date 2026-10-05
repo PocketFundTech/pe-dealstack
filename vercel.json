@@ -1,6 +1,7 @@
 {
   "version": 2,
   "framework": "nextjs",
+  "regions": ["hnd1"],
   "installCommand": "rm -rf node_modules package-lock.json && npm install --include=dev",
   "buildCommand": "npm run build:api && npm run build --workspace=@ai-crm/web-next",
   "outputDirectory": "apps/web-next/.next",
@@ -32,6 +33,10 @@
     {
       "path": "/api/cron/reengagement-nudge",
       "schedule": "0 10 * * 1"
+    },
+    {
+      "path": "/api/cron/usage-reconciliation",
+      "schedule": "0 3 * * *"
     }
   ]
 }

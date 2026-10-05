@@ -28,6 +28,22 @@ router.get('/insights/gmail-suggestions', async (req: any, res) => {
   }
 });
 
+// ─── GET /api/contacts/:id/email-summary — AI summary of Gmail threads with a contact ─
+// Used by the contact panel's "Summarize emails". The service is org-scoped
+// and returns a neutral summary (never an error) when Gmail isn't linked or
+// the contact has no email. Loaded lazily to keep the lite bundle light.
+
+router.get('/:id/email-summary', async (req: any, res) => {
+  try {
+    const orgId = getOrgId(req);
+    const { getContactEmailSummary } = await import('../services/gmailContactsService.js');
+    res.json(await getContactEmailSummary(orgId, req.params.id, req.user?.id));
+  } catch (error) {
+    log.error('Contact email summary error', error);
+    res.status(500).json({ error: 'Could not summarize emails right now. Please try again.' });
+  }
+});
+
 // ─── GET /api/contacts/insights/timeline — Recent interactions across all contacts ─
 
 router.get('/insights/timeline', async (req: Request, res) => {

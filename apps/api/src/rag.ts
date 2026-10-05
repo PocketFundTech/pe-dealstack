@@ -13,6 +13,13 @@ import { trackedEmbedDocuments, trackedEmbedQuery } from './services/usage/track
 
 let embeddingsModel: GoogleGenerativeAIEmbeddings | null = null;
 
+/** The real embedding model, env-overridable — single source of truth so the
+ *  usage ledger labels rows with what actually ran instead of a hardcoded
+ *  guess (see trackedEmbeddings.ts). */
+function getEmbeddingModelName(): string {
+  return process.env.EMBEDDING_MODEL || 'gemini-embedding-001';
+}
+
 function getEmbeddingsModel(): GoogleGenerativeAIEmbeddings | null {
   if (embeddingsModel) return embeddingsModel;
   if (!process.env.GEMINI_API_KEY) {
@@ -20,7 +27,7 @@ function getEmbeddingsModel(): GoogleGenerativeAIEmbeddings | null {
     return null;
   }
   embeddingsModel = new GoogleGenerativeAIEmbeddings({
-    modelName: process.env.EMBEDDING_MODEL || 'gemini-embedding-001',
+    modelName: getEmbeddingModelName(),
     apiKey: process.env.GEMINI_API_KEY,
   });
   return embeddingsModel;
@@ -141,6 +148,7 @@ export async function embedDocument(
       'gemini_embed_doc',
       chunkTexts,
       () => model.embedDocuments(chunkTexts),
+      getEmbeddingModelName(),
     );
 
     // Delete existing chunks for this document
@@ -230,6 +238,7 @@ export async function searchDocumentChunks(
       'gemini_embed_query',
       query,
       () => model.embedQuery(query),
+      getEmbeddingModelName(),
     );
     const embeddingStr = `[${queryEmbedding.join(',')}]`;
 

@@ -24,12 +24,12 @@ vi.mock('../src/services/userService.js', () => ({
  *
  * The middleware in the "user exists / no org" branch issues these calls
  * in order:
- *   1. .from('User').select('id, organizationId').eq('authId', X).single()  → resolve user
- *   2. .from('Organization').select('id').eq('name', firmName).single()    → existing-org probe
- *   3. .from('Organization').insert(...).select('id').single()              → create-org attempt
- *   4. (optional retry) same as #3
- *   5. .from('User').select('id, organizationId').eq('authId', X).single() → race re-fetch
- *   6. .from('User').update(...).eq('id', userId)                          → set organizationId
+ *   1. .from('User').select('id, organizationId').eq('authId', X).single()      → resolve user
+ *   2. .from('Organization').insert(...).select('id').single()                  → create-org attempt
+ *   3. .from('User').update({organizationId}).eq('id', userId)
+ *        .is('organizationId', null).select('organizationId').maybeSingle()     → atomic claim
+ *   4. (only if #3 claimed 0 rows) .from('User').select('id, organizationId')
+ *        .eq('authId', X).single()                                              → re-read winner
  */
 type FromHandler = (table: string, callIndex: number) => any;
 
@@ -86,20 +86,19 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
         };
       }
       if (table === 'User' && callIndex === 1) {
-        // race re-fetch — same user, still no org
+        // atomic claim — no one else has raced, so the conditional update
+        // matches this row and returns the org we just set.
         return {
-          select: () => ({
+          update: () => ({
             eq: () => ({
-              single: () =>
-                Promise.resolve({ data: { id: 'user-1', organizationId: null }, error: null }),
+              is: () => ({
+                select: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({ data: { organizationId: 'org-new-1' }, error: null }),
+                }),
+              }),
             }),
           }),
-        };
-      }
-      if (table === 'User' && callIndex === 2) {
-        // update
-        return {
-          update: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }),
         };
       }
       throw new Error(`Unexpected supabase.from(${table}) call #${callIndex}`);
@@ -158,10 +157,10 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
     expect(next).toHaveBeenCalled();
   });
 
-  it('race detected: parallel request set organizationId — uses parallel org, logs race', async () => {
+  it('race detected: parallel request already claimed organizationId — atomic update matches zero rows, re-reads winner, logs race', async () => {
     installSupabaseHandler((table, callIndex) => {
       if (table === 'User' && callIndex === 0) {
-        // First read — no org yet.
+        // First read — no org yet (this request hasn't seen the winner commit).
         return {
           select: () => ({
             eq: () => ({
@@ -182,7 +181,23 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
         };
       }
       if (table === 'User' && callIndex === 1) {
-        // Race re-fetch — parallel request already set organizationId.
+        // Atomic claim — by the time this UPDATE ... WHERE organizationId
+        // IS NULL runs, a parallel request has already committed its own
+        // org, so the WHERE clause matches zero rows: maybeSingle() → null.
+        return {
+          update: () => ({
+            eq: () => ({
+              is: () => ({
+                select: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === 'User' && callIndex === 2) {
+        // Re-read after losing the claim — sees the winner's committed org.
         return {
           select: () => ({
             eq: () => ({
@@ -207,6 +222,92 @@ describe('orgMiddleware — auto-create race fix (Task 6.7)', () => {
       expect.objectContaining({
         parallelOrgId: 'org-winner',
         discardedOrgId: 'org-loser',
+      })
+    );
+  });
+
+  it('double race (the actual NDA-template bug): two concurrent requests both see organizationId null — only one atomic UPDATE can win, the other must adopt the winner instead of silently keeping its own orphaned org', async () => {
+    // This is the scenario the old SELECT-then-UPDATE guard could not catch:
+    // both racers' initial reads AND their (former) re-fetch both observed
+    // organizationId: null, because neither had written yet. With the old
+    // code, BOTH would fall into the "I'm first" branch and unconditionally
+    // UPDATE — whichever ran last would silently win in Postgres, while the
+    // other request's response had already gone out using its own (now
+    // orphaned) org. A row inserted under the loser's org — e.g. an admin's
+    // NDA template — would be invisible to every future request, forever,
+    // including after a full reload.
+    //
+    // With the atomic `.is('organizationId', null)` guard, only one UPDATE
+    // can match per racer even if both attempt it "simultaneously": the DB
+    // serializes the two UPDATE statements, so the second one's WHERE
+    // clause no longer matches (the column is no longer null) and it must
+    // fall back to re-reading the authoritative value.
+    installSupabaseHandler((table, callIndex) => {
+      if (table === 'User' && callIndex === 0) {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () =>
+                Promise.resolve({ data: { id: 'user-1', organizationId: null }, error: null }),
+            }),
+          }),
+        };
+      }
+      if (table === 'Organization' && callIndex === 0) {
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () => Promise.resolve({ data: { id: 'org-B' }, error: null }),
+            }),
+          }),
+        };
+      }
+      if (table === 'User' && callIndex === 1) {
+        // Request B's atomic claim runs AFTER request A already committed
+        // org-A in the DB (simulated by this WHERE-clause miss), even
+        // though B's own earlier read (callIndex 0) still saw null.
+        return {
+          update: () => ({
+            eq: () => ({
+              is: () => ({
+                select: () => ({
+                  maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === 'User' && callIndex === 2) {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: { id: 'user-1', organizationId: 'org-A' },
+                  error: null,
+                }),
+            }),
+          }),
+        };
+      }
+      throw new Error(`Unexpected supabase.from(${table}) call #${callIndex}`);
+    });
+
+    const req = buildReq();
+    await runMiddleware(req);
+
+    // Request B must end up on org-A (the actual committed winner), never
+    // on its own org-B — otherwise anything B does under req.user.organizationId
+    // (e.g. inserting a LegalDocTemplate) gets orphaned under org-B and is
+    // permanently invisible to every future request, which always reads org-A.
+    expect(req.user!.organizationId).toBe('org-A');
+    expect(req.user!.organizationId).not.toBe('org-B');
+    expect(logWarn).toHaveBeenCalledWith(
+      'Org middleware: race detected — parallel request set organizationId, using existing',
+      expect.objectContaining({
+        parallelOrgId: 'org-A',
+        discardedOrgId: 'org-B',
       })
     );
   });

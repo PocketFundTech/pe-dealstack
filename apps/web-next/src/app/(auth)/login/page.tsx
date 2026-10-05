@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { friendlyAuthError, isEmailNotConfirmed } from "@/lib/authErrors";
+import { UnconfirmedEmailHelp } from "./UnconfirmedEmailHelp";
 
 // Order, icons, copy mirror login.html on main (commit 37a3392).
 const AI_AGENTS = [
@@ -27,13 +29,26 @@ const STATS = [
 
 const MFA_DIGIT_COUNT = 6;
 
+// A 401 elsewhere in the app redirects here with `?next=<path>` so re-login
+// returns the user to what they were doing instead of always landing on
+// /dashboard. Only a same-origin relative path is honored — a `next`
+// pointing at an absolute or protocol-relative URL could redirect a freshly
+// authenticated session off-site.
+function getSafeNextPath(): string | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("next");
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return null;
+  return raw;
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // "Email not confirmed" → offer resend / enter-code instead of a dead end.
+  const [unconfirmed, setUnconfirmed] = useState(false);
 
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
   const [mfaDigits, setMfaDigits] = useState<string[]>(Array(MFA_DIGIT_COUNT).fill(""));
@@ -54,12 +69,14 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setUnconfirmed(false);
     setLoading(true);
 
     const supabase = createClient();
     const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
     if (authError) {
-      setError(mapAuthError(authError.message));
+      setUnconfirmed(isEmailNotConfirmed(authError.message));
+      setError(friendlyAuthError(authError.message));
       setLoading(false);
       return;
     }
@@ -77,7 +94,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/dashboard");
+    router.push(getSafeNextPath() ?? "/dashboard");
   };
 
   const handleMfaDigitChange = (index: number, raw: string) => {
@@ -110,8 +127,9 @@ export default function LoginPage() {
     if (pasted.length === MFA_DIGIT_COUNT) mfaInputRefs.current[MFA_DIGIT_COUNT - 1]?.focus();
   };
 
-  const handleMfaVerify = async () => {
-    if (!mfaReady || !mfaFactorId) return;
+  const handleMfaVerify = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!mfaReady || !mfaFactorId || mfaVerifying) return;
     setMfaVerifying(true);
     setMfaError("");
 
@@ -129,7 +147,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/dashboard");
+    router.push(getSafeNextPath() ?? "/dashboard");
   };
 
   const handleMfaBack = async () => {
@@ -141,10 +159,15 @@ export default function LoginPage() {
     setMfaVerifying(false);
   };
 
-  const handleSso = () => {
-    // Placeholder — real IdP wiring (Okta, Azure AD, etc.) lands later.
-    // No user-facing message yet; the button click is a no-op until then.
-  };
+  // Six digits typed or pasted → verify without making the user click.
+  const lastAutoSubmitted = useRef<string | null>(null);
+  useEffect(() => {
+    if (!mfaReady || mfaVerifying || lastAutoSubmitted.current === mfaCode) return;
+    lastAutoSubmitted.current = mfaCode;
+    void handleMfaVerify();
+    // handleMfaVerify is re-created each render; the code is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mfaReady, mfaCode]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -219,10 +242,10 @@ export default function LoginPage() {
 
         <div className="w-full max-w-[440px] z-10">
           <div className="flex items-center gap-2 mb-10">
-            <div className="w-8 h-8 rounded flex items-center justify-center text-white" style={{ backgroundColor: "#003366" }}>
-              <span className="material-symbols-outlined text-[20px]">candlestick_chart</span>
-            </div>
-            <span className="text-xl font-bold tracking-tight" style={{ color: "#003366" }}>PE<span className="font-light opacity-80">OS</span></span>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 2L2 12L12 22L22 12L12 2Z" fill="#003366" />
+            </svg>
+            <span className="text-xl font-bold tracking-tight" style={{ color: "#003366" }}>Avise</span>
           </div>
 
           {!showMfa ? (
@@ -271,18 +294,7 @@ export default function LoginPage() {
                   </div>
                 </label>
 
-                <div className="flex justify-between items-center">
-                  <label className="flex items-center gap-2 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={rememberMe}
-                      onChange={(e) => setRememberMe(e.target.checked)}
-                      className="rounded border-gray-300 text-primary focus:ring-primary/20 w-4 h-4"
-                    />
-                    <span className="text-sm text-slate-600 group-hover:text-slate-800 transition-colors">
-                      Remember me
-                    </span>
-                  </label>
+                <div className="flex justify-end items-center">
                   <Link
                     href="/forgot-password"
                     className="text-primary hover:text-blue-700 text-sm font-medium transition-colors"
@@ -313,27 +325,14 @@ export default function LoginPage() {
                 {error && (
                   <div className="text-red-500 text-sm text-center bg-red-50 p-3 rounded-lg">
                     {error}
+                    {unconfirmed && <UnconfirmedEmailHelp email={email} />}
                   </div>
                 )}
               </form>
 
-              {/* Divider, SSO, and Sign Up — outside form, matches legacy loginExtras */}
+              {/* Sign Up. SSO is hidden until an IdP is wired (it was a no-op button);
+                  the pricing page lists SSO as available on request. */}
               <div className="flex flex-col gap-5 mt-5">
-                <div className="relative flex py-2 items-center">
-                  <div className="flex-grow border-t border-gray-200" />
-                  <span className="flex-shrink-0 mx-4 text-xs text-gray-400 font-medium uppercase tracking-wider">Or continue with</span>
-                  <div className="flex-grow border-t border-gray-200" />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleSso}
-                  className="w-full h-12 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-[#121417] font-medium text-sm transition-all duration-200 flex items-center justify-center gap-3"
-                >
-                  <span className="material-symbols-outlined text-[20px] text-primary">lock_person</span>
-                  Single Sign-On (SSO)
-                </button>
-
                 <div className="text-center mt-2">
                   <p className="text-sm text-slate-500">
                     Don&apos;t have an account?{" "}
@@ -351,7 +350,7 @@ export default function LoginPage() {
               </div>
             </>
           ) : (
-            <div className="flex flex-col gap-5">
+            <form onSubmit={handleMfaVerify} className="flex flex-col gap-5">
               <div className="flex items-center gap-3 mb-2">
                 <div className="p-2 bg-blue-50 rounded-lg">
                   <span className="material-symbols-outlined text-primary text-[24px]">security</span>
@@ -369,6 +368,7 @@ export default function LoginPage() {
                       ref={(el) => { mfaInputRefs.current[i] = el; }}
                       type="text"
                       inputMode="numeric"
+                      aria-label={`Digit ${i + 1}`}
                       autoComplete={i === 0 ? "one-time-code" : undefined}
                       maxLength={1}
                       value={digit}
@@ -383,8 +383,7 @@ export default function LoginPage() {
               </div>
 
               <button
-                type="button"
-                onClick={handleMfaVerify}
+                type="submit"
                 disabled={!mfaReady || mfaVerifying}
                 className="w-full h-12 rounded-lg text-white font-medium text-sm shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#15304a] flex items-center justify-center gap-2"
                 style={{ backgroundColor: "#003366" }}
@@ -412,7 +411,7 @@ export default function LoginPage() {
               >
                 Back to sign in
               </button>
-            </div>
+            </form>
           )}
 
           {/* Footer */}
@@ -425,8 +424,3 @@ export default function LoginPage() {
   );
 }
 
-function mapAuthError(raw: string): string {
-  if (raw.includes("Invalid login credentials")) return "Invalid email or password. Please try again.";
-  if (raw.includes("Email not confirmed")) return "Please verify your email address before signing in.";
-  return raw;
-}

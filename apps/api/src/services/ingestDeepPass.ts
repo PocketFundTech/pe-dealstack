@@ -11,7 +11,10 @@
 // the pre-existing behavior where financials simply didn't exist yet.
 
 import { runFinancialAgent, type FileType } from './agents/financialAgent/index.js';
-import { acquireExtractionSlot, releaseExtractionSlot } from './agents/financialAgent/concurrency.js';
+import { acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot } from './agents/financialAgent/concurrency.js';
+
+/** Background wait for an extraction slot before giving up (fix plan B3). */
+const INGEST_SLOT_WAIT_MS = 120_000;
 import { maybeScoreAfterExtraction } from './agents/dealScorecard/index.js';
 import { isExcelFile } from './excelFinancialExtractor.js';
 import { log } from '../utils/logger.js';
@@ -33,9 +36,11 @@ export function shouldRunIngestDeepPass(mimeType: string, fileName: string): boo
 export async function runIngestDeepPass(input: IngestDeepPassInput): Promise<void> {
   const { dealId, orgId, documentId, fileBuffer, fileName, mimeType } = input;
 
-  if (!acquireExtractionSlot(orgId)) {
-    // Same convention as documents-upload.ts: at the org concurrency cap we
-    // skip rather than queue — the user can Re-extract manually.
+  // Runs in the background (runInBackground), so it can afford to queue for
+  // a slot — skipping meant a multi-file "New deal" upload extracted only
+  // two documents. Give up only near the function's time limit.
+  if (!(await acquireExtractionSlotBy(orgId, Date.now() + INGEST_SLOT_WAIT_MS))) {
+    // Still no slot — skip; the user can Re-extract manually.
     log.warn('Ingest deep pass skipped — org at extraction concurrency cap', { dealId, documentId, orgId });
     return;
   }

@@ -8,9 +8,9 @@
  * answer per disputed field (with a citation requirement).
  *
  * Behaviour:
- *   - ANTHROPIC_API_KEY unset → falls back to GPT-only (existing behaviour
- *     before this module landed). Zero behaviour change for installations
- *     that don't opt in.
+ *   - Neither ANTHROPIC_API_KEY nor ANTHROPIC_OAUTH_TOKEN set → falls back
+ *     to GPT-only (existing behaviour before this module landed). Zero
+ *     behaviour change for installations that don't opt in.
  *   - Both extractions succeed and agree on every field within tolerance
  *     → skip the reconciliation call (cost optimization). Return the
  *     higher-confidence side, with a `crossVerify` warning recording the
@@ -32,6 +32,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { SystemMessage, HumanMessage, type AIMessageChunk } from '@langchain/core/messages';
 import { log } from '../utils/logger.js';
+import { AIProviderUnavailableError } from '../utils/aiErrors.js';
+import { getChatAnthropicAuthFields } from './anthropic.js';
+import { recordUsageEvent } from './usage/trackedLLM.js';
 import {
   classifyFinancials,
   normalizeClassificationResult,
@@ -69,9 +72,11 @@ let cachedClient: ChatAnthropic | null = null;
 
 function getClient(): ChatAnthropic | null {
   if (cachedClient) return cachedClient;
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const authFields = getChatAnthropicAuthFields();
+  if (!authFields) return null;
   cachedClient = new ChatAnthropic({
     model: SONNET_MODEL,
+    ...authFields,
     maxTokens: RECONCILE_MAX_OUTPUT,
     // Adaptive extended thinking — preserved exactly. The reconciler runs
     // a deliberative compare-and-pick task over two extractions; adaptive
@@ -126,15 +131,24 @@ export async function classifyFinancialsCrossVerified(
     log.warn('Cross-verify: Claude extraction threw', { reason: String(claudeResult.reason) });
   }
 
+  // A side that was rejected by its provider (out of credit, bad key, rate
+  // limit) — kept so the user hears that reason, not "no financial data".
+  const gptDown = gptResult.status === 'rejected' && gptResult.reason instanceof AIProviderUnavailableError ? gptResult.reason : null;
+  const claudeDown = claudeResult.status === 'rejected' && claudeResult.reason instanceof AIProviderUnavailableError ? claudeResult.reason : null;
+
   // Fall-throughs when one or both fail.
-  if (!gpt && !claude) return null;
+  if (!gpt && !claude) {
+    const down = gptDown ?? claudeDown;
+    if (down) throw down;
+    return null;
+  }
   if (!gpt) {
     log.info('Cross-verify: only Claude succeeded, skipping reconciliation');
-    return tagCrossVerifyOnlyOne(claude!, 'claude');
+    return tagCrossVerifyOnlyOne(claude!, 'claude', gptDown);
   }
   if (!claude) {
     log.info('Cross-verify: only GPT succeeded, skipping reconciliation');
-    return tagCrossVerifyOnlyOne(gpt, 'gpt');
+    return tagCrossVerifyOnlyOne(gpt, 'gpt', claudeDown);
   }
 
   // Both succeeded — find disagreements.
@@ -340,6 +354,7 @@ async function reconcileWithSonnet(
   const systemPrompt = buildReconcilePrompt();
   const userMessage = formatReconcileUserMessage(truncatedSource, gpt, claude, diffs);
 
+  const start = Date.now();
   try {
     // System message content is an array of TextBlockParams with
     // cache_control: ephemeral — ChatAnthropic forwards the first
@@ -420,6 +435,24 @@ async function reconcileWithSonnet(
       cacheWriteTokens: message.usage_metadata?.input_token_details?.cache_creation,
     });
 
+    // usage_metadata.input_tokens INCLUDES cache (see llm.ts makeUsageHandler
+    // doc comment) — subtract the cache portions to get the uncached
+    // promptTokens field recordUsageEvent expects.
+    const cacheReadTokens = message.usage_metadata?.input_token_details?.cache_read ?? 0;
+    const cacheWrite5mTokens = message.usage_metadata?.input_token_details?.cache_creation ?? 0;
+    const totalInputTokens = message.usage_metadata?.input_tokens ?? 0;
+    await recordUsageEvent({
+      operation: 'financial_extraction_reconcile',
+      provider: 'anthropic',
+      model: SONNET_MODEL,
+      promptTokens: Math.max(0, totalInputTokens - cacheReadTokens - cacheWrite5mTokens),
+      completionTokens: message.usage_metadata?.output_tokens ?? 0,
+      cacheReadTokens,
+      cacheWrite5mTokens,
+      status: 'success',
+      durationMs: Date.now() - start,
+    });
+
     return result;
   } catch (err) {
     // LangChain's wrapAnthropicClientError preserves the original
@@ -431,6 +464,16 @@ async function reconcileWithSonnet(
     } else {
       log.error('Cross-verify reconciler: unexpected error', err);
     }
+    await recordUsageEvent({
+      operation: 'financial_extraction_reconcile',
+      provider: 'anthropic',
+      model: SONNET_MODEL,
+      promptTokens: 0,
+      completionTokens: 0,
+      status: 'error',
+      durationMs: Date.now() - start,
+      metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+    });
     return null;
   }
 }
@@ -537,12 +580,18 @@ function mergeAgreeing(
 function tagCrossVerifyOnlyOne(
   result: ClassificationResult,
   side: 'gpt' | 'claude',
+  /** Why the other side failed, when its provider rejected the request. */
+  otherDown: AIProviderUnavailableError | null = null,
 ): ClassificationResult {
+  const failed = side === 'gpt' ? 'Claude' : 'GPT';
+  const used = side === 'gpt' ? 'GPT' : 'Claude';
   return {
     ...result,
     warnings: [
       ...result.warnings,
-      `cross-verify: ${side === 'gpt' ? 'Claude extraction failed; using GPT only' : 'GPT extraction failed; using Claude only'}`,
+      otherDown
+        ? `Figures were read by one AI model only (${used}), so they were not cross-checked: ${otherDown.message}`
+        : `cross-verify: ${failed} extraction failed; using ${used} only`,
     ],
   };
 }

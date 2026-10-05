@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { buildModelWorkbook, SHEETS, PL_ROWS, ASSUMPTION_CELLS } from '../src/services/dealModel/workbook.js';
+import { buildModelWorkbook, buildModelLayout, SHEETS, SCALAR_KEYS } from '../src/services/dealModel/workbook.js';
 import { deriveDefaults } from '../src/services/dealModel/assumptions.js';
 
 const HISTORY = [
@@ -29,6 +29,9 @@ const CONTEXT = {
 };
 
 let wb: ExcelJS.Workbook;
+// Addresses come from the generated registry (fix plan E1), not magic numbers.
+const { registry: reg } = buildModelLayout({ assumptions: deriveDefaults(HISTORY), history: HISTORY });
+const PL = reg.pl.row;
 
 beforeAll(async () => {
   const buffer = await buildModelWorkbook({
@@ -57,8 +60,8 @@ function isFormula(value: unknown): boolean {
 describe('workbook structure', () => {
   it('has every sheet a banker expects, in order', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual([
-      SHEETS.cover, SHEETS.assumptions, SHEETS.historicals,
-      SHEETS.projections, SHEETS.returns, SHEETS.sensitivity, SHEETS.notes,
+      SHEETS.cover, SHEETS.assumptions, SHEETS.scenarios, SHEETS.historicals,
+      SHEETS.projections, SHEETS.returns, SHEETS.balanceSheet, SHEETS.sensitivity, SHEETS.notes,
     ]);
   });
 
@@ -90,7 +93,7 @@ describe('Historicals', () => {
     // History is fact, not model output — it must not move when an
     // assumption changes.
     const sheet = wb.getWorksheet(SHEETS.historicals)!;
-    const revenueRow = sheet.getRow(PL_ROWS.revenue);
+    const revenueRow = sheet.getRow(PL.revenue);
     expect(revenueRow.getCell(2).value).toBe(8);
     expect(isFormula(revenueRow.getCell(2).value)).toBe(false);
   });
@@ -99,7 +102,7 @@ describe('Historicals', () => {
 describe('Projections — must be formula-driven', () => {
   it('derives every projected revenue from a formula', () => {
     const sheet = wb.getWorksheet(SHEETS.projections)!;
-    const revenueRow = sheet.getRow(PL_ROWS.revenue);
+    const revenueRow = sheet.getRow(PL.revenue);
     // Column B is the last actual; C onward are projected.
     for (let col = 3; col <= 7; col++) {
       expect(isFormula(revenueRow.getCell(col).value)).toBe(true);
@@ -108,22 +111,24 @@ describe('Projections — must be formula-driven', () => {
 
   it('points projected revenue at the growth assumption', () => {
     const sheet = wb.getWorksheet(SHEETS.projections)!;
-    const formula = (sheet.getRow(PL_ROWS.revenue).getCell(3).value as { formula: string }).formula;
-    expect(formula).toContain(SHEETS.assumptions);
+    const formula = (sheet.getRow(PL.revenue).getCell(3).value as { formula: string }).formula;
+    expect(formula).toContain(reg.value('revenue', 0));
+    expect(formula).toContain(reg.method('revenue'));
   });
 
-  it('derives EBITDA from revenue and the margin assumption', () => {
+  it('derives EBITDA from its lines — costs are a % of revenue', () => {
     const sheet = wb.getWorksheet(SHEETS.projections)!;
-    const ebitdaRow = sheet.getRow(PL_ROWS.ebitda);
-    const formula = (ebitdaRow.getCell(3).value as { formula: string }).formula;
-    expect(formula).toContain(SHEETS.assumptions);
+    const ebitda = (sheet.getRow(PL.ebitda).getCell(3).value as { formula: string }).formula;
+    expect(ebitda).toBe(`C${PL.gross_profit}-C${PL.total_opex}`);
+    const opex = (sheet.getRow(PL.total_opex).getCell(3).value as { formula: string }).formula;
+    expect(opex).toContain(`C${PL.revenue}*${reg.value('total_opex', 0)}`);
   });
 
   it('hard-codes nothing in the projection block', () => {
     const sheet = wb.getWorksheet(SHEETS.projections)!;
     const offenders: string[] = [];
-    // Rows 4-12, columns C.. are all derived — any bare number is a bug.
-    for (let r = PL_ROWS.revenue; r <= PL_ROWS.ebitdaMargin; r++) {
+    // Every projected row, columns C.. are all derived — any bare number is a bug.
+    for (let r = reg.pl.header + 1; r <= reg.pl.fcf; r++) {
       for (let c = 3; c <= 7; c++) {
         const v = sheet.getRow(r).getCell(c).value;
         if (typeof v === 'number') offenders.push(sheet.getRow(r).getCell(c).address);
@@ -189,10 +194,32 @@ describe('every input earns its place', () => {
       .map((c) => (c.value as { formula: string }).formula)
       .join(' | ');
 
-    const dead = Object.entries(ASSUMPTION_CELLS)
-      .filter(([, ref]) => typeof ref === 'string')
-      .filter(([, ref]) => !allFormulas.includes(ref as string))
-      .map(([name]) => name);
+    const inputs: Array<[string, string]> = [
+      ...SCALAR_KEYS.map((k): [string, string] => [k, reg.scalar(k)]),
+      ...reg.driverLines.flatMap((l): Array<[string, string]> => [
+        [`${l.key}.method`, reg.method(l.key)],
+        ...Array.from({ length: reg.years }, (_, y): [string, string] => [`${l.key}.Y${y + 1}`, reg.value(l.key, y)]),
+      ]),
+    ];
+    const dead = inputs.filter(([, ref]) => !allFormulas.includes(ref)).map(([name]) => name);
+
+    // Every Low / Base / High input feeds its case's Scenarios block (E2).
+    const scenarioFormulas = cells(SHEETS.scenarios)
+      .filter((c) => isFormula(c.value))
+      .map((c) => (c.value as { formula: string }).formula)
+      .join(' | ');
+    // Interest rate, WACC and DSCR target don't move IRR / MoM / exit EV, so the
+    // compact blocks skip them; each case's value still reaches the model
+    // through the Live column when that case is active.
+    const notInBlocks = ['interestRate', 'wacc', 'dscrTarget'];
+    for (const c of ['Low', 'Base', 'High'] as const) {
+      for (const k of SCALAR_KEYS.filter((x) => !notInBlocks.includes(x))) {
+        if (!scenarioFormulas.includes(reg.scalar(k, c))) dead.push(`${c}.${k}`);
+      }
+      for (const l of reg.driverLines) {
+        if (!scenarioFormulas.includes(reg.value(l.key, 0, c))) dead.push(`${c}.${l.key}`);
+      }
+    }
 
     expect(dead).toEqual([]);
   });
@@ -241,7 +268,8 @@ describe('robustness', () => {
     await round.xlsx.load(buffer as never);
     const sheet = round.getWorksheet(SHEETS.historicals)!;
     // Revenue present on its row; EBITDA row exists but is blank.
-    expect(sheet.getRow(PL_ROWS.revenue).getCell(2).value).toBe(10);
-    expect(sheet.getRow(PL_ROWS.ebitda).getCell(2).value ?? null).toBeNull();
+    const sparseReg = buildModelLayout({ assumptions: deriveDefaults(sparse), history: sparse }).registry;
+    expect(sheet.getRow(sparseReg.pl.row.revenue).getCell(2).value).toBe(10);
+    expect(sheet.getRow(sparseReg.pl.row.ebitda).getCell(2).value ?? null).toBeNull();
   });
 });

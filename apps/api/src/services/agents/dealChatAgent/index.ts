@@ -96,7 +96,7 @@ TOOL USAGE:
 - compare_deals — for benchmarks, portfolio comparisons; pass targetDealName if comparing to a specific deal
 - get_deal_activity — for timeline of deal changes
 - update_deal_field — when asked to change deal properties: name, currency, revenue, ebitda, dealSize, irrProjected, mom, grossMargin, targetCloseDate, priority, industry, description, source, leadPartner, analyst. For numeric fields pass value in millions. For targetCloseDate use YYYY-MM-DD.
-- change_deal_stage — when asked to advance, move back, or close a deal. Stages: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_NEGOTIATION → CLOSING → CLOSED_WON. Terminal: CLOSED_LOST, PASSED.
+- change_deal_stage — when asked to advance, move back, or close a deal. Stages: INITIAL_REVIEW → DUE_DILIGENCE → IOI_SUBMITTED → LOI_SUBMITTED → NEGOTIATION → CLOSING → CLOSED_WON. Terminal: CLOSED_LOST, PASSED.
 - add_note — when asked to log a note, call, email, or meeting on the deal
 - trigger_financial_extraction — when asked to extract or analyze financials from documents
 - generate_meeting_prep — when asked to prepare for a meeting, create a brief, or get talking points
@@ -470,7 +470,30 @@ export async function* runDealChatAgentStreaming(
   const today = input.today ?? getTodayIso();
   const firmContext = await getFirmContextBlock(input.orgId).catch(() => '');
   const firmContextBlock = firmContext ? `=== FIRM CONTEXT ===\n${firmContext}\n\n` : '';
-  const system = `${firmContextBlock}${buildDealAgentSystemPrompt(today)}\n${SHARED_GUARDRAILS}\n\nCurrent Deal Context:\n${input.dealContext}\n\nDeal ID: ${input.dealId}\nOrganization ID: ${input.orgId}`;
+  // Prompt caching (token savings, 2026-09-29). This used to be ONE plain
+  // string with no cache_control, re-billed at full price on every Tool Runner
+  // iteration of every turn (~12.8K input tokens for a one-word "hi"). Same
+  // text, same order — split at the stable/per-deal seam into two cached
+  // blocks:
+  //  1. firm context + instructions + guardrails: stable per org for the day
+  //     (only the date changes, once a day), shared by every deal's chat.
+  //  2. deal context: stable for this deal across the tool loop and follow-up
+  //     questions within the 5-minute cache window.
+  // Tools render before system, so they ride inside the first cached prefix.
+  // `autoCache` adds a request-level breakpoint that moves forward with the
+  // growing tool transcript. 3 breakpoints total (limit is 4).
+  const system = [
+    {
+      type: 'text' as const,
+      text: `${firmContextBlock}${buildDealAgentSystemPrompt(today)}\n${SHARED_GUARDRAILS}`,
+      cache_control: { type: 'ephemeral' as const },
+    },
+    {
+      type: 'text' as const,
+      text: `Current Deal Context:\n${input.dealContext}\n\nDeal ID: ${input.dealId}\nOrganization ID: ${input.orgId}`,
+      cache_control: { type: 'ephemeral' as const },
+    },
+  ];
   const history = (input.history ?? []).slice(-10).map((h) => ({ role: h.role, content: h.content }));
   const messages = [...history, { role: 'user', content: input.message }];
 
@@ -486,7 +509,10 @@ export async function* runDealChatAgentStreaming(
   };
 
   let fullText = '';
-  const usage = { inputTokens: 0, outputTokens: 0 };
+  const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 };
+  // Served model — read off message_start (fallback-aware; may differ from
+  // the requested role alias if the request routed through a fallback).
+  let servedModel: string | undefined;
 
   const { runner, recordUsage } = trackedClaudeStream({
     operation: 'deal_chat',
@@ -495,6 +521,7 @@ export async function* runDealChatAgentStreaming(
     messages,
     tools,
     signal: internalController.signal,
+    autoCache: true,
   });
 
   let iterationCount = 0;
@@ -504,13 +531,17 @@ export async function* runDealChatAgentStreaming(
       if (iterationCount > getAgentRecursionLimit()) {
         internalController.abort();
         cleanup();
-        await recordUsage(usage, 'error');
+        await recordUsage(usage, 'error', servedModel);
         yield { type: 'error', message: 'Reached the maximum number of tool calls for this response. Please try rephrasing or asking a more specific question.' };
         return;
       }
       for await (const event of messageStream as AsyncIterable<any>) {
         if (event.type === 'message_start') {
           usage.inputTokens += event.message?.usage?.input_tokens ?? 0;
+          usage.cacheReadTokens += event.message?.usage?.cache_read_input_tokens ?? 0;
+          usage.cacheWrite5mTokens += event.message?.usage?.cache_creation?.ephemeral_5m_input_tokens ?? 0;
+          usage.cacheWrite1hTokens += event.message?.usage?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+          if (event.message?.model) servedModel = event.message.model;
         }
         if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
           const toolName = event.content_block.name;
@@ -528,18 +559,26 @@ export async function* runDealChatAgentStreaming(
   } catch (error: any) {
     cleanup();
     if (internalController.signal.aborted) {
-      await recordUsage(usage, 'error');
-      yield { type: 'error', message: `Response timed out after ${timeoutMs}ms. Please try again.` };
+      await recordUsage(usage, 'error', servedModel);
+      // The same internal controller aborts on both a timeout AND a
+      // client-initiated Stop (opts.signal) — collapsing them into one
+      // "timed out" message told a user who just clicked Stop that the
+      // request had failed. Only call it a timeout when the deadline, not
+      // the caller, triggered the abort; a Stop needs no error event at all.
+      if (!opts.signal?.aborted) {
+        const seconds = Math.round(timeoutMs / 1000);
+        yield { type: 'error', message: `Response timed out after ${seconds}s. Please try again.` };
+      }
       return;
     }
-    await recordUsage(usage, 'error');
+    await recordUsage(usage, 'error', servedModel);
     captureAgentError(error, { agent: 'dealChatAgent', node: 'stream' });
     yield { type: 'error', message: classifyAIError(error.message || 'Unknown error') };
     return;
   }
 
   cleanup();
-  await recordUsage(usage, 'success');
+  await recordUsage(usage, 'success', servedModel);
 
   for (const effect of sideEffects) yield { type: 'side_effect', effect };
   for (const update of updates) yield { type: 'update', update };

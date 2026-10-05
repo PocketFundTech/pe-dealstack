@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { formatCurrency } from "@/lib/formatters";
 import { createClient } from "@/lib/supabase/client";
+import { INGEST_MAX_FILE_SIZE } from "@/lib/storageUpload";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -46,14 +48,23 @@ export interface IngestResponse {
   deal?: { id: string; name: string };
   extraction?: ExtractionResult;
   isUpdate?: boolean;
-  summary?: { imported: number; failed: number; total: number };
+  summary?: {
+    imported: number;
+    failed: number;
+    total: number;
+    deals?: Array<{ dealId: string; companyName: string }>;
+    errors?: Array<{ companyName: string; error: string }>;
+  };
 }
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+// Re-exported from storageUpload.ts (the single source of truth shared with
+// the sign-and-upload helper) so the client-side validation and the "too
+// large" warning message never drift from the actual limit enforced there.
+export const MAX_FILE_SIZE = INGEST_MAX_FILE_SIZE;
 
 export const TABS = [
   { key: "file", label: "Upload File", icon: "upload_file" },
@@ -277,11 +288,13 @@ function ResultField({
 }
 
 interface ResultDisplayProps {
+  /** Called when the user follows a link away (e.g. to close the intake modal). */
+  onNavigate?: () => void;
   result: IngestResponse;
   onReset: () => void;
 }
 
-export function ResultDisplay({ result, onReset }: ResultDisplayProps) {
+export function ResultDisplay({ result, onReset, onNavigate }: ResultDisplayProps) {
   const detectedCurrency = result.extraction?.currency || "USD";
 
   return (
@@ -385,23 +398,25 @@ export function ResultDisplay({ result, onReset }: ResultDisplayProps) {
       {/* Actions */}
       <div className="flex gap-3 mt-5">
         {result.deal ? (
-          <a
+          <Link
             href={`/deals/${result.deal.id}`}
+            onClick={onNavigate}
             className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
             style={{ backgroundColor: "#003366" }}
           >
             <span className="material-symbols-outlined text-[18px]">open_in_new</span>
             View Deal
-          </a>
+          </Link>
         ) : result.summary ? (
-          <a
-            href="/crm"
+          <Link
+            href="/deals"
+            onClick={onNavigate}
             className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
             style={{ backgroundColor: "#003366" }}
           >
             <span className="material-symbols-outlined text-[18px]">list</span>
             View All Deals
-          </a>
+          </Link>
         ) : null}
         <button
           onClick={onReset}

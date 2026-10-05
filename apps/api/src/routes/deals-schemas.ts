@@ -2,13 +2,14 @@
 // Shared by deals-list.ts and deals-mutate.ts.
 
 import { z } from 'zod';
+import { DEAL_STAGES } from '../services/dealStages.js';
 
 // Validation schemas
 export const createDealSchema = z.object({
   name: z.string().min(1),
   companyId: z.string().optional(),
   companyName: z.string().optional(),
-  stage: z.string().default('INITIAL_REVIEW'),
+  stage: z.enum(DEAL_STAGES).default('INITIAL_REVIEW'),
   status: z.string().default('ACTIVE'),
   irrProjected: z.number().nullable().optional(),
   mom: z.number().nullable().optional(),
@@ -49,4 +50,9 @@ export const dealsQuerySchema = z.object({
   maxDealSize: z.coerce.number().positive().optional(),
   assignedTo: z.string().uuid().optional(),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+  // For integrations that poll (n8n, Zapier): only deals changed at/after this
+  // time, and optional paging (applies only when `offset` is sent).
+  updatedSince: z.coerce.date().optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
 });

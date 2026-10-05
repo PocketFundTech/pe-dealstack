@@ -10,8 +10,13 @@ import { log } from '../utils/logger.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { extractTextFromPDF } from '../services/pdfExtractor.js';
-import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
+import { acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
+
+/** How long an upload waits for an extraction slot before skipping (see B3). */
+const UPLOAD_SLOT_WAIT_MS = 30_000;
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
+import { runAfterResponse, type RequestWithAfterResponse } from '../utils/afterResponse.js';
+import { resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
 import { getProviderAccessToken } from '../integrations/_platform/tokenStore.js';
 import {
   getDriveFileMetadata,
@@ -21,6 +26,7 @@ import {
   driveExportTargetFor,
 } from '../integrations/googleDrive/client.js';
 import { GoogleDriveError } from '../integrations/googleDrive/types.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -75,18 +81,21 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       return res.status(404).json({ error: 'Deal not found' });
     }
 
-    const file = req.file;
-
-    // Verify deal exists
-    const { data: deal, error: dealError } = await supabase
-      .from('Deal')
-      .select('id, name')
-      .eq('id', dealId)
-      .single();
-
-    if (dealError || !deal) {
-      return res.status(404).json({ error: 'Deal not found' });
+    // Accepts either multipart/form-data (legacy — multer populates
+    // req.file) or a JSON body `{ storagePath, fileName, mimeType, size }`
+    // pointing at a file already staged in Supabase Storage via
+    // POST /api/uploads/sign — see ingest-shared.ts#resolveUploadedFile.
+    // A file is optional here (a Document row can be metadata-only), so
+    // `file` staying null is not itself an error.
+    const resolvedUpload = await resolveUploadedFile(req);
+    if (resolvedUpload.error) {
+      return res.status(resolvedUpload.error.status).json(resolvedUpload.error.body);
     }
+    const file = resolvedUpload.file;
+    const stagingPathToClean = resolvedUpload.cleanupStoragePath;
+
+    // verifyDealAccess() above already confirmed the Deal row exists (and is
+    // in this org) — a second SELECT here was redundant.
 
     let fileUrl = null;
     let fileSize = null;
@@ -277,11 +286,13 @@ export async function handleDocumentUpload(req: Request, res: Response) {
         : req.body.tags;
     }
 
-    // Extract text from PDF if applicable
+    // Extract text from PDF / Excel if applicable. This is local parsing
+    // only (no LLM call), so it always runs inline before the Document row
+    // is created — it's needed to populate extractedText on the row and to
+    // decide whether there's AI work left to defer (see needsAiWork below).
     let extractedText: string | null = null;
     let extractionStatus = 'pending';
     let numPages: number | null = null;
-    let aiExtractedData: ExtractedDealData | null = null;
 
     if (file && mimeType === 'application/pdf') {
       extractionStatus = 'processing';
@@ -294,33 +305,16 @@ export async function handleDocumentUpload(req: Request, res: Response) {
         numPages = extraction.numPages;
         extractionStatus = 'completed';
         log.info('PDF extraction completed', { numPages, textLength: extractedText.length });
-
-        // Run AI extraction on the extracted text
-        try {
-          log.info('Starting AI data extraction', { documentName });
-          const aiData = await extractDealDataFromText(extractedText);
-          if (aiData) {
-            aiExtractedData = aiData;
-            extractionStatus = 'analyzed';
-            log.info('AI extraction completed', { documentName, companyName: aiData.companyName, industry: aiData.industry });
-          } else {
-            log.info('AI extraction returned no data', { documentName });
-          }
-        } catch (aiError) {
-          // Log AI error but don't fail the upload - text extraction still worked
-          log.error('AI extraction failed', aiError, { documentName });
-        }
       } else {
         extractionStatus = 'failed';
         log.warn('PDF extraction failed', { documentName });
       }
     } else if (file && isExcelFile(mimeType, documentName)) {
       // Excel extraction — convert sheets to Markdown tables for RAG / chat
-      // context, then run the same AI deal-level extraction the PDF branch
-      // does so company name / industry / revenue / EBITDA populate on the
-      // deal from financial models. FinancialStatement rows (per-period
-      // line items) are populated below via runDeepPass after the Document
-      // row exists.
+      // context. The AI deal-level extraction (company name / industry /
+      // revenue / EBITDA) and the deep per-period FinancialStatement pass
+      // both run afterwards, once the Document row exists — see
+      // runPostProcessing below.
       extractionStatus = 'processing';
       log.info('Starting Excel-to-Markdown extraction', { documentName });
       try {
@@ -328,22 +322,6 @@ export async function handleDocumentUpload(req: Request, res: Response) {
         if (markdownText) {
           extractedText = markdownText.replace(/\u0000/g, '');
           log.info('Excel extraction completed', { documentName, textLength: extractedText.length });
-
-          try {
-            log.info('Starting AI data extraction', { documentName });
-            const aiData = await extractDealDataFromText(extractedText);
-            if (aiData) {
-              aiExtractedData = aiData;
-              extractionStatus = 'analyzed';
-              log.info('AI extraction completed', { documentName, companyName: aiData.companyName, industry: aiData.industry });
-            } else {
-              extractionStatus = 'completed';
-              log.info('AI extraction returned no data', { documentName });
-            }
-          } catch (aiError) {
-            log.error('AI extraction failed', aiError, { documentName });
-            extractionStatus = 'completed';
-          }
         } else {
           log.info('Excel extraction: no meaningful content', { documentName });
           extractionStatus = 'completed';
@@ -357,10 +335,15 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       extractionStatus = 'completed';
     }
 
-    // Create document record
-    // Use AI extracted data if available, otherwise fall back to request body
-    const extractedDataToSave = aiExtractedData
-      || (req.body.extractedData ? JSON.parse(req.body.extractedData) : null);
+    // Whether there's LLM-dependent work left to do once the Document row
+    // exists: the deal-level AI extraction runs whenever we have text at
+    // all (PDF or Excel); the Excel deep financial pass additionally runs
+    // for Excel files with text. Both are deferred to runPostProcessing
+    // below, via runAfterResponse, whenever a post-response hook is present.
+    const needsAiWork = !!(file && extractedText && extractedText.length > 0);
+    if (needsAiWork) {
+      extractionStatus = 'processing';
+    }
 
     // Auto-assign to a VDR folder if none was provided
     let resolvedFolderId = req.body.folderId || null;
@@ -415,24 +398,32 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       }
     }
 
+    // Resolve the uploader's internal User.id from the authenticated
+    // request. Never trust a client-supplied value here — previously this
+    // read req.body.uploadedBy, which no caller ever sent, so Author always
+    // showed "Unknown" in the VDR table. doc-request-portal.ts / from-drive
+    // synthesize req.user without an `id` (token-derived org, no real user),
+    // in which case uploadedBy stays null exactly as before.
+    const uploadedByUserId = req.user?.id ? await resolveUserId(req.user.id) : null;
+
     const { data: document, error: docError } = await supabase
       .from('Document')
       .insert({
         dealId,
         folderId: resolvedFolderId,
-        uploadedBy: req.body.uploadedBy || null,
+        uploadedBy: uploadedByUserId,
         name: documentName,
         type: docType,
         fileUrl,
         fileSize,
         mimeType,
         fileSha256,
-        extractedData: extractedDataToSave,
+        extractedData: req.body.extractedData ? JSON.parse(req.body.extractedData) : null,
         extractedText,
         status: extractionStatus,
-        confidence: aiExtractedData ? 0.85 : (req.body.confidence ? parseFloat(req.body.confidence) : null),
+        confidence: req.body.confidence ? parseFloat(req.body.confidence) : null,
         aiAnalysis,
-        aiAnalyzedAt: aiExtractedData ? new Date().toISOString() : (aiAnalysis ? new Date().toISOString() : null),
+        aiAnalyzedAt: aiAnalysis ? new Date().toISOString() : null,
         tags: tags.length > 0 ? tags : null,
         isHighlighted: req.body.isHighlighted === 'true' || req.body.isHighlighted === true,
       })
@@ -441,85 +432,8 @@ export async function handleDocumentUpload(req: Request, res: Response) {
 
     if (docError) throw docError;
 
-    // Excel-only follow-up: populate FinancialStatement rows so the
-    // Financial Analysis tab can show per-period revenue / EBITDA / line
-    // items extracted from the spreadsheet. Awaited (not fire-and-forget)
-    // because Vercel can freeze the function once res.json is sent — a
-    // background promise would silently drop. Typical wall time is 10-30s
-    // for a real financial model; failures are logged but never fail the
-    // upload (text + AI fields are already saved). Only fires for Excel
-    // because PDFs have a different financial extraction path.
-    if (file && isExcelFile(mimeType, documentName) && extractedText) {
-      // Concurrency-slot guard mirrors /api/deals/:id/financials/extract
-      // (financials-extraction.ts:173). Without it, parallel uploads from the
-      // same org both run runDeepPass concurrently and can blow Vercel's
-      // function memory on a multi-statement workbook. If the slot isn't
-      // available, log and skip — the user can re-extract manually via the
-      // Re-extract button on the deal page rather than the upload failing.
-      const slotAcquired = acquireExtractionSlot(orgId);
-      if (!slotAcquired) {
-        log.warn('Deep financial extraction skipped — org at concurrency cap', {
-          documentId: document.id,
-          dealId,
-          orgId,
-        });
-      } else {
-        try {
-          // EXTRACTION_ENGINE=claude routes upload-time spreadsheet
-          // extraction through the same flag-aware agent the Re-extract
-          // button uses (extractNode → claudeEngine, container mode), with
-          // the raw workbook buffer. Previously this block always called
-          // runDeepPass → classifyFinancials directly, silently bypassing
-          // the engine flag — uploaded spreadsheets kept getting legacy
-          // extraction even after the 2026-08-18 flag flip. runDeepPass
-          // remains the legacy-only path.
-          const useClaudeEngine = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude';
-          if (useClaudeEngine) {
-            log.info('Running deep financial extraction (claude engine)', { documentId: document.id, dealId });
-            const { runFinancialAgent } = await import('../services/agents/financialAgent/index.js');
-            const agentResult = await runFinancialAgent({
-              dealId,
-              documentId: document.id,
-              fileBuffer: file.buffer,
-              fileName: documentName,
-              fileType: 'excel',
-              organizationId: orgId,
-            });
-            log.info('Deep financial extraction complete (claude engine)', {
-              documentId: document.id,
-              status: agentResult.status,
-              statementsStored: agentResult.statementIds.length,
-              periodsStored: agentResult.periodsStored,
-              overallConfidence: agentResult.overallConfidence,
-            });
-          } else {
-            log.info('Running deep financial extraction', { documentId: document.id, dealId });
-            const deepResult = await runDeepPass({
-              text: extractedText,
-              dealId,
-              documentId: document.id,
-            });
-            if (deepResult) {
-              log.info('Deep financial extraction complete', {
-                documentId: document.id,
-                statementsStored: deepResult.statementsStored,
-                periodsStored: deepResult.periodsStored,
-                overallConfidence: deepResult.overallConfidence,
-                warnings: deepResult.warnings,
-              });
-            } else {
-              log.info('Deep financial extraction: no statements detected', { documentId: document.id });
-            }
-          }
-        } catch (deepErr) {
-          log.error('Deep financial extraction failed', deepErr, { documentId: document.id });
-        } finally {
-          releaseExtractionSlot(orgId);
-        }
-      }
-    }
-
-    // Update deal's lastDocument field
+    // Update deal's lastDocument field — cheap, single-row update, not
+    // AI-dependent, so it stays inline regardless of needsAiWork.
     await supabase
       .from('Deal')
       .update({
@@ -528,109 +442,260 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       })
       .eq('id', dealId);
 
-    // Auto-update deal with extracted data if requested
     const autoUpdateDeal = req.body.autoUpdateDeal === 'true' || req.body.autoUpdateDeal === true;
     let dealUpdated = false;
     let updatedFields: string[] = [];
-    if (autoUpdateDeal && aiExtractedData) {
+
+    // Everything below depends on (or follows) the LLM deal-data extraction.
+    // When needsAiWork is true AND the caller has wired up a post-response
+    // hook (see apps/api/src/utils/afterResponse.ts / api-adapter.ts), this
+    // whole block runs AFTER the 201 response has already been sent, so the
+    // slow `extractDealDataFromText` / Excel deep-pass calls never make the
+    // upload request wait. Every side effect here is unchanged from before
+    // this refactor — only the timing moved.
+    const runPostProcessing = async () => {
+      let aiExtractedData: ExtractedDealData | null = null;
+      let finalStatus = extractionStatus;
+
+      if (needsAiWork) {
+        try {
+          log.info('Starting AI data extraction', { documentName });
+          const aiData = await extractDealDataFromText(extractedText as string);
+          if (aiData) {
+            aiExtractedData = aiData;
+            finalStatus = 'analyzed';
+            log.info('AI extraction completed', { documentName, companyName: aiData.companyName, industry: aiData.industry });
+          } else {
+            finalStatus = 'completed';
+            log.info('AI extraction returned no data', { documentName });
+          }
+        } catch (aiError) {
+          // Log AI error but don't fail the upload - text extraction still worked
+          log.error('AI extraction failed', aiError, { documentName });
+          finalStatus = 'completed';
+        }
+
+        // Excel-only follow-up: populate FinancialStatement rows so the
+        // Financial Analysis tab can show per-period revenue / EBITDA / line
+        // items extracted from the spreadsheet. Failures are logged but
+        // never fail the upload (text + AI fields are already saved). Only
+        // fires for Excel because PDFs have a different financial
+        // extraction path.
+        if (file && isExcelFile(mimeType, documentName) && extractedText) {
+          // Concurrency-slot guard mirrors /api/deals/:id/financials/extract
+          // (financials-extraction.ts:173). Without it, parallel uploads from
+          // the same org both run runDeepPass concurrently and can blow
+          // Vercel's function memory on a multi-statement workbook. If the
+          // slot isn't free, wait a short while for one (a multi-file upload
+          // arrives as parallel requests); only then log and skip — the user
+          // can Re-extract rather than the upload failing. The wait is short
+          // because the upload response is waiting on it.
+          const slotAcquired = await acquireExtractionSlotBy(orgId, Date.now() + UPLOAD_SLOT_WAIT_MS);
+          if (!slotAcquired) {
+            log.warn('Deep financial extraction skipped — org at concurrency cap', {
+              documentId: document.id,
+              dealId,
+              orgId,
+            });
+          } else {
+            try {
+              // EXTRACTION_ENGINE=claude routes upload-time spreadsheet
+              // extraction through the same flag-aware agent the Re-extract
+              // button uses (extractNode → claudeEngine, container mode), with
+              // the raw workbook buffer. runDeepPass remains the legacy-only
+              // path.
+              const useClaudeEngine = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude';
+              if (useClaudeEngine) {
+                log.info('Running deep financial extraction (claude engine)', { documentId: document.id, dealId });
+                const { runFinancialAgent } = await import('../services/agents/financialAgent/index.js');
+                const agentResult = await runFinancialAgent({
+                  dealId,
+                  documentId: document.id,
+                  fileBuffer: file.buffer,
+                  fileName: documentName,
+                  fileType: 'excel',
+                  organizationId: orgId,
+                });
+                log.info('Deep financial extraction complete (claude engine)', {
+                  documentId: document.id,
+                  status: agentResult.status,
+                  statementsStored: agentResult.statementIds.length,
+                  periodsStored: agentResult.periodsStored,
+                  overallConfidence: agentResult.overallConfidence,
+                });
+              } else {
+                log.info('Running deep financial extraction', { documentId: document.id, dealId });
+                const deepResult = await runDeepPass({
+                  text: extractedText,
+                  dealId,
+                  documentId: document.id,
+                });
+                if (deepResult) {
+                  log.info('Deep financial extraction complete', {
+                    documentId: document.id,
+                    statementsStored: deepResult.statementsStored,
+                    periodsStored: deepResult.periodsStored,
+                    overallConfidence: deepResult.overallConfidence,
+                    warnings: deepResult.warnings,
+                  });
+                } else {
+                  log.info('Deep financial extraction: no statements detected', { documentId: document.id });
+                }
+              }
+            } catch (deepErr) {
+              log.error('Deep financial extraction failed', deepErr, { documentId: document.id });
+            } finally {
+              releaseExtractionSlot(orgId);
+            }
+          }
+        }
+
+        // Persist the AI results onto the Document row now that they exist
+        // — the initial insert above only had 'processing' + null fields.
+        try {
+          const { error: updateErr } = await supabase
+            .from('Document')
+            .update({
+              extractedData: aiExtractedData,
+              status: finalStatus,
+              confidence: aiExtractedData ? 0.85 : null,
+              // Matches the original inline logic: either the LLM extraction
+              // OR a client-supplied `aiAnalysis` marks the document as
+              // AI-analyzed as of now.
+              aiAnalyzedAt: aiExtractedData || aiAnalysis ? new Date().toISOString() : null,
+            })
+            .eq('id', document.id);
+          if (updateErr) {
+            log.error('Failed to persist AI extraction results on Document row', updateErr, { documentId: document.id });
+          }
+        } catch (updateThrow) {
+          log.error('Threw persisting AI extraction results on Document row', updateThrow, { documentId: document.id });
+        }
+      }
+
+      // Auto-update deal with extracted data if requested
+      if (autoUpdateDeal && aiExtractedData) {
+        try {
+          const { mergeIntoExistingDeal } = await import('../services/dealMerger.js');
+          const mergeResult = await mergeIntoExistingDeal(dealId, aiExtractedData, (req as any).user?.id, documentName);
+          dealUpdated = true;
+          updatedFields = Object.keys(mergeResult.deal || {}).filter(k =>
+            ['revenue', 'ebitda', 'industry', 'description', 'aiThesis'].includes(k) && mergeResult.deal[k] != null
+          );
+          log.info('Deal auto-updated from document upload', { dealId, documentName, updatedFields });
+        } catch (mergeError) {
+          log.error('Deal auto-update failed (upload continues)', mergeError, { dealId, documentName });
+        }
+      }
+
+      // Log activity
+      let activityDescription = `${docType} document uploaded`;
+      if (extractedText && aiExtractedData) {
+        activityDescription = `${docType} document uploaded, processed (${numPages} pages), and AI-analyzed`;
+      } else if (extractedText) {
+        activityDescription = `${docType} document uploaded and processed (${numPages} pages extracted)`;
+      }
+
+      // Activity row is a nice-to-have for the timeline — if its schema drifts
+      // or the insert fails for any other reason, we should NOT fail the
+      // upload. The Document row is already persisted at this point, the
+      // file is in Supabase Storage. Logging the failure preserves
+      // debuggability.
       try {
-        const { mergeIntoExistingDeal } = await import('../services/dealMerger.js');
-        const mergeResult = await mergeIntoExistingDeal(dealId, aiExtractedData, (req as any).user?.id, documentName);
-        dealUpdated = true;
-        updatedFields = Object.keys(mergeResult.deal || {}).filter(k =>
-          ['revenue', 'ebitda', 'industry', 'description', 'aiThesis'].includes(k) && mergeResult.deal[k] != null
-        );
-        log.info('Deal auto-updated from document upload', { dealId, documentName, updatedFields });
-      } catch (mergeError) {
-        log.error('Deal auto-update failed (upload continues)', mergeError, { dealId, documentName });
+        const { error: activityErr } = await supabase.from('Activity').insert({
+          dealId,
+          type: 'DOCUMENT_UPLOADED',
+          title: `Document uploaded: ${documentName}`,
+          description: activityDescription,
+          metadata: {
+            documentId: document.id,
+            documentType: docType,
+            extractionStatus: finalStatus,
+            numPages,
+            textLength: extractedText?.length || 0,
+            aiExtracted: !!aiExtractedData,
+            extractedCompany: aiExtractedData?.companyName || null,
+            extractedIndustry: aiExtractedData?.industry || null,
+          },
+        });
+        if (activityErr) {
+          log.warn('Activity row insert failed (upload continues)', { dealId, documentId: document.id, err: activityErr });
+        }
+      } catch (activityThrow) {
+        log.warn('Activity row threw (upload continues)', { dealId, documentId: document.id, err: activityThrow });
       }
-    }
 
-    // Log activity
-    let activityDescription = `${docType} document uploaded`;
-    if (extractedText && aiExtractedData) {
-      activityDescription = `${docType} document uploaded, processed (${numPages} pages), and AI-analyzed`;
-    } else if (extractedText) {
-      activityDescription = `${docType} document uploaded and processed (${numPages} pages extracted)`;
-    }
-
-    // Activity row is a nice-to-have for the timeline — if its schema drifts
-    // or the insert fails for any other reason, we should NOT 500 the upload.
-    // The Document row is already persisted at this point, the file is in
-    // Supabase Storage, and the caller's UI expects a 201 with the document
-    // payload. Logging the failure preserves debuggability.
-    try {
-      const { error: activityErr } = await supabase.from('Activity').insert({
-        dealId,
-        type: 'DOCUMENT_UPLOADED',
-        title: `Document uploaded: ${documentName}`,
-        description: activityDescription,
-        metadata: {
-          documentId: document.id,
-          documentType: docType,
-          extractionStatus,
-          numPages,
-          textLength: extractedText?.length || 0,
-          aiExtracted: !!aiExtractedData,
-          extractedCompany: aiExtractedData?.companyName || null,
-          extractedIndustry: aiExtractedData?.industry || null,
-        },
-      });
-      if (activityErr) {
-        log.warn('Activity row insert failed (upload continues)', { dealId, documentId: document.id, err: activityErr });
+      // Audit log — same logic: if the audit pipeline errors, don't fail the
+      // upload. The Document row is already in the DB. Better to log a
+      // partial-audit warning than fail a successful upload.
+      try {
+        await AuditLog.documentUploaded(req, document.id, documentName, dealId);
+      } catch (auditErr) {
+        log.warn('Audit log threw (upload continues)', { dealId, documentId: document.id, err: auditErr });
       }
-    } catch (activityThrow) {
-      log.warn('Activity row threw (upload continues)', { dealId, documentId: document.id, err: activityThrow });
-    }
 
-    // Audit log — same logic: if the audit pipeline errors, don't 500 the
-    // upload. The Document row is already in the DB. Better to log a
-    // partial-audit warning than fail a successful upload.
-    try {
-      await AuditLog.documentUploaded(req, document.id, documentName, dealId);
-    } catch (auditErr) {
-      log.warn('Audit log threw (upload continues)', { dealId, documentId: document.id, err: auditErr });
-    }
+      // Notify team: document uploaded (fire-and-forget)
+      if (req.user?.id) {
+        resolveUserId(req.user.id).then(internalId => {
+          notifyDealTeam(
+            dealId, 'DOCUMENT_UPLOADED',
+            `New document uploaded: ${documentName}`,
+            aiExtractedData ? `AI-analyzed (${numPages} pages)` : undefined,
+            internalId || undefined
+          );
+        }).catch(err => log.error('Notification error (doc upload)', err));
+      }
 
-    // Notify team: document uploaded (fire-and-forget)
-    if (req.user?.id) {
-      resolveUserId(req.user.id).then(internalId => {
-        notifyDealTeam(
-          dealId, 'DOCUMENT_UPLOADED',
-          `New document uploaded: ${documentName}`,
-          aiExtractedData ? `AI-analyzed (${numPages} pages)` : undefined,
-          internalId || undefined
-        );
-      }).catch(err => log.error('Notification error (doc upload)', err));
-    }
+      // Invalidate AI cache since new document was uploaded
+      // This ensures next thesis/risk analysis uses fresh data
+      await AICache.invalidate(dealId);
+      log.debug('AICache invalidated for deal due to document upload', { dealId });
 
-    // Invalidate AI cache since new document was uploaded
-    // This ensures next thesis/risk analysis uses fresh data
-    await AICache.invalidate(dealId);
-    log.debug('AICache invalidated for deal due to document upload', { dealId });
-
-    // Trigger RAG embedding in background (don't block response)
-    if (extractedText && extractedText.length > 0) {
-      log.info('RAG starting document embedding', { documentName });
-      embedDocument(document.id, dealId, extractedText)
-        .then(result => {
+      // Trigger RAG embedding (don't block anything downstream of this)
+      if (extractedText && extractedText.length > 0) {
+        log.info('RAG starting document embedding', { documentName });
+        try {
+          const result = await embedDocument(document.id, dealId, extractedText);
           if (result.success) {
             log.info('RAG embedded document successfully', { documentName, chunkCount: result.chunkCount });
           } else {
             log.error('RAG failed to embed document', result.error, { documentName });
           }
-        })
-        .catch(err => {
+        } catch (err) {
           log.error('RAG embedding error', err, { documentName });
-        });
+        }
+      }
+
+      // Onboarding: mark uploadDocument step complete
+      if (req.user?.id) {
+        tryCompleteOnboardingStep(req.user.id, 'uploadDocument');
+      }
+    };
+
+    const afterResponseHook = (req as RequestWithAfterResponse).runAfterResponse;
+    if (needsAiWork && typeof afterResponseHook === 'function') {
+      // Response first: the client sees status 'processing' and no
+      // dealUpdated/updatedFields yet (those land once the deferred merge
+      // runs). The VDR UI already polls a folder's documents while any file
+      // in it is 'processing' (see file-handlers.ts), so this is picked up
+      // automatically.
+      emitWebhookEvent(req, orgId, 'document.uploaded', { ...document, dealId });
+      res.status(201).json({ ...document, dealUpdated: false, updatedFields: [] });
+      await runAfterResponse(req, runPostProcessing);
+    } else {
+      // No post-response hook available (local dev via app.ts, tests,
+      // non-Vercel deploys) — preserve the original fully-synchronous
+      // behavior so the response reflects the final state.
+      await runPostProcessing();
+      emitWebhookEvent(req, orgId, 'document.uploaded', { ...document, dealId });
+      res.status(201).json({ ...document, dealUpdated, updatedFields });
     }
 
-    // Onboarding: mark uploadDocument step complete (fire-and-forget)
-    if (req.user?.id) {
-      tryCompleteOnboardingStep(req.user.id, 'uploadDocument');
+    // Delete the staging object after the response — best-effort, never
+    // blocks or fails the upload.
+    if (stagingPathToClean) {
+      await runAfterResponse(req, () => cleanupStagingObject(stagingPathToClean));
     }
-
-    res.status(201).json({ ...document, dealUpdated, updatedFields });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation error', details: error.errors });

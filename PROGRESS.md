@@ -5,7 +5,7 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
-### Session 72 — October 5, 2026
+### Session 103 — October 5, 2026
 
 #### Timestamp: October 05, 2026 — 13:48 IST
 
@@ -21,7 +21,7 @@ one browser tab's React state. Confirmed via direct read of the `ImportJob` row 
 import kept progressing for hours server-side (companies: 3,837 processed; contacts
 climbing past 2,300) with zero visible UI state once the tab was reloaded.
 
-#### Fix (branch `fix/ingest-provider-rejection`)
+#### Fix (PR #132 — `fix/ingest-provider-rejection`, merged into `main` here)
 
 - `GET /api/integrations/hubspot/import/latest` (new) — returns the org's most recent
   HubSpot `ImportJob`, or `null`. Registered before `GET /import/:id` so Express doesn't
@@ -40,12 +40,22 @@ climbing past 2,300) with zero visible UI state once the tab was reloaded.
   identically). Verified the frontend change via `tsc --noEmit` (clean) and manual review
   instead.
 
+#### Note on this PR's other commits
+
+PR #132 originally also carried a Sept 19 fix for AI-provider-rejection error handling
+(`aiErrors.ts`, `ingest-email.ts`, `ingest-upload.ts` — surfacing a 503 instead of "no deal
+information" on billing/quota errors). That work was independently cherry-picked into
+`main` weeks ago via PR #144 (see Session 74 below) while PR #132 itself sat unmerged —
+merging `main` into this branch resolved to identical file content on both sides (verified
+byte-for-byte identical diffs), so no functional change ships from that half of this PR;
+this session's actual content is the HubSpot fix above.
+
 #### Known follow-ups (not in this fix)
 
 - **Frontend component test suite is broken repo-wide** (duplicate React versions —
-  `react@19.2.4` vs `react@19.3.0`) — likely related to the `installCommand` lockfile-wipe
-  issue flagged in Session 71. Needs a dependency-tree fix before any RTL-based test can
-  run; worth prioritizing since it silently blocks verification for every future frontend PR.
+  `react@19.2.4` vs `react@19.3.0`) — needs a dependency-tree fix before any RTL-based test
+  can run; worth prioritizing since it silently blocks verification for every future
+  frontend PR.
 - No dedicated "Companies" page exists in `apps/web-next` — imported Company records
   (HubSpot auto-creates one per contact/website domain, so counts routinely run 4-10x
   actual Deal counts) are only visible if linked to a Deal. `GET /api/companies` already
@@ -59,44 +69,996 @@ climbing past 2,300) with zero visible UI state once the tab was reloaded.
 
 ---
 
-### Session 71 — September 19, 2026
+### Session 102 — October 3, 2026
 
-#### Timestamp: September 19, 2026 — 17:10 IST
+#### Timestamp: October 3, 2026 — 04:25 IST
 
-#### Goal: Every document upload in the deal-intake modal was failing ("The AI couldn't identify any deal information…" and "No valid deals found in file. Ensure you have a column named Company").
+#### Goal: Smooth Flows Batch 3 — stop losing users' work (`docs/USERFLOW-SMOOTHING-TODO.md`).
 
-#### 1. Root cause — the AI provider was rejecting every call, and the product blamed the document
+All 7 items in the batch, one branch (`fix/flows-batch-3`):
 
-**Symptom:** three uploads in a row failed. Two PDFs/Word docs returned 422 *"Couldn't extract data from this document. The AI couldn't identify any deal information in the text"*; one spreadsheet returned 400 *"No valid deals found in file. Ensure you have a column named Company"*.
+- **Memo "Generate all"** now persists each section to the DB as soon as it completes (`section_complete`/`section_revised`), not only at the very end — a refresh, error, or the 300s limit no longer loses finished sections. A stream that ends without a `done` event sends an `error` frame. The overlay has a Cancel button, threaded through a new `opts.signal` on `api.stream`.
+- **Deal chat failures**: the user's own message is saved before the stream starts (previously only after full success, so an early exception dropped the question too); an `error` SSE frame is always sent, not just when nothing streamed yet; a mid-stream exception now persists whatever text had streamed (`truncated:true`) instead of discarding it; an empty generator-reported reply gets a real fallback sentence + `metadata.failed` instead of an empty DB row.
+- **Chat Retry/Stop**: `isServerError` was matching a string (`"API error 5"`) `ApiError` never produces — fixed to check `ApiError.status`. Failed messages now carry `failed`/`retryText` and render a Retry button; a new Stop button aborts the in-flight request via `AbortController`; the legacy (non-streaming) route's bare 500 now uses `classifyAIErrorObject`; `dealChatAgent`'s internal timeout message reports seconds (was raw ms) and no longer fires on a user-initiated Stop (same internal `AbortController` used for both — now distinguished by whether the *external* signal aborted).
+- **Chat history reload**: `loadChatHistory` now maps `metadata.action`/`metadata.failed` onto the message (previously dropped — action buttons vanished on every reload).
+- **Session expiry (401)**: all three 401 sites in `api.ts` try one shared `refreshSession()` + retry before redirecting; the redirect (here and in `middleware.ts`) carries `?next=<path>`; the login page honours a same-origin `next` after both password and MFA verification, instead of always landing on `/dashboard`.
+- **Unsaved-changes guard**: new shared `useUnsavedChanges(isDirty)` hook (`beforeunload`), wired into the NDA full editor, memo section editor, template editor, and settings page. `EditDealModal`'s backdrop click / X / Cancel now confirm via `ConfirmDialog` when dirty instead of discarding silently.
+- **Upload modal mid-upload**: `IngestDealForm` reports its `processing` state via a new `onProcessingChange` prop; the modal blocks Escape/backdrop/X while processing.
+- **Stage change cache wipe**: `confirmStageChange` and `selectTerminalStage` now merge the PATCH response onto the previous cached deal instead of replacing it wholesale (was wiping `teamMembers`/scorecard fields the PATCH response doesn't echo back).
 
-**Root cause (reproduced locally under production-like env):**
-1. **OpenAI account has zero credits.** A direct call to `api.openai.com/v1/chat/completions` with the org key returns `429 insufficient_quota / credit_balance_exhausted` ("You have no credits remaining").
-2. **The new Vercel project (`pocket-funds-projects/pe-dealstack`, created 2026-09-17 during the deploy move) has no `ANTHROPIC_API_KEY`** — only `ANTHROPIC_API_KEY_FALLBACK`, `ANTHROPIC_OAUTH_TOKEN` and `OPENAI_API_KEY`. So `chatProvider` resolves to `openai`, every extraction goes to the out-of-credit OpenAI key, and the fallback chain was only ever built for an *Anthropic* primary — the fallback key was never consulted.
-3. `extractDealDataFromText` swallowed the 429 into `null`, and the ingest routes map `null` to the "couldn't identify any deal information" 422 — a content error for what is a billing error.
-4. **Spreadsheet case:** `IngestDealForm` sends *every* `.xlsx` in "new deal" mode to `POST /ingest/bulk`, which only understands deal-list sheets with a `Company` column. A financial model / CIM workbook therefore hit the "add a Company column" error instead of the single-document pipeline (which already supports Excel).
+Fixed two pre-existing-but-now-exercised gaps found while testing: iconFont subset test needed `stop_circle` added; `api.test.ts`'s 401 test needed a `pathname`/`search` stub and a mocked `refreshSession` to match the new retry-then-redirect flow.
 
-Ruled out: dependency drift. The lockfile-less `installCommand` (`rm -rf node_modules package-lock.json && npm install`) bumped `openai` 6.25→6.49, `@langchain/openai` 1.2→1.5, `@langchain/core` 1.1→1.2, `@anthropic-ai/sdk` 0.74→0.122, `@langchain/langgraph` 1.2→1.4 — but the extraction path works with those versions locally (170 extraction tests green, live call reaches the provider). Still a reproducibility risk; see "Still pending".
+Tests: API 2492 pass (3 new/updated files: memo generate-all per-section persistence + no-done error, deal-chat partial-save + always-error, dealChatAgent seconds + Stop-vs-timeout). Web-next 541 pass (new `useUnsavedChanges.test.ts`, `edit-deal-modal.test.tsx`; extended `deal-page-handlers.test.ts`, `section-handlers.test.ts`, `api.test.ts`).
 
-#### 2. Code fix (PR — `fix/ingest-provider-rejection`)
+---
 
-- `utils/aiErrors.ts`: `classifyProviderRejection(err)` → `quota | auth | rate_limit | overloaded | null`, single source of truth. `AIProviderUnavailableError` now carries `reason` + `detail` and a user message that says *"API credits are exhausted… not a problem with your document — contact your administrator"*.
-- `services/llm.ts`: `shouldFallbackToOpenAI` delegates to the shared classifier. **Fallback chain is now built for an OpenAI primary too** — `ANTHROPIC_API_KEY_FALLBACK` is consulted when OpenAI rejects for quota/auth/rate-limit (OpenAI-direct entry is skipped since it *is* the primary).
-- `services/aiExtractor.ts`: `extractDealDataFromText(text, { throwOnProviderError })` — HTTP ingest routes opt in and get a thrown `AIProviderUnavailableError`; background callers (inbox scan, deep pass, crons) keep the `null` contract.
-- `routes/ingest-upload.ts`, `ingest-text.ts`, `ai-ingest.ts` (both routes): catch `AIProviderUnavailableError` → **503 `{ error, code: 'AI_PROVIDER_UNAVAILABLE', reason }`** with the provider detail logged.
-- `routes/ingest-email.ts` (`POST /ingest/bulk`): zero deal-list rows → hand the file to `runIngestFromBuffer` (single-document ingest) instead of the "Company column" error.
-- Tests: 4 new files / 12 tests (`ai-provider-rejection`, `ingest-provider-unavailable`, `llm-openai-primary-fallback`, `ingest-bulk-single-doc-fallback`), all verified failing before the fix. `tsc --noEmit` clean. Full API suite: 1876 passed; 2 pre-existing failures in `dealChatAgent*-bounds` (timeout-window assertions, identical on a clean checkout) and 4 load-related flakes that pass in isolation.
+### Session 101 — October 3, 2026
 
-#### 3. Founder actions required (code alone does not restore extraction)
+#### Timestamp: October 3, 2026 — 03:44 IST
 
-Either **add OpenAI credits** or **set a valid `ANTHROPIC_API_KEY` in the new Vercel project** (`vercel env add ANTHROPIC_API_KEY production`). With the PR merged, a valid `ANTHROPIC_API_KEY_FALLBACK` alone would also unblock extraction — but its validity can't be checked from here (sensitive var).
+#### Goal: a one-click OpenAPI import for n8n/Postman, so integrators don't hand-configure 315 endpoints.
 
-**The Vercel project move dropped ~50 env vars.** Missing vs. what the API reads, most important first: `ANTHROPIC_API_KEY`, `CRON_SECRET` (all 7 crons 401 again), `INGEST_ENGINE` / `EXTRACTION_ENGINE` / `DEAL_CHAT_ENGINE` (all Claude-native features silently reverted to legacy), `LLM_CHAT_PROVIDER`, `EXCEL_EXTRACTION_MODE`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Drive import / Gmail), `OAUTH_STATE_SECRET`, `RESEND_FROM_EMAIL`, `OPENROUTER_API_KEY`, `RESEARCH_ENGINE` / `SIGNAL_ENGINE` + `MANAGED_AGENTS_*`, `MS_TENANT`, `AZURE_DOC_INTEL_*`, `LLAMA_CLOUD_API_KEY`, `POCKET_FUND_STAFF_EMAILS`, `LOG_LEVEL`. Full list is in the PR description.
+**What shipped:**
+- `apps/api/tools/generate-openapi.ts` generates an OpenAPI 3.1 spec from `endpoint-index.ts` (the same list the public docs page renders) — one source of truth, no hand-duplicated endpoint list to drift.
+- Published at `https://app.avise.io/openapi.json` (a static file under `apps/web-next/public/`, so it needs no auth and no route change — bypasses the auth middleware the same way `favicon.svg` does, any path with a dot is excluded).
+- 315 operations, matching `ENDPOINT_TOTAL` exactly. 45 of the most-used ones (deals, contacts, tasks, documents, ingest, memos, webhooks…) carry hand-written summaries and real request-body examples; the rest get an auto-generated summary and path-parameter descriptions, so nothing is left blank.
+- Both auth methods declared (`bearerAuth`, `apiKeyHeader`), and the 403 response documents the new `API_KEY_READ_ONLY` code from the read-only-keys work.
+- Validated with Redocly's linter (clean except 4 harmless "ambiguous path" warnings — a real, harmless property of a few `/api/invitations/*` routes, not a spec defect) and round-tripped through `openapi-to-postmanv2`: 315 Postman requests in, 315 out.
+- `/api-reference` links to it from the hero and the n8n/Postman setup section.
+- New test `openapi-spec.test.ts`: fails if a route is added to `endpoint-index.ts` without regenerating the spec (verified it actually catches a removed operation, not just passing vacuously).
 
-#### Still pending
+**Tests:** 266 files / 2,493 pass.
 
-- Restore the env vars above (values live with the founder / old project).
-- `vercel.json` `installCommand` deletes the lockfile on every deploy → non-reproducible builds. Now that the `htmlparser2` override is captured in the committed lockfile, switch to `npm ci`.
-- No production runtime logs were retrievable (`vercel logs` returned nothing for the window); Sentry should have the 429s — worth confirming after env restore.
+---
+
+### Session 100 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:31 IST
+
+#### Goal: read-only API keys, so a less-trusted integration can be given a key that can never write to Avise.
+
+**What shipped:**
+- `ApiKey.scope` (`full` | `read_only`), set at creation in Settings → API Keys or via `POST /api/api-keys { scope }`. Defaults to `full`, so every key created before this change keeps working exactly as before.
+- Enforcement is one new middleware, `enforceApiKeyScope`, inserted after `authMiddleware` on every authenticated mount in `app-lite.ts`, `app-ai.ts` and `app.ts` (119 mount points, scripted insertion — session logins and `full` keys are never affected; a `read_only` key gets 403 `API_KEY_READ_ONLY` on anything but GET/HEAD/OPTIONS).
+- Settings → API Keys: an Access selector (Full access / Read-only) on create, a badge on the one-time key reveal, and a column in the key list.
+- Graceful degradation if `api-key-scope-migration.sql` hasn't run yet: `resolveApiKey`, and the list/create routes, detect the missing column once and fall back to treating every key as full-access — a key never stops working because of this change. Creating a `read_only` key specifically returns a clear 503 until the migration runs, rather than silently granting it full access.
+- `/api-reference` documents the Access field and the new 403 code.
+
+**Tests:** 265 files / 2,499 pass, including 23 new ones (scope resolution + fallback, the `enforceApiKeyScope` middleware for every HTTP verb, and the route-level create/list behavior with and without the migration).
+
+**Founder to-do:** run `apps/api/api-key-scope-migration.sql`. Until then, read-only keys can't be created (503, no silent downgrade); existing full-access keys are unaffected either way.
+
+---
+
+### Session 99 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:50 IST
+
+#### Goal: fix plan Phase H3 — an integrated balance sheet with a balance check.
+
+- **Entry (closing date), purchase accounting with a goodwill plug** (founder's choice): goodwill = entry EV − net working capital − PP&E − other net operating assets bought; transaction fees are expensed at close (reduce opening equity, not capitalised); no dividends during the hold.
+- **Each projected year:** PP&E rolls with capex − D&A; debt is the schedule's closing balance (including the revolver); equity grows by net income; goodwill and other net assets are held flat.
+- **New extraction read:** `total_assets`, `total_liabilities`/`total_equity`, `goodwill`, `intangibles` on the balance sheet (`balanceItems.ts`), reduced to one `otherNetOperatingAssets` figure (other assets − other liabilities) and PP&E, both carried in `OpeningBalances`.
+- **Shared calculator:** new `projectBalanceSheet` in `@ai-crm/shared` (`dealModelBalance.ts`) — balances by construction (Δnet assets = net income + Δdebt, since levered FCF ties cash to net income and ΔNWC/capex).
+- **Workbook:** a new Balance Sheet sheet, right after Returns, built from the same Projections and Returns cells — no new circular references.
+- **Panel:** a read-only Balance Sheet section with entry + every projected year, and a "Balances" / "Check off by …" badge.
+- **Parity:** goodwill, PP&E, debt, equity and the check row are checked between the workbook and the live preview, across all five parity cases (including the revolver drawn).
+
+Tests: API 2487 pass, web 527 pass.
+
+---
+
+### Session 98 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:11 IST
+
+#### Goal: fix plan Phase H2 — a revolving credit facility in the model.
+
+- **Revolver (off by default).** New assumptions `revolverSize` (money; 0 = none), `revolverRate` (% on drawn, default 8) and `revolverFeePct` (undrawn fee, default 0.5). Saved models load with it off and are unchanged.
+- **Mechanics** (`debtScheduler` in `@ai-crm/shared` and `workbook/debtSchedule.ts`, which mirror each other):
+  - The revolver is undrawn at entry.
+  - Each year it's repaid first from cash above the minimum, before the sweep, and drawn to cover a shortfall below the minimum, up to the commitment.
+  - Interest is the opening drawn balance × rate, plus the undrawn commitment × fee. Both use the opening balance, so there's no circular reference (`findCycle` test).
+  - Total interest and closing debt include it, so exit debt, DSCR, the Scenarios blocks and the Sensitivity grid follow automatically.
+- **Panel:** revolver commitment / rate / fee inputs and a "Revolver drawn" row once sized. The Notes sheet describes it.
+- **Parity:** a stressed case (heavy debt, negative early FCF) with the revolver drawn; the workbook and live preview agree on every year's draw, balance, cash and the returns.
+
+Tests: API 2470 pass, web 525 pass.
+
+---
+
+### Session 97 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:02 IST
+
+#### Goal: test every safely-testable API endpoint against production and check each one is actually used.
+
+**Live test (`--extended --ai`, real admin key, PocketFund org):** 215 of 224 checks passed. Coverage went from about 100 to about 205 of the 315 key-accessible endpoints. Every record the test created was cleaned up.
+
+**Failures, by cause:**
+1. **Real bug, fixed here — creating or duplicating a memo template returned 500 for every user, in the app too.** `POST /api/templates` and `/:id/duplicate` wrote the Supabase auth UUID into `MemoTemplate.createdBy`, but the column references `User.id` (`MemoTemplate_createdBy_fkey`). They now resolve the internal id via `resolveUserId`. New test: `templates-create-owner.test.ts`.
+2. **Legacy `/api/conversations/*` (6 endpoints):** `GET /:id`, `GET` and `POST /:id/messages` return 500 "Database error". No screen calls these (deal chat and memo chat use their own routes), and a conversation with no deal is readable by ID across orgs. **Recommended: remove them.** That deletion was blocked in auto mode, so it's left for the founder to decide.
+3. **Test expectations corrected (not bugs):** legal-doc export returns 409 "Google Workspace not connected" (correct, the org has no Google integration). Legal-template DELETE returns 204. NDA review rejects the test's fake PDF with 400.
+4. **Transient:** two "fetch failed" network blips (`/api/firm-context`, `/api/documents/:id`). Both answered normally on retest.
+
+**Safety:** the extended run never sends emails or e-signatures, never invites users, and never writes org settings. The firm-context and firm-teaser "write back the same value" checks were removed, because a misread response shape could have wiped real settings.
+
+**Usage audit:** about 245 of 315 endpoints are called by web-next. Of the ~70 that aren't, most are API-only but useful (company, user and activity detail, trash and restore, deal import, contact insights, audit summary). About 10–15 look like leftovers (old AI routes, debug endpoints, `/api/conversations`).
+
+**Tests:** 2,451 API tests pass.
+
+---
+
+### Session 96 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 03:06 IST
+
+#### Goal: model extras while AI credit is out (fix plan Phase H). H1: prove the workbook and the live preview give the same numbers.
+
+- **H1 · Parity test + INDEX fix.** New `tests/deal-model-parity.test.ts` checks cached workbook values against `projectModel` / `summariseCase` on four cases: defaults, two tranches + minimum cash, revenue basis + absolute debt, and % of revenue working capital. It checks entry, every projected year, the debt / cash schedule, exit, IRR / MoM, the Scenarios summary and the Sensitivity centre.
+  - *Problem it found:* `INDEX` over a range on another sheet was cached as 0. The library resolved the reference against the formula's own sheet, so previews of the export (Protected View, Quick Look) showed exit EV 0 and IRR "n/a". Excel was right once editing was enabled.
+  - *Fix:* `calc.ts` resolves `INDEX` itself, through the sheet-aware range lookup.
+  - The XML readers moved to `tests/helpers/xlsxXml.ts`.
+
+Tests: API 2462 pass.
+
+---
+
+### Session 95 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 00:47 IST
+
+#### Goal: post-SRM financial hardening, PR D2 — fiscal year-ends, restatements, fast-read units (fix plan Phase G, G13, G14, G16).
+
+- **G13 · June year-ends mis-ordered.**
+  - *Problem:* a bare "FY2025" was assumed to end in December, so a June year-end company's annual figure sorted after its own later months and quarters.
+  - *Fix:* `parsePeriod` accepts a fiscal year-end hint, and `inferFiscalYearEndMonth` reads it from labels that state a range ("FY2024 (Jul 2023 - Jun 2024)"). The analysis and the model's ordering use it.
+- **G14 · Restatements.**
+  - *Problem:* an original could beat a later restated set on document authority or line count.
+  - *Fix:* "restated" in the period label or document name now wins after the reported-vs-model check, across documents (`compareSources`) and within one document (period dedup).
+- **G16 · Fast deal read did its own unit arithmetic.**
+  - *Problem:* the headline revenue / EBITDA / deal size on upload came only from the model's arithmetic — the ₹25.1 Cr vs ₹251.3 Cr case.
+  - *Fix:* the read now also returns each figure as printed, plus its unit. `finalizeExtractedDealData` redoes the conversion with the deep pass's `SCALE_TO_MILLIONS`; a disagreement is corrected, flagged for review and capped at 60% confidence.
+  - Deal cards already label currency.
+
+Tests: API 2458 pass, web 524 pass. Phase G (G1–G16) is complete except PR E (headcount extraction) and the founder-run period-key migration from PR C.
+
+---
+
+### Session 94 — October 3, 2026
+
+#### Timestamp: October 3, 2026 — 00:16 IST
+
+#### Goal: post-SRM financial hardening, PR D1 — scenarios, source names, model units (fix plan Phase G, G11, G12, G15).
+
+- **G11 · Low / High cases could match Base.**
+  - *Problem:* the ±2pp EBITDA-margin delta only went through % of revenue cost lines, so with Fixed cost lines it did nothing. The three cases showed the same EBITDA while the Notes said "±2pp".
+  - *Fix:* the remainder now goes through the Fixed cost lines as money (projected revenue × pp). Anything still not applied is named on the Build model panel and the Notes sheet (`seedScenarioDetailed` / `scenarioSeedNotes`).
+- **G12 · "Summary" treated as a valuation model.** "Financial Summary" / "FY24 Summary P&L" files and tabs were classed as model-derived: processed last and losing to weaker sources. File names no longer use "summary" as a signal; a "summary" tab is capped only when it doesn't name a statement.
+- **G15 · Model units.**
+  - A saved `unitScale: THOUSANDS` relabelled every caption 1000× wrong; the model is now always in millions.
+  - `Deal.ebitda` is read as whole dollars when either deal field is above 100,000.
+  - An implied deal multiple outside 1–50× is ignored instead of becoming the default.
+
+Tests: API 2449 pass, web 524 pass.
+
+---
+
+### Session 93 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 21:11 IST
+
+#### Goal: post-SRM financial hardening, PR C — one fiscal year stored twice, and mixed currencies added together (fix plan Phase G, G9–G10).
+
+- **G9 · One fiscal year stored twice.**
+  - *Problem:* `dedupePeriods` grouped labels with its own synonym table, which doesn't understand range labels. A document printing "2024" and "FY2024 (Jan - Dec 2024)" kept both. The only database guard was a unique index on the raw label.
+  - *Dedup:* it now keys on the canonical period (`parsePeriod`), the same key the store and conflict resolution use. It keeps the more descriptive label, while a 9-month YTD, quarters, LTM and estimates stay separate.
+  - *Deep pass:* rows written earlier in the same run now count when checking for an active row for the period.
+  - *Conflicts:* the conflict list, resolve and resolve-all group versions by canonical period. A pick across labels deactivates every version of that year first.
+  - *DB guard:* `financials-period-key-unique-migration.sql` deactivates existing duplicates (keeps the reported, higher-confidence, newer one, flagged `needs_review`) and adds a unique index on `(dealId, statementType, periodKey)` for active rows. It refuses to run until the period-key backfill has filled every active row. **Pending: founder runs backfill, then SQL** (`docs/PENDING-MIGRATIONS.md`).
+- **G10 · Mixed currencies added together.**
+  - The analysis now uses the main currency's statements only, and `currencyNote` says what it left out. It's shown on the Analysis section.
+  - The statements table says when its columns are in different currencies. It used to label the whole table with the first column's currency.
+
+Tests:
+- API: 2420 pass. New suites: `period-dedupe-canonical`, `analysis-mixed-currency`, plus a canonical-period resolve case.
+- Web: 513 pass. New suite: `deal-financials-table-currency`.
+
+---
+
+### Session 92 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 20:59 IST
+
+#### Goal: post-SRM financial hardening, PR B — failures must say why (fix plan Phase G, G5–G8).
+
+- **G5 · "No financial data found" when the AI was out of credit.**
+  - *Problem:* both classifiers caught every error and returned null. Cross-verify returned null when both did, and the extract node turned that into a "completed" run with 0 periods. With prod out of credit, every extraction blamed the document.
+  - *Fix, provider rejections:* `toProviderUnavailable()` (`utils/aiErrors.ts`) turns a provider rejection (credits, bad key, rate limit, overloaded) into `AIProviderUnavailableError`. The GPT and Claude classifiers and the Claude engine's uploads now throw it.
+  - *Fix, cross-verify:* when both sides are rejected, it throws. When only one is, it uses the other side and adds a warning that the figures weren't cross-checked.
+  - *Fix, extract node:* it remembers a rejection swallowed by a per-sheet or per-chunk catch and fails the run with the reason. It also skips Vision, which would hit the same wall. The existing `humanizeExtractionError` then turns that into "The AI provider account is out of credits…".
+- **G6 · AI Insights showed a stand-in narrative, and cached it.**
+  - *Problem:* any failure returned "AI insights are currently unavailable…" as a successful result. It was cached, so it outlived the outage.
+  - *Fix:* failures now throw with the reason. `AI_BAD_RESPONSE` asks the user to Regenerate, and `AI_NOT_CONFIGURED` covers a missing key.
+  - A cached placeholder is now treated as a miss. The insights routes use the new `aiErrorResponse()`.
+- **G7 · Vague or missing explanations on the deal page.**
+  - The Analysis section shows the server's reason (new `lib/errorMessage.ts → describeLoadError`) instead of "Something went wrong".
+  - The Insights tab shows the failure reason with Retry instead of "Loading…" forever.
+  - In the Build model panel (new `deal-model-notices.tsx`):
+    - A load failure, with its reason and Retry, now looks different from "no financials yet".
+    - Missing entry EBITDA, and entry EBITDA taken from the deal record, are both explained.
+    - A blank IRR or MoM is explained (zero equity cheque, or equity wiped out at exit).
+    - MoM 0.0x no longer shows "—".
+- **G8 · Model route errors.**
+  - A failed Deal, statements or saved-case read used to look like "deal not found", or like a deal with no statements (and defaults the user could save over). It is now a 503 `MODEL_DB_ERROR` with the reason.
+  - Anything unknown is a 500 `MODEL_BUILD_FAILED` with a support reference.
+  - Ingest-time deal-field AI failures are not persisted: no column or screen shows document AI status.
+
+Tests: API 2429 pass (new: `financial-provider-rejection`, `extract-node-provider-down`, `narrative-insights-failure`, plus model-route DB-error and `modelErrorResponse` cases). Web 522 pass (new: `deal-analysis-errors`, `deal-model-panel-states`). `tsc` is clean apart from the pre-existing missing `api/dist` bundles.
+
+---
+
+### Session 91 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 20:47 IST
+
+#### Goal: post-SRM financial hardening, PR A — wrong numbers that look right (fix plan Phase G, G1–G4).
+
+Three read-only audits (extraction correctness, model correctness, financial AI-failure messages) found ~25 issues after fix plan A–F merged; the top ones were checked against the code. Plan in `docs/FINANCIALS-FIX-PLAN.md` → Phase G (PRs A–E). This PR is A.
+
+- **G1 · Entry multiple priced a different deal.**
+  - *Problem:* the default entry multiple is deal size ÷ the deal record's EBITDA, but the model applies it to the statements' EBITDA. On SRM (6.1 on the record vs 2.21 from the P&L) that gave a plausible-looking 5.5× on the wrong base.
+  - *Fix:* new `dealModel/entrySeed.ts`. When the two EBITDAs differ by more than 25% and the statements drive entry, the default is 5× and the API returns `warnings` naming both figures. The Build model panel shows them in an amber note, and the export's Notes sheet explains the 5×. Once Base is saved, only the EBITDA-gap warning remains.
+- **G2 · Bottom-up EBITDA carried one-off gains.** The QuickBooks-style derivation (`net_income + interest + tax + da`) now subtracts other income and adds back other expense, from printed totals or raw sub-accounts (`financialDerivations.ts`).
+- **G3 · Cash-flow signs missed nested accounts.** Raw sub-accounts under investing / financing activities (e.g. `financing_activities_equipment_loan_principal`) are now judged by their words and stored as outflows. Proceeds, sales and contributions stay positive.
+- **G4 · "Revenue per employee" was plain revenue.** It now divides by headcount (`employees`), and is omitted when there's none. The web never rendered it. Extracting headcount is PR E.
+
+Tests: 2412 API tests pass (new: `analysis-workforce.test.ts`, plus cases in the derived-EBITDA, signs, base-period and model-route suites). Web deal-page tests pass (93), including two new Build model panel warning tests.
+
+---
+
+### Session 90 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 20:00 IST
+
+#### Goal: live API smoke test against production, then fix what it found.
+
+**Smoke test result:** 120 of 122 passed, run against app.avise.io with a real admin key ("PocketFund" org). It covered auth, keys-can't-manage-keys, ~50 reads, a full write lifecycle (company, deal, note, folder, PDF upload, 413 at 5 MB, task, contact, duplicate 409, delete/restore), the new filters, `GET /api/tasks/:id` and the webhook subscription lifecycle.
+
+**1. `GET /api/graphs` returned 500 "Failed to fetch graphs"** (cross-deal graphs list)
+- **Root cause:** the list joined `deal:Deal(…)` in a single PostgREST query. That join needs a `CustomGraph.dealId → Deal` foreign key, which `foreign-keys-migration.sql` adds only conditionally. The per-deal route doesn't join, so it worked.
+- **Fix:** fetch the graphs, then fetch their deal and company labels in one org-scoped `Deal … in(ids)` query. The response shape is unchanged. New test: `graphs-list-route.test.ts`.
+
+**2. `GET /api/integrations/activities` returned 400** — this was correct behaviour, because the endpoint requires `dealId` or `contactId`. The smoke script now passes `dealId`.
+
+**Note:** the smoke test's deal ends up soft-deleted in Trash as "QA-API-TEST … Deal".
+
+---
+
+### Session 89 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 17:55 IST
+
+#### Goal: close the API gaps that block real n8n/Zapier integrations (PR `feat/api-webhooks-and-gaps`).
+
+**1. Outbound webhooks (new)**
+- **Problem:** Avise couldn't tell other tools when something happened. n8n "triggers" had to poll everything every few minutes.
+- **Fix:** added the `WebhookSubscription` table, `/api/webhook-subscriptions` (list, create, update, delete, test, events), and **Settings → Webhooks**.
+- **Events:** 11 in total — `deal.created/updated/stage_changed/deleted`, `contact.created/updated/deleted`, `task.created/updated/completed`, `document.uploaded`. They fire from the app, from the API and from all ingest paths.
+- **Delivery:** HMAC-signed (`Avise-Signature: t=…,v1=…`), runs after the response is sent, one attempt with a 5 s timeout. Failures show in Settings.
+- **URL rules:** https only, and private-network URLs are refused.
+- **Who can manage them:** admins. API keys are allowed here, so tools can register their own URLs.
+
+**2. Polling support:** `updatedSince` on deals, contacts, tasks and companies; optional paging on deals and companies with `offset` + `limit`. Paging only applies when `offset` is sent, because the web app already sends `limit=50` to `/api/deals` and expects every deal back. Deal and company updates now set `updatedAt` explicitly.
+
+**3. Bugs fixed:**
+- `PATCH /api/contacts/:id` on an unknown id now returns 404 instead of 500.
+- Keys sent as `X-API-Key` are now rate-limited per key instead of per IP; on n8n Cloud, unrelated users were sharing one limit.
+
+**4. New endpoint:** `GET /api/tasks/:id`.
+
+**5. Settings → API Keys:** the new-key box now shows the full `Authorization: Bearer …` header with its own copy button. Founder question: "where do users get the Bearer token?" Answer: the API key is the Bearer token.
+
+**6. Docs:** /api-reference gains a Webhooks section (events, payload, signature verification), the new query params, and the regenerated index (315 endpoints). The smoke test covers the new endpoints too.
+
+**Review fixes (independent Opus review before merge):**
+- **Deal lists:** honouring `limit` alone would have cut the Deals page to 50 deals and capped dashboard counts. Paging now needs `offset`, with a regression test.
+- **SSRF:** webhook delivery now resolves DNS at connect time, rejects private, CGNAT and IPv4-mapped addresses, and connects to the checked IP, so DNS rebinding can't get through.
+- **Payload size:** payloads no longer include document text or nested documents and activities.
+- **Smaller fixes:** dead endpoints are auto-paused after 20 failures, `document.uploaded` fires only on success, and the rate-limit key is used only for well-formed `avise_sk_` keys.
+
+**Tests:** 2,388 API tests pass, including 38 new tests covering webhooks, SSRF and paging. Two background-upload tests now stub the webhook module, because they count after-response jobs.
+
+**Migration:** the founder ran `apps/api/webhook-subscriptions-migration.sql` on 2026-10-02, and `to_regclass` returned `"WebhookSubscription"`. Webhooks are live.
+
+---
+
+### Session 88 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 17:07 IST
+
+#### Goal: public API docs that match the API-key launch, plus a repeatable endpoint test (PR #176).
+
+**1. /api-reference was wrong for integrators**
+- **Problem:** the public page predated API keys. It told integrators to use 1-hour Supabase JWTs and listed a 200/15 min rate limit (the real limit is 600). Its deal-create example had no `companyName`, so it returned a 400. Two endpoints it listed (`/api/memos/:id/generate`, `/api/users/team`) don't exist.
+- **Fix:** rewrote the page from the code. It now covers API-key auth and the key standard, n8n/Zapier/Make setup, corrected common endpoints with real request bodies, rate limits, an errors table, and a generated index of all 308 endpoints that accept a key (`endpoint-index.ts`).
+
+**2. Endpoint smoke test**
+- `apps/api/tools/api-key-smoke-test.mjs`: run `AVISE_API_KEY="$(pbpaste)" node apps/api/tools/api-key-smoke-test.mjs`.
+- It tests auth (including the rule that keys can't manage keys), ~45 read endpoints, and a full write lifecycle: company, deal, note, folder, PDF upload, the 4.5 MB limit, task, contact, duplicate 409, delete and restore. Every record it creates is removed again.
+- It writes `api-test-report.md` and never prints the key. Claude can't run it in this session (using a key is blocked as credential leakage), so the founder runs it.
+
+---
+
+### Session 87 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 14:20 IST
+
+#### Goal: standard API keys so n8n and other tools can connect to Avise (PR `feat/api-keys`).
+
+**Problem:** Avise had no way for an external tool to call its API. Every request needed a browser login token that expires after about an hour, so n8n couldn't be connected. The only "API key" endpoint was inbound: users pasting *their* Granola or other keys into Avise.
+
+**Fix: org API keys, one standard for all of them**
+- **Format:** `avise_sk_` + 43 random URL-safe characters. Sent as `Authorization: Bearer avise_sk_…` or `X-API-Key`.
+- **Storage:** only the SHA-256 hash is stored, plus a display prefix and last 4 characters. The full key is shown once.
+- **Scope:** a key acts as the admin who created it, inside their org only. It stops working when revoked or expired, or when that admin is deactivated or moves org.
+- **Management:** new **Settings → API Keys** section (admin-only): create with name and expiry (never / 30d / 90d / 1y), list with last-used date, revoke. A key can't create or revoke keys.
+- **How:** `authMiddleware` recognises `avise_sk_` keys before the Supabase JWT check, so every existing `/api/*` endpoint works with a key and no route changes were needed. New `/api/api-keys` routes are mounted in `app-lite` and `app.ts`.
+- **Docs:** `docs/API-KEYS.md` covers the standard and n8n setup.
+- **Tests:** `tests/api-keys.test.ts` (10) covers format, Bearer/X-API-Key, and rejection of unknown, revoked, expired, deactivated-owner and moved-org keys.
+
+**Migration:** the founder ran `apps/api/api-keys-migration.sql` on 2026-10-02, and the check returned `"ApiKey"`. The feature goes live once this PR merges.
+
+### Session 86 — October 2, 2026
+
+#### Timestamp: October 2, 2026 — 00:11 IST
+
+#### Goal: follow-ups from the live re-test (PR `fix/qa-retest-followups`), plus migration bookkeeping.
+
+**Migrations:** the founder ran all three pending SQL files on 2026-10-02 and the combined check passed:
+- `usage-cost-accuracy-migration.sql` — `claude-sonnet-5` priced at 2 / 10, `UsageReconciliation` table created.
+- `deal-stage-cleanup.sql` — 0 deals left on hidden stages.
+- `financials-source-period-migration.sql` — 6 new `FinancialStatement` columns.
+
+Ticked in `docs/PENDING-MIGRATIONS.md` and `docs/PENDING-OPS-CHECKLIST.md`.
+
+**1. AI failures said "check ANTHROPIC_API_KEY" when the account was out of credit**
+- **Root cause:** `folderInsightsGenerator` turned every model error into `null`, and the route reported `null` as a missing key. The shared `classifyAIErrorObject` also let an out-of-credit 400 fall through to a generic "AI error: 400 {…}".
+- **Fix:** the generator rethrows model errors and the route classifies them. `classifyAIErrorObject` now checks provider rejections first (out of credit, bad key, rate limit, overloaded) and names the provider, e.g. "AI service (Anthropic) … credits are exhausted". Every route using the shared classifier benefits.
+- **Missing toast:** the data room used its own toast, whose hide-timer was never cleared, so an older toast could dismiss a newer error before anyone saw it. The page now uses the app-wide `useToast`, and the old `VDRToast` is removed.
+
+**2. Deal headline showed "₹25.1 Cr" instead of "₹251.3 Cr"**
+- **Root cause:** an Excel P&L headed "(INR crore)" was read as millions. Both deal-reading prompts (the legacy `aiExtractor` and the Claude deal reader) described only $-millions and $-thousands table headers; crore appeared only as a suffix on a single number.
+- **Fix:** both prompts now state that a crore table is ×10 and a lakh table ×0.1 to reach millions, with worked examples.
+- **Existing data:** deals already written this way need the deal edited or the file re-uploaded. Financial statements are unaffected; that path was fixed in #160.
+
+**3. Re-extract "timed out after ~10 s"**
+- **Finding:** production logs show the request never reached the server; only page loads appear for that deal. The client waits up to 290 s, and the app showed its "Couldn't reach the server" message, so the app behaved correctly.
+- **Conclusion:** this is the same intermittent network-level `ERR_TIMED_OUT` seen earlier from this network. No code change.
+
+**Also:** added `apps/api/scripts/backfill-statement-period-keys.ts`. It was referenced by #164 but never committed. It fills the new period columns on old rows with the same values new extractions write. It is optional, since the app parses labels when the columns are empty. Usage: `--dry-run` first.
+
+**Production finding:** Anthropic and OpenAI are both out of credit in production. Real users' extractions are failing (e.g. a "Kliniva" deal), not just the QA org.
+
+**Handoff docs (for safe context compaction):**
+- New root `CONTEXT.md`: one-page current state, open PRs, blockers, founder to-dos, next steps, and this week's gotchas.
+- `CLAUDE.md` gained reminders: start from `CONTEXT.md`; check AI credit first when AI features fail; `apps/api/scripts/` is gitignored; merge stacked PRs bottom-up; worktree shared-package setup.
+- `docs/FINANCIALS-FIX-PLAN.md`: all items A1–F1 ticked as merged, with the remaining non-code steps.
+- `docs/USERFLOW-SMOOTHING-TODO.md`: status header added (Batches 0–2 done; Batch 3 next).
+
+**Verification:** API 2326 tests passing (+5), web 509, tsc clean, lint 0 errors, lockfile unchanged.
+
+---
+
+### Session 85 — October 1, 2026
+
+#### Timestamp: October 1, 2026 — 23:06 IST
+
+#### Goal: User-flow smoothing **Batch 2** — onboarding, team invites and auth pages (branch `fix/flows-batch-2`, cut from `origin/main`).
+
+**Onboarding**
+- **"Invite your team" invited nobody.** *Root cause:* `completeTask` had no team branch; the Analyst/VP/Partner/Admin labels were never sent. *Fix:* each filled row is POSTed to `/invitations` with an API role from one shared map (`lib/roles.ts`: Analyst = VIEWER, Associate = MEMBER, Admin = ADMIN — same as the Settings invite dialog). Each failure toasts and stays in the modal; the task completes only when sent or on an explicit "Skip for now". Admin is offered only to admins (the API 403s otherwise).
+- **"Use a sample deal" created no deal.** *Root cause:* it only ticked the box client-side. *Fix:* calls `/onboarding/create-demo-deal` (busy state, error toast, stays on welcome on failure), then marks the upload step server-side. Loaded progress now merges instead of overwriting an in-flight completion.
+- **Invited teammates ran the founder flow and could overwrite the firm profile.** *Fix:* `services/firmProfileAccess.ts` — only org ADMINs or the founding user (`Organization.createdBy`) may overwrite an existing firm profile (anyone may set it while empty); enforced on `/onboarding/firm-profile` and `/onboarding/enrich-firm` (403 `FIRM_PROFILE_LOCKED`). `GET /onboarding/status` returns a `context`; invitees skip the welcome pitch and get a 2-task checklist without the firm task.
+
+**Invitations**
+- **Existing accounts couldn't accept.** *Fix:* `/verify` returns `accountExists`; the page shows "Sign in to accept" (inline sign-in, one-click join if already signed in, sign-out if signed in as someone else). New authenticated `POST /invitations/join/:token` (web calls `/api/public/invitations/join/:token`, auth inline — same router, so app-lite / app.ts / pickBundle need no change). Rules: valid PENDING unexpired token; signed-in email must equal the invite email (case-insensitive, else 403); a user in another org is **never silently moved** — only out of an empty personal workspace (no other members, no deals), otherwise 409 `INVITE_USER_IN_OTHER_ORG`; ACCEPTED only after the user is attached; org cache invalidated; audit-logged against the joined org with `previousOrganizationId`.
+- **Failed User insert burned the link.** *Fix:* `/accept` now returns 500 before touching the invitation and deletes the just-created auth user, so the link can be retried.
+- **Accepted invitees bounced to /login.** *Fix:* the user is created already confirmed (`admin.createUser`, `email_confirm: true` — the emailed token proves the address; existing emails → 409 `ACCOUNT_EXISTS`), a session is minted on a throwaway anon client (signing in on the shared service-role client would pin the user's JWT onto it), and the page applies it with `setSession` and opens `/dashboard`.
+- **Expired invites stuck; accepted ones showed PENDING.** *Root cause:* expiry is only written lazily, the duplicate check treated expired PENDING rows as live (and the unique pending index would reject the re-invite), and nothing reconciled a PENDING row whose teammate had joined. *Fix:* the list derives EXPIRED and ACCEPTED (repairing stale rows of org members); create / bulk expire stale rows instead of blocking; resend reopens EXPIRED invites; revoke / resend refuse ACCEPTED ones. Settings → Team has Resend and Revoke (confirm dialog), friendly status / role labels, and an error + Retry state.
+- `invitations.ts` ↔ `invitations-accept.ts` import cycle broken (`services/invitationEmail.ts`).
+
+**Auth pages**
+- Signup with an existing email (`identities = []`) → "An account with this email already exists — log in or reset your password"; "check your email" now has Resend (60s cooldown) and "Enter code instead"; the button is never left disabled.
+- Verify-email success → straight to `/onboarding` ("Continue to setup"), no 5-second wait.
+- Login: "verify your email" offers Resend + Enter code; raw Supabase errors mapped (`lib/authErrors.ts`); SSO button hidden (no IdP wired); Remember me removed; MFA is a form (Enter submits, 6th digit auto-submits).
+- Expired reset link → "Request a new link". One password rule text (`lib/passwordRules.ts`). Forgot-password unlocks after a 60s cooldown. Auth pages have their own tab titles.
+- Notifications: no new `/notifications` callers since #160; the new admin "joined" notifications use `User.id`. Nothing to change.
+
+**No migration.**
+
+**Decisions for the founder:** (1) moving a user out of a non-empty org on invite is refused (409) — support has to move them; (2) Analyst = view-only (kept from the invite dialog) — onboarding now uses the same labels instead of VP/Partner; (3) founders who are not ADMIN still can't invite Admins (unchanged API rule; Admin is hidden for them in onboarding).
+
+**Verification:** API 2320 tests passing (+29: join security, accept rollback, list / resend / re-invite, firm-profile access), web 509 passing (+35: onboarding, team section, accept-invite, auth pages, helpers), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
+---
+
+### Session 84 — October 1, 2026
+
+#### Timestamp: October 1, 2026 — 22:27 IST
+
+#### Goal: Model builder fix plan **E3** — working capital, capex and debt from the balance sheet and cash flow (branch `feat/model-wc-capex-debt`, stacked on the E1 / E2 branch).
+
+**E3 · Balance-sheet and cash-flow driven items**
+- **Root cause:** `normaliseStatements` kept only income statements — balance sheets and cash flows were thrown away. Working capital and capex were two scalars (`nwcPctRevenue`, `capexPctRevenue`), the debt was one tranche, interest ran on the opening balance and the cash sweep used **unlevered** FCF (before interest and tax). Opening net debt never appeared.
+- **Inputs from history** (`dealModel/balanceItems.ts`): AR, inventory, AP, PP&E, cash, short- / long-term debt (`total_debt` when printed) and capex now attach to the P&L of the same canonical period ("FY2024", "2024" and "FY2024 (Jan - Dec 2024)" all match). Split capex lines (growth / maintenance / replacement) are summed; outflows (stored ≤ 0) are read as positive amounts. A statement in another currency, or for a period with no P&L, is left out rather than failing the model.
+- **Working capital:** per-year **DSO / DIO / DPO** seeded from **full fiscal years only** (AR / revenue × 365, inventory and AP / COGS × 365); projected receivables, inventory and payables start from the latest full-year balance sheet, and the increase in NWC is a use of cash. Falls back to % of revenue — from the balance sheet if it has any working-capital items, else the old 10%.
+- **Capex:** per-year % of revenue from the cash flow (else the old 3%), split into maintenance + growth when both were reported.
+- **Debt:** opening net debt from the latest full-year balance sheet goes into a full sources & uses (cash-free, debt-free: refinanced at entry; sources = uses). Two tranches (senior + optional second), mandatory amortisation, a year-end cash sweep from **levered** FCF (net income + D&A − capex − ΔNWC) above a **minimum cash** input, senior first, and a cash balance. Interest is on the average balance after scheduled amortisation (opening − mandatory / 2), so it never depends on the sweep — **no circular reference, no iterative calculation.** Exit equity = EV − debt + cash. DSCR now uses scheduled debt service only.
+- **Scenarios:** every new input has Low / Base / High values and a Live (`CHOOSE`) cell; each Scenarios block now carries the full P&L, working capital, capex and the two-tranche schedule. Low / High start equal to Base (no obvious delta). Methods (days vs %, total vs split) are shared by all three cases.
+- **Old saved models still load:** scalar NWC / capex % become per-year % of revenue drivers at the same value (cash flows identical), no second tranche, no minimum cash. Returns move by design (levered sweep, cash at exit).
+- **Workbook:** new modules `workbook/workingCapital.ts`, `workbook/debtSchedule.ts`, `workbook/balanceHistory.ts` (Historicals block with full-year DSO / DIO / DPO / capex % as formulas). Assumptions has a "Working capital & capex drivers" block; Projections a cash-flow block; Returns sources & uses and the debt and cash schedule.
+- **Checked:** recalculating the generated workbook with a throwaway evaluator matched the shared calculator for all three cases in five set-ups (days + split capex with two tranches and minimum cash, defaults, P&L only, a pre-E3 saved model, absolute debt with a 100% sweep): IRR, MoM, equity, exit EV, levered / unlevered FCF, ΔNWC, debt and cash per year all within 4e-15; sources = uses in every case.
+- **Panel:** a "Working capital, capex & debt" section — method selectors, DSO / DIO / DPO (or NWC %) and capex % per year, senior and second tranche (size, rate, amortisation), cash sweep and minimum cash, the opening net debt, and read-only ΔNWC / capex / levered FCF / debt / cash from the shared calculator.
+
+**No migration** (assumptions are JSON). No new route.
+
+**Verification:** API 2265 tests passing (+32: balance inputs, workbook debt / working capital, route), web 474 passing (+6 panel), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
+#### Timestamp: October 1, 2026 — 21:55 IST
+
+#### Goal: Model builder fix plan **E1** — model every P&L line (branch `feat/model-line-items-scenarios`, stacked on PR #165).
+
+**Analyst feedback (Pushkar, SRM deal):** "the build model feature is really good; the main problem is it's only using the main figures — every line item should be modelled out."
+
+**E1 · Every P&L line is now modelled**
+- **Root cause:** the model carried six fixed figures (revenue, COGS, GP, EBITDA, D&A, net income) on hard-coded rows (`PL_ROWS`, `ASSUMPTION_CELLS`), and projected EBITDA from one growth + one margin input. Every raw account (cement, fly ash, insurance …) was thrown away.
+- **Line catalogue** (`dealModel/lineCatalogue.ts`): the standard income-statement vocabulary (revenue → net income, incl. other income / expense) plus every raw account the extractor filed under a parent (`cogs_cement`, `revenue_discounts` …), nested under that parent. A parent is the sum of its accounts; where the accounts don't add up to the printed total an "Other (unallocated)" line keeps it tied. Gaps the statement implies are filled and shown grey (COGS = revenue − GP, operating costs = GP − EBITDA, D&A = EBITDA − EBIT).
+- **Per-line drivers** (`dealModel/drivers.ts`): each input line has `{ method: GROWTH | PCT_REVENUE | FIXED, values per year }`, seeded from **full fiscal years only** (revenue at the CAGR, costs at their average % of revenue, other income at its average amount). Subtotals, parents, interest (debt schedule) and tax (tax rate × EBT) are formulas, never inputs.
+- **Old saved models still load:** rows saved with one growth / margin are migrated in code — revenue lines get the saved growth, the saved margin is split across cost lines in their historical proportions (projected EBITDA margin equals the saved margin exactly), D&A keeps its %.
+- **Workbook** split from one 700-line file into `workbook/` modules (registry, assumptions, historicals, projections, returns, sensitivity, cover/notes). A generated registry hands out every address. Assumptions has a blue driver row per line with a method dropdown; Projections and Historicals have a row per line with accounts outlined under their parent; subtotals are formulas on both sheets. Exit EBITDA now follows the exit-year input.
+- **Found while verifying:** revenue accounts' formulas referenced the revenue row (their own sum) in an untaken IF branch — a circular reference to Google Sheets. Fixed, with a static circular-reference test.
+- **Panel:** per-line driver table (method + value per year, collapsible parents), and the preview now runs the shared calculator (`@ai-crm/shared` `projectModel`, margin × revenue), which recalculated to the workbook's exact IRR / MoM / exit EV on the SRM fixture.
+
+**Verification:** see the E2 entry below for the final counts.
+
+#### Timestamp: October 1, 2026 — 22:05 IST
+
+#### Goal: Model builder fix plan **E2** — Low / Base / High scenarios (same branch).
+
+**Analyst feedback:** "there is no high/base/low scenario; even basic models should have quick scenario analysis."
+
+**E2 · Low / Base / High cases**
+- **Root cause:** `DealModel` already supported named cases (`name` + `UNIQUE("dealId", name)`), but the route hard-coded `'Base case'`. **No migration needed.**
+- **API:** `GET` / `PUT /model?case=Low|Base|High` (default Base — every existing saved model is the Base case), new `GET /model/cases` (all three + a summary of each), and export carries all three cases and opens on the requested one. Unknown case → 400 `INVALID_CASE`. Same router, already in the lite bundle.
+- **Seeding:** an unsaved Low / High starts from Base — revenue growth ∓3pp, EBITDA margin ∓2pp (through the % of revenue cost lines, in proportion), exit multiple ∓1.0x (floor 0.5x). After that every number is an ordinary editable input. Projection years, entry basis and debt mode follow Base so the workbook has one layout.
+- **Workbook:** Assumptions has Low / Base / High columns for every scalar and Low / Base / High rows for every line driver, a blue **Active case** dropdown, and a Live column (`CHOOSE` on the active case) that every formula reads. A new **Scenarios** sheet shows revenue, EBITDA, margin, entry / exit EV, equity, IRR and MoM for all three cases at once, each from its own compact calculation block (no macros, no data tables). `fullCalcOnLoad` stays on.
+- **Checked:** recalculating the generated workbook gave the same IRR / MoM / exit EV as the shared calculator for all three cases (difference < 1e-14), and the Returns sheet followed whichever case was active.
+- **Panel:** Low / Base / High tabs ("seeded" / unsaved markers), Save saves the active case only, a side-by-side IRR / MoM / exit EV / exit EBITDA summary that moves as you edit, and Download sends all three cases.
+
+**Not done here:** ticking E1 / E2 in `docs/FINANCIALS-FIX-PLAN.md` — that file lives only on the unmerged `docs/financials-fix-plan` branch.
+
+**Verification:** API 2233 tests passing (+46 new across catalogue / drivers / workbook-lines / scenarios / route), web 467 passing (+9 panel, +1 routing), tsc clean in both apps (bar the known `api/dist/app-*.js` web errors when the API isn't built), web lint 0 errors (81 warnings, unchanged), `package-lock.json` unchanged.
+
+---
+
+#### Timestamp: October 1, 2026 — 21:38 IST
+
+#### Goal: Financials fix plan **F1 part 2** — customer concentration and related-party customers in the AI Financial Analysis (branch `feat/financials-f1-customer-concentration`, stacked on `feat/financials-f1-cashflow-flags`).
+
+**Problem:** the SRM analyst found by hand that one customer was 39% of revenue and was also a part-owner. The analysis never saw it: those facts are in the CIM / management presentation, not on the financial statements.
+
+**Fix:**
+- New `analysis/customerConcentrationReader.ts`: takes keyword windows from the deal's document text ("% of revenue", "largest customer", "related party", "shareholder" …, CIM first, max 60k chars). It then makes **one** Claude call (Haiku, `operation: customer_concentration`, structured output, today's date in the prompt) for top customers and their revenue share, related-party customers, and related-party suppliers or transactions, each with a verbatim quote and document name.
+- Every quote is checked against the text that was sent. Anything not found there is dropped, so the analysis never invents a finding.
+- The result is cached in the existing `FinancialExtractionCache` table (mode `customer_concentration`), keyed by the deal's document ids and `updatedAt`. **No migration needed.** A new or re-processed document refreshes it automatically.
+- The analysis page reads the cache. Only the first view calls the model, and waits at most 15s; after that the read finishes in the background. The insights, memo, scorecard and deal-chat paths read the cache only.
+- New `analysis/customerConcentrationFlags.ts` turns the facts into flags with fixed rules:
+
+  | Finding | Severity |
+  |---|---|
+  | Top customer ≥ 20% of revenue | warning |
+  | Top customer ≥ 35% of revenue | critical |
+  | Top 5 customers ≥ 60% of revenue | warning |
+  | Related-party customer, ≥ 10% of revenue | critical |
+  | Related-party customer, smaller share | warning |
+  | Related-party suppliers / transactions | warning |
+
+- Each flag cites its quote and document. The flags feed Red Flags, Key Findings and the QoE score, the same way the part 1 cash-flow flags do.
+- On an SRM-shaped document: critical "One Customer Is 39% of Revenue" plus critical "Related-Party Customer".
+- **Cost:** about $0.02 per deal at most, once per document set.
+- **Tests:** 24 new tests (flag rules, call shape, quote check, caching, analysis integration). API suite 2205 passing, tsc clean.
+
+---
+
+### Session 83 — September 30, 2026
+
+#### Timestamp: September 30, 2026 — 13:53 IST
+
+#### Goal: Smooth Flows **Batch 0**, the demo blockers from the live QA run (PR `fix/flows-batch-0`).
+
+Four tracks ran in parallel on separate branches (Excel financials, PDF ingest, NDA templates, Firm Profile + insights), plus two small fixes done directly. Every change was reviewed, then cherry-picked onto one branch. Two reported bugs were re-tested live first and did not reproduce.
+
+**1. Wrong financials from Excel uploads (EBITDA 0), also shown on the client portal**
+- **Root cause, part 1:** the extraction schema only offered UNITS / THOUSANDS / MILLIONS / BILLIONS. An "INR crore" sheet had no accurate option, so the model tagged it UNITS.
+- **Root cause, part 2:** conversion to millions then rounded to 4 decimals, which acts as a $100 floor: 182.4 → 0.0002 (shown as 200) and EBITDA 29.1–44.2 → 0. That exactly matches the 15 wrong values seen live.
+- **Fix:**
+  - Added LAKHS (×0.1) and CRORES (×10) to the schema, both prompts and the conversion table.
+  - Replaced the rounding with 12-significant-digit cleanup.
+  - Added a schema version (`v2`) to the extraction cache key, so **Re-extract** recomputes instead of replaying the old cached output.
+- **Existing deals:** rows already stored are wrong. After deploy, click **Re-extract** on affected documents. INR/crore deals are the likely ones; the Northwind QA deal is one.
+
+**2. Valid PDFs rejected at upload**
+- **Root cause:** `pdf-parse` 1.1.4 (2017 pdf.js) can't read modern object-stream PDFs. Ingest returned 422 before Claude's native PDF read ever ran.
+- **Fix:** with `INGEST_ENGINE=claude`, a text-extraction failure now falls through to the Claude read. Only if that also fails does the user get a plain "We couldn't read this PDF" message.
+- **Data room:** the "Pending Analysis forever" state was really a `failed` status the UI didn't map. It now shows "Extraction Failed".
+
+**3. "Mark all as read" returned 403 for every user**
+- **Root cause:** the panel sends the Supabase auth id, but the route compared it to `User.id`.
+- **Fix:** one org-scoped resolver accepts either id, used by the list, mark-all-read and bulk delete (bulk delete had the same bug).
+
+**4. Firm Profile "Saved" but the fields came back empty**
+- **Root cause:** the save always worked. `findOrCreateUser`'s Organization join (which serves `/users/me`) never selected `settings` or `website`, so the page reloaded blanks.
+- **Fix:** added both columns to the join. `settings` holds only firm profile, criteria, research and playbook data, which members already see.
+
+**5. Data-room "Generate insights" required OpenAI**
+- **Fix:** moved to Claude (`trackedClaudeMessage`, structured output) with the same prompt and output shape. The 503 message no longer mentions OpenAI.
+
+**6. Multi-file upload silently dropped unsupported files**
+- **Fix:** the confirm dialog now lists each skipped file and why. Validation moved to a tested `splitUploadFiles` helper, which also brought `page.tsx` back under 500 lines.
+
+**Not reproducible on re-test (no code change)**
+- **Dashboard "0 live deals":** a new Initial Review deal counted immediately.
+- **NDA template "never listed":** the saved template appears and New NDA works. The "0 saved" the tester saw counts NDA *documents*, not templates.
+
+**Hardening found along the way:** `orgMiddleware`'s lazy org creation had a read-then-write race that could create orphan orgs when several requests arrived together. It now claims the org with a conditional update. This was not the cause of the NDA report.
+
+**Verification:** API 2085 tests passing (+18 new), web 439 passing (+2 new), tsc clean in both apps, web lint 0 errors (81 warnings, unchanged from `main`), `package-lock.json` unchanged.
+
+---
+
+### Session 82 — September 30, 2026
+
+#### Timestamp: September 30, 2026 — 02:25 IST
+
+#### Goal: live browser QA of production (founder asked for "every button and feature").
+
+**Setup**
+- **Test account:** a production QA login, `qa.tester@example.com` (ADMIN), created through the Supabase admin API with email already confirmed. The app provisioned its own org, "Avise QA Test Org", on first sign-in. `@example.com` never delivers mail, so invites triggered by the tests reach nobody.
+- **Test files:** a fictional test CIM (PDF) and a P&L (Excel).
+- **Testers:** four parallel `playwright-cli` browser testers covered navigation and dashboard, intake and the deal page, documents, and settings/team/contacts. They recorded console errors and failed requests and took screenshots.
+
+**Results**
+- About 30 new findings, all added to `docs/USERFLOW-SMOOTHING-TODO.md` → "Live QA findings", including a new **Batch 0** for demo blockers.
+- Worst:
+  - Excel-derived financial statements are wrong (EBITDA 0), and they appear on the client portal.
+  - Valid modern PDFs are rejected at ingest.
+  - "Mark all as read" 403s for every user.
+  - The dashboard shows "0 live deals" for new deals.
+  - The NDA template never appears after saving.
+  - Firm Profile shows "Saved" but doesn't save.
+- Batch 1 fixes confirmed working live: stage-change note, the contact email-summary message, and new data rooms appearing on the kanban.
+
+**Root causes confirmed this session**
+- **PDF ingest.** Production logs show `pdf-parse` 1.1.4 (pdf.js v1.10, 2017) throwing "Invalid PDF structure" on the test PDF, which macOS PDFKit reads fine. Ingest stops before Claude's native PDF read.
+- **Mark all as read.** The route compares the Supabase auth id against `User.id` without the auth→internal translation that the `GET` route performs.
+- **Portal download 404 on app.avise.io.** Not reproducible: re-tested with the same token, and both domains serve the portal and download.
+
+**Test data left in the QA org:** deal "Northwind Cold Chain", data room "QA-Room", contact "Priya Sharma", NDA template "QA NDA template", memo, invitee account `qa.invitee1@example.com`. Kept for re-testing fixes.
+
+---
+
+### Session 81 — September 30, 2026
+
+#### Timestamp: September 30, 2026 — 00:31 IST
+
+#### Goal: Smooth Flows, Batch 1 — the 14 quick high-impact fixes (PR `fix/flows-batch-1`).
+
+Every fix started with a failing test, except the two toast and brand one-liners, which were checked by eye.
+
+**Getting deals in**
+- **"New Deal" opened the wrong mode.** Most New Deal buttons (dashboard masthead, quick actions, Deals empty states) passed the click event into `openDealIntake`, which treated it as a deal. The upload modal opened as "Update Existing Deal" with a blank deal selected. The provider now only pre-selects a real deal.
+- **Bulk import's "View All Deals" went to a 404** (`/crm`). It now goes to `/deals`. A new test checks that every hard-coded internal link points at a real route; that test found only this one.
+
+**Working a deal**
+- **The stage-change note was thrown away.** It is now sent with the stage change and saved on the stage-change activity.
+- **Extraction errors blamed the document.** "Document may be encrypted or unsupported" was shown for every failure. The message now matches the cause:
+  - No document on the deal: "upload one first".
+  - Too many extractions (429) and other failures: the server's own reason.
+  - Network failure: "couldn't reach the server".
+  - Timeout: the existing 5-minute explanation.
+- **Deals disappeared from the pipeline.**
+  - **Root cause:** stage was accepted as any string. The Data Room page created deals as `SCREENING`, and the deal chat and AI assistant stage tools offered `LOI_NEGOTIATION`, a stage that doesn't exist (they also lacked `LOI_SUBMITTED` and `NEGOTIATION`). Neither value has a pipeline column, so those deals never showed on the kanban.
+  - **Fix:** one shared stage list (`services/dealStages.ts`) is now used by the API schema and all three chat tools.
+  - **Existing deals:** `apps/api/deal-stage-cleanup.sql` moves them onto real stages. **Founder must run it**; it is listed in `docs/PENDING-MIGRATIONS.md`.
+- **A failed pipeline drag snapped back silently.** It now shows why. Removing the sample deal also reports failure.
+
+**Documents and integrations**
+- **Data-room files vanished.** One failed background refresh (the 5-second processing poll, or the refresh on returning to the tab) replaced the file list with nothing until a reload. `fetchDocuments` now reports the failure, so the screen keeps its files.
+- **Data-room actions failed silently.** Delete, rename and new folder/file, Generate insights and the missing-document "Request" now say when they fail. Request also confirms success.
+- **Cancelling Google sign-in stranded the user.** It showed a raw "Missing code or state" page. The callback now always returns to Settings, with a "connection cancelled" or "could not connect" message.
+- **Expired integrations had no way back.** They now show a **Reconnect** button and the actual sync error. Also:
+  - Settings now uses the app-wide toasts.
+  - The OAuth result is cleared from the URL, so refreshing the page no longer repeats the toast.
+  - `ProviderCard` was split into its own file to keep the section under 500 lines.
+- **Contact "Summarize emails" never worked.** The API route it called didn't exist. Added `GET /contacts/:id/email-summary`, which loads the Gmail service only when called.
+
+**App-wide**
+- **Errors appeared as raw JSON.** The API error handler returns `{ error: { code, message } }`, and the web client printed that object as `{"code":"INTERNAL_ERROR",…}`. The code was also lost. One parser now reads the message and code on all three request paths.
+- **The login page showed the old "PEOS" mark.** It now shows the Avise mark.
+
+**Verification:** API 2063 tests passing (+11 new), web 437 passing (+30 new), tsc clean in both apps. Web lint shows 0 errors and the same 81 warnings as `main`.
+
+**Pending (founder):** run `apps/api/deal-stage-cleanup.sql` in Supabase so existing hidden deals appear on the kanban.
+
+---
+
+### Session 80 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 16:26 IST
+
+#### Goal: token savings (PRs #154–#156, merged) and a full user-flow audit (PR #157).
+
+**1. Nightly signal scan skipped idle orgs (#154)**
+- **Problem:** `/api/cron/signal-scan` started a paid Managed Agents session for every active org, including orgs with no deals to monitor.
+- **Fix:** Before the scan, count the org's active deals, using the same filter as the agent's `list_deals_for_org` (not PASSED, not CLOSED_LOST). Orgs with no active deals are skipped. If the count query fails, the org is scanned anyway. The response is now `{ scanned, skipped, failed }`.
+
+**2. PASSED deals scored once after extraction, not twice (#155)**
+- **Problem:** After an extraction, both `maybeScoreAfterExtraction` and `maybeReactivateAfterExtraction` called `scoreDeal` for a passed deal: two identical Sonnet calls.
+- **Root cause of the worse bug:** the two calls raced. If the plain score landed first, the reactivation check compared the new card against itself, so a real improvement could read as "no change" and the deal was never flagged for reactivation.
+- **Fix:** the plain post-extraction score now skips PASSED deals. The reactivation hook scores them once, against the card from before the extraction.
+
+**3. Memo generation caches the deal context (#156)**
+- **Problem:** each of a memo's ~12 sections sent its section prompt first and the full deal context (up to ~40K chars) after it. With the order switched between calls, nothing could be cached, and every section re-billed the whole context.
+- **Fix:** the deal context now comes first, as a cached block that is identical for every section, followed by that section's instructions. The first batch of three sections writes the cache, and the remaining ~9 sections and the critique read it at 0.1×. That cuts roughly 60% of the context input cost per memo. The model sees the same text in a different order.
+
+**4. Skipped: trimming the deal chat context.** Since #150 the chat context is cached, so trimming would save about $0.0004 per message. It would also remove the user list the assign tool needs and the source quotes used for citations.
+
+**5. User-flow audit → "Smooth Flows" fix list (#157)**
+- Five parallel code reviews covered auth and onboarding, deal intake, working a deal, documents and integrations, and app-wide patterns. Every finding was re-verified against `main`.
+- The result is `docs/USERFLOW-SMOOTHING-TODO.md`: 68 checklist items with file:line references and fixes, grouped into 4 batches.
+- Worst findings:
+  - The onboarding "Invite your team" step invites nobody.
+  - Most "New Deal" buttons open intake in "Update Existing Deal" mode.
+  - Memo "Generate all" saves nothing until the very end.
+  - A chat reply that fails midway freezes, shows no error and isn't saved.
+  - There is no mobile navigation.
+- **Process lesson:** the main checkout was on a stale branch 98 commits behind `main`, and the first pass read it. All audit and review work must run against a fresh `origin/main` worktree.
+
+**Verification:** #154 and #155 each added 2 tests and #156 added 1. The API suite passed (2042–2044 tests) and tsc was clean on each branch.
+
+---
+
+### Session 79 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 15:40 IST
+
+#### Goal: cut the 4MB icon font that loads on every cold page load (PR `perf/icon-font-subset`).
+
+**Problem:** The root layout loaded the whole Material Symbols variable font, 4.0MB covering all ~4,300 icons and every axis, on every cold load. The product uses 365 of those icons.
+
+**Fix:**
+- The font request now passes Google Fonts' `icon_names=` with only the icons we use. It downloads **364KB instead of 4.0MB (−91%)**.
+- All axes (fill, weight, grade, optical size) are kept, so every icon looks exactly the same.
+- Added `preconnect` to Google Fonts so the font request starts sooner.
+- Switched `font-display` from `swap` to `block`. Icon names no longer flash as plain text ("dashboard", "search") while the font loads. Google recommends `block` for icon fonts.
+- The list lives in `apps/web-next/src/lib/iconFont.ts`. A guard test (`iconFont.test.ts`) scans the source for icon names and fails if one is missing from the list. Without the guard, a missing icon would render as its name in plain text. The guard found 7 icons that a first scan had missed.
+- **Side fix:** the verify-email loading spinner used `material-symbols-rounded`, a font the app never loads, so it rendered as the text "progress_activity". It now uses the outlined font.
+
+**Known limit:** A deal's `icon` column is free text. An icon name stored in the database that the code never uses would render as text. All code paths that set it use `business_center`, which is in the list.
+
+**Verification:** The live Google Fonts URL returns 200 and a 364KB font file. Web: 410 tests passing (3 new), lint clean.
+
+---
+
+### Session 78 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 15:12 IST
+
+#### Goal: three small bugs found during the token/upload work (PR `fix/small-bugs`).
+
+**1. Deal-chat audit entries were silently lost**
+- **Problem:** Zero `AI_CHAT` rows in the audit trail since August.
+- **Root cause:** `AuditLog.aiChat` passed no resource type. The `AuditLog.entityType` column is NOT NULL, so every insert was rejected, and the audit logger swallows errors. The login, failed-login and logout helpers had the same gap.
+- **Fix:** Deal chat is now recorded against the deal (`entityType: DEAL`, `entityId: dealId`). Login and logout events are recorded against the user. Any caller that still omits a type falls back to a non-null default and logs a warning.
+- **Note:** the login/logout helpers have no callers, so auth events are not audited at all. This is flagged for a later decision.
+
+**2. Notification polling hammered an unreachable API**
+- **Problem:** When the API was unreachable (the ERR_TIMED_OUT reports), the bell badge re-polled every 15s and logged a console error each time.
+- **Fix:** Polling now backs off exponentially, from 15s up to a 5-minute cap. It logs once per outage, resets on the first success, and polls immediately when the tab becomes visible again. Hidden tabs skip the request.
+
+**3. Refusal-fallback attempts missing from the cost ledger**
+- **Problem:** Fable 5 extraction uses server-side fallback to Opus 4.8. When the classifier declines Fable mid-output, Anthropic bills that Fable attempt at Fable rates. Our ledger only recorded the top-level usage, which covers only the Opus attempt that served the message.
+- **Fix:** `trackedClaudeMessage` now reads `usage.iterations`. Each attempt that was replaced and had produced output is recorded as its own `blocked` row, priced at its own model. Attempts declined before any output are not billed by Anthropic and stay unrecorded.
+
+**Verification:** Every fix started with a failing test. API: 219 files, 2046 tests passing, tsc clean. Web: NotificationCountProvider tests 4/4.
+
+---
+
+### Session 77 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 03:46 IST
+
+#### Goal: fix very slow uploads (ingest modal, data room, bulk import).
+
+#### 1. What was actually wrong (measured, not guessed)
+- **Uploads over 4.5 MB were rejected outright.** Vercel caps a function's request body at 4.5 MB; a 5.5 MB test upload to `/api/ingest` returned `413 FUNCTION_PAYLOAD_TOO_LARGE` before reaching the app, while the UI advertised 50 MB and showed a misleading "Maximum upload size is 50MB".
+- **Ingest waited on everything before responding.** Measured from the usage ledger: the Fable 5 document read (`deal_ingest`) takes ~30 s; on top of that the request waited on teaser generation (one Sonnet call per investment profile), ~8 sequential DB writes, and — for bulk imports — one blocking teaser call per row (lists of 40–60+ rows could exceed the 300 s limit).
+- Ruled out: LlamaParse (its key is not set in prod, so PDFs parse locally in ~1 s).
+
+#### 2. Fixes (PR `perf/fast-large-uploads`)
+- **Direct-to-storage uploads:** the browser gets a signed URL from new `POST /api/uploads/sign` and uploads straight to Supabase Storage; the API receives only the storage path (strictly validated per org; traversal rejected). Removes the 4.5 MB cap and one full transfer of the file.
+- **Founder's choice: keep waiting for the AI read** (the modal still shows extracted results before the deal is created), but nothing else blocks: teasers, activity/audit/embeddings and the multi-doc analyzer run after the response; bulk runs one background teaser job (3 at a time) and batches its inserts; email attachments process 3 at a time; updating an existing deal uploads to storage alongside the AI read.
+- Web: per-file progress text, "Data Room only" uploads 3 at a time, teasers fetched by polling, accurate size errors.
+- Tests: API 2041 passing (29 new), web 407 passing (22 new); review added strict storage-path validation (6 traversal cases seen failing first).
+
+#### 3. Notes
+- Data-room files between 50 and 100 MB also need the Supabase project's global file-size limit raised (bucket has no own limit; default project limit is 50 MB).
+- The remaining wait is the ~30 s Fable read itself. Lowering its effort or using a faster model for the ingest summary would cut it further but needs an extraction eval first.
+
+---
+
+### Session 76 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 02:46 IST
+
+#### Goal: track every AI token and its real cost, everywhere in the product.
+
+#### 1. What was wrong (full audit of every AI call site)
+
+The `UsageEvent` ledger was wrong in both directions:
+- **Undercounted:** Anthropic cache tokens were never recorded (`usage.input_tokens` excludes them — after PR #145 turned on prompt caching, most of extraction's input vanished from the ledger); ~12 call sites recorded nothing (firm teaser, legacy financial classifier + reconciler, outreach cleaner, reply classifier, 3 OpenAI agents, memo suggestions, extraction fallback, Tavily, LlamaParse); cron / webhook / integration-sync work was dropped entirely ("no usage context bound"); failed and aborted calls recorded 0 tokens although Anthropic billed them; managed-agent web search ($10/1k) and runtime ($0.08/h) were never counted.
+- **Overcounted:** LangChain paths billed cache reads at the full input price (10× too much); `claude-sonnet-5` was priced at $3/$15 instead of the $2/$10 list price (+50% on chat, memo, NDA, scorecard, managed agents); Apify failures were recorded as full-cost successes.
+- **$0 rows:** `claude-sonnet-4-6` had no price row; date-suffixed served model ids missed the exact-match price table.
+
+Prices and cache multipliers (read 0.1×, 5-min write 1.25×, 1-hour write 2×) verified against the Claude API reference, not memory.
+
+#### 2. Fixes (PR `feat/usage-cost-accuracy`)
+
+- **Cost core:** cache-aware pricing, date-suffix fallback, provider-reported cost override, `runAsOrgSystem` so background work is attributed to the org (flagged `attribution: system`).
+- **Every call path records exact usage:** direct SDK, streaming chat, LangChain (cache split), managed agents (authoritative `list_cost`), embeddings, background uploads; errors/aborts record what was billed; ledger writes are awaited.
+- **Coverage:** all ~12 untracked call sites + Tavily + LlamaParse; signal-scan and reactivation crons, reply-io webhook and every integration sync now recorded.
+- **Daily reconciliation:** 03:00 UTC cron compares the ledger with Anthropic's Admin API cost report, stores drift in `UsageReconciliation`, alerts over 5% and $0.50.
+
+Review caught one gap the agents' scopes missed: the nightly signal monitor still priced its sessions from tokens only (missing web-search cost) — fixed with a test that fails first. Also reverted an unintended `package-lock.json` rewrite left by a local `npm install`.
+
+Tests: API 2005 passing (≈45 new), `tsc` clean, build clean.
+
+#### 3. Founder actions required
+1. **Run `apps/api/usage-cost-accuracy-migration.sql`** in Supabase (price corrections, new providers, reconciliation table) — tracked in `docs/PENDING-MIGRATIONS.md`. Until then the sonnet-5 / sonnet-4-6 prices stay wrong.
+2. **Create an Anthropic Admin API key** (`sk-ant-admin01-…`, Console → Settings → Admin keys) and set `ANTHROPIC_ADMIN_KEY` in Vercel — without it the reconciliation job skips.
+3. Optional: `ANTHROPIC_RECONCILE_WORKSPACE_ID` if the Anthropic org is shared with other apps; verify the Tavily / LlamaParse per-unit prices against your plans (`TAVILY_PRICE_PER_CREDIT_USD`, `LLAMA_PARSE_PRICE_PER_PAGE_USD`).
+
+---
+
+### Session 75 — September 29, 2026
+
+#### Timestamp: September 29, 2026 — 01:58 IST
+
+#### Goal: fix the chat greeting the founder as "Hi Dev", fix the Anthropic key incident, and make page-to-page navigation faster.
+
+#### 1. Anthropic key incident (PRs #146, #147)
+
+**Problem:** every AI call failed with "credit balance is too low" even after a new key was added in Vercel.
+
+**Root cause:** the first new key was added as `Antropic_api_avise` (a name no code reads) and was itself out of credit (tested directly against the Anthropic API → 400). PR #146 aliased that name onto `ANTHROPIC_API_KEY` *with priority*; once the founder put a second, working key (tested → 200) directly into `ANTHROPIC_API_KEY`, the alias overwrote it with the dead one at startup.
+
+**Fix:** PR #147 reverted the alias. Verified live: next deal-chat call succeeded (12,762 in / 292 out tokens). **Still to do (founder):** delete `Antropic_api_avise` in Vercel and revoke both keys that were pasted in plaintext in chat.
+
+#### 2. Chat greeted Ganesh as "Hi Dev" (this PR)
+
+**Root cause:** the chat prompt never states who the user is; it injected `User.onboardingStatus.personProfile` as "Your Role: …". Ganesh's profile had been researched from Dev's LinkedIn (`devlikesbizness`) and the model had put the *name* "Dev Shah" into the undescribed `title` field. The Settings values (`User.name` / `User.title`) were correct but never reached the prompt.
+
+**Fix:** chat now injects "You are assisting: <Settings name> (<Settings title>)" and no longer uses the onboarding blob; the onboarding schema now describes `title`/`role` as job title / functional role, never a name. 3 route tests.
+
+#### 3. Slow navigation (this PR)
+
+**Measured root cause:** every API response carried `x-vercel-id: bom1::iad1` — functions ran in **US East** while the DB is in **Tokyo**. The new Vercel project (Sept 17 move) defaulted to `iad1`; the old project had been switched to Tokyo in the dashboard, and the code-level `preferredRegion` doesn't override the project region. Each request: India → US → Tokyo DB, 3–4 sequential queries across the Pacific.
+
+**Fixes:**
+- `vercel.json` `"regions": ["hnd1"]` — functions next to the DB.
+- `staleTimes.dynamic: 30` — revisits reuse the page payload for 30s.
+- Dashboard, deals, contacts, templates, graphs, NDAs, deal detail, settings now cached via `useApiQuery` (instant revisit, background refresh; mutations write through).
+- Deal detail's duplicate `/financials` request removed; settings' triplicate `/users/me` and `/organizations/me` deduped.
+- chart.js / recharts lazy-loaded; notification polling paused in background tabs.
+- Review rules: a failed background refresh never replaces cached data with an error screen; dashboard always revalidates (no freshness window); deleting a deal doesn't blank card financials.
+
+**Ruled out:** middleware auth check per navigation is local (Supabase uses ES256 keys).
+
+**Open:** PR #141 (data-room summary endpoint — fixes the N+1 requests behind the data-room console timeouts) is green and ready; it only needs an approval.
+
+---
+
+### Session 74 — September 28, 2026
+
+#### Timestamp: September 28, 2026 — 21:16 IST
+
+#### Goal: Fix six product issues Gaurav B reported on Slack against the live Jantar Energia test deal.
+
+#### 1. Root cause for each, traced against live production logs before writing any fix
+
+Set up a clean worktree on latest `main`, cherry-picked the still-unmerged `fix/ingest-provider-rejection` (PR #132) as a base, then dispatched four parallel investigation agents (read-only) followed by four parallel implementation agents, one per issue area. Production `vercel logs` for the exact deal in the screenshots confirmed two of the six were live billing/timeout failures, not document problems:
+
+```
+"Financial agent timed out after 120000ms" ... "Per-doc extraction issue"
+"Your credit balance is too low to access the Anthropic API..." (Anthropic 400, live at 19:49-19:58 IST)
+```
+
+Both returned HTTP 200 with `periodsStored: 0` and no reason attached, which is why the product showed the generic "No financial data found in the documents" instead of the real cause.
+
+#### 2. Fixes (PR #144 — `fix/gaurav-feedback-2026-09-28`, branched off current `main`)
+
+1. **Ingest modal "CIM only"**: modal took one file, always in "Create New Deal" mode. Now accepts multiple files (planned by a new pure `batchPlan.ts`) and can open pre-scoped to "Update Existing Deal" for a given deal.
+2. **Spreadsheet ingest "No valid deals found in file"**: fixed by the cherry-picked PR #132 fallback to single-document ingest when a spreadsheet has no deal-list column.
+3. **Data room upload speed**: `documents-upload.ts` awaited the full AI pipeline (extraction, deep financial pass, deal merge) before responding. Now responds as soon as the Document row is stored and runs AI work in the background via a new `runAfterResponse()` helper backed by Next's `after()`; client uploads run 3 at a time instead of sequentially.
+4. **Data room hidden file details**: `FileTable.tsx` had no fixed column layout, so an unbounded Name column pushed Author/Date/actions off-screen. Fixed with `table-fixed`, truncation + tooltips, and an insights panel that defaults collapsed below 1536px (persisted in localStorage).
+5. **"Extract Financials not working"**: the real per-document failure reason (timeout or provider error) was discarded and always reported as "no financial data." Route now returns `result.warnings` with the humanized real cause and `result.allFailed`; frontend shows it instead of the generic message. Agent timeout raised 120s → 240s to match the route's per-doc budget, and its `AbortSignal` is now threaded through to the Anthropic client so a timed-out run actually stops calling the paid API. Also closed the CLAUDE.md-flagged gap: `EXTRACTION_SYSTEM_PROMPT`/`EXCEL_CONTAINER_INSTRUCTION` in the now-live Claude extraction engine were static constants with no current-date injection — converted to builder functions that inject today's date per call, matching what the legacy path already did.
+6. **Unreadable AI chat responses**: the opening chat message was hand-built raw JSX (`deal.aiThesis` dumped into a `<p>`), bypassing the markdown renderer entirely — source of the literal ".." after "sp. z o.o.". Replaced with a structured markdown builder (headline, key metrics, highlights, risks). `lib/markdown.ts` rewritten as a line-based parser adding GitHub-style table support (the chat system prompts already ask for tables the old renderer couldn't display) and fixing numbered lists / stray `<br>`s between list items.
+
+90 new tests across both apps, each confirmed failing before its fix. `apps/api`: `tsc --noEmit` clean, full suite 194 files / 1907 tests passing. `apps/web-next`: `tsc --noEmit` clean, full suite 24 files / 362 tests passing. One flaky, unrelated API test failure observed on 1 of 3 consecutive full-suite runs with no code change in between (passed on retry).
+
+#### 3. Founder action required
+
+Production is out of Anthropic credits (same account issue as Session 71 — confirmed live in the logs above). This is a billing action; this PR only ensures that once credits are restored, a real failure is never again shown to the user as "no data in your documents."
+
+---
+
+### Session 73 — September 28, 2026
+
+#### Timestamp: September 28, 2026 — 16:15 IST
+
+#### Goal: Ship the dashboard/Command Center/Data Room redesign (Sessions 71-72) to production, then restore what the 2026-09-17 Vercel project move had silently dropped.
+
+**Shipped.** PR #136 (`feat/dashboard-redesign` → `main`, merge commit `0ceed51`) was reviewed, its CI failures triaged (one real: a `today-queue.tsx` type only caught by CI's lockfile-pinned `@types/react`, fixed; two pre-existing API test failures unrelated to this PR, confirmed already failing on #134/#135), approved, and merged. Vercel deployed it to `app.avise.io` / `deals.avise.io`. Verified live: all three pages render from the merged commit, API routes respond, no new errors in the runtime logs.
+
+**While checking production, re-discovered the 2026-09-17 Vercel project move's dropped env vars** (first found in Session 71's ingest-provider-rejection fix) — the founder asked directly whether documents still go through manual text extraction instead of Claude reading them natively, which surfaced that every Claude-native flag from the August rollout (`EXTRACTION_ENGINE`, `INGEST_ENGINE`, `DEAL_CHAT_ENGINE`, `EXCEL_EXTRACTION_MODE`) had silently reverted to its legacy default after the move, because the new Vercel project never got them.
+
+**Restored in production** (env vars added via `vercel env add` + a redeploy; secrets added by the founder through the Vercel dashboard, values never seen by Claude):
+- `EXTRACTION_ENGINE=claude`, `INGEST_ENGINE=claude`, `DEAL_CHAT_ENGINE=streaming`, `EXCEL_EXTRACTION_MODE=container` — added directly (not secrets).
+- `CRON_SECRET`, `OAUTH_STATE_SECRET` — freshly generated (not the pre-move values, which are gone).
+- `POCKET_FUND_STAFF_EMAILS`, `RESEND_FROM_EMAIL=welcome@avise.io` — added by the founder.
+
+**Still missing:** `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Gmail inbox scan, Drive import, Google Docs NDA flow are down until these are set — also need to confirm the OAuth client's redirect URIs cover `app.avise.io`). `APIFY_API_KEY` skipped deliberately (firm research feature, founder call). `LLAMA_CLOUD_API_KEY` / `AZURE_DOC_INTEL_*` / `MANAGED_AGENTS_*` / `CLAY_*` not restored — all gate features that are currently off, not urgent.
+
+**Not yet verified end-to-end:** a real PDF/Excel upload and a live deal-chat message against the restored Claude engines (no test document pushed through production yet); the first scheduled-job run under the new `CRON_SECRET` (next fires ~12:00 UTC / 17:30 IST).
+
+**Agent permissions note:** Claude Code's auto-mode blocks writing Vercel secret values and blocks self-modifying its own permission file — both by design. Plain (non-sensitive) env vars and `vercel redeploy` were allowed once the founder added explicit Bash rules for them. Secret values were always handed to the founder as copy/paste steps for the Vercel dashboard.
+
+**No code changes, no migrations.** Follow-up: PR to fix the "Local preview only, uncommitted" wording left in the Session 71/72 entries above, now that this is merged and live (this PR).
+
+---
+
+### Session 72 — September 28, 2026
+
+#### Timestamp: September 28, 2026 — IST
+
+#### Goal: Redesign the Admin "Command Center" in the same language as the dashboard.
+
+The direction was agreed through a brainstorm: *team oversight* as the core job, actions in context through a side sheet, and a "team ledger + rail" layout. Spec: `docs/superpowers/specs/2026-09-28-command-center-team-ledger-design.md`.
+
+**Problems found in the old page:**
+- **Negative due dates:** "In -215 days" appeared on completed tasks, because the due formatter skipped the overdue branch for completed tasks.
+- **Nonsense deal volume:** "Deal volume $10000001B" summed USD and INR deals (plus test data) as one number.
+- **Unhelpful allocation rows:** Resource Allocation showed duplicate chips ("DMpro DMpro DMpro"), and its capacity was a flat deals ÷ 5.
+- **Fake status pill:** "System Operational" wasn't checking anything.
+- **Off-palette card:** Upcoming Reviews was a dark navy card.
+
+**Built:**
+- **Masthead:** a summary line that jumps to each section, and a "New ▾" menu.
+- **Slipping list:** org-wide overdue, unowned and stale items with *Nudge* (pre-filled reminder), *Reassign ▾* (`PATCH /tasks` `assignedTo`, with undo) and *Assign*.
+- **Team workload ledger:** load relative to the busiest person, Stretched/Idle tags, de-duplicated deal names, and a per-person ⋯ menu.
+- **Task table:** tabs with counts, correct due labels, deal shown under the title, a status menu with undo, and inline delete confirmation.
+- **Rail:** a compact security panel, a light Upcoming reviews panel, and a restyled Team activity feed.
+- **Side sheet:** all four actions now open in it, pre-filled from context.
+
+**Shared module `src/components/dash/`:** `dash.css`, `undo-bar`, `side-sheet`, `menu`, `avatar`. The dashboard was moved onto these, and its deals drawer now uses `SideSheet`. Decorative icons are marked `aria-hidden` across both pages, because icon names were being read as part of button labels ("notifications Nudge").
+
+**Removed:** `ResourceAllocation.tsx` and `SecurityDashboard.tsx`, replaced by `team-workload.tsx` and `security-strip.tsx`. Nothing else imported them.
+
+**Verified:**
+- `tsc` is clean, apart from the existing missing `api/dist` errors.
+- ESLint shows only the 7 existing `set-state-in-effect` warnings. The same warnings appear on `origin/main` for these forms and the activity feed.
+- 28/28 tests pass across the admin and dashboard suites.
+- Visual check through a temporary mock-data harness (since deleted) at 1600px and 390px, covering the Nudge sheet pre-fill, the row menu and the Overdue jump.
+
+**No migrations.**
+
+#### Data Room index redesign (same session)
+
+The direction was agreed through a brainstorm: *room status at a glance*, rich cards, and frontend-only data (the founder chose this over a new summary endpoint). Spec: `docs/superpowers/specs/2026-09-28-data-room-index-design.md`.
+
+**Before:** a grid of identical folder-icon cards showing only name, industry, a raw stage enum and a date. Nothing about the room's contents, and passed deals mixed in with live ones.
+
+**Built:**
+- **Masthead:** live totals (rooms, documents, open requests, live share links).
+- **Toolbar:** tabs Active / Needs attention / Passed / All, search, and sort by latest upload, coverage or name.
+- **Cards:** a folder-coverage meter with the document count, the latest upload (from `Deal.lastDocument*`), request and share chips, attention reasons, and "created <date>" to tell apart duplicate names (Nino Burgers ×4, DMpro ×3).
+- **New room:** now opens in the shared side sheet.
+
+**Stats loading:** stats come from `/deals/:id/folders` (`fileCount`), `/doc-requests` and `/shares`. `/documents` was deliberately avoided because it returns full rows, including extracted text. At most 4 rooms load at a time, visible first, with a session cache and a retry on each card.
+
+**Deviation from the approved design:** the "Request documents" action became "Deal page", because the deal page can't deep-link to its Documents tab.
+
+**Bug caught during the visual check:** a loading placeholder `<div>` sat inside a `<p>`, which is invalid HTML and caused a hydration error. Fixed.
+
+**Verified:**
+- `tsc` is clean, and the new data-room files have 0 lint findings.
+- 70/70 tests pass across `src/app/(app)` (including 8 new `room-status` tests).
+- Visual check at 1600px and 390px through a temporary mock-data harness (since deleted).
+
+---
+
+### Session 71 — September 27, 2026
+
+#### Timestamp: September 27, 2026 — 12:31 IST
+
+#### Goal: Redesign the dashboard ("refined banker").
+
+Branch `feat/dashboard-redesign` (off `main` @ 930718e). Built and reviewed on `localhost:3002` before merging — see Session 73.
+
+**Problem:** the dashboard read as a generic SaaS template. It had four identical stat cards, a multi-colour donut, big icon tiles, and a subtitle promising "AI market analysis" that doesn't exist. Hierarchy was flat: every widget had the same weight, shadow and bold 16px title.
+
+**What changed (dashboard only; every style is scoped under `.dash`, so no other page is affected):**
+- **Type:** kept **Inter** so the whole product uses one font. A Bodoni Moda + Schibsted Grotesk pairing was previewed and rejected by the founder. Hierarchy now comes from semibold weight, tight tracking and tabular figures.
+- **Masthead:** a dateline, a serif greeting and a factual summary line ("17 active deals, 3 in diligence. 1 task overdue.", with overdue in red), all above an accounting double rule. "Add widget", "Edit layout" and **New deal** moved up here. The two full-width buttons at the bottom of the page are gone.
+- **Pipeline:** the 4 stat cards are now one ledger band with a shared distribution bar. The last column was relabelled from "Closed" to "Closing", because it counts Negotiation + Closing + Won.
+- **Active Priorities:** a hairline table with a 5-step stage tick scale, High-priority tags, initials avatars and right-aligned tabular values. Legacy enum stages such as `LOI_OFFER` now get a readable label instead of the raw enum.
+- **My Tasks:** open tasks sort first by due date and completed ones sink. Rows are labelled "Overdue · 3 days ago" or "Due …".
+- **Portfolio Allocation:** the donut became ranked horizontal bars on a Banker Blue ramp.
+- **Widget shell and optional widgets** (funnel, quick actions, deadlines, signal monitor): one flat panel style, Banker Blue ramp instead of purple/orange, and empty states rewritten to explain what the widget does.
+- Core and optional widgets now share one masonry flow. Motion is a single staggered reveal plus bars that grow in; both honour `prefers-reduced-motion`.
+- Split `PortfolioSignalsWidget` into `widgets/portfolio-signals.tsx` (re-exported) to keep `dashboard-widgets.tsx` under 500 lines. Removed the dead `MarketSentimentCard` (no importers).
+- Design context recorded in `.impeccable.md`.
+
+**Verified:** `tsc` clean (except the existing missing `api/dist` errors), dashboard ESLint shows no new warnings, and the dashboard vitest suite passes 3/3. Checked visually at 1440px and 390px through a temporary mock-data harness, which has since been deleted.
+
+**No migrations.**
+
+#### Timestamp: September 27, 2026 — 20:45 IST
+
+#### Goal: Dashboard v2, the "Morning brief". The founder called v1 "very basic" and asked for more detail and UX.
+
+The direction was agreed through a short brainstorm: lead with "what needs me today", allow quick inline actions, and use a briefing column plus a right rail. Spec: `docs/superpowers/specs/2026-09-27-dashboard-morning-brief-design.md`.
+
+**Built:**
+- **Today queue.** One ranked list of overdue tasks, tasks due today, ownerless deals (High/Urgent, or at Diligence or later) and stale deals (no update in 14+ days). The actions are inline:
+  - *Done* comes with an undo.
+  - *Snooze* lasts 1 or 7 days and is stored per browser.
+  - *Assign ▾* is a keyboard-navigable team menu that PATCHes `assignedTo`.
+  - *Review* opens the deal.
+- **Pipeline funnel.** Five stages, each with a count, a bar scaled to the largest stage and a stale count. Clicking a stage opens a right-side **deals drawer** (focus trapping, Esc to close), replacing the centred stage modal.
+- **Active Priorities.** Three tabs (By priority / Needs attention with a count / Recently updated). A new **Last touch** column turns amber once a deal is stale. On hover, *Data room* and *Open* replace the value. A footer shows "Showing 6 of N".
+- **Right rail:**
+  - **My Tasks** is grouped into Overdue / Today / Upcoming / No date. Completed tasks collapse, and there's an inline **Add task** with due chips.
+  - **Portfolio Allocation** merges near-duplicate sectors ("Food & Beverage(s)"), and each row opens the drawer.
+  - The Inbox Deal Finder and optional widgets follow. Rail order can be dragged in edit mode.
+- **Masthead:** "N things need you today" links to the queue. "Updated X ago ↻" refreshes on click, and the page refetches silently on returning to the tab after 5+ minutes. "Customize ▾" merges the two old buttons.
+- **Details:**
+  - Each section has its own error state with Retry.
+  - Skeletons match the new layout, including the route `loading.tsx`.
+  - Actions are optimistic and roll back on failure.
+  - On phones, the queue badges become coloured eyebrows above the title.
+  - Reduced motion is honoured.
+
+**Bugs found along the way:**
+- **Wrong due labels:** `formatRelativeTime` renders every *future* date as "Just now", so "Due …" labels for upcoming tasks were wrong. The dashboard now uses its own `dueLabel` in `triage.ts`. The shared formatter is untouched and still needs fixing for other callers.
+- **Tasks not filtered to you:** the dashboard fetched `/tasks?limit=20` across the whole org, not "my" tasks. It now shows tasks assigned to you or to no one.
+- **CSS overriding utilities:** `dashboard.css` was unlayered and silently beat Tailwind utilities. It's now in `@layer components`.
+
+**Follow-up fix (founder report, 21:10 IST): the Customize menu was cut off.** The staggered-reveal animation leaves each page section in its own stacking context, so the later Today panel painted over the masthead's dropdown. Fix:
+- The masthead now gets `relative z-20`.
+- The Today panel no longer uses `overflow-hidden`, so the Assign popover can't be clipped. Its edge rows are rounded instead.
+- The Assign menu opens upward when there's no room below it.
+- Menu items no longer wrap.
+- The "Last touch" column is renamed "Updated", so it no longer collides with the next header at narrower widths.
+
+**Defaults:** the Deal Funnel and Upcoming Deadlines widgets dropped out of `DEFAULT_VISIBLE`, because the core funnel and task groups now cover them. Existing users' saved layouts are unaffected.
+
+**Verified:**
+- 19/19 dashboard tests pass: 11 for the triage logic, plus queue/undo component tests and the existing signals test.
+- `tsc` is clean, and ESLint shows only the 2 existing warnings in untouched widgets.
+- Visual check at 1600px and 390px through a temporary mock-data harness (since deleted), covering the assign flow, drawer, undo bar and add-task.
+
 
 ---
 

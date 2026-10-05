@@ -146,7 +146,14 @@ export async function generateSection(
         ? '\n\nReturn your response as valid JSON matching the structure described in the prompt above.'
         : '\n\nReturn your response as clean HTML only (no markdown, no code fences).';
 
-    const userPrompt = `${sectionPrompt}\n\n---\n\n## Deal Context\n\n${contextText}${formatInstruction}`;
+    // Deal context first, as a cached block that is byte-identical for every
+    // section of this memo; the section's own instructions follow it. The
+    // other sections in the run then read the context from cache instead of
+    // re-billing it in full (it is the bulk of every section's input).
+    const userContent = [
+      { type: 'text', text: `## Deal Context\n\n${contextText}`, cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: `---\n\n${sectionPrompt}${formatInstruction}` },
+    ];
 
     // Bound the LLM call — AbortSignal is now forwarded all the way to the
     // in-flight Anthropic request (Task 1), not just raced client-side.
@@ -166,7 +173,7 @@ export async function generateSection(
           operation: 'memo_section_generation',
           role: 'memo',
           system: MEMO_SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: userPrompt }],
+          messages: [{ role: 'user', content: userContent }],
           // 2000 was too small for the JSON-envelope sections (narrative HTML
           // + tableData rows + chartConfig in one object) and truncated them
           // mid-output — or, when the model spent the budget before emitting

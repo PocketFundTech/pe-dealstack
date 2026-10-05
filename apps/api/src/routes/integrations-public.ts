@@ -27,14 +27,22 @@ router.get('/oauth/:provider/callback', async (req: Request, res: Response, _nex
   const provider = req.params.provider as ProviderId;
   const code = String(req.query.code ?? '');
   const state = String(req.query.state ?? '');
-  if (!code || !state) return res.status(400).send('Missing code or state');
+  // Always land the user back in Settings — a raw 400 page strands them.
+  const backToSettings = (status: 'connected' | 'cancelled' | 'error') =>
+    res.redirect(`/settings?integrations=${status}&provider=${encodeURIComponent(provider)}#section-integrations`);
+  // Cancel on the consent screen: ?error=access_denied and no code.
+  if (req.query.error === 'access_denied') return backToSettings('cancelled');
+  if (req.query.error || !code || !state) {
+    log.warn('OAuth callback without a usable code', { provider, error: req.query.error });
+    return backToSettings('error');
+  }
   if (!isProviderRegistered(provider)) return res.status(404).send('Provider not registered');
   try {
     await getProvider(provider).handleCallback({ code, state });
-    res.redirect(`/settings?integrations=connected&provider=${provider}#section-integrations`);
+    backToSettings('connected');
   } catch (err) {
     log.error('OAuth callback failed', err);
-    res.redirect(`/settings?integrations=error&provider=${provider}#section-integrations`);
+    backToSettings('error');
   }
 });
 

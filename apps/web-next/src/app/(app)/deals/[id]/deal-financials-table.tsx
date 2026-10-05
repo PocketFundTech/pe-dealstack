@@ -5,12 +5,8 @@ import { cn } from "@/lib/cn";
 import { getCurrencySymbol } from "@/lib/formatters";
 import { type FinancialStatement } from "./deal-financials-charts";
 import { comparePeriodChronologically } from "./deal-financials-period-scope";
-import {
-  LINE_ITEM_LABELS,
-  ORDERED_LINE_ITEMS,
-  SUBTOTAL_KEYS,
-  type StatementType,
-} from "./deal-financials-constants";
+import { SUBTOTAL_KEYS, type StatementType } from "./deal-financials-constants";
+import { buildStatementRows, hideEmptyRows, UNCLASSIFIED_KEY } from "./deal-financials-layout";
 import { ConfidenceBadge, fmtMoney, fmtPct, isPctKey } from "./deal-financials-formatters";
 import { type ConflictGroup } from "./deal-financials-conflicts";
 
@@ -68,177 +64,6 @@ export function FinancialShell({ children, avgConfidence, currency, collapsed, o
   );
 }
 
-// --- Sub-category detection helpers ---
-//
-// Sub-categories follow the convention "<parent_canonical>_<short_label>" where
-// <parent_canonical> is one of the keys already declared in ORDERED_LINE_ITEMS
-// (e.g. rd, cogs, sga, capex). The renderer detects them at runtime so a source
-// like "Engineering R&D / Product R&D / Applied R&D" can be emitted as
-// rd_engineering / rd_product / rd_applied and shown indented under the rd row.
-//
-// Reserved suffixes that must NOT be treated as children:
-//   _source — citation strings stored alongside numeric values
-//   _pct, _percent, _ratio, _margin — derived percentages with their own slot
-//   _total — convention some sources use to flag the rolled-up total
-const RESERVED_CHILD_SUFFIXES = ["source", "pct", "percent", "ratio", "margin", "total"];
-
-const CANONICAL_SET = new Set<string>(ORDERED_LINE_ITEMS);
-
-/**
- * Find the longest canonical-key prefix that K is a sub-category of.
- * Returns null if K is itself a canonical key OR has no canonical parent OR
- * the trailing segment matches a reserved suffix (e.g. *_source, *_pct).
- *
- * Longest-prefix matching prevents `total_assets_other` from being parsed as
- * "total" + "assets_other" — it correctly resolves to parent "total_assets".
- */
-export function findCanonicalParent(key: string): string | null {
-  if (CANONICAL_SET.has(key)) return null;
-  if (key.endsWith("_source")) return null;
-
-  let bestParent: string | null = null;
-  for (const candidate of ORDERED_LINE_ITEMS) {
-    const prefix = candidate + "_";
-    if (key.startsWith(prefix) && key.length > prefix.length) {
-      if (bestParent === null || candidate.length > bestParent.length) {
-        bestParent = candidate;
-      }
-    }
-  }
-  if (!bestParent) return null;
-
-  const childSuffix = key.slice(bestParent.length + 1);
-  // Reject reserved single-segment suffixes; multi-segment children with these
-  // suffixes inside (e.g. cogs_engineering_total) are still rejected because
-  // the trailing token disambiguates from a real child label.
-  const segments = childSuffix.split("_");
-  const lastSegment = segments[segments.length - 1].toLowerCase();
-  if (RESERVED_CHILD_SUFFIXES.includes(lastSegment)) return null;
-
-  return bestParent;
-}
-
-/** Humanize a child suffix (e.g. "engineering_rd" → "Engineering R&D"). */
-function labelForChild(parent: string, key: string): string {
-  if (LINE_ITEM_LABELS[key]) return LINE_ITEM_LABELS[key];
-  const suffix = key.slice(parent.length + 1);
-  return suffix
-    .split("_")
-    .map((seg) => (seg.length <= 3 ? seg.toUpperCase() : seg.charAt(0).toUpperCase() + seg.slice(1)))
-    .join(" ");
-}
-
-interface DisplayRow {
-  key: string;
-  label: string;
-  isChild: boolean;
-  parent?: string;
-}
-
-/**
- * Build the ordered render plan: walk ORDERED_LINE_ITEMS for canonical/parent
- * rows, attach detected children directly under their parent, then append any
- * unknown standalone keys at the end.
- */
-function buildDisplayRows(allKeys: Set<string>): DisplayRow[] {
-  const childrenByParent = new Map<string, string[]>();
-  const standaloneUnknown: string[] = [];
-
-  for (const k of allKeys) {
-    if (k.endsWith("_source")) continue;
-    if (CANONICAL_SET.has(k)) continue;
-    const parent = findCanonicalParent(k);
-    if (parent) {
-      const arr = childrenByParent.get(parent) ?? [];
-      arr.push(k);
-      childrenByParent.set(parent, arr);
-    } else {
-      standaloneUnknown.push(k);
-    }
-  }
-  // Stable child order — alphabetical so re-renders don't shuffle.
-  childrenByParent.forEach((arr) => arr.sort());
-
-  const rows: DisplayRow[] = [];
-  for (const canonical of ORDERED_LINE_ITEMS) {
-    const hasOwnValue = allKeys.has(canonical);
-    const children = childrenByParent.get(canonical) ?? [];
-    if (!hasOwnValue && children.length === 0) continue;
-    rows.push({
-      key: canonical,
-      label: LINE_ITEM_LABELS[canonical] ?? canonical.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-      isChild: false,
-    });
-    for (const child of children) {
-      rows.push({
-        key: child,
-        label: labelForChild(canonical, child),
-        isChild: true,
-        parent: canonical,
-      });
-    }
-  }
-  for (const k of standaloneUnknown) {
-    rows.push({
-      key: k,
-      label: LINE_ITEM_LABELS[k] ?? k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-      isChild: false,
-    });
-  }
-  return rows;
-}
-
-/**
- * Hide-empty filter. A row is hidden when EVERY period's value is null or
- * undefined — legitimate zeros (e.g. "no debt repayments this year") are
- * preserved so users still see them. Subtotals always render so a zero
- * subtotal carries the "no operating expenses" signal.
- *
- * Children: same nullness check. If a parent has no own value AND every child
- * is hidden, the parent is hidden too (the entire group collapses).
- */
-function applyHideEmpty(
-  displayRows: DisplayRow[],
-  periods: FinancialStatement[],
-): DisplayRow[] {
-  const hasAnyValue = (key: string): boolean => {
-    for (const p of periods) {
-      const v = (p.lineItems ?? {})[key];
-      if (v !== null && v !== undefined) return true;
-    }
-    return false;
-  };
-
-  const visibleChildKeys = new Set<string>();
-  for (const r of displayRows) {
-    if (r.isChild && hasAnyValue(r.key)) visibleChildKeys.add(r.key);
-  }
-
-  const result: DisplayRow[] = [];
-  for (const r of displayRows) {
-    if (r.isChild) {
-      if (visibleChildKeys.has(r.key)) result.push(r);
-      continue;
-    }
-    if (SUBTOTAL_KEYS.has(r.key)) {
-      result.push(r);
-      continue;
-    }
-    // Parent / standalone row. Show if it has its own value OR if any of its
-    // children survive the filter.
-    if (hasAnyValue(r.key)) {
-      result.push(r);
-      continue;
-    }
-    // Walk forward for direct children of this row.
-    const childCount = displayRows.filter(
-      (x) => x.isChild && x.parent === r.key && visibleChildKeys.has(x.key),
-    ).length;
-    if (childCount > 0) result.push(r);
-  }
-  return result;
-}
-
 // --- Financial Data Table ---
 
 export function FinancialTable({
@@ -260,11 +85,38 @@ export function FinancialTable({
     return set;
   }, [rows]);
 
-  const baseDisplayRows = useMemo(() => buildDisplayRows(allKeys), [allKeys]);
-  const displayRows = useMemo(
-    () => (showEmpty ? baseDisplayRows : applyHideEmpty(baseDisplayRows, rows)),
-    [baseDisplayRows, rows, showEmpty],
-  );
+  // Statement-specific layout (deal-financials-layout.ts): sections in P&L
+  // order, raw accounts nested under their section, leftovers grouped.
+  const baseDisplayRows = useMemo(() => buildStatementRows(statementType, allKeys), [statementType, allKeys]);
+  const visibleRows = useMemo(() => {
+    if (showEmpty) return baseDisplayRows;
+    const hasAnyValue = (key: string) => rows.some((p) => {
+      const v = (p.lineItems ?? {})[key];
+      return v !== null && v !== undefined;
+    });
+    return hideEmptyRows(baseDisplayRows, hasAnyValue);
+  }, [baseDisplayRows, rows, showEmpty]);
+
+  // Collapsible sections. Unclassified accounts start collapsed so the
+  // statement reads top-down; everything else starts open.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set([UNCLASSIFIED_KEY]));
+  const toggleSection = (key: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const displayRows = visibleRows.filter((r) => !(r.isChild && r.parent && collapsed.has(r.parent)));
+  const childCount = (key: string) => visibleRows.filter((r) => r.isChild && r.parent === key).length;
+
+  // A value computed by the backend (EBITDA from EBIT + D&A, etc.) carries
+  // `<key>_source: "derived: …"` — mark it rather than pass it off as printed.
+  const derivedFormula = (key: string): string | null => {
+    for (const r of rows) {
+      const src = (r.lineItems ?? {})[`${key}_source`] as unknown;
+      if (typeof src === "string" && src.startsWith("derived:")) return src.slice("derived:".length).trim();
+    }
+    return null;
+  };
 
   if (rows.length === 0) {
     return <p className="text-xs text-gray-400 py-4 text-center">No {statementType.replace(/_/g, " ").toLowerCase()} data available.</p>;
@@ -272,9 +124,14 @@ export function FinancialTable({
 
   const currency = rows[0]?.currency ?? "USD";
   const sym = getCurrencySymbol(currency);
+  // Columns can come from documents in different currencies; each cell is
+  // formatted in its own, but nothing is converted — say so instead of
+  // labelling the whole table with the first column's currency.
+  const currencies = Array.from(new Set(rows.map((r) => (r.currency ?? "USD").toUpperCase())));
+  const mixedCurrency = currencies.length > 1;
   // Cells auto-scale via formatFinancialValue, so we only label the currency
   // here. Per-cell suffixes (K/M/B/Cr/L) are applied at render time.
-  const headerLabel = sym.trim();
+  const headerLabel = mixedCurrency ? "mixed currencies" : sym.trim();
 
   const docMap = new Map<string, string>();
   rows.forEach((r) => { if (r.Document?.id) docMap.set(r.Document.id, r.Document.name ?? "Unknown document"); });
@@ -286,10 +143,15 @@ export function FinancialTable({
       .map((c) => c.period),
   );
 
-  const hiddenCount = baseDisplayRows.length - displayRows.length;
+  const hiddenCount = baseDisplayRows.length - visibleRows.length;
 
   return (
     <>
+      {mixedCurrency && (
+        <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900" role="note">
+          These columns are in different currencies ({currencies.join(", ")}). Figures are not converted, so don&apos;t compare or add them across currencies.
+        </p>
+      )}
       <div className="flex items-center justify-end mb-2 px-1">
         <label className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer select-none">
           <input
@@ -337,8 +199,11 @@ export function FinancialTable({
           </thead>
           <tbody>
             {displayRows.map((row, idx) => {
-              const { key, label, isChild } = row;
-              const isSubtotal = SUBTOTAL_KEYS.has(key);
+              const { key, label, isChild, kind } = row;
+              const isGroup = kind === "group";
+              const isSubtotal = kind === "subtotal" || SUBTOTAL_KEYS.has(key);
+              const kids = isChild ? 0 : childCount(key);
+              const derived = derivedFormula(key);
               const isPct = isPctKey(key);
               const rowBg = isSubtotal ? "#f7f8f9" : idx % 2 === 0 ? "#ffffff" : "#fbfbfc";
               // Indentation:
@@ -346,7 +211,9 @@ export function FinancialTable({
               //   - margin/% rows already indent via existing pl-6 styling
               //   - sub-category children indent one extra level
               //   - everything else is the regular gray-500 leaf
-              const labelCls = isSubtotal
+              const labelCls = isGroup
+                ? "text-gray-400 italic"
+                : isSubtotal
                 ? "font-semibold text-gray-800"
                 : isChild
                 ? "text-gray-500 pl-8 italic"
@@ -360,15 +227,33 @@ export function FinancialTable({
                     {isChild && (
                       <span className="text-gray-300 mr-1" aria-hidden="true">└</span>
                     )}
-                    {label}
+                    {kids > 0 ? (
+                      <button type="button" onClick={() => toggleSection(key)}
+                        className="inline-flex items-center gap-0.5 hover:text-[#003366]"
+                        aria-expanded={!collapsed.has(key)}
+                        title={collapsed.has(key) ? `Show ${kids} account${kids === 1 ? "" : "s"}` : "Hide accounts"}>
+                        <span className="material-symbols-outlined text-[14px] text-gray-400">
+                          {collapsed.has(key) ? "chevron_right" : "expand_more"}
+                        </span>
+                        {label}
+                      </button>
+                    ) : label}
+                    {derived && (
+                      <span className="ml-1.5 text-[9px] font-medium uppercase tracking-wide text-sky-600 bg-sky-50 px-1 py-px rounded"
+                        title={`Not printed in the source — derived: ${derived}`}>derived</span>
+                    )}
                   </td>
                   {rows.map((r) => {
+                    if (isGroup) return <td key={r.id} />;
                     const val = (r.lineItems ?? {})[key];
                     // Each row carries its own `unitScale`; per-cell formatting
                     // means a single statement can mix periods stored at
                     // different scales without mis-rendering.
+                    // Accounting-style negatives: (1.2M) rather than −1.2M.
                     const display = isPct
                       ? fmtPct(val)
+                      : typeof val === "number" && val < 0
+                      ? `(${fmtMoney(-val, r.unitScale ?? "ACTUALS", r.currency ?? currency)})`
                       : fmtMoney(val, r.unitScale ?? "ACTUALS", r.currency ?? currency);
                     const valCls = r.periodType === "PROJECTED" ? "text-gray-400 italic"
                       : isSubtotal ? "text-gray-900 font-semibold"

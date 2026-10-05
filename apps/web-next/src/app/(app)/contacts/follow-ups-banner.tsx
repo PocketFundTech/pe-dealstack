@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useState } from "react";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { cn } from "@/lib/cn";
 
 // ─── Follow-ups Banner ─────────────────────────────────────
@@ -70,17 +70,8 @@ function FollowUpItem({ c, kind, onOpen }: { c: FollowUpContact; kind: "overdue"
 }
 
 export function FollowUpsBanner({ onOpenContact }: { onOpenContact: (id: string) => void }) {
-  const [data, setData] = useState<FollowUpsResponse | null>(null);
+  const { data } = useApiQuery<FollowUpsResponse>("/contacts/insights/follow-ups");
   const [dismissed, setDismissed] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    api
-      .get<FollowUpsResponse>("/contacts/insights/follow-ups")
-      .then((res) => { if (active) setData(res); })
-      .catch((err) => { console.warn("[contacts] follow-ups load failed:", err); });
-    return () => { active = false; };
-  }, []);
 
   if (!data || dismissed) return null;
   const { overdue, upcoming, counts, windowDays } = data;

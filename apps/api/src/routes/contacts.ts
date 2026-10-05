@@ -7,6 +7,7 @@ import { log } from '../utils/logger.js';
 // Sub-routers
 import contactsInsightsRouter from './contacts-insights.js';
 import contactsConnectionsRouter from './contacts-connections.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -85,6 +86,7 @@ const contactsQuerySchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+  updatedSince: z.coerce.date().optional(),
 });
 
 const importContactsSchema = z.object({
@@ -100,7 +102,7 @@ router.get('/', async (req: Request, res) => {
       return res.status(400).json({ error: 'Invalid query parameters', details: query.error.errors });
     }
 
-    const { search, type, company, tag, sortBy, sortOrder, limit = 50, offset = 0 } = query.data;
+    const { search, type, company, tag, sortBy, sortOrder, limit = 50, offset = 0, updatedSince } = query.data;
 
     const orgId = getOrgId(req);
 
@@ -110,6 +112,7 @@ router.get('/', async (req: Request, res) => {
       .eq('organizationId', orgId);
 
     if (type) q = q.eq('type', type);
+    if (updatedSince) q = q.gte('updatedAt', updatedSince.toISOString());
     if (company) q = q.ilike('company', `%${company}%`);
     if (tag) q = q.contains('tags', [tag]);
 
@@ -342,6 +345,7 @@ router.post('/', async (req: Request, res) => {
       });
     }
 
+    emitWebhookEvent(req, orgId, 'contact.created', contact);
     res.status(201).json(contact);
   } catch (error: any) {
     log.error('Create contact error', error);
@@ -384,12 +388,13 @@ router.patch('/:id', async (req: Request, res) => {
       .eq('id', id)
       .eq('organizationId', orgId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
     log.info('Contact updated', { contactId: id });
+    emitWebhookEvent(req, orgId, 'contact.updated', contact);
 
     res.json(contact);
   } catch (error) {
@@ -405,15 +410,17 @@ router.delete('/:id', async (req: Request, res) => {
     const { id } = req.params;
     const orgId = getOrgId(req);
 
-    const { error } = await supabase
+    const { data: deleted, error } = await supabase
       .from('Contact')
       .delete()
       .eq('id', id)
-      .eq('organizationId', orgId);
+      .eq('organizationId', orgId)
+      .select('id');
 
     if (error) throw error;
 
     log.info('Contact deleted', { contactId: id });
+    if (deleted?.length) emitWebhookEvent(req, orgId, 'contact.deleted', { id });
 
     res.json({ success: true });
   } catch (error) {

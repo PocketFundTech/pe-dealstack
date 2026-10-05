@@ -2,6 +2,7 @@ import { supabase } from '../../supabase.js';
 import { log } from '../../utils/logger.js';
 import { getProvider } from './registry.js';
 import type { Integration, SyncOptions, SyncResult } from './types.js';
+import { runAsOrgSystem } from '../../middleware/usageContext.js';
 
 export async function syncIntegration(
   integration: Integration,
@@ -9,10 +10,16 @@ export async function syncIntegration(
 ): Promise<SyncResult> {
   const provider = getProvider(integration.provider);
   try {
-    const result = await provider.sync(integration, {
-      since: options.since ?? (integration.lastSyncAt ? new Date(integration.lastSyncAt) : undefined),
-      backfill: options.backfill ?? false,
-    });
+    // Integration sync (cron `_cron/sync-all` and manual "sync now") has no
+    // requesting user — providers like Gmail can trigger AI calls
+    // (createDealFromEmail's extractor, deal-email classifier) mid-sync, so
+    // bind an org-system usage context or those calls silently go untracked.
+    const result = await runAsOrgSystem(integration.organizationId, `integration-sync:${integration.provider}`, () =>
+      provider.sync(integration, {
+        since: options.since ?? (integration.lastSyncAt ? new Date(integration.lastSyncAt) : undefined),
+        backfill: options.backfill ?? false,
+      }),
+    );
     await supabase
       .from('Integration')
       .update({

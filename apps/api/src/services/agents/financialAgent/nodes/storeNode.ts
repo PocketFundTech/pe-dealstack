@@ -33,6 +33,7 @@ import {
   scoreMathValidation,
   scoreCrossModel,
 } from '../../../compositeConfidence.js';
+import { isDerivedSource } from '../../../financialDerivations.js';
 
 /** Create a timestamped agent step */
 function step(node: string, message: string, detail?: string): AgentStep {
@@ -92,7 +93,8 @@ export function computeSourceMatchAvg(
   for (const stmt of statements) {
     for (const period of stmt.periods) {
       for (const [key, val] of Object.entries(period.lineItems || {})) {
-        if (key.endsWith('_source') && typeof val === 'string') {
+        // Derived values (financialDerivations.ts) aren't quotes — nothing to match.
+        if (key.endsWith('_source') && typeof val === 'string' && !isDerivedSource(val)) {
           scores.push(usesClaudeNativePdf ? scoreClaudeNativePdfSource(val) : scoreSourceMatch(val, rawText));
         }
       }

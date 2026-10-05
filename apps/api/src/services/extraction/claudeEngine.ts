@@ -16,13 +16,15 @@ import { extractTextFromExcel } from '../excelFinancialExtractor.js';
 import { trackedClaudeMessage, getAnthropicClient, AIRefusalError } from '../ai/client.js';
 import {
   EXTRACTION_JSON_SCHEMA,
-  EXTRACTION_SYSTEM_PROMPT,
   EXTRACTION_USER_INSTRUCTION,
-  EXCEL_CONTAINER_INSTRUCTION,
+  buildExtractionSystemPrompt,
+  buildExcelContainerInstruction,
   buildRepairInstruction,
   extractionResponseZod,
 } from './extractionSchema.js';
+import { getTodayIso } from '../../utils/dates.js';
 import { toClassificationResult } from './normalize.js';
+import { toProviderUnavailable } from '../../utils/aiErrors.js';
 
 const FILES_BETA = 'files-api-2025-04-14';
 // GA server tool (no beta header required) — supported by both extraction
@@ -155,7 +157,10 @@ function mergeRepairedStatements(
   };
 }
 
-export async function extractWithClaude(input: ClaudeEngineInput): Promise<ClaudeEngineResult | null> {
+export async function extractWithClaude(
+  input: ClaudeEngineInput,
+  signal?: AbortSignal,
+): Promise<ClaudeEngineResult | null> {
   // Container-first for spreadsheets, with an automatic fallback ladder so
   // accuracy can only go up: container mode → flattened-text mode → (caller
   // falls back to the legacy chain on null). Any container failure — upload
@@ -163,24 +168,28 @@ export async function extractWithClaude(input: ClaudeEngineInput): Promise<Claud
   // behavior instead of failing the extraction outright.
   if (input.fileType === 'excel' && excelContainerModeEnabled()) {
     try {
-      const containerResult = await runExtraction(input, 'container');
+      const containerResult = await runExtraction(input, 'container', signal);
       if (containerResult) return containerResult;
       log.warn('claudeEngine: container-mode spreadsheet extraction returned nothing — falling back to text mode', {
         fileName: input.fileName,
       });
     } catch (err) {
+      // Text mode would hit the same provider wall — say so now.
+      const unavailable = toProviderUnavailable(err, 'Anthropic');
+      if (unavailable) throw unavailable;
       log.warn('claudeEngine: container-mode spreadsheet extraction failed — falling back to text mode', {
         fileName: input.fileName,
         err: err instanceof Error ? err.message : String(err),
       });
     }
   }
-  return runExtraction(input, 'standard');
+  return runExtraction(input, 'standard', signal);
 }
 
 async function runExtraction(
   input: ClaudeEngineInput,
   mode: 'standard' | 'container',
+  signal?: AbortSignal,
 ): Promise<ClaudeEngineResult | null> {
   const { fileBuffer, fileName, fileType } = input;
   const usage = { inputTokens: 0, outputTokens: 0 };
@@ -216,6 +225,9 @@ async function runExtraction(
         betas: [FILES_BETA],
       } as never)) as { id: string };
     } catch (err) {
+      // Out of credit / bad key: the reason, not a null "couldn't extract".
+      const unavailable = toProviderUnavailable(err, 'Anthropic');
+      if (unavailable) throw unavailable;
       log.error('claudeEngine: spreadsheet upload failed', err, { fileName });
       return null;
     }
@@ -223,7 +235,7 @@ async function runExtraction(
     documentBlocks = [{ type: 'container_upload', file_id: uploaded.id }];
     extraBetas = [FILES_BETA];
     tools = [CODE_EXECUTION_TOOL];
-    baseInstruction = EXCEL_CONTAINER_INSTRUCTION;
+    baseInstruction = buildExcelContainerInstruction(getTodayIso());
   } else if (fileType === 'excel') {
     const excelText = extractTextFromExcel(fileBuffer);
     if (!excelText || excelText.trim().length < 50) {
@@ -243,6 +255,8 @@ async function runExtraction(
         betas: [FILES_BETA],
       } as never)) as { id: string };
     } catch (err) {
+      const unavailable = toProviderUnavailable(err, 'Anthropic');
+      if (unavailable) throw unavailable;
       log.error('claudeEngine: file upload failed', err, { fileName });
       return null;
     }
@@ -254,12 +268,37 @@ async function runExtraction(
     extraBetas = [FILES_BETA];
   }
 
+  // Prompt caching: the system prompt and the document block are byte-for-
+  // byte identical across the (up to) two calls this function makes — the
+  // first pass and, when the validator fails, a single repair pass that
+  // resends the same document with only the trailing instruction text
+  // changed. Marking the last document block as cacheable caches that
+  // block plus everything before it (including the system prompt, sent
+  // first); the trailing instruction block is deliberately left uncached
+  // since it differs between the two calls and a cache write there would
+  // never hit. This is a pure cost optimization — extraction accounts for
+  // the large majority of tracked Anthropic spend (financial_extraction
+  // UsageEvent rows), and this changes nothing about what is sent or what
+  // comes back, only how a repeated prefix is billed (~90% cheaper on a
+  // hit within Anthropic's 5-minute cache window).
+  documentBlocks[documentBlocks.length - 1] = {
+    ...documentBlocks[documentBlocks.length - 1],
+    cache_control: { type: 'ephemeral' },
+  };
+
   const callEngine = async (extraInstruction?: string): Promise<ClassificationResult | null> => {
     try {
       const res = await trackedClaudeMessage({
         operation: 'financial_extraction',
         role: 'extraction',
-        system: EXTRACTION_SYSTEM_PROMPT,
+        // Built fresh per call (not module-scope) — CLAUDE.md: extraction
+        // prompts must be injected with today's date at call time so
+        // FY/LTM/"current quarter" period inference doesn't drift off the
+        // model's training cutoff. Still cacheable: the date, and so this
+        // string, is identical across every call within the same run.
+        system: [
+          { type: 'text', text: buildExtractionSystemPrompt(getTodayIso()), cache_control: { type: 'ephemeral' } },
+        ],
         extraBetas,
         ...(tools ? { tools } : {}),
         messages: [
@@ -272,9 +311,23 @@ async function runExtraction(
           },
         ],
         outputSchema: EXTRACTION_JSON_SCHEMA as unknown as Record<string, unknown>,
+        signal,
       });
       usage.inputTokens += res.usage.inputTokens;
       usage.outputTokens += res.usage.outputTokens;
+      // A response cut short before it finished (max_tokens) or paused for a
+      // server-side continuation we don't handle (pause_turn) produces
+      // truncated/incomplete JSON. Previously this fell straight into
+      // parseAndNormalize(), which logged a generic "response was not valid
+      // JSON" with no indication of *why* — treat it explicitly as a failed
+      // call instead of a silent parse-null.
+      if (res.stopReason === 'max_tokens' || res.stopReason === 'pause_turn') {
+        log.warn('claudeEngine: response stopped early — treating as a failed extraction', {
+          fileName,
+          stopReason: res.stopReason,
+        });
+        return null;
+      }
       return parseAndNormalize(res.text);
     } catch (err) {
       if (err instanceof AIRefusalError) {
@@ -309,7 +362,7 @@ async function runExtraction(
       failedStatementTypes: [...failedTypes],
     });
     const previousJson = JSON.stringify(first.statements);
-    const repaired = await callEngine(buildRepairInstruction(firstFailures, previousJson));
+    const repaired = await callEngine(buildRepairInstruction(firstFailures, previousJson, [...failedTypes]));
 
     if (repaired && repaired.statements.length > 0) {
       const merged = mergeRepairedStatements(first, repaired, failedTypes);

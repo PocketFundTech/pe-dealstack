@@ -464,8 +464,15 @@ export function formatRelativeTime(dateString: string | null | undefined): strin
   if (!dateString) return "\u2014";
   const date = new Date(dateString);
   const now = new Date();
+  // Positive = past (X ago), negative = future (in X). Every caller of this
+  // helper historically expected a past timestamp, so a future date used to
+  // fall through every branch below and silently print "Just now" no matter
+  // how far ahead it was (e.g. a task due in 9 days). Handle both signs the
+  // same way instead of assuming diff is always positive.
   const diff = now.getTime() - date.getTime();
-  const seconds = Math.floor(diff / 1000);
+  const isPast = diff >= 0;
+  const abs = Math.abs(diff);
+  const seconds = Math.floor(abs / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
@@ -473,9 +480,11 @@ export function formatRelativeTime(dateString: string | null | undefined): strin
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
   }
-  if (days > 0) return days + (days === 1 ? " day ago" : " days ago");
-  if (hours > 0) return hours + (hours === 1 ? " hour ago" : " hours ago");
-  if (minutes > 0) return minutes + (minutes === 1 ? " min ago" : " mins ago");
+  if (days > 0) return isPast ? `${days} ${days === 1 ? "day" : "days"} ago` : `in ${days} ${days === 1 ? "day" : "days"}`;
+  if (hours > 0) return isPast ? `${hours} ${hours === 1 ? "hour" : "hours"} ago` : `in ${hours} ${hours === 1 ? "hour" : "hours"}`;
+  if (minutes > 0) return isPast ? `${minutes} ${minutes === 1 ? "min" : "mins"} ago` : `in ${minutes} ${minutes === 1 ? "min" : "mins"}`;
+  // Under a minute either side reads as "now" \u2014 this also absorbs ordinary
+  // client/server clock skew, which the old code only did for the past side.
   return "Just now";
 }
 

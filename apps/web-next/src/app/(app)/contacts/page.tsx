@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/providers/ToastProvider";
 import {
@@ -26,15 +27,13 @@ import {
 // ─── Page Component ────────────────────────────────────────
 
 export default function ContactsPage() {
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [totalContacts, setTotalContacts] = useState(0);
-  const [contactScores, setContactScores] = useState<Record<string, { score: number; label: string }>>({});
-  const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filters, setFilters] = useState({ search: "", type: "", sortBy: "createdAt", sortOrder: "desc" });
-  const [currentOffset, setCurrentOffset] = useState(0);
+  // Pages beyond the first (from "Load More") — kept separately from the
+  // cached first page so a background revalidation of page 1 never drops
+  // rows the user already paged into.
+  const [moreContacts, setMoreContacts] = useState<Contact[]>([]);
 
   // Modal / panel state
   const [modalOpen, setModalOpen] = useState(false);
@@ -60,39 +59,45 @@ export default function ContactsPage() {
   const moreDropdownRef = useRef<HTMLDivElement>(null);
 
   // ─── Data Loading ─────────────────────────────────────────
+  // Stale-while-revalidate cache: revisiting /contacts renders instantly.
 
-  const loadContacts = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (filters.search) params.set("search", filters.search);
-      if (filters.type) params.set("type", filters.type);
-      // Strength is a client-side sort (not in the API's sortBy enum) — fall
-      // back to a stable server order and reorder after load.
-      params.set("sortBy", isStrengthSort(filters.sortBy) ? "createdAt" : filters.sortBy);
-      params.set("sortOrder", filters.sortOrder);
-      params.set("limit", String(CONTACTS_PAGE_SIZE));
-      params.set("offset", "0");
-
-      const [data, scores] = await Promise.all([
-        api.get<{ contacts: Contact[]; total: number }>(`/contacts?${params}`),
-        api.get<{ scores: Record<string, { score: number; label: string }> }>("/contacts/insights/scores").catch(() => ({ scores: {} })),
-      ]);
-
-      const fetched = data.contacts || [];
-      setContacts(fetched);
-      setTotalContacts(data.total || 0);
-      setContactScores(scores.scores || {});
-      setCurrentOffset(fetched.length);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load contacts");
-    } finally {
-      setLoading(false);
-    }
+  const contactsQueryKey = useMemo(() => {
+    const params = new URLSearchParams();
+    if (filters.search) params.set("search", filters.search);
+    if (filters.type) params.set("type", filters.type);
+    // Strength is a client-side sort (not in the API's sortBy enum) — fall
+    // back to a stable server order and reorder after load.
+    params.set("sortBy", isStrengthSort(filters.sortBy) ? "createdAt" : filters.sortBy);
+    params.set("sortOrder", filters.sortOrder);
+    params.set("limit", String(CONTACTS_PAGE_SIZE));
+    params.set("offset", "0");
+    return `/contacts?${params}`;
   }, [filters]);
 
-  useEffect(() => { loadContacts(); }, [loadContacts]);
+  const contactsQuery = useApiQuery<{ contacts: Contact[]; total: number }>(contactsQueryKey);
+  const scoresQuery = useApiQuery<{ scores: Record<string, { score: number; label: string }> }>(
+    "/contacts/insights/scores",
+  );
+
+  const firstPage = useMemo(() => contactsQuery.data?.contacts ?? [], [contactsQuery.data]);
+  const contacts = useMemo(() => [...firstPage, ...moreContacts], [firstPage, moreContacts]);
+  const totalContacts = contactsQuery.data?.total ?? 0;
+  const contactScores = scoresQuery.data?.scores ?? {};
+  const loading = contactsQuery.isLoading;
+  const error = contactsQuery.error && contactsQuery.data === undefined ? contactsQuery.error.message || "Failed to load contacts" : null;
+  const currentOffset = contacts.length;
+
+  // A new filter/sort/search key means a different first page — drop any
+  // "Load More" pages appended for the previous query.
+  /* eslint-disable-next-line react-hooks/set-state-in-effect -- resets pagination for a brand-new query key, not a render-time state sync */
+  useEffect(() => { setMoreContacts([]); }, [contactsQueryKey]);
+
+  const { refetch: refetchContacts } = contactsQuery;
+  const { refetch: refetchScores } = scoresQuery;
+  const loadContacts = useCallback(() => {
+    setMoreContacts([]);
+    return Promise.allSettled([refetchContacts(), refetchScores()]);
+  }, [refetchContacts, refetchScores]);
 
   // Close dropdowns on outside click (ref-based, no stopPropagation needed)
   useEffect(() => {
@@ -152,8 +157,7 @@ export default function ContactsPage() {
 
       const data = await api.get<{ contacts: Contact[]; total: number }>(`/contacts?${params}`);
       const newContacts = data.contacts || [];
-      setContacts((prev) => [...prev, ...newContacts]);
-      setCurrentOffset((prev) => prev + newContacts.length);
+      setMoreContacts((prev) => [...prev, ...newContacts]);
     } catch (err) {
       console.error("Error loading more:", err);
     } finally {

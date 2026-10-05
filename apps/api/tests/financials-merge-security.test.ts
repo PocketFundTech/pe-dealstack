@@ -39,8 +39,8 @@ describe('POST /api/deals/:dealId/financials/resolve — chosenVersionId binding
     let activationUpdate: { id: string | null } = { id: null };
 
     const versions = [
-      { id: '11111111-1111-1111-1111-111111111111', isActive: false },
-      { id: '22222222-2222-2222-2222-222222222222', isActive: false },
+      { id: '11111111-1111-1111-1111-111111111111', isActive: false, period: '2024-Q4' },
+      { id: '22222222-2222-2222-2222-222222222222', isActive: false, period: '2024-Q4' },
     ];
 
     let updateCallCount = 0;
@@ -91,8 +91,8 @@ describe('POST /api/deals/:dealId/financials/resolve — chosenVersionId binding
     let activationUpdate: { id: string | null } = { id: null };
 
     const versions = [
-      { id: '11111111-1111-1111-1111-111111111111', isActive: false },
-      { id: '22222222-2222-2222-2222-222222222222', isActive: false },
+      { id: '11111111-1111-1111-1111-111111111111', isActive: false, period: '2024-Q4' },
+      { id: '22222222-2222-2222-2222-222222222222', isActive: false, period: '2024-Q4' },
     ];
 
     mockSupabase.from.mockImplementation((table: string) => {
@@ -128,5 +128,36 @@ describe('POST /api/deals/:dealId/financials/resolve — chosenVersionId binding
 
     expect(res.status).toBe(200);
     expect(activationUpdate.id).toBe('22222222-2222-2222-2222-222222222222');
+  });
+
+  it('treats "2024" and "FY2024 (Jan - Dec 2024)" as versions of the same period (G9)', async () => {
+    verifyDealAccess.mockResolvedValue({ id: 'deal-A1', organizationId: 'org-A' });
+    const activated: string[] = [];
+    const deactivated: string[][] = [];
+    const rows = [
+      { id: '11111111-1111-1111-1111-111111111111', isActive: true, period: 'FY2024 (Jan - Dec 2024)', periodKey: '2024' },
+      { id: '22222222-2222-2222-2222-222222222222', isActive: false, period: '2024', periodKey: null },
+      { id: '33333333-3333-3333-3333-333333333333', isActive: true, period: '2023', periodKey: '2023' },
+    ];
+    mockSupabase.from.mockImplementation(() => ({
+      select: () => {
+        const chain: any = { eq: () => chain, then: (resolve: any) => resolve({ data: rows, error: null }) };
+        return chain;
+      },
+      update: () => ({
+        in: (_c: string, ids: string[]) => { deactivated.push(ids); return Promise.resolve({ error: null }); },
+        eq: (_c: string, id: string) => { activated.push(id); return Promise.resolve({ error: null }); },
+      }),
+    }));
+
+    const app = await buildApp('org-A');
+    const res = await request(app)
+      .post('/api/deals/deal-A1/financials/resolve')
+      .send({ statementType: 'INCOME_STATEMENT', period: '2024', chosenVersionId: '22222222-2222-2222-2222-222222222222' });
+
+    expect(res.status).toBe(200);
+    // Both 2024 versions are deactivated first (whatever their label); 2023 is untouched.
+    expect(deactivated[0].sort()).toEqual(['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222']);
+    expect(activated[0]).toBe('22222222-2222-2222-2222-222222222222');
   });
 });

@@ -12,16 +12,20 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { log } from '../../utils/logger.js';
 import { recordUsageEvent } from '../usage/trackedLLM.js';
+import { resolveAnthropicAuth, hasAnthropicCredentials } from '../anthropic.js';
 import { getModelConfig, type AiRole } from './models.js';
 import { normalizeOutputSchema } from './schemaCompat.js';
 
 let _client: Anthropic | null = null;
 
 export function getAnthropicClient(): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is not set — AI features unavailable');
+  if (!_client) {
+    const authOptions = resolveAnthropicAuth();
+    if (!authOptions) {
+      throw new Error('ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN is not set — AI features unavailable');
+    }
+    _client = new Anthropic(authOptions);
   }
-  if (!_client) _client = new Anthropic();
   return _client;
 }
 
@@ -30,9 +34,9 @@ export function _resetAnthropicClient(): void {
   _client = null;
 }
 
-/** True when ANTHROPIC_API_KEY is configured — cheap check, no client construction. */
+/** True when ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is configured — cheap check, no client construction. */
 export function isAnthropicAvailable(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return hasAnthropicCredentials();
 }
 
 export class AIRefusalError extends Error {
@@ -44,11 +48,22 @@ export class AIRefusalError extends Error {
   }
 }
 
+/**
+ * A system-prompt text block, optionally marked cacheable. Pass an array
+ * (instead of a plain string) when the prompt is stable across repeated
+ * calls in the same request (e.g. a repair pass, or a container→text
+ * fallback resending the same instructions) — `cache_control: { type:
+ * 'ephemeral' }` on the last block tells Anthropic to cache everything up
+ * to and including it, cutting input cost ~90% on a hit within 5 minutes.
+ * Passed straight through to the SDK's `system` field either way.
+ */
+export type ClaudeSystemPrompt = string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+
 export interface ClaudeCallOptions {
   /** UsageEvent operation name, e.g. 'financial_extraction'. */
   operation: string;
   role: AiRole;
-  system?: string;
+  system?: ClaudeSystemPrompt;
   messages: Array<{ role: 'user' | 'assistant'; content: unknown }>;
   /** JSON schema for structured output (output_config.format). */
   outputSchema?: Record<string, unknown>;
@@ -71,6 +86,39 @@ export interface ClaudeCallResult {
   model: string;
   stopReason: string | null;
   usage: { inputTokens: number; outputTokens: number };
+}
+
+/** Cache token counts pulled off a Beta Messages `usage` object (or a stream
+ *  snapshot's `usage`, same shape). Anthropic's `input_tokens` EXCLUDES these
+ *  — see trackedLLM.ts / modelPrices.ts for why they're priced separately. */
+function extractCacheTokens(
+  usage?: {
+    cache_read_input_tokens?: number | null;
+    cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } | null;
+  } | null,
+): { cacheReadTokens: number; cacheWrite5mTokens: number; cacheWrite1hTokens: number } {
+  return {
+    cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
+    cacheWrite5mTokens: usage?.cache_creation?.ephemeral_5m_input_tokens ?? 0,
+    cacheWrite1hTokens: usage?.cache_creation?.ephemeral_1h_input_tokens ?? 0,
+  };
+}
+
+interface AttemptUsage {
+  type: string;
+  model: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } | null;
+}
+
+/** Billed attempts in usage.iterations other than the one that served the message (the last). */
+function declinedAttempts(usage: unknown): AttemptUsage[] {
+  const iterations = (usage as { iterations?: AttemptUsage[] | null } | undefined)?.iterations;
+  if (!Array.isArray(iterations)) return [];
+  const attempts = iterations.filter((it) => it.type === 'message' || it.type === 'fallback_message');
+  return attempts.slice(0, -1).filter((it) => (it.output_tokens ?? 0) > 0);
 }
 
 export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<ClaudeCallResult> {
@@ -105,19 +153,40 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
   // Never send `thinking`: Fable 5 rejects explicit configs; other models
   // use their defaults.
 
-  const record = (status: 'success' | 'error' | 'blocked', model: string, inTok: number, outTok: number) =>
-    void recordUsageEvent({
-      operation: opts.operation,
-      provider: 'anthropic',
-      status,
-      model,
-      promptTokens: inTok,
-      completionTokens: outTok,
-      durationMs: Date.now() - startedAt,
-    }).catch(() => { /* ledger is fire-and-forget */ });
+  // Awaited (not fire-and-forget): Vercel can freeze the function once the
+  // response is sent, dropping an un-awaited insert. A ledger failure must
+  // never surface to the caller though, so it's caught here rather than left
+  // to propagate — callers of trackedClaudeMessage shouldn't have to know
+  // the usage ledger exists.
+  const record = async (
+    status: 'success' | 'error' | 'blocked',
+    model: string,
+    inTok: number,
+    outTok: number,
+    cache: { cacheReadTokens: number; cacheWrite5mTokens: number; cacheWrite1hTokens: number },
+  ): Promise<void> => {
+    try {
+      await recordUsageEvent({
+        operation: opts.operation,
+        provider: 'anthropic',
+        status,
+        model,
+        promptTokens: inTok,
+        completionTokens: outTok,
+        ...cache,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch {
+      /* ledger is best-effort */
+    }
+  };
 
+  // Held outside the try so the catch block can still read whatever usage
+  // the stream had already received before it errored/aborted — Anthropic
+  // bills the tokens it processed regardless of how the request ended.
+  let stream: ReturnType<typeof client.beta.messages.stream> | undefined;
   try {
-    const stream = client.beta.messages.stream(
+    stream = client.beta.messages.stream(
       request as never,
       opts.signal ? { signal: opts.signal } : undefined,
     );
@@ -125,9 +194,18 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
 
     const inTok = message.usage?.input_tokens ?? 0;
     const outTok = message.usage?.output_tokens ?? 0;
+    const cache = extractCacheTokens(message.usage);
+
+    // Server-side fallback: top-level usage covers only the attempt that
+    // produced this message. Earlier attempts live in usage.iterations —
+    // one declined mid-output is billed at its own model's rates, one
+    // declined before any output is not billed at all.
+    for (const hop of declinedAttempts(message.usage)) {
+      await record('blocked', hop.model, hop.input_tokens ?? 0, hop.output_tokens ?? 0, extractCacheTokens(hop));
+    }
 
     if (message.stop_reason === 'refusal') {
-      record('blocked', message.model, inTok, outTok);
+      await record('blocked', message.model, inTok, outTok, cache);
       const category =
         message.stop_details && 'category' in message.stop_details
           ? ((message.stop_details as { category: string | null }).category)
@@ -135,7 +213,7 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
       throw new AIRefusalError(category);
     }
 
-    record('success', message.model, inTok, outTok);
+    await record('success', message.model, inTok, outTok, cache);
     const text = (message.content as Array<{ type: string; text?: string }>)
       .filter((b) => b.type === 'text')
       .map((b) => b.text ?? '')
@@ -143,7 +221,16 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     return { text, model: message.model, stopReason: message.stop_reason ?? null, usage: { inputTokens: inTok, outputTokens: outTok } };
   } catch (err) {
     if (err instanceof AIRefusalError) throw err;
-    record('error', cfg.model, 0, 0);
+    // On error/abort, the stream may have already accumulated a partial
+    // message (message_start/message_delta events) before it broke — pull
+    // that snapshot's usage instead of recording 0/0, which under-bills
+    // every aborted/errored call that Anthropic still charged for.
+    const snapshot = stream?.currentMessage;
+    const inTok = snapshot?.usage?.input_tokens ?? 0;
+    const outTok = snapshot?.usage?.output_tokens ?? 0;
+    const cache = extractCacheTokens(snapshot?.usage);
+    const model = snapshot?.model ?? cfg.model;
+    await record('error', model, inTok, outTok, cache);
     log.error('trackedClaudeMessage failed', { operation: opts.operation, model: cfg.model, err });
     throw err;
   }
@@ -152,15 +239,40 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
 export interface ClaudeStreamOptions {
   operation: string;
   role: AiRole;
-  system?: string;
+  /** A string, or text blocks carrying cache_control breakpoints. */
+  system?: ClaudeSystemPrompt;
   messages: unknown[];
   tools: unknown[];
   signal?: AbortSignal;
+  /**
+   * Request-level automatic caching (top-level `cache_control`). The API
+   * places the breakpoint on the last cacheable block and moves it forward
+   * as the tool loop grows, so each Tool Runner iteration reads the earlier
+   * iterations from cache instead of re-billing them at full price.
+   */
+  autoCache?: boolean;
+}
+
+/** Usage accumulated by the caller from stream events (message_start /
+ *  message_delta) across a tool-runner's iterations. Cache tokens are
+ *  optional so existing callers that haven't been updated to accumulate them
+ *  yet keep compiling. */
+export interface ClaudeStreamUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWrite5mTokens?: number;
+  cacheWrite1hTokens?: number;
 }
 
 export interface ClaudeStreamHandle {
   runner: AsyncIterable<AsyncIterable<any>>;
-  recordUsage: (usage: { inputTokens: number; outputTokens: number }, status: 'success' | 'error') => Promise<void>;
+  /**
+   * @param servedModel The model that actually served the response, read by
+   *   the caller off `message_start.message.model`. Falls back to the
+   *   requested alias (`cfg.model`) when the caller hasn't tracked it.
+   */
+  recordUsage: (usage: ClaudeStreamUsage, status: 'success' | 'error', servedModel?: string) => Promise<void>;
 }
 
 export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHandle {
@@ -188,22 +300,27 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
       tools: opts.tools as never,
       ...(cfg.betas.length > 0 ? { betas: cfg.betas as never } : {}),
       stream: true,
-      ...(opts.system ? { system: opts.system } : {}),
+      ...(opts.system ? { system: opts.system as never } : {}),
+      ...(opts.autoCache ? { cache_control: { type: 'ephemeral' as const } } : {}),
       ...(cfg.fallbacks ? { fallbacks: cfg.fallbacks as never } : {}),
     },
     opts.signal ? { signal: opts.signal } : undefined,
   );
 
   const recordUsage = async (
-    usage: { inputTokens: number; outputTokens: number },
+    usage: ClaudeStreamUsage,
     status: 'success' | 'error',
+    servedModel?: string,
   ): Promise<void> => {
     await recordUsageEvent({
       operation: opts.operation,
       provider: 'anthropic',
-      model: cfg.model,
+      model: servedModel ?? cfg.model,
       promptTokens: usage.inputTokens,
       completionTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWrite5mTokens: usage.cacheWrite5mTokens,
+      cacheWrite1hTokens: usage.cacheWrite1hTokens,
       status,
       durationMs: Date.now() - start,
     });

@@ -42,6 +42,8 @@ export interface ExtractionResult {
     warnings?: string[];
     overallConfidence?: number;
     hasConflicts?: boolean;
+    /** True when every document in the batch failed extraction (vs. succeeded with 0 periods found). */
+    allFailed?: boolean;
   };
   agent?: {
     retryCount?: number;

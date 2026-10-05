@@ -147,3 +147,26 @@ describe('maybeScoreAfterExtraction', () => {
     await expect(maybeScoreAfterExtraction('deal-1', 'org-1')).resolves.toBeUndefined();
   });
 });
+
+// Cost + correctness: after extraction the route fires both this hook and
+// dealReactivation's maybeReactivateAfterExtraction. For a PASSED deal both
+// used to call scoreDeal — two identical Sonnet calls — and whichever landed
+// first overwrote the card the reactivation check compares against, so a
+// real improvement could read as "no change".
+describe('maybeScoreAfterExtraction', () => {
+  it('scores an active deal', async () => {
+    trackedClaudeMessage.mockResolvedValue(verdict());
+    const { maybeScoreAfterExtraction } = await getEngine();
+    await maybeScoreAfterExtraction('deal-1', 'org-1');
+    expect(trackedClaudeMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves PASSED deals to the reactivation hook', async () => {
+    dealRow = { ...dealRow, stage: 'PASSED' };
+    trackedClaudeMessage.mockResolvedValue(verdict());
+    const { maybeScoreAfterExtraction } = await getEngine();
+    await maybeScoreAfterExtraction('deal-1', 'org-1');
+    expect(trackedClaudeMessage).not.toHaveBeenCalled();
+    expect(persistedScorecard).toBeNull();
+  });
+});

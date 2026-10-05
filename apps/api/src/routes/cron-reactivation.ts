@@ -12,6 +12,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { sweepPassedDeals } from '../services/agents/dealReactivation/index.js';
+import { runAsOrgSystem } from '../middleware/usageContext.js';
 
 const router = Router();
 const BATCH_SIZE = 5;
@@ -53,7 +54,7 @@ router.post('/', async (req: Request, res: Response) => {
     const batch = orgs.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
       batch.map((org) =>
-        sweepPassedDeals(org.id).catch((err) => {
+        runAsOrgSystem(org.id, 'cron:reactivation', () => sweepPassedDeals(org.id)).catch((err) => {
           captureAgentError(err, { context: 'cron-reactivation', organizationId: org.id });
           return null;
         }),

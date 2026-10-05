@@ -5,7 +5,7 @@
 
 import { log } from '../../utils/logger.js';
 import { AnalysisResult } from './types.js';
-import { prepareData } from './helpers.js';
+import { prepareData, pickAnalysisCurrency } from './helpers.js';
 import { computeQoEFlags, computeQoEScore, generateQoESummary } from './qoeAnalysis.js';
 import { computeRatios, computeDuPont } from './ratioAnalysis.js';
 import {
@@ -14,6 +14,10 @@ import {
 } from './operationalAnalysis.js';
 import { computeDebtCapacity, computeLBOScreen } from './debtAndLBO.js';
 import { computeRedFlags } from './redFlags.js';
+import { computeCashFlowRedFlags, computeCashFlowQoEFlags } from './cashFlowFlags.js';
+import {
+  computeConcentrationRedFlags, computeConcentrationQoEFlags, type ConcentrationFacts,
+} from './customerConcentrationFlags.js';
 
 // Re-export all types
 export type {
@@ -21,14 +25,26 @@ export type {
   CashFlowAnalysis, WorkingCapital, CostStructure, DebtCapacity,
   LBOScreen, RedFlag, WorkforceMetrics, AnalysisResult, DuPontDecomposition,
 } from './types.js';
+export type { ConcentrationFacts } from './customerConcentrationFlags.js';
 
-export async function analyzeFinancials(dealId: string, rows: any[]): Promise<AnalysisResult> {
+export interface AnalyzeOptions {
+  /**
+   * Customer concentration / related-party facts read from the deal's
+   * documents (customerConcentrationReader.ts — fix plan F1 part 2).
+   * Omitted or null → no document-derived flags.
+   */
+  concentration?: ConcentrationFacts | null;
+}
+
+export async function analyzeFinancials(dealId: string, rows: any[], options: AnalyzeOptions = {}): Promise<AnalysisResult> {
   if (!rows || rows.length === 0) {
     return { hasData: false, dealId, periods: [], qoe: { score: 0, flags: [], summary: 'No financial data available.' }, ratios: [], analyzedAt: new Date().toISOString() } as any;
   }
   log.info('Starting financial analysis', { dealId, rowCount: rows.length });
 
-  const data = prepareData(rows);
+  // One currency only — mixed currencies used to be added together.
+  const single = pickAnalysisCurrency(rows);
+  const data = prepareData(single.rows);
 
   // All analysis modules read from `data` (immutable) and write to independent outputs.
   // Group into parallel batches for throughput:
@@ -44,7 +60,11 @@ export async function analyzeFinancials(dealId: string, rows: any[]): Promise<An
   ] = await Promise.all([
     // Group A
     Promise.all([
-      Promise.resolve(computeQoEFlags(data)),
+      // Cash-flow findings (negative FCF, debt-funded capex — fix plan F1) feed QoE too.
+      // Customer concentration / related parties (F1 part 2) come from the documents.
+      Promise.resolve([
+        ...computeQoEFlags(data), ...computeCashFlowQoEFlags(data), ...computeConcentrationQoEFlags(options.concentration),
+      ]),
       Promise.resolve(computeRatios(data)),
       Promise.resolve(computeDuPont(data)),
     ]),
@@ -64,7 +84,9 @@ export async function analyzeFinancials(dealId: string, rows: any[]): Promise<An
       Promise.resolve(computeDebtCapacity(data)),
       Promise.resolve(computeLBOScreen(data)),
       Promise.resolve(computeWorkforceMetrics(data)),
-      Promise.resolve(computeRedFlags(data)),
+      Promise.resolve([
+        ...computeRedFlags(data), ...computeCashFlowRedFlags(data), ...computeConcentrationRedFlags(options.concentration),
+      ]),
     ]),
   ]);
 
@@ -94,6 +116,8 @@ export async function analyzeFinancials(dealId: string, rows: any[]): Promise<An
     redFlags,
     workforceMetrics,
     periods: data.periods,
+    currency: single.currency,
+    ...(single.note ? { currencyNote: single.note } : {}),
     analyzedAt: new Date().toISOString(),
   };
 }

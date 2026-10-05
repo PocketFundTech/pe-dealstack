@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import type { Template, TemplateSection } from "./types";
 import { SectionList } from "./SectionList";
 import { AddSectionModal } from "./AddSectionModal";
@@ -57,6 +58,8 @@ export function TemplateEditor({
   );
   const [showAddSection, setShowAddSection] = useState(false);
   const [saving, setSaving] = useState(false);
+  const isDirty = name !== template.name || category !== template.category || permissions !== template.permissions;
+  useUnsavedChanges(isDirty);
 
   /* Sync local state when template prop changes */
   const templateId = template.id;

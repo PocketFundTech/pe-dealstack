@@ -6,6 +6,43 @@ import { AI_MODELS, isOpenRouterEnabled } from '../utils/aiModels.js';
 import { log } from '../utils/logger.js';
 import { wrapDocumentContent } from './agents/guardrails.js';
 import { getTodayIso } from '../utils/dates.js';
+import { recordUsageEvent } from './usage/trackedLLM.js';
+import { SCALE_TO_MILLIONS } from './extraction/normalize.js';
+import type { BaseCallbackHandler } from '@langchain/core/callbacks/base';
+
+// getModel() (llm.ts's bare escape hatch) has no `operation` label / usage
+// callback of its own — unlike getExtractionModel/getChatModel/getFastModel,
+// so the fallback path below needs its own tracking callback wired through
+// invoke's config (same "callbacks propagate through withStructuredOutput"
+// mechanism documented on llm.ts's makeUsageHandler).
+function makeFallbackUsageHandler(operation: string, modelName: string): Partial<BaseCallbackHandler> {
+  return {
+    name: 'aiExtractor-fallback-usage-tracker',
+    async handleLLMEnd(output: any): Promise<void> {
+      const gen0 = output?.generations?.[0]?.[0]?.message;
+      const usage = gen0?.usage_metadata ?? output?.llmOutput?.tokenUsage ?? output?.llmOutput?.usage ?? null;
+      await recordUsageEvent({
+        operation,
+        model: modelName,
+        provider: 'openai',
+        promptTokens: usage?.input_tokens ?? usage?.promptTokens ?? usage?.prompt_tokens ?? 0,
+        completionTokens: usage?.output_tokens ?? usage?.completionTokens ?? usage?.completion_tokens ?? 0,
+        status: 'success',
+      });
+    },
+    async handleLLMError(err: any): Promise<void> {
+      await recordUsageEvent({
+        operation,
+        model: modelName,
+        provider: 'openai',
+        promptTokens: 0,
+        completionTokens: 0,
+        status: 'error',
+        metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+      });
+    },
+  };
+}
 
 // Extract the actual provider error from an OpenAI-SDK APIError. OpenRouter
 // wraps upstream provider errors as `400 Provider returned error` and tucks
@@ -178,6 +215,8 @@ STEP 1 — DETECT THE REPORTING SCALE BEFORE READING ANY NUMBER:
    PE documents almost always declare units once at the top of a financial table or in a note. Common headers:
    - "$ in millions" / "(USD millions)" / "in $M" → numbers are already in millions, e.g. "Revenue 45" means $45M (output 45)
    - "$ in thousands" / "(USD 000s)" / "in $K" / "$ '000" → numbers are in thousands, e.g. "Revenue 45" means $45K (output 0.045)
+   - "(INR crore)" / "₹ in crores" / "₹ Cr" / "Rs. crore" → numbers are in crores (1 crore = 10 million), e.g. "Revenue 251.3" in a crore table means ₹2,513M (output 2513)
+   - "(INR lakhs)" / "₹ in lakhs" / "Rs. lakh" → numbers are in lakhs (1 lakh = 0.1 million), e.g. "Revenue 450" in a lakh table means ₹45M (output 45)
    - No header → numbers are raw dollars unless explicitly suffixed with M, K, B, Cr, L
    You MUST scan the section header, table header, and any footnote ABOVE OR ON the financial figure before deciding the scale.
    If you cannot determine the scale, set the value to null with confidence 0 — do NOT guess.
@@ -330,6 +369,7 @@ export async function extractDealDataFromText(
         ...invokeOpts,
         runName: 'financial_extraction_fallback',
         tags: [...invokeOpts.tags, 'fallback', fallbackModelName],
+        callbacks: [makeFallbackUsageHandler('financial_extraction_fallback', fallbackModelName)],
       });
     }
 
@@ -356,6 +396,40 @@ export async function extractDealDataFromText(
  * nothing about document substance there, so the short-doc cap and its
  * review flags are skipped.
  */
+const UNIT_WORDS: Record<keyof typeof SCALE_TO_MILLIONS, string> = {
+  UNITS: 'whole units', THOUSANDS: 'thousands', LAKHS: 'lakhs', MILLIONS: 'millions', CRORES: 'crores', BILLIONS: 'billions',
+};
+
+/**
+ * Fix plan G16: redo the model's unit conversion in code. When the reply
+ * carries the printed figure and the unit it's printed in (Claude deal
+ * reader), the millions value must equal printed × scale; a model that
+ * didn't convert (251.3 crore kept as 251.3 — live QA 2026-10-01) or
+ * converted wrong is corrected, flagged for review and capped at 60%
+ * confidence. Replies without those fields are left as they are.
+ */
+function reconcilePrintedUnits(extracted: any, result: ExtractedDealData): string[] {
+  const unit = extracted?.figuresUnit as keyof typeof SCALE_TO_MILLIONS | null | undefined;
+  const factor = unit ? SCALE_TO_MILLIONS[unit] : undefined;
+  if (!factor) return [];
+  const reasons: string[] = [];
+  const fields = [['revenue', 'revenueAsPrinted', 'Revenue'], ['ebitda', 'ebitdaAsPrinted', 'EBITDA'], ['dealSize', 'dealSizeAsPrinted', 'Deal size']] as const;
+  for (const [key, printedKey, label] of fields) {
+    const printed = extracted?.[printedKey];
+    const field = result[key];
+    if (typeof printed !== 'number' || !Number.isFinite(printed) || typeof field.value !== 'number') continue;
+    const expected = Number((printed * factor).toPrecision(12));
+    if (expected === 0 || Math.abs(field.value - expected) / Math.abs(expected) <= 0.01) continue;
+    reasons.push(
+      `${label} corrected to ${formatExtractedValue(expected)}: the document prints ${printed} in ${UNIT_WORDS[unit!]}, ` +
+      `which the AI had converted to ${formatExtractedValue(field.value)}. Verify against the source.`,
+    );
+    field.value = expected;
+    field.confidence = Math.min(field.confidence, 60);
+  }
+  return reasons;
+}
+
 export function finalizeExtractedDealData(
   extracted: any,
   sourceLen: number,
@@ -404,7 +478,7 @@ export function finalizeExtractedDealData(
 
   // Calculate overall confidence and determine if review is needed
   const confidenceScores: number[] = [];
-  const reviewReasons: string[] = [];
+  const reviewReasons: string[] = [...reconcilePrintedUnits(extracted, result)];
 
   // Per-field review reasons. Avoid embedding the raw "(N% confidence)"
   // parenthetical — when the per-field score is 0, the legacy phrasing

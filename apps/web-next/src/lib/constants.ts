@@ -7,7 +7,25 @@ export type NavItem = {
   memberOnly?: boolean;
   isAI?: boolean;
   divider?: boolean;
+  // Restricts visibility to users whose organization.slug is in this list.
+  // Undefined/omitted means no org restriction (visible to all orgs, subject
+  // to the other flags above).
+  orgSlugAllowlist?: string[];
 };
+
+// Orgs allowed to see/use Outreach. 'cicero-capital' is the real client;
+// 'pocket-fund' and 'cicero-capital-test-mtmtzb0d-ieqa' are wholly separate,
+// isolated test orgs created for safe Enrich/Send testing (see
+// apps/api/cicero-test-org-outreach-stages.sql). MUST stay in sync with the
+// backend's requireCiceroCapital allow-list (apps/api/src/middleware/
+// orgScope.ts) — that's the real access boundary; this and the /outreach
+// page re-check below are UX only (hide the link, and re-deny if someone
+// navigates there directly), not where enforcement actually happens.
+export const OUTREACH_ALLOWED_ORG_SLUGS = [
+  "cicero-capital",
+  "pocket-fund",
+  "cicero-capital-test-mtmtzb0d-ieqa",
+];
 
 export const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard", href: "/dashboard" },
@@ -18,6 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "admin", label: "Admin", icon: "admin_panel_settings", href: "/admin", adminOnly: true },
   { id: "divider", label: "", icon: "", href: "", divider: true },
   { id: "ai-reports", label: "AI Reports", icon: "auto_awesome", href: "/memo-builder", isAI: true, memberOnly: true },
+  { id: "outreach", label: "Outreach", icon: "campaign", href: "/outreach", orgSlugAllowlist: OUTREACH_ALLOWED_ORG_SLUGS },
 ];
 
 export const STAGES = [

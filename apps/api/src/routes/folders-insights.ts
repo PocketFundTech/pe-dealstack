@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
+import { classifyAIErrorObject } from '../utils/aiErrors.js';
 import { getOrgId, verifyFolderAccess } from '../middleware/orgScope.js';
 
 const router = Router();
@@ -139,7 +140,9 @@ router.post('/folders/:id/generate-insights', async (req: Request, res: Response
 
     // 5. Call AI to generate insights
     const { generateFolderInsights } = await import('../services/folderInsightsGenerator.js');
-    const insights = await generateFolderInsights(
+    let insights: Awaited<ReturnType<typeof generateFolderInsights>>;
+    try {
+      insights = await generateFolderInsights(
       folder.name,
       {
         dealName:
@@ -152,10 +155,15 @@ router.post('/folders/:id/generate-insights', async (req: Request, res: Response
         ebitda: deal?.ebitda || undefined,
       },
       formattedDocs
-    );
+      );
+    } catch (aiError) {
+      // Say what actually went wrong (e.g. the AI account is out of credit).
+      const { statusCode, userMessage, code } = classifyAIErrorObject(aiError);
+      return res.status(statusCode).json({ error: userMessage, code });
+    }
 
     if (!insights) {
-      return res.status(503).json({ error: 'AI insights generation unavailable. Check that OPENAI_API_KEY is configured.' });
+      return res.status(503).json({ error: 'AI insights generation unavailable. Check that ANTHROPIC_API_KEY is configured.' });
     }
 
     // 6. Save to FolderInsight table (upsert: delete old, insert new)

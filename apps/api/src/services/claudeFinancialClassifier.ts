@@ -30,6 +30,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { log } from '../utils/logger.js';
+import { hasAnthropicCredentials, getChatAnthropicAuthFields } from './anthropic.js';
 import { buildExtractionPrompt } from './extractionPrompt.js';
 import { periodHygieneGuidanceIfEnabled } from './extraction-evals/fewshot.js';
 import { MAX_TEXT_LENGTH } from './agents/financialAgent/config.js';
@@ -43,6 +44,8 @@ import {
   type ClassificationResult,
   type ClassifyOptions,
 } from './financialClassifier.js';
+import { recordAnthropicMessageUsage } from './usage/trackedAnthropic.js';
+import { toProviderUnavailable } from '../utils/aiErrors.js';
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -64,9 +67,11 @@ let cachedModel: ChatAnthropic | null = null;
 
 function getModel(): ChatAnthropic | null {
   if (cachedModel) return cachedModel;
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const authFields = getChatAnthropicAuthFields();
+  if (!authFields) return null;
   cachedModel = new ChatAnthropic({
     model: SONNET_MODEL,
+    ...authFields,
     maxTokens: MAX_OUTPUT_TOKENS,
     // Adaptive thinking: extraction is intelligence-sensitive (unit-scale
     // inference, period classification, derived-field reconciliation).
@@ -83,13 +88,12 @@ function getModel(): ChatAnthropic | null {
 }
 
 /**
- * True when ANTHROPIC_API_KEY is present in the environment. The cross-
- * verify wrapper uses this to decide whether to fan out to a second
- * extractor or fall through to GPT-only behaviour. Vercel users set this
- * via the project's env vars (the user names it ANTHROPIC_API_KEY).
+ * True when ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is present in the
+ * environment. The cross-verify wrapper uses this to decide whether to fan
+ * out to a second extractor or fall through to GPT-only behaviour.
  */
 export function isClaudeClassifierEnabled(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return hasAnthropicCredentials();
 }
 
 // ─── Main Function ────────────────────────────────────────────
@@ -105,7 +109,7 @@ export async function classifyFinancialsWithClaude(
 ): Promise<ClassificationResult | null> {
   const model = getModel();
   if (!model) {
-    log.warn('Claude classifier skipped: ANTHROPIC_API_KEY not set');
+    log.warn('Claude classifier skipped: ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN not set');
     return null;
   }
 
@@ -139,6 +143,7 @@ export async function classifyFinancialsWithClaude(
     hasLineItemHints: Boolean(options?.lineItemHints),
   });
 
+  const start = Date.now();
   try {
     // System prompt as a single text block carrying cache_control. When
     // ChatAnthropic sees a SystemMessage with array content, it forwards
@@ -214,6 +219,14 @@ export async function classifyFinancialsWithClaude(
       outputTokens: rawUsage?.output_tokens,
     });
 
+    await recordAnthropicMessageUsage({
+      operation: 'financial_extraction',
+      model: SONNET_MODEL,
+      usage: rawUsage,
+      status: 'success',
+      durationMs: Date.now() - start,
+    });
+
     return result;
   } catch (err) {
     // SDK typed exceptions per shared/error-codes.md — most-specific first.
@@ -222,7 +235,7 @@ export async function classifyFinancialsWithClaude(
     if (err instanceof Anthropic.RateLimitError) {
       log.warn('Claude classifier: rate limited (retry handled by SDK already exhausted)');
     } else if (err instanceof Anthropic.AuthenticationError) {
-      log.error('Claude classifier: authentication failed — check ANTHROPIC_API_KEY');
+      log.error('Claude classifier: authentication failed — check ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN');
     } else if (err instanceof Anthropic.APIError) {
       log.error('Claude classifier: API error', {
         status: err.status,
@@ -231,6 +244,17 @@ export async function classifyFinancialsWithClaude(
     } else {
       log.error('Claude classifier: unexpected error', err);
     }
+    await recordAnthropicMessageUsage({
+      operation: 'financial_extraction',
+      model: SONNET_MODEL,
+      usage: null,
+      status: 'error',
+      durationMs: Date.now() - start,
+      metadata: { errorMessage: err instanceof Error ? err.message : String(err) },
+    });
+    // A provider rejection is a reason the user needs, not an empty result.
+    const unavailable = toProviderUnavailable(err, 'Anthropic');
+    if (unavailable) throw unavailable;
     return null;
   }
 }

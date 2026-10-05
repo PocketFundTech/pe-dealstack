@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import { analyzeFinancials } from '../../../analysis/index.js';
+import type { QoEFlag } from '../../../analysis/types.js';
+import { getConcentrationFacts } from '../../../analysis/customerConcentrationReader.js';
 
 export const inputSchema = z.object({});
 
@@ -31,7 +33,7 @@ export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
           return 'No financial statements available for analysis. Extract financials first.';
         }
 
-        const analysis = await analyzeFinancials(dealId, statements);
+        const analysis = await analyzeFinancials(dealId, statements, { concentration: await getConcentrationFacts(dealId) });
         const parts: string[] = [];
 
         // QoE Score
@@ -39,7 +41,7 @@ export function makeGetAnalysisSummaryTool(dealId: string, _orgId: string) {
           parts.push(`**Quality of Earnings Score: ${analysis.qoe.score}/100**`);
           parts.push(analysis.qoe.summary);
           if (analysis.qoe.flags?.length) {
-            parts.push(`\nQoE Flags:\n${analysis.qoe.flags.map((f: any) => `- [${f.severity}] ${f.label}: ${f.description}`).join('\n')}`);
+            parts.push(`\nQoE Flags:\n${analysis.qoe.flags.map((f: QoEFlag) => `- [${f.severity}] ${f.title}: ${f.detail}`).join('\n')}`);
           }
         }
 

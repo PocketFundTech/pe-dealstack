@@ -1,6 +1,7 @@
 import { Fragment } from "react";
+import { ENDPOINT_INDEX, ENDPOINT_TOTAL } from "./endpoint-index";
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 type Endpoint = {
   method: Method;
@@ -22,14 +23,17 @@ type EndpointGroup = {
 const METHOD_CLASS: Record<Method, string> = {
   GET: "bg-emerald-100 text-emerald-800",
   POST: "bg-blue-100 text-blue-800",
+  PUT: "bg-amber-100 text-amber-800",
   PATCH: "bg-amber-100 text-amber-800",
   DELETE: "bg-rose-100 text-rose-800",
 };
 
+const code = "bg-[#f1f5f9] px-1 rounded text-xs";
+
 const ENDPOINT_GROUPS: EndpointGroup[] = [
   {
     title: "Deals",
-    blurb: "Create, read, update, and delete deals in your pipeline",
+    blurb: "Create, read, update and delete deals in your pipeline",
     iconKey: "handshake",
     iconWrapClass: "bg-blue-500/10 text-blue-600",
     defaultOpen: true,
@@ -38,26 +42,38 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         method: "GET",
         path: "/api/deals",
         description:
-          "List all deals for the authenticated user's organization. Supports filtering and pagination.",
-        queryParams: "status, stage, search, sortBy, sortOrder, limit, offset",
+          "List your organization's deals (plain array, newest activity first). Deleted deals are excluded.",
+        queryParams:
+          "updatedSince (ISO date: only deals changed since), offset + limit (paging, limit ≤500, default 100; applies when offset is sent), stage, status, industry, priority, assignedTo, minDealSize, maxDealSize, search, sortBy, sortOrder",
       },
       {
         method: "GET",
         path: "/api/deals/:id",
         description:
-          "Get a single deal with all details including company, documents, activities, and team members.",
+          "One deal with its company, team, documents, activities and folders. 404 if it isn't in your organization.",
       },
       {
         method: "POST",
         path: "/api/deals",
-        description: "Create a new deal manually.",
+        description: (
+          <>
+            Create a deal. <strong>name</strong> and <strong>companyName</strong> (or{" "}
+            <code className={code}>companyId</code>) are required. Stages: INITIAL_REVIEW (default),
+            DUE_DILIGENCE, IOI_SUBMITTED, LOI_SUBMITTED, NEGOTIATION, CLOSING, PASSED, CLOSED_WON,
+            CLOSED_LOST. Priority: LOW, MEDIUM, HIGH, URGENT.
+          </>
+        ),
         body: `{
-  "name": "Acme Corp Acquisition",
-  "industry": "Manufacturing",
+  "name": "Project Falcon",
+  "companyName": "Falcon Logistics",
+  "industry": "Logistics",
   "stage": "INITIAL_REVIEW",
-  "dealSize": 50,
-  "revenue": 25,
-  "ebitda": 8
+  "revenue": 42.5,
+  "ebitda": 6.1,
+  "dealSize": 120,
+  "priority": "HIGH",
+  "source": "n8n",
+  "tags": ["inbound"]
 }`,
       },
       {
@@ -65,63 +81,178 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         path: "/api/deals/:id",
         description: (
           <>
-            Update deal fields. Supports optimistic locking via{" "}
-            <code className="bg-[#f1f5f9] px-1 rounded text-xs">
-              lastKnownUpdatedAt
-            </code>{" "}
-            to prevent concurrent edit conflicts (returns 409 if stale).
+            Update any deal field. Add <code className={code}>stageNote</code> to record why a stage
+            changed. Send <code className={code}>lastKnownUpdatedAt</code> to get a 409 instead of
+            overwriting someone else&apos;s newer edit.
           </>
         ),
+        body: '{ "stage": "DUE_DILIGENCE", "stageNote": "Management call went well" }',
       },
       {
         method: "DELETE",
         path: "/api/deals/:id",
-        description:
-          "Delete a deal and all associated data (documents, activities, memos). Admin or deal creator only.",
+        description: "Move a deal to trash (204). Restore it with POST /api/deals/:id/restore.",
       },
       {
-        method: "POST",
-        path: "/api/deals/:id/analyze",
-        description:
-          "Trigger multi-document analysis. Requires 2+ documents. Detects conflicts, fills gaps, and synthesizes insights across all documents.",
-      },
-      {
-        method: "POST",
-        path: "/api/deals/:id/chat",
-        description:
-          "Chat with a deal using AI. Sends a question and receives an AI-generated answer based on all deal documents (RAG).",
-        body: '{ "message": "What is the company\'s revenue growth trend?" }',
+        method: "GET",
+        path: "/api/deals/stats/summary",
+        description: "Pipeline counts: total, active, passed and deals per stage.",
       },
     ],
   },
   {
-    title: "Deal Ingestion",
-    blurb: "Import deals from files, text, URLs, or emails",
+    title: "Contacts & Companies",
+    blurb: "Bankers, advisors, executives and the companies behind your deals",
+    iconKey: "contacts",
+    iconWrapClass: "bg-sky-500/10 text-sky-600",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/api/contacts",
+        description: "Paged contact list: { contacts, total, limit, offset }. limit up to 200.",
+        queryParams: "updatedSince, search, type, company, tag, sortBy, sortOrder, limit, offset",
+      },
+      {
+        method: "POST",
+        path: "/api/contacts",
+        description: (
+          <>
+            Create a contact. <strong>firstName</strong> and <strong>lastName</strong> are required.
+            Type: BANKER, ADVISOR, EXECUTIVE, LP, LEGAL, OTHER. A duplicate email returns 409 with{" "}
+            <code className={code}>existingContactId</code>.
+          </>
+        ),
+        body: `{
+  "firstName": "Priya",
+  "lastName": "Shah",
+  "email": "priya@bank.com",
+  "company": "Example Bank",
+  "type": "BANKER",
+  "tags": ["mid-market"]
+}`,
+      },
+      {
+        method: "PATCH",
+        path: "/api/contacts/:id",
+        description: "Update any contact field. DELETE on the same path removes the contact.",
+      },
+      {
+        method: "POST",
+        path: "/api/contacts/import",
+        description: "Bulk create up to 500 contacts in one call.",
+        body: '{ "contacts": [ { "firstName": "…", "lastName": "…", "email": "…" } ] }',
+      },
+      {
+        method: "POST",
+        path: "/api/contacts/:id/deals",
+        description: "Link a contact to a deal.",
+      },
+      {
+        method: "GET",
+        path: "/api/companies",
+        description: "Companies with their deals. POST with { name, industry, website } creates one.",
+        queryParams: "updatedSince, offset + limit (paging applies when offset is sent)",
+      },
+    ],
+  },
+  {
+    title: "Tasks & Notes",
+    blurb: "Follow-ups, to-dos and the activity feed on each deal",
+    iconKey: "task_alt",
+    iconWrapClass: "bg-teal-500/10 text-teal-600",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/api/tasks",
+        description: "Paged tasks: { tasks, count, limit, offset }.",
+        queryParams: "updatedSince, status, priority, assignedTo, dealId, limit, offset",
+      },
+      {
+        method: "GET",
+        path: "/api/tasks/:id",
+        description: "One task with its assignee and deal.",
+      },
+      {
+        method: "POST",
+        path: "/api/tasks",
+        description:
+          "Create a task. title is required. Status: PENDING, IN_PROGRESS, COMPLETED, STUCK.",
+        body: '{ "title": "Request Q3 management accounts", "dealId": "uuid", "priority": "HIGH", "dueDate": "2026-10-15" }',
+      },
+      {
+        method: "POST",
+        path: "/api/deals/:dealId/activities",
+        description: (
+          <>
+            Add a note or log activity on a deal. <strong>type</strong> and <strong>title</strong> are
+            required. Use NOTE_ADDED for notes; also CALL_LOGGED, MEETING_SCHEDULED, EMAIL_SENT.
+            Emails in <code className={code}>mentionedEmails</code> notify those teammates.
+          </>
+        ),
+        body: '{ "type": "NOTE_ADDED", "title": "Banker call", "description": "Seller wants to close by Q1." }',
+      },
+      {
+        method: "GET",
+        path: "/api/deals/:dealId/activities",
+        description: "A deal's activity feed, newest first: { data, total, limit, offset }.",
+      },
+    ],
+  },
+  {
+    title: "Documents",
+    blurb: "Upload files to a deal's data room",
+    iconKey: "folder_open",
+    iconWrapClass: "bg-orange-500/10 text-orange-600",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/api/deals/:dealId/documents",
+        description: "A deal's documents.",
+        queryParams: "type, folderId, tags, search",
+      },
+      {
+        method: "POST",
+        path: "/api/deals/:dealId/documents",
+        description:
+          "Upload one file as multipart form data in the field named file (PDF, Excel, CSV, Word, .msg, .eml, JPG, PNG). Up to 4.5 MB this way; use the signed upload below for larger files. Avise reads the file with AI after responding.",
+        body: `Content-Type: multipart/form-data
+file: (binary)    name: optional    type: CIM | TEASER | FINANCIALS | LEGAL | NDA | OTHER`,
+      },
+      {
+        method: "POST",
+        path: "/api/uploads/sign",
+        description:
+          "For files over 4.5 MB: get a signed URL, PUT the bytes to it, then call the upload or ingest endpoint with { storagePath, fileName, mimeType, size }.",
+        body: '{ "fileName": "CIM.pdf", "contentType": "application/pdf", "size": 18200000, "purpose": "data-room", "dealId": "uuid" }',
+      },
+      {
+        method: "GET",
+        path: "/api/documents/:id/download",
+        description: "Download a document. PATCH and DELETE on /api/documents/:id rename or remove it.",
+      },
+    ],
+  },
+  {
+    title: "Deal Ingestion (AI)",
+    blurb: "Create or update deals from files, text, URLs or emails",
     iconKey: "upload_file",
     iconWrapClass: "bg-violet-500/10 text-violet-600",
     endpoints: [
       {
         method: "POST",
-        path: "/api/ingest",
-        description:
-          "Upload a document file (PDF, Word, Excel, CSV, text). Uses multipart form data. Excel/CSV files are auto-routed to bulk import.",
-        body: `Content-Type: multipart/form-data
-Body: file (binary)`,
-      },
-      {
-        method: "POST",
         path: "/api/ingest/text",
-        description: "Create a deal from pasted text content.",
+        description:
+          "Create a deal from pasted text such as a banker email (50 characters or more). Pass dealId to update an existing deal instead.",
         body: `{
   "text": "Deal content text...",
-  "sourceType": "email"  // email | note | slack | whatsapp | other
+  "sourceType": "email",            // email | note | slack | whatsapp | other
+  "sourceName": "Inbound from banker"
 }`,
       },
       {
         method: "POST",
         path: "/api/ingest/url",
-        description:
-          "Research a company from its website URL. Scrapes multiple pages and extracts deal data.",
+        description: "Research a company from its website and create a deal.",
         body: `{
   "url": "https://acme.com",
   "companyName": "Acme Corp",       // optional override
@@ -130,103 +261,90 @@ Body: file (binary)`,
       },
       {
         method: "POST",
-        path: "/api/ingest/email",
+        path: "/api/ingest",
         description:
-          "Upload a .eml email file. Parses email body for deal data and auto-processes PDF attachments.",
+          "Create a deal from a CIM, teaser or financials file (multipart, field file). Optional dealId, source.",
+        body: `Content-Type: multipart/form-data
+Body: file (binary)`,
+      },
+      {
+        method: "POST",
+        path: "/api/ingest/email",
+        description: "Upload a .eml email file; its body and PDF attachments are read.",
         body: `Content-Type: multipart/form-data
 Body: file (.eml)`,
       },
       {
         method: "POST",
         path: "/api/ingest/bulk",
-        description:
-          "Bulk import deals from an Excel or CSV file. Each row creates a separate deal. Returns imported/failed/total counts.",
+        description: "Bulk import deals from Excel or CSV, one deal per row.",
       },
     ],
   },
   {
-    title: "Memos",
-    blurb: "Create and manage investment memos with AI assistance",
+    title: "Memos (AI)",
+    blurb: "Investment memos generated from a deal's documents",
     iconKey: "description",
     iconWrapClass: "bg-emerald-500/10 text-emerald-600",
     endpoints: [
       {
         method: "GET",
-        path: "/api/memos?dealId=:dealId",
-        description: "List all memos for a deal.",
+        path: "/api/memos",
+        description: "List memos.",
+        queryParams: "dealId, status, type, limit, offset",
       },
       {
         method: "POST",
         path: "/api/memos",
-        description: "Create a new investment memo for a deal.",
+        description: "Create a memo for a deal. title and dealId are required.",
         body: `{
   "dealId": "uuid",
   "title": "Investment Memo - Acme Corp",
-  "templateId": "standard"   // optional: use a memo template
+  "type": "IC_MEMO",          // IC_MEMO | TEASER | SUMMARY | CUSTOM
+  "templateId": "uuid"        // optional
 }`,
       },
       {
         method: "POST",
-        path: "/api/memos/:id/generate",
-        description: "AI-generate content for a specific memo section.",
-        body: '{ "section": "executive_summary" }',
+        path: "/api/memos/:id/generate-all",
+        description: "Generate every section of a memo with AI.",
+      },
+      {
+        method: "POST",
+        path: "/api/memos/:id/sections/:sectionId/generate",
+        description: "Regenerate a single memo section.",
       },
     ],
   },
   {
-    title: "Export & Audit",
-    blurb: "Export data and view audit trails",
+    title: "Export, Audit & Account",
+    blurb: "Exports, audit trail and the identity behind your key",
     iconKey: "download",
     iconWrapClass: "bg-amber-500/10 text-amber-600",
     endpoints: [
       {
         method: "GET",
+        path: "/api/users/me",
+        description:
+          "The user the key acts as, with their organization. Use it as a connection test.",
+      },
+      {
+        method: "GET",
+        path: "/api/users/me/team",
+        description: "Everyone in your organization.",
+      },
+      {
+        method: "GET",
         path: "/api/export/deals?format=csv",
-        description: (
-          <>
-            Export all deals as CSV or JSON. Supported formats:{" "}
-            <code className="bg-[#f1f5f9] px-1 rounded text-xs">csv</code>,{" "}
-            <code className="bg-[#f1f5f9] px-1 rounded text-xs">json</code>. CSV
-            includes headers: Name, Industry, Revenue, EBITDA, Stage, Status,
-            Confidence, Created.
-          </>
-        ),
+        description: "Export deals as csv or json (default json).",
+        queryParams: "format, stage, status, industry",
       },
       {
         method: "GET",
         path: "/api/audit",
-        description:
-          "View audit log entries. Filter by action, resourceType, resourceId, severity, date range. Paginated with limit/offset.",
+        description: "Audit log entries, paged.",
         queryParams:
           "action, resourceType, resourceId, severity, startDate, endDate, limit, offset",
-      },
-    ],
-  },
-  {
-    title: "Users & Invitations",
-    blurb: "Manage team members and workspace invitations",
-    iconKey: "group",
-    iconWrapClass: "bg-rose-500/10 text-rose-600",
-    endpoints: [
-      {
-        method: "GET",
-        path: "/api/users/me",
-        description:
-          "Get the authenticated user's profile, role, organization, and preferences.",
-      },
-      {
-        method: "GET",
-        path: "/api/users/team",
-        description: "List all team members in the user's organization.",
-      },
-      {
-        method: "POST",
-        path: "/api/invitations",
-        description: "Invite a new team member. Admin only.",
-        body: `{
-  "email": "analyst@firm.com",
-  "role": "MEMBER"   // ADMIN | MEMBER | VIEWER
-}`,
       },
     ],
   },
@@ -293,6 +411,43 @@ export function EndpointSections() {
           </div>
         </details>
       ))}
+    </div>
+  );
+}
+
+export function FullEndpointIndex() {
+  return (
+    <div className="space-y-3">
+      {ENDPOINT_INDEX.map((group) => (
+        <details
+          key={group.title}
+          className="group rounded-xl bg-white border border-[#e2e8f0] overflow-hidden"
+        >
+          <summary className="flex items-center gap-3 px-5 py-4 cursor-pointer list-none">
+            <h3 className="flex-1 font-semibold text-[#111418]">{group.title}</h3>
+            <span className="text-xs text-[#64748b]">{group.endpoints.length}</span>
+            <span className="material-symbols-outlined text-[#64748b] group-open:rotate-180 transition-transform">
+              expand_more
+            </span>
+          </summary>
+          <div className="px-5 pb-4 border-t border-[#e2e8f0]">
+            {group.note && <p className="text-xs text-[#64748b] pt-3">{group.note}</p>}
+            <ul className="pt-2 divide-y divide-[#f1f5f9]">
+              {group.endpoints.map(([method, path]) => (
+                <li key={`${method} ${path}`} className="flex items-center gap-3 py-1.5">
+                  <span
+                    className={`w-16 shrink-0 text-center px-2 py-0.5 rounded text-[11px] font-bold font-mono ${METHOD_CLASS[method]}`}
+                  >
+                    {method}
+                  </span>
+                  <code className="text-[13px] font-mono text-[#111418] break-all">{path}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </details>
+      ))}
+      <p className="text-xs text-[#64748b]">{ENDPOINT_TOTAL} endpoints in total.</p>
     </div>
   );
 }

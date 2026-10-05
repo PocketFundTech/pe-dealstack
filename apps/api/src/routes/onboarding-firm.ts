@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
+import { getFirmProfileAccess, FIRM_PROFILE_LOCKED } from '../services/firmProfileAccess.js';
 
 const router = Router();
 
@@ -41,6 +42,13 @@ router.post('/firm-profile', async (req: Request, res: Response) => {
   }
 
   try {
+    // Invited teammates must not overwrite a firm profile the founder/admin
+    // already set up (they used to, by running the onboarding firm task).
+    const access = await getFirmProfileAccess(req.user!, orgId);
+    if (!access.canEditFirmProfile) {
+      return res.status(403).json(FIRM_PROFILE_LOCKED);
+    }
+
     const { data: org, error: fetchError } = await supabase
       .from('Organization')
       .select('settings')

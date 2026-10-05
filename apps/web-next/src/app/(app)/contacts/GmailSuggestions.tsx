@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime, getInitials } from "@/lib/formatters";
 import { useToast } from "@/providers/ToastProvider";
@@ -115,59 +116,48 @@ const HTTP_CONFLICT = 409;
 
 export function GmailSuggestions({ onContactAdded }: { onContactAdded?: () => void }) {
   const { showToast } = useToast();
-  const [data, setData] = useState<GmailSuggestionsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  // Lazy: defer the fetch until after the list has had a chance to render.
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setReady(true), 400);
+    return () => clearTimeout(id);
+  }, []);
+
+  const query = useApiQuery<GmailSuggestionsResponse>("/contacts/insights/gmail-suggestions", {
+    enabled: ready,
+  });
+  // Treat a missing/unavailable endpoint as "no suggestions" — never block
+  // the page or surface a scary error for an optional enhancement.
+  const data = query.data ?? (query.error ? { connected: false, scanned: false, suggestions: [] } : null);
+  const loading = !ready || query.isLoading;
   const [scanning, setScanning] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [addingEmail, setAddingEmail] = useState<string | null>(null);
   const [dismissedEmails, setDismissedEmails] = useState<Set<string>>(new Set());
 
-  const load = useCallback(async () => {
-    try {
-      const res = await api.get<GmailSuggestionsResponse>("/contacts/insights/gmail-suggestions");
-      setData(res);
-    } catch (err) {
-      // Treat a missing/unavailable endpoint as "no suggestions" — never block
-      // the page or surface a scary error for an optional enhancement.
-      console.warn("[contacts] gmail suggestions load failed:", err);
-      setData({ connected: false, scanned: false, suggestions: [] });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Lazy: defer the fetch until after the list has had a chance to render.
-  useEffect(() => {
-    let active = true;
-    const id = setTimeout(() => {
-      if (active) load();
-    }, 400);
-    return () => {
-      active = false;
-      clearTimeout(id);
-    };
-  }, [load]);
-
   async function handleScan() {
     setScanning(true);
-    try {
-      const res = await api.get<GmailSuggestionsResponse>("/contacts/insights/gmail-suggestions");
-      setData(res);
+    const result = await query.refetch();
+    if (result) {
       setDismissedEmails(new Set());
-    } catch (err) {
-      console.warn("[contacts] gmail suggestions scan failed:", err);
+    } else {
+      console.warn("[contacts] gmail suggestions scan failed");
       showToast("Couldn't scan your inbox right now", "error");
-    } finally {
-      setScanning(false);
     }
+    setScanning(false);
   }
 
   // Remove a suggestion from the list once it's been added (or already exists).
+  // Only ever called once suggestions are on screen, so `prev` is defined in
+  // practice; the fallback keeps the updater's return type total.
   function removeSuggestion(email: string) {
-    setData((prev) =>
-      prev ? { ...prev, suggestions: prev.suggestions.filter((x) => x.email !== email) } : prev,
-    );
+    query.mutate((prev) => ({
+      connected: prev?.connected ?? true,
+      scanned: prev?.scanned ?? true,
+      suggestions: (prev?.suggestions ?? []).filter((x) => x.email !== email),
+    }));
   }
 
   async function handleAdd(s: GmailSuggestion) {

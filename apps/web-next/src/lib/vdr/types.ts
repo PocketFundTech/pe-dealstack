@@ -36,6 +36,14 @@ export interface VDRFile {
   folderId: string;
   isHighlighted?: boolean;
   tags?: string[];
+  // Raw Document.status ('pending' | 'processing' | 'completed' | 'analyzed'
+  // | 'failed') — kept alongside the derived `analysis` presentation fields
+  // so callers that need the literal processing state (e.g. the upload
+  // poller) don't have to reverse-engineer it from analysis.label.
+  status?: string;
+  // Document type (CIM / FINANCIALS / LEGAL / ...) shown as a small badge
+  // in the file table, next to the size.
+  docType?: string;
 }
 
 export type RedFlagSeverity = "high" | "medium";

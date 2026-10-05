@@ -12,6 +12,7 @@ import { AIMessageActions } from "./deal-tabs-ai-message-actions";
 import { ArtifactActionButton } from "./deal-tabs-artifact-button";
 import { SlashMenu } from "./deal-tabs-slash-menu";
 import { AiMessageBody } from "./deal-tabs-ai-message-body";
+import { buildWelcomeMessage } from "./deal-welcome-message";
 import { filterSkills, findSkillCommand, expandChatInput, type Skill } from "@/lib/dealchat-skills";
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,7 @@ export function ChatTab({
   chatSending,
   onSend,
   onSendPrompt,
+  onStop,
   onClearChat,
   chatEndRef,
 }: {
@@ -36,6 +38,7 @@ export function ChatTab({
   chatSending: boolean;
   onSend: () => void;
   onSendPrompt: (text: string) => void;
+  onStop?: () => void;
   onClearChat?: () => void;
   chatEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
@@ -249,17 +252,7 @@ export function ChatTab({
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-bold text-text-muted ml-1">Avise AI</span>
                 <div className="ai-bubble-gradient border border-border-subtle rounded-2xl rounded-tl-none p-4 text-sm text-text-secondary shadow-sm">
-                  {deal?.aiThesis ? (
-                    <>
-                      <p>I&apos;ve analyzed the documents for <strong>{deal.name}</strong>. {deal.aiThesis}</p>
-                      <p className="mt-2">What would you like to know about this deal?</p>
-                    </>
-                  ) : (
-                    <>
-                      <p>I&apos;m ready to help analyze this deal. Ask me about financials, risks, or any uploaded documents.</p>
-                      <p className="mt-2">What would you like to know?</p>
-                    </>
-                  )}
+                  <AiMessageBody content={buildWelcomeMessage(deal)} />
                 </div>
               </div>
             </div>
@@ -295,6 +288,16 @@ export function ChatTab({
                   </div>
                   {/* Helpful / Copy buttons — hidden while the message is still streaming in */}
                   {!msg.streaming && <AIMessageActions content={msg.content} />}
+                  {msg.failed && msg.retryText && !chatSending && (
+                    <button
+                      type="button"
+                      onClick={() => onSendPrompt(msg.retryText!)}
+                      className="self-start text-xs font-medium text-primary hover:underline ml-1 flex items-center gap-1"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">refresh</span>
+                      Retry
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -316,6 +319,17 @@ export function ChatTab({
                 </div>
               </div>
             </div>
+          )}
+
+          {chatSending && onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="self-start ml-12 flex items-center gap-1 text-xs font-medium text-text-muted hover:text-text-main border border-border-subtle rounded-full px-3 py-1 bg-white shadow-sm"
+            >
+              <span className="material-symbols-outlined text-[14px]">stop_circle</span>
+              Stop
+            </button>
           )}
 
           <div ref={chatEndRef} />

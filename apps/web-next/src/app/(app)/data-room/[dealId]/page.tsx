@@ -3,6 +3,7 @@
 import { use, useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/providers/ToastProvider";
 import { FiltersBar } from "@/components/vdr/FiltersBar";
 import { InsightsPanel } from "@/components/vdr/InsightsPanel";
 import { DEFAULT_SMART_FILTERS } from "@/lib/vdr/filters";
@@ -18,7 +19,6 @@ import {
   DataRoomLoading,
   LinkToDealModal,
   UploadConfirmModal,
-  VDRToast,
 } from "./components";
 import {
   FolderSidebar,
@@ -33,11 +33,7 @@ import {
   applyDataRoomFilters,
   type DataRoomFilterState,
 } from "./data-room-filters";
-import {
-  ALLOWED_UPLOAD_MIME_TYPES,
-  MAX_UPLOAD_FILE_SIZE,
-  hasHighValueDoc,
-} from "./upload-helpers";
+import { hasHighValueDoc, splitUploadFiles, type SkippedUpload } from "./upload-helpers";
 import {
   createCreateFolder,
   createDeleteFolder,
@@ -55,7 +51,7 @@ import {
   createRequestDocument,
   createConfirmUpload,
 } from "./file-handlers";
-import { useInitialLoad, useFolderInsights } from "./data-loaders";
+import { useInitialLoad, useFolderInsights, useProcessingPoll, useInsightsCollapse } from "./data-loaders";
 import { generateVDRReport } from "./report-generator";
 
 interface PageProps {
@@ -80,26 +76,28 @@ export default function DataRoomDealPage({ params }: PageProps) {
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
-  const [insightsCollapsed, setInsightsCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [teamMembers, setTeamMembers] = useState<Array<{ id: string; role: string; user?: { name?: string; avatar?: string; email?: string } }>>([]);
   const [showTeamModal, setShowTeamModal] = useState(false);
   // Upload confirmation modal state (two-stage upload like legacy)
   const [pendingUploadFiles, setPendingUploadFiles] = useState<File[] | null>(null);
+  const [skippedUploads, setSkippedUploads] = useState<SkippedUpload[]>([]);
   const [autoUpdateDeal, setAutoUpdateDeal] = useState(false);
   // Link-to-deal modal state
   const [linkModalFile, setLinkModalFile] = useState<VDRFile | null>(null);
   const [linkDeals, setLinkDeals] = useState<Array<{ id: string; name: string; industry?: string }>>([]);
   const [linkSearchQuery, setLinkSearchQuery] = useState("");
   const [linking, setLinking] = useState(false);
-  // Toast notifications
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  // App-wide toasts. The page's own toast hid itself on a timer that was
+  // never cleared, so an older toast's timer could dismiss a newer error
+  // (e.g. a failed "Generate insights") before anyone saw it.
+  const { showToast: appToast } = useToast();
+  const showToast = useCallback(
+    (message: string, type: "success" | "error" | "info" = "success") => appToast(message, type),
+    [appToast],
+  );
 
-  const showToast = useCallback((message: string, type: "success" | "error" | "info" = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 5000);
-  }, []);
-
+  const [insightsCollapsed, handleToggleInsightsCollapse] = useInsightsCollapse();
   const isSearching = searchQuery.trim().length > 0;
 
   useInitialLoad({
@@ -114,6 +112,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
   });
 
   useFolderInsights({ activeFolderId, setInsights });
+  useProcessingPoll({ dealId, activeFolderId, allFiles, setAllFiles });
 
   // ─── Derived data ────────────────────────────────────────────────
   const filteredFiles = useMemo(() => {
@@ -169,24 +168,16 @@ export default function DataRoomDealPage({ params }: PageProps) {
     e.target.value = ""; // allow re-selecting the same file
     if (!files.length || !activeFolderId) return;
 
-    const validFiles: File[] = [];
-    for (const file of files) {
-      if (file.size > MAX_UPLOAD_FILE_SIZE) {
-        showToast(`File "${file.name}" exceeds maximum size of 50MB`, "error");
-        continue;
-      }
-      if (!ALLOWED_UPLOAD_MIME_TYPES.includes(file.type)) {
-        showToast(`File "${file.name}" has an unsupported file type`, "error");
-        continue;
-      }
-      validFiles.push(file);
+    const { valid: validFiles, skipped } = splitUploadFiles(files);
+    setSkippedUploads(skipped);
+    if (validFiles.length === 0) {
+      // Nothing to confirm, so say why here (the dialog would list it otherwise).
+      skipped.forEach((f) => showToast(`"${f.name}" can't be uploaded: ${f.reason}`, "error"));
+      return;
     }
-
-    if (validFiles.length > 0) {
-      // Smart default: auto-check toggle for CIM/financials/teaser documents
-      setAutoUpdateDeal(hasHighValueDoc(validFiles));
-      setPendingUploadFiles(validFiles);
-    }
+    // Smart default: auto-check toggle for CIM/financials/teaser documents
+    setAutoUpdateDeal(hasHighValueDoc(validFiles));
+    setPendingUploadFiles(validFiles);
   };
 
   // Stage 2: User confirms upload
@@ -221,6 +212,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
     setCreatingFolder,
     setAllFiles,
     setPendingDelete,
+    showToast,
   };
   const handleCreateFolder = createCreateFolder(folderDeps);
   const handleDeleteFolder = createDeleteFolder(folderDeps);
@@ -298,6 +290,7 @@ export default function DataRoomDealPage({ params }: PageProps) {
     setInsights,
     setFolders,
     setGenerating,
+    showToast,
   };
   // activeFolder/activeFolderInsights are derived above this line. Re-attach
   // them before constructing the handlers so the factories have current refs.
@@ -421,12 +414,13 @@ export default function DataRoomDealPage({ params }: PageProps) {
         onGenerateInsights={handleGenerateInsights}
         isGenerating={generating}
         isCollapsed={insightsCollapsed}
-        onToggleCollapse={() => setInsightsCollapsed((v) => !v)}
+        onToggleCollapse={handleToggleInsightsCollapse}
       />
 
       {pendingUploadFiles && (
         <UploadConfirmModal
           files={pendingUploadFiles}
+          skipped={skippedUploads}
           autoUpdateDeal={autoUpdateDeal}
           uploading={uploading}
           onAutoUpdateChange={setAutoUpdateDeal}
@@ -491,9 +485,6 @@ export default function DataRoomDealPage({ params }: PageProps) {
         onCancel={() => setPendingDelete(null)}
       />
 
-      {toast && (
-        <VDRToast message={toast.message} type={toast.type} onDismiss={() => setToast(null)} />
-      )}
     </div>
   );
 }

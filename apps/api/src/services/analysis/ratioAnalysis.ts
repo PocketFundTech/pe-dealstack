@@ -4,7 +4,7 @@
  */
 
 import { PreparedData, RatioGroup, Ratio, DuPontDecomposition } from './types.js';
-import { li, safeDiv, round2, trendDirection } from './helpers.js';
+import { li, safeDiv, round2, comparableTrend, ebitdaOf } from './helpers.js';
 
 export function computeRatios(data: PreparedData): RatioGroup[] {
   const { income, balance, cashflow, periods } = data;
@@ -33,8 +33,9 @@ export function computeRatios(data: PreparedData): RatioGroup[] {
       key: 'ebitda_margin',
       periods: byPeriod(p => {
         const rev = li(income.get(p) ?? {}, 'revenue');
-        const ebitda = li(income.get(p) ?? {}, 'ebitda');
-        return safeDiv(ebitda, rev) != null ? safeDiv(ebitda, rev)! * 100 : null;
+        const ebitda = ebitdaOf(income.get(p) ?? {});
+        if (safeDiv(ebitda, rev) != null) return safeDiv(ebitda, rev)! * 100;
+        return li(income.get(p) ?? {}, 'ebitda_margin_pct');
       }),
       benchmark: { low: 10, mid: 20, high: 35 },
       unit: '%',
@@ -83,7 +84,7 @@ export function computeRatios(data: PreparedData): RatioGroup[] {
   ];
 
   profitability.forEach(r => {
-    r.trend = trendDirection(r.periods.map(p => p.value));
+    r.trend = comparableTrend(data, r.periods);
   });
   groups.push({ category: 'Profitability', icon: 'monitoring', ratios: profitability });
 
@@ -133,7 +134,7 @@ export function computeRatios(data: PreparedData): RatioGroup[] {
     },
   ];
 
-  liquidity.forEach(r => { r.trend = trendDirection(r.periods.map(p => p.value)); });
+  liquidity.forEach(r => { r.trend = comparableTrend(data, r.periods); });
   groups.push({ category: 'Liquidity', icon: 'water_drop', ratios: liquidity });
 
   // ── 3. Leverage Ratios ──
@@ -159,7 +160,7 @@ export function computeRatios(data: PreparedData): RatioGroup[] {
         const bal = balance.get(p) ?? {};
         const debt = (li(bal, 'short_term_debt') ?? 0) + (li(bal, 'long_term_debt') ?? 0);
         const cash = li(bal, 'cash') ?? 0;
-        const ebitda = li(income.get(p) ?? {}, 'ebitda');
+        const ebitda = ebitdaOf(income.get(p) ?? {});
         return safeDiv(debt - cash, ebitda);
       }),
       benchmark: { low: 0.5, mid: 2.5, high: 4.5 },
@@ -196,7 +197,7 @@ export function computeRatios(data: PreparedData): RatioGroup[] {
     },
   ];
 
-  leverage.forEach(r => { r.trend = trendDirection(r.periods.map(p => p.value)); });
+  leverage.forEach(r => { r.trend = comparableTrend(data, r.periods); });
   groups.push({ category: 'Leverage', icon: 'balance', ratios: leverage });
 
   // ── 4. Efficiency Ratios ──
@@ -278,7 +279,7 @@ export function computeRatios(data: PreparedData): RatioGroup[] {
     },
   ];
 
-  efficiency.forEach(r => { r.trend = trendDirection(r.periods.map(p => p.value)); });
+  efficiency.forEach(r => { r.trend = comparableTrend(data, r.periods); });
   groups.push({ category: 'Efficiency', icon: 'speed', ratios: efficiency });
 
   return groups;

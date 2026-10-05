@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getCachedOrgMfa, setCachedOrgMfa } from './authContextCache.js';
+import { isApiKey, resolveApiKey } from '../services/apiKeyService.js';
 
 // User type for authenticated requests
 export interface AuthUser {
@@ -12,6 +13,12 @@ export interface AuthUser {
   organizationId?: string;
   role: string;
   user_metadata?: Record<string, unknown>;
+  /** True when Supabase has confirmed the user owns `email`. */
+  emailConfirmed?: boolean;
+  /** Set when the request authenticated with an Avise API key (avise_sk_…). */
+  apiKeyId?: string;
+  /** Only set for API-key requests. 'read_only' keys can only GET. */
+  apiKeyScope?: 'full' | 'read_only';
 }
 
 // Extend Express Request to include user
@@ -33,6 +40,28 @@ export async function authMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
+    // Avise API key (external tools like n8n): `X-API-Key: avise_sk_…` or
+    // `Authorization: Bearer avise_sk_…`. Acts as the admin who created it.
+    const xApiKey = req.headers['x-api-key'];
+    const bearer = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.substring(7)
+      : undefined;
+    const apiKey = typeof xApiKey === 'string' ? xApiKey : isApiKey(bearer) ? bearer : undefined;
+    if (apiKey) {
+      const keyUser = isApiKey(apiKey) ? await resolveApiKey(apiKey) : null;
+      if (!keyUser) {
+        log.warn('API key rejected', { ip: req.ip, url: req.originalUrl });
+        res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Invalid, revoked or expired API key. Create a new one in Settings → API Keys.',
+        });
+        return;
+      }
+      req.user = keyUser;
+      next();
+      return;
+    }
+
     // Get the Authorization header
     const authHeader = req.headers.authorization;
 
@@ -91,6 +120,7 @@ export async function authMiddleware(
       firmName: user.user_metadata?.firm_name as string | undefined,
       role: (user.user_metadata?.role as string) || 'MEMBER',
       user_metadata: user.user_metadata as Record<string, unknown> | undefined,
+      emailConfirmed: Boolean(user.email_confirmed_at),
     };
 
     next();
@@ -129,6 +159,7 @@ export async function optionalAuthMiddleware(
             firmName: user.user_metadata?.firm_name as string | undefined,
             role: (user.user_metadata?.role as string) || 'MEMBER',
             user_metadata: user.user_metadata as Record<string, unknown> | undefined,
+            emailConfirmed: Boolean(user.email_confirmed_at),
           };
         }
       }
@@ -251,6 +282,23 @@ export const enforceOrgMfaMiddleware = async (
     next(); // fail-open on errors — don't lock users out on transient bugs
   }
 };
+
+/**
+ * Read-only API key enforcement.
+ * A key created with scope 'read_only' can only make GET requests — any
+ * other verb is rejected before it reaches a route handler. Session logins
+ * and 'full' keys are unaffected. Must run after authMiddleware.
+ */
+export function enforceApiKeyScope(req: Request, res: Response, next: NextFunction): void {
+  if (req.user?.apiKeyScope === 'read_only' && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+    res.status(403).json({
+      error: 'This API key is read-only and cannot make a ' + req.method + ' request. Create a full-access key in Settings → API Keys if this integration needs to write data.',
+      code: 'API_KEY_READ_ONLY',
+    });
+    return;
+  }
+  next();
+}
 
 /**
  * Role-based access control middleware

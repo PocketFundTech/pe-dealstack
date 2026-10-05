@@ -3,7 +3,12 @@ import { extractDealDataFromText, ExtractedDealData } from './aiExtractor.js';
 import { classifyFinancials, ClassificationResult, ClassifiedStatement } from './financialClassifier.js';
 import { dedupeStatementPeriods, mergeStatementsBySameType } from './financialPeriodNormalizer.js';
 import { refreshDealCache } from './dealCacheWriteback.js';
-import { financialSourceAuthorityRank } from './financialSourceAuthority.js';
+import {
+  compareSources, periodKeyOf, resolveSourceKind, selectSourceStatements, type SourceCandidate,
+} from './financialSourceSelection.js';
+import {
+  canonicalPeriodColumns, candidateFromRow, deactivateRows, upsertStatementRow, type ActiveRow,
+} from './financialStatementStore.js';
 import { log } from '../utils/logger.js';
 
 // ─── Types ────────────────────────────────────────────────────
@@ -75,9 +80,40 @@ export async function runFastPass(text: string): Promise<FastPassResult | null> 
  * Designed so the extraction layer can be swapped for Azure later —
  * only this function and classifyFinancials() need to change.
  */
+// Per-deal write lock. The cross-document conflict check (read the active
+// row, then upsert) is not atomic, so two documents of the same deal
+// finishing together could both see "no active row" and both go active —
+// or the outcome depended on which finished first. "Extract all" runs its
+// documents inside one function instance, so serialising runDeepPass per
+// deal in-process closes that race without a migration. (Cross-instance
+// writers — a data-room upload racing an Extract-all — would need a DB
+// advisory lock; see FINANCIALS-FIX-PLAN B3.)
+const dealWriteLocks = new Map<string, Promise<unknown>>();
+
+export async function withDealWriteLock<T>(dealId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = dealWriteLocks.get(dealId) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(fn);
+  const tail = run.catch(() => undefined);
+  dealWriteLocks.set(dealId, tail);
+  try {
+    return await run;
+  } finally {
+    if (dealWriteLocks.get(dealId) === tail) dealWriteLocks.delete(dealId);
+  }
+}
+
 export async function runDeepPass(input: OrchestrationInput): Promise<DeepPassResult | null> {
-  // Use pre-computed classification (vision path) or run text classifier
+  // Classify (an LLM call when no classification is passed) OUTSIDE the
+  // lock — only the DB merge needs serialising.
   const classification = input.classification ?? await classifyFinancials(input.text);
+  return withDealWriteLock(input.dealId, () => runDeepPassUnlocked(input, classification));
+}
+
+async function runDeepPassUnlocked(
+  input: OrchestrationInput,
+  // Pre-computed (vision path) or text-classified by runDeepPass above.
+  classification: Awaited<ReturnType<typeof classifyFinancials>> | NonNullable<OrchestrationInput['classification']> | null,
+): Promise<DeepPassResult | null> {
   const source = input.extractionSource ?? 'gpt4o';
 
   if (!classification || classification.statements.length === 0) {
@@ -90,6 +126,27 @@ export async function runDeepPass(input: OrchestrationInput): Promise<DeepPassRe
       warnings: classification?.warnings ?? ['No financial data found in document'],
       hasConflicts: false,
     };
+  }
+
+  // Document metadata for the deal — used to tell reported statements from
+  // derived models and to rank sources across documents (fix plan B1).
+  const { data: dealDocs } = await supabase
+    .from('Document')
+    .select('id, type, mimeType, name')
+    .eq('dealId', input.dealId);
+  const docMetaById = new Map<string, { type?: string | null; mimeType?: string | null; name?: string | null }>(
+    (dealDocs ?? []).map((d) => [d.id as string, d as { type?: string | null; mimeType?: string | null; name?: string | null }]),
+  );
+  const incomingDoc = input.documentId ? docMetaById.get(input.documentId) : undefined;
+
+  // One document can hold the same statement twice — the reported tab and a
+  // valuation tab. Keep the reported one; merging would union the model's
+  // lines into the real statement.
+  const selected = selectSourceStatements(classification.statements, incomingDoc?.name);
+  if (selected.dropped.length > 0) {
+    log.info('Deep pass: dropped model-derived statements in favour of reported ones', {
+      dealId: input.dealId, documentId: input.documentId, dropped: selected.dropped,
+    });
   }
 
   // Statement merge pass: collapse multiple statements of the same type into
@@ -106,7 +163,7 @@ export async function runDeepPass(input: OrchestrationInput): Promise<DeepPassRe
   // mergeStatementsBySameType uses the existing per-period merge logic so
   // overlapping line-item KEYS are unioned (higher-confidence value wins
   // per key, missing keys filled from the loser).
-  classification.statements = mergeStatementsBySameType(classification.statements);
+  classification.statements = mergeStatementsBySameType(selected.statements);
 
   // Period dedup pass: collapse equivalent labels ("FY26 Est." vs "FY26 Est",
   // "YTD 2026" vs "2026 YTD" vs "YTD Total") before upsert so the time
@@ -152,158 +209,124 @@ export async function runDeepPass(input: OrchestrationInput): Promise<DeepPassRe
   let hasConflicts = false;
   const now = new Date().toISOString();
 
-  // Source-authority map for cross-document conflict resolution. A dedicated
-  // financials spreadsheet outranks a CIM/teaser narrative, so the P&L wins the
-  // active slot for a period even when the CIM extracted first or scored higher
-  // confidence. Fetched once for the deal; missing docs rank lowest.
-  const { data: dealDocs } = await supabase
-    .from('Document')
-    .select('id, type, mimeType, name')
-    .eq('dealId', input.dealId);
-  const docMetaById = new Map<string, { type?: string | null; mimeType?: string | null; name?: string | null }>(
-    (dealDocs ?? []).map((d) => [d.id as string, d as { type?: string | null; mimeType?: string | null; name?: string | null }]),
-  );
-  const rankOf = (documentId: string | null | undefined): number =>
-    financialSourceAuthorityRank(documentId ? docMetaById.get(documentId) : undefined);
-
   for (const stmt of classification.statements) {
+    const incomingKind = resolveSourceKind(stmt.sourceKind, stmt.sheetName, incomingDoc?.name);
+
+    // Every active row of this statement type, matched by CANONICAL period
+    // (fix plan A4) — "FY2024 (Jan - Dec 2024)" from the P&L and "2024" from
+    // a valuation file are the same year. Exact-label matching let both stay
+    // active with no conflict raised. One read per statement, not per period.
+    const { data: activeRows } = await supabase
+      .from('FinancialStatement')
+      .select('*')
+      .eq('dealId', input.dealId)
+      .eq('statementType', stmt.statementType)
+      .eq('isActive', true);
+    // Kept current through the loop: rows written earlier in THIS run are
+    // compared too, so two labels for one period from the same document
+    // can't both end up active (dedup should already have merged them —
+    // this is the backstop).
+    let active = (activeRows ?? []) as ActiveRow[];
+
     for (const periodData of stmt.periods) {
       try {
-        // Check for existing active row(s) from a DIFFERENT document.
-        // Use limit(1) + array fetch instead of .maybeSingle() — if a
-        // previous race condition left multiple active rows for the same
-        // (deal, type, period), .maybeSingle() throws "JSON object
-        // requested, multiple (or no) rows returned" which the catch
-        // block silently swallows, dropping the entire period from the
-        // re-extraction. This was the bug that caused only 3 of 12
-        // months to survive a multi-doc re-extract.
-        const { data: existingRows } = await supabase
-          .from('FinancialStatement')
-          .select('id, documentId, isActive')
-          .eq('dealId', input.dealId)
-          .eq('statementType', stmt.statementType)
-          .eq('period', periodData.period)
-          .eq('isActive', true)
-          .limit(1);
-        const existing = existingRows && existingRows.length > 0 ? existingRows[0] : null;
+        const periodKey = periodKeyOf(periodData.period);
+        const matching = active.filter(
+          (r) => (r.periodKey ?? periodKeyOf(r.period)) === periodKey,
+        );
+        const incomingDocId = input.documentId ?? null;
+        const others = matching.filter((r) => r.documentId !== incomingDocId);
+        // Same document, old label for the same period (re-extract renamed it).
+        const staleSameDoc = matching.filter((r) => r.documentId === incomingDocId && r.period !== periodData.period);
 
-        const isConflict = existing && existing.documentId !== (input.documentId ?? null);
-
-        if (isConflict) {
-          // CONFLICT: a different document already has an active row for this
-          // period. Resolve by SOURCE AUTHORITY, not first-writer or
-          // confidence: a P&L spreadsheet (rank 3) beats a CIM/teaser narrative
-          // (rank 2). Only a genuine tie (equal-rank sources) stays needs_review.
-          const incomingRank = rankOf(input.documentId ?? null);
-          const existingRank = rankOf(existing.documentId);
-          const incomingWins = incomingRank > existingRank;
-          const tie = incomingRank === existingRank;
+        let isActive = true;
+        let mergeStatus: 'auto' | 'needs_review' = 'auto';
+        if (others.length > 0) {
+          // CONFLICT with another document. Decide by source kind, then
+          // document authority, then completeness (financialSourceSelection.ts)
+          // — never by which document wrote first.
+          const incoming: SourceCandidate = {
+            sourceKind: incomingKind, doc: incomingDoc, statementType: stmt.statementType, lineItems: periodData.lineItems,
+            period: periodData.period,
+          };
+          const best = others
+            .map((r) => ({ row: r, cand: candidateFromRow(r, stmt.statementType, docMetaById) }))
+            .sort((x, y) => compareSources(y.cand, x.cand))[0];
+          const cmp = compareSources(incoming, best.cand);
+          const incomingWins = cmp > 0;
+          const tie = cmp === 0;
+          isActive = incomingWins;
+          mergeStatus = tie ? 'needs_review' : 'auto';
+          hasConflicts = true;
 
           log.info('Deep pass: conflict detected', {
             dealId: input.dealId, statementType: stmt.statementType,
-            period: periodData.period, existingDocId: existing.documentId,
-            newDocId: input.documentId, incomingRank, existingRank,
-            resolution: incomingWins ? 'incoming_wins_by_authority' : tie ? 'tie_needs_review' : 'existing_wins_by_authority',
+            period: periodData.period, periodKey, existingDocId: best.row.documentId,
+            newDocId: input.documentId, incomingKind, existingKind: best.cand.sourceKind,
+            resolution: incomingWins ? 'incoming_wins' : tie ? 'tie_needs_review' : 'existing_wins',
           });
 
           if (incomingWins) {
-            // Deactivate EVERY currently-active row for this period first (to
-            // respect the one-active-per-period partial unique index), then the
-            // upsert below installs the higher-authority incoming row as active.
-            await supabase
-              .from('FinancialStatement')
-              .update({ isActive: false, mergeStatus: 'auto' })
-              .eq('dealId', input.dealId)
-              .eq('statementType', stmt.statementType)
-              .eq('period', periodData.period)
-              .eq('isActive', true);
+            // Deactivate every active row for this period first (respects the
+            // one-active-per-period partial unique indexes), then the upsert
+            // below installs the incoming row as active.
+            const ids = [...others, ...staleSameDoc].map((r) => r.id);
+            await deactivateRows(ids);
+            active = active.filter((r) => !ids.includes(r.id));
           } else {
-            // Existing source outranks or ties the incoming one → keep it
-            // active. Flag for user review only on a true tie; a strictly
-            // weaker incoming source is auto-resolved (no review needed).
+            // Existing source stays active. Flag for review only on a true tie.
             await supabase
               .from('FinancialStatement')
-              .update({ mergeStatus: tie ? 'needs_review' : 'auto' })
-              .eq('id', existing.id);
+              .update({ mergeStatus })
+              .eq('id', best.row.id);
           }
-
-          // Upsert (not insert) so a re-extraction of the incoming doc updates
-          // its own prior row instead of violating the (deal,type,period,doc)
-          // unique constraint.
-          const { data, error } = await supabase
-            .from('FinancialStatement')
-            .upsert(
-              {
-                dealId: input.dealId,
-                documentId: input.documentId ?? null,
-                statementType: stmt.statementType,
-                period: periodData.period,
-                periodType: periodData.periodType,
-                lineItems: periodData.lineItems,
-                currency: stmt.currency,
-                unitScale: stmt.unitScale,
-                extractionConfidence: periodData.confidence,
-                extractionSource: source,
-                extractedAt: now,
-                isActive: incomingWins,
-                mergeStatus: incomingWins ? 'auto' : tie ? 'needs_review' : 'auto',
-              },
-              { onConflict: 'dealId,statementType,period,documentId' },
-            )
-            .select('id')
-            .single();
-
-          if (error) {
-            log.error('Deep pass: conflict upsert failed', {
-              dealId: input.dealId, statementType: stmt.statementType,
-              period: periodData.period, error,
-            });
-            continue;
-          }
-          if (data?.id) {
-            statementIds.push(data.id);
-            idLabels.push(`${stmt.statementType}:${periodData.period}`);
-          }
-          periodsStored++;
-          hasConflicts = true;
-        } else {
-          // NO CONFLICT: same doc re-extraction or first extraction for this period
-          const { data, error } = await supabase
-            .from('FinancialStatement')
-            .upsert(
-              {
-                dealId: input.dealId,
-                documentId: input.documentId ?? null,
-                statementType: stmt.statementType,
-                period: periodData.period,
-                periodType: periodData.periodType,
-                lineItems: periodData.lineItems,
-                currency: stmt.currency,
-                unitScale: stmt.unitScale,
-                extractionConfidence: periodData.confidence,
-                extractionSource: source,
-                extractedAt: now,
-                isActive: true,
-                mergeStatus: 'auto',
-              },
-              { onConflict: 'dealId,statementType,period,documentId' },
-            )
-            .select('id')
-            .single();
-
-          if (error) {
-            log.error('Deep pass: failed to upsert period', {
-              dealId: input.dealId, statementType: stmt.statementType,
-              period: periodData.period, error,
-            });
-            continue;
-          }
-          if (data?.id) {
-            statementIds.push(data.id);
-            idLabels.push(`${stmt.statementType}:${periodData.period}`);
-          }
-          periodsStored++;
+        } else if (staleSameDoc.length > 0) {
+          const ids = staleSameDoc.map((r) => r.id);
+          await deactivateRows(ids);
+          active = active.filter((r) => !ids.includes(r.id));
         }
+
+        // Upsert (not insert) so a re-extraction of the same document updates
+        // its own prior row instead of violating the (deal,type,period,doc)
+        // unique constraint.
+        const { data, error } = await upsertStatementRow({
+          dealId: input.dealId,
+          documentId: incomingDocId,
+          statementType: stmt.statementType,
+          period: periodData.period,
+          periodType: periodData.periodType,
+          lineItems: periodData.lineItems,
+          currency: stmt.currency,
+          unitScale: stmt.unitScale,
+          extractionConfidence: periodData.confidence,
+          extractionSource: source,
+          extractedAt: now,
+          isActive,
+          mergeStatus,
+        }, {
+          ...canonicalPeriodColumns(periodData.period),
+          sourceKind: incomingKind,
+          sheetName: stmt.sheetName ?? null,
+        });
+
+        if (error) {
+          log.error('Deep pass: failed to upsert period', {
+            dealId: input.dealId, statementType: stmt.statementType,
+            period: periodData.period, error,
+          });
+          continue;
+        }
+        if (data?.id) {
+          statementIds.push(data.id);
+          idLabels.push(`${stmt.statementType}:${periodData.period}`);
+          if (isActive && !active.some((r) => r.id === data.id)) {
+            active.push({
+              ...(data as Partial<ActiveRow>), id: data.id, documentId: incomingDocId,
+              period: periodData.period, periodKey, lineItems: periodData.lineItems, sourceKind: incomingKind,
+            } as ActiveRow);
+          }
+        }
+        periodsStored++;
       } catch (err) {
         log.error('Deep pass: unexpected error upserting period', {
           dealId: input.dealId, statementType: stmt.statementType,

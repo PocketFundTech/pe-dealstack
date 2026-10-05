@@ -6,11 +6,12 @@
  * Disagreements between models flag values for human review.
  *
  * Uses claude-haiku-4-5-20251001 for cost efficiency (~$0.001-0.002 per run).
- * Gracefully degrades if ANTHROPIC_API_KEY is not set.
+ * Gracefully degrades if neither ANTHROPIC_API_KEY nor ANTHROPIC_OAUTH_TOKEN
+ * is set.
  */
 
 import { ChatAnthropic } from '@langchain/anthropic';
-import { isClaudeEnabled } from '../../../../services/anthropic.js';
+import { isClaudeEnabled, getChatAnthropicAuthFields } from '../../../../services/anthropic.js';
 import { log } from '../../../../utils/logger.js';
 import { captureAgentError } from '../../../../utils/sentryHelpers.js';
 import { getTodayIso } from '../../../../utils/dates.js';
@@ -269,7 +270,7 @@ export async function crossVerifyNode(
 
   // Skip if Claude not configured
   if (!isClaudeEnabled()) {
-    steps.push(step('crossVerify', 'Skipping cross-verification — ANTHROPIC_API_KEY not configured'));
+    steps.push(step('crossVerify', 'Skipping cross-verification — ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN not configured'));
     return { steps };
   }
 
@@ -296,10 +297,17 @@ export async function crossVerifyNode(
 
     await enforceUserGate('financial_extraction', 'claude-haiku-4-5-20251001', 'anthropic');
     const start = Date.now();
+    const authFields = getChatAnthropicAuthFields();
+    if (!authFields) {
+      // Shouldn't happen — isClaudeEnabled() gated entry into this function —
+      // but degrade gracefully rather than let ChatAnthropic throw.
+      steps.push(step('crossVerify', 'Skipping cross-verification — Claude auth unavailable'));
+      return { steps };
+    }
     const claude = new ChatAnthropic({
       model: 'claude-haiku-4-5-20251001',
       maxTokens: 2000,
-      apiKey: process.env.ANTHROPIC_API_KEY,
+      ...authFields,
     });
     let response;
     try {
@@ -330,13 +338,32 @@ export async function crossVerifyNode(
       });
       throw err;
     }
-    const claudeUsage = response.usage_metadata;
+    const claudeUsage = response.usage_metadata as
+      | { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number; cache_creation?: number } }
+      | undefined;
+    // LangChain's usage_metadata.input_tokens INCLUDES cache tokens (unlike
+    // the raw Anthropic SDK) — subtract them so promptTokens stays
+    // UNCACHED-only and pass the cache counts on separately so they're
+    // priced at their own rate instead of full-price input (see llm.ts
+    // makeUsageHandler for the same split, and trackedLLM.ts's docblock).
+    const cacheRead = claudeUsage?.input_token_details?.cache_read ?? 0;
+    const cacheCreation = claudeUsage?.input_token_details?.cache_creation ?? 0;
+    const rawInputTokens = claudeUsage?.input_tokens ?? 0;
+    const promptTokens = Math.max(0, rawInputTokens - cacheRead - cacheCreation);
+    // Served model — response_metadata.model reflects what actually
+    // answered (this call doesn't use a fallback chain today, but the
+    // field is authoritative when present).
+    const servedModel =
+      (response as unknown as { response_metadata?: { model?: string } }).response_metadata?.model ??
+      'claude-haiku-4-5-20251001';
     await recordUsageEvent({
       operation: 'financial_extraction',
-      model: 'claude-haiku-4-5-20251001',
+      model: servedModel,
       provider: 'anthropic',
-      promptTokens: claudeUsage?.input_tokens ?? 0,
+      promptTokens,
       completionTokens: claudeUsage?.output_tokens ?? 0,
+      cacheReadTokens: cacheRead,
+      cacheWrite5mTokens: cacheCreation,
       status: 'success',
       durationMs: Date.now() - start,
     });

@@ -29,11 +29,16 @@ import { runWithAgentBounds } from '../agentBounds.js';
 // ─── Bounds ──────────────────────────────────────────────────────────
 // Multi-pass extraction (extract → verify → cross-verify → validate →
 // self-correct → store) can legitimately take 60-90s on large CIMs.
-// 120s budget leaves headroom; recursionLimit 25 covers worst-case
-// (3 self-correct retries × ~7 hops each).
+// 240s matches PER_DOC_BUDGET_MS in routes/financials-extraction.ts — the
+// route already gives each document up to 240s before abandoning it, so an
+// agent timeout tighter than that (120s, prior default) meant the agent
+// gave up on large CIMs/XLSX models well before the route did, surfacing as
+// "Financial agent timed out after 120000ms" for documents that had another
+// 120s of budget left (prod incident 2026-09-28). recursionLimit 25 covers
+// worst-case (3 self-correct retries × ~7 hops each).
 //
 // Refs: .planning/REMEDIATION_ROADMAP.md Phase 4 Task 4.3
-const FINANCIAL_AGENT_TIMEOUT_MS = 120_000;
+const FINANCIAL_AGENT_TIMEOUT_MS = 240_000;
 const FINANCIAL_AGENT_RECURSION_LIMIT = 25;
 
 // ─── Input Types ─────────────────────────────────────────────

@@ -12,11 +12,15 @@ import type { ClassifiedStatement } from '../services/financialClassifier.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { runFinancialAgent } from '../services/agents/financialAgent/index.js';
 import type { FileType } from '../services/agents/financialAgent/index.js';
-import { acquireExtractionSlot, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
+import {
+  acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot, MAX_CONCURRENT_PER_ORG,
+} from '../services/agents/financialAgent/concurrency.js';
+import { extractionOrder } from '../services/financialSourceAuthority.js';
+import { mapWithConcurrencyLimit } from '../utils/limitConcurrency.js';
 import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
 import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { maybeReactivateAfterExtraction } from '../services/agents/dealReactivation/index.js';
-import { isFinancialDoc } from './financials-extraction-utils.js';
+import { isFinancialDoc, buildResultWarnings } from './financials-extraction-utils.js';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -83,6 +87,9 @@ const extractSchema = z.object({
   // 'all'            — every doc on the deal regardless of type.
   // Always coerced to 'single' when documentId is provided.
   mode: z.enum(['single', 'all_financials', 'all']).optional().default('single'),
+  // Multi-doc continuation: restrict the batch to these documents (the
+  // `pendingDocumentIds` a previous call couldn't reach in its time budget).
+  documentIds: z.array(z.string().uuid()).max(200).optional(),
 });
 
 // Per-doc helper: runs slot acquire/release + runFinancialAgent for one doc
@@ -91,7 +98,8 @@ const extractSchema = z.object({
 interface PerDocResult {
   id: string;
   name: string;
-  status: 'completed' | 'failed' | 'skipped_no_slot';
+  /** 'pending' = queued but not reached within this request's time budget — send it again. */
+  status: 'completed' | 'failed' | 'skipped_no_slot' | 'pending';
   statementsStored: number;
   periodsStored: number;
   overallConfidence: number | null;
@@ -99,21 +107,31 @@ interface PerDocResult {
   extractionMethod?: string;
   agent?: any;
   error?: string;
+  /** Agent-level warnings (e.g. "no CASH_FLOW statement found") — always present. */
+  warnings: string[];
 }
 
 async function processOneDoc(
   doc: { id: string; fileUrl: string; name: string | null; type?: string | null; mimeType?: string | null },
   dealId: string,
   orgId: string,
+  /** Multi-doc: wait for a slot until this time (epoch ms) instead of skipping. */
+  slotDeadline?: number,
 ): Promise<PerDocResult> {
   const baseName = doc.name ?? 'document';
-  const fail = (status: 'failed' | 'skipped_no_slot', error: string): PerDocResult => ({
-    id: doc.id, name: baseName, status, statementsStored: 0, periodsStored: 0, overallConfidence: null, hasConflicts: false, error,
+  const fail = (status: 'failed' | 'skipped_no_slot' | 'pending', error: string): PerDocResult => ({
+    id: doc.id, name: baseName, status, statementsStored: 0, periodsStored: 0, overallConfidence: null, hasConflicts: false, error, warnings: [],
   });
 
   const fileBuffer = await fetchBuffer(doc.fileUrl);
   if (!fileBuffer) return fail('failed', 'Could not download document file');
-  if (!acquireExtractionSlot(orgId)) return fail('skipped_no_slot', 'Extraction slot unavailable');
+  if (slotDeadline !== undefined) {
+    if (!(await acquireExtractionSlotBy(orgId, slotDeadline))) {
+      return fail('pending', 'Queued — not reached in this request');
+    }
+  } else if (!acquireExtractionSlot(orgId)) {
+    return fail('skipped_no_slot', 'Extraction slot unavailable');
+  }
 
   try {
     const agentResult = await runFinancialAgent({
@@ -142,6 +160,7 @@ async function processOneDoc(
         crossVerifyResult: agentResult.crossVerifyResult || null,
       },
       error: agentResult.error ?? undefined,
+      warnings: agentResult.warnings ?? [],
     };
   } catch (err: any) {
     log.error('processOneDoc failed', { dealId, docId: doc.id, err: err?.message });
@@ -161,7 +180,8 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
     const dealAccess = await verifyDealAccess(dealId, orgId);
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
-    const { documentId, documentType, mode } = extractSchema.parse(req.body);
+    const { documentId, documentType, mode, documentIds } = extractSchema.parse(req.body);
+    const requestStartedAt = Date.now();
 
     // Resolve target documents based on mode + documentId precedence.
     // documentId always wins (single-doc behaviour) regardless of mode.
@@ -227,6 +247,17 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         const fallback = allDocs.find((d) => !!d.fileUrl);
         if (fallback) docs = [fallback];
       }
+    }
+
+    if (effectiveMode !== 'single') {
+      if (documentIds && documentIds.length > 0) {
+        const wanted = new Set(documentIds);
+        docs = docs.filter((d) => wanted.has(d.id));
+      }
+      // Reported statements first, narrative docs next, derived valuation
+      // models last — so the budget is spent on the authoritative sources.
+      // (Array.prototype.sort is stable: newest-first is kept within a tier.)
+      docs = [...docs].sort((a, b) => extractionOrder(a) - extractionOrder(b));
     }
 
     if (docs.length === 0 || !docs[0]?.fileUrl) {
@@ -308,16 +339,23 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
     // Per-doc time budget. 240s leaves ~60s headroom under Vercel's 300s
     // hard limit for response serialization, slot release, etc.
     const PER_DOC_BUDGET_MS = 240_000;
+    // Whole-request budget for the multi-doc queue, and the least time a doc
+    // needs left to be worth starting (most finish in 30-90s; the cache
+    // makes a re-sent doc near-instant).
+    const REQUEST_BUDGET_MS = 270_000;
+    const MIN_DOC_START_BUDGET_MS = 75_000;
 
     const withDocTimeout = (
       doc: { id: string; fileUrl: string; name: string | null; type?: string | null; mimeType?: string | null },
+      budgetMs: number = PER_DOC_BUDGET_MS,
+      slotDeadline?: number,
     ): Promise<PerDocResult> => {
       const baseName = doc.name ?? 'document';
       let timeoutHandle: NodeJS.Timeout | undefined;
       const timeoutPromise = new Promise<PerDocResult>((resolve) => {
         timeoutHandle = setTimeout(() => {
           log.warn('Per-doc extraction timeout — abandoning so others can complete', {
-            dealId, docId: doc.id, budgetMs: PER_DOC_BUDGET_MS,
+            dealId, docId: doc.id, budgetMs,
           });
           resolve({
             id: doc.id,
@@ -327,11 +365,12 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
             periodsStored: 0,
             overallConfidence: null,
             hasConflicts: false,
-            error: `Extraction exceeded ${PER_DOC_BUDGET_MS / 1000}s per-doc budget`,
+            error: `Extraction exceeded ${Math.round(budgetMs / 1000)}s per-doc budget`,
+            warnings: [],
           });
-        }, PER_DOC_BUDGET_MS);
+        }, budgetMs);
       });
-      return Promise.race([processOneDoc(doc, dealId, orgId), timeoutPromise])
+      return Promise.race([processOneDoc(doc, dealId, orgId, slotDeadline), timeoutPromise])
         .finally(() => { if (timeoutHandle) clearTimeout(timeoutHandle); });
     };
 
@@ -349,10 +388,27 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         log.warn('Per-doc extraction issue', { dealId, docId: docs[0].id, status: r.status, error: r.error });
       }
     } else {
-      // Multi-doc modes: parallel execution. Slot acquisition inside
-      // processOneDoc enforces the 2-concurrent-per-org cap — anything beyond
-      // gets 'skipped_no_slot' and the user can retry.
-      const settled = await Promise.allSettled(docs.map(withDocTimeout));
+      // Multi-doc modes: a bounded QUEUE, not a race for slots. Previously
+      // every doc ran at once and all but two came back 'skipped_no_slot'
+      // — on the SRM deal the two that won were the smallest files (the
+      // valuation summary). Now at most MAX_CONCURRENT_PER_ORG run at a
+      // time, each waiting its turn. The request is still capped by the
+      // 300s function limit, so a doc is only STARTED while enough budget
+      // remains; the rest come back 'pending' and the client re-sends them
+      // (pendingDocumentIds). Already-extracted docs hit the extraction
+      // cache on a re-run, so a continuation doesn't redo work.
+      const requestDeadline = requestStartedAt + REQUEST_BUDGET_MS;
+      const pending = (doc: (typeof docs)[number]): PerDocResult => ({
+        id: doc.id, name: doc.name ?? 'document', status: 'pending',
+        statementsStored: 0, periodsStored: 0, overallConfidence: null, hasConflicts: false,
+        error: 'Queued — not reached in this request', warnings: [],
+      });
+      const settled = await mapWithConcurrencyLimit(docs, MAX_CONCURRENT_PER_ORG, async (doc) => {
+        const startBy = requestDeadline - MIN_DOC_START_BUDGET_MS;
+        if (Date.now() > startBy) return pending(doc);
+        const r = await withDocTimeout(doc, Math.min(PER_DOC_BUDGET_MS, requestDeadline - Date.now()), startBy);
+        return r;
+      });
       for (let i = 0; i < settled.length; i++) {
         const s = settled[i];
         const doc = docs[i];
@@ -371,6 +427,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
             statementsStored: 0, periodsStored: 0,
             overallConfidence: null, hasConflicts: false,
             error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+            warnings: [],
           });
           log.error('Per-doc extraction rejected', { dealId, docId: doc.id, err: s.reason });
         }
@@ -382,14 +439,25 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         acc.statementsStored += r.statementsStored;
         acc.periodsStored += r.periodsStored;
         if (r.status === 'completed') acc.documentsUsed += 1;
+        else if (r.status === 'pending') acc.documentsPending += 1;
         else acc.documentsFailed += 1;
         if (r.hasConflicts) acc.hasConflicts = true;
         return acc;
       },
-      { statementsStored: 0, periodsStored: 0, documentsUsed: 0, documentsFailed: 0, hasConflicts: false },
+      { statementsStored: 0, periodsStored: 0, documentsUsed: 0, documentsFailed: 0, documentsPending: 0, hasConflicts: false },
     );
 
     const aggregateSuccess = perDoc.some((r) => r.status === 'completed');
+    // Prod incident (2026-09-28): every doc failed (timeout / provider
+    // credit exhaustion) but the response still looked like a benign
+    // "0 periods found" — `allFailed` lets the frontend distinguish "no
+    // financial data in otherwise-successful docs" from "extraction itself
+    // never worked". HTTP status stays 200 (BC — callers already branch on
+    // `success` / `periodsStored`, not status code).
+    const pendingDocumentIds = perDoc.filter((r) => r.status === 'pending').map((r) => r.id);
+    const allFailed = perDoc.length > 0 && !aggregateSuccess && pendingDocumentIds.length < perDoc.length;
+    // Pending docs aren't failures — don't warn about them.
+    const resultWarnings = buildResultWarnings(perDoc.filter((r) => r.status !== 'pending'));
 
     // Single-doc back-compat: flat fields alongside the new aggregate.
     const first = perDoc[0];
@@ -426,10 +494,15 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
         periodsStored: totals.periodsStored,
         documentsUsed: totals.documentsUsed,
         documentsFailed: totals.documentsFailed,
+        documentsPending: totals.documentsPending,
         overallConfidence: first?.overallConfidence ?? null,
         hasConflicts: totals.hasConflicts,
+        warnings: resultWarnings,
+        allFailed,
       },
       hasConflicts: totals.hasConflicts,
+      // Re-send these (mode all_financials + documentIds) to continue the batch.
+      pendingDocumentIds,
     });
   } catch (err: any) {
     log.error('POST financials extract error', err);

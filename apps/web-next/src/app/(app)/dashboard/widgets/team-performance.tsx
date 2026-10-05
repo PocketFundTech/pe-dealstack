@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useMemo } from "react";
+import { useApiQuery } from "@/lib/useApiQuery";
 import { getInitials } from "@/lib/formatters";
 import { WidgetShell, WidgetEmpty, WidgetError, WidgetLoading } from "./shell";
 
@@ -25,49 +25,44 @@ function capacityColor(pct: number): string {
   return "#003366";
 }
 
+// Stale-while-revalidate cache: `/deals?limit=500` matches the calendar
+// widget's key, so the two dedupe/share that fetch. `/tasks?limit=500` is
+// wider than the dashboard's own `/tasks?limit=100`, so it stays separate.
 export function TeamPerformanceWidget() {
-  const [rows, setRows] = useState<Row[] | null>(null);
-  const [error, setError] = useState(false);
+  const usersQuery = useApiQuery<User[]>("/users?isActive=true");
+  const dealsQuery = useApiQuery<DealRow[] | { deals: DealRow[] }>("/deals?limit=500");
+  const tasksQuery = useApiQuery<{ tasks?: TaskRow[] } | TaskRow[]>("/tasks?limit=500");
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [users, dealsData, tasksData] = await Promise.all([
-          api.get<User[]>("/users?isActive=true"),
-          api.get<DealRow[] | { deals: DealRow[] }>("/deals?limit=500"),
-          api.get<{ tasks?: TaskRow[] } | TaskRow[]>("/tasks?limit=500"),
-        ]);
-        if (cancelled) return;
-        const team = Array.isArray(users) ? users : [];
-        const deals = Array.isArray(dealsData) ? dealsData : dealsData.deals || [];
-        const tasks = Array.isArray(tasksData) ? tasksData : tasksData.tasks || [];
+  const error = !!usersQuery.error || !!dealsQuery.error || !!tasksQuery.error;
+  const loading = usersQuery.isLoading || dealsQuery.isLoading || tasksQuery.isLoading;
 
-        const dealsByMember = new Map<string, number>();
-        for (const d of deals) {
-          for (const tm of d.teamMembers || []) {
-            const uid = tm.user?.id || tm.userId;
-            if (!uid) continue;
-            dealsByMember.set(uid, (dealsByMember.get(uid) || 0) + 1);
-          }
-        }
+  const rows = useMemo<Row[] | null>(() => {
+    if (loading || error) return null;
+    const users = usersQuery.data;
+    const dealsData = dealsQuery.data;
+    const tasksData = tasksQuery.data;
+    if (users === undefined || dealsData === undefined || tasksData === undefined) return null;
 
-        const computed = team.slice(0, 6).map((m) => {
-          const dealCount = dealsByMember.get(m.id) || 0;
-          const taskCount = tasks.filter((t) => t.assignedTo === m.id && t.status !== "COMPLETED").length;
-          const capacity = Math.min(100, Math.round((dealCount / 5) * 100));
-          return { id: m.id, name: m.name, email: m.email, dealCount, taskCount, capacity };
-        });
-        setRows(computed);
-      } catch (err) {
-        console.warn("[dashboard/team-performance] failed to load team data:", err);
-        if (!cancelled) setError(true);
+    const team = Array.isArray(users) ? users : [];
+    const deals = Array.isArray(dealsData) ? dealsData : dealsData.deals || [];
+    const tasks = Array.isArray(tasksData) ? tasksData : tasksData.tasks || [];
+
+    const dealsByMember = new Map<string, number>();
+    for (const d of deals) {
+      for (const tm of d.teamMembers || []) {
+        const uid = tm.user?.id || tm.userId;
+        if (!uid) continue;
+        dealsByMember.set(uid, (dealsByMember.get(uid) || 0) + 1);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    }
+
+    return team.slice(0, 6).map((m) => {
+      const dealCount = dealsByMember.get(m.id) || 0;
+      const taskCount = tasks.filter((t) => t.assignedTo === m.id && t.status !== "COMPLETED").length;
+      const capacity = Math.min(100, Math.round((dealCount / 5) * 100));
+      return { id: m.id, name: m.name, email: m.email, dealCount, taskCount, capacity };
+    });
+  }, [loading, error, usersQuery.data, dealsQuery.data, tasksQuery.data]);
 
   return (
     <WidgetShell title="Team Performance" icon="groups">

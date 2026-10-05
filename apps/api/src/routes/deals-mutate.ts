@@ -14,6 +14,7 @@ import { log } from '../utils/logger.js';
 import { createNotification, notifyDealTeam, resolveUserId } from './notifications.js';
 import { createDealSchema, updateDealSchema } from './deals-schemas.js';
 import { sendDealStageChangedEmail } from '../services/dealStageChangedEmail.js';
+import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
@@ -116,6 +117,7 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_CREATE), async (req, res) =>
         }, () => {}); // Fire-and-forget
     }
 
+    emitWebhookEvent(req, orgId, 'deal.created', deal);
     res.status(201).json(deal);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -206,6 +208,8 @@ router.patch('/:id', async (req, res) => {
         ...data,
         ...passedFields,
         companyId: undefined,
+        // Set explicitly so `updatedSince` polling and the optimistic lock see every edit.
+        updatedAt: new Date().toISOString(),
       })
       .eq('id', id)
       .eq('organizationId', orgId)
@@ -222,11 +226,14 @@ router.patch('/:id', async (req, res) => {
 
     // Log stage change
     if (data.stage && data.stage !== existingDeal.stage) {
+      // Optional "reason for stage change" from the stage modal. Read outside
+      // the schema on purpose: it belongs on the activity, not the Deal row.
+      const stageNote = typeof req.body.stageNote === 'string' ? req.body.stageNote.trim().slice(0, 2000) : '';
       await supabase.from('Activity').insert({
         dealId: deal.id,
         type: 'STAGE_CHANGED',
         title: `Stage changed to ${data.stage}`,
-        description: `Deal stage changed from ${existingDeal.stage} to ${data.stage}`,
+        description: `Deal stage changed from ${existingDeal.stage} to ${data.stage}${stageNote ? `\n\nNote: ${stageNote}` : ''}`,
       });
     }
 
@@ -255,6 +262,10 @@ router.patch('/:id', async (req, res) => {
       }).catch(err => log.error('Deal stage-changed email error', err));
     }
 
+    emitWebhookEvent(req, orgId, 'deal.updated', deal);
+    if (data.stage && data.stage !== existingDeal.stage) {
+      emitWebhookEvent(req, orgId, 'deal.stage_changed', { ...deal, previousStage: existingDeal.stage });
+    }
     res.json(deal);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -299,6 +310,7 @@ router.delete('/:id', requirePermission(PERMISSIONS.DEAL_DELETE), async (req, re
     await AuditLog.dealDeleted(req, id, deal?.name || 'Unknown');
 
     log.info('Deal soft-deleted', { dealId: id, dealName: deal.name });
+    emitWebhookEvent(req, orgId, 'deal.deleted', { id, name: deal.name, deletedAt });
     res.status(204).send();
   } catch (error) {
     log.error('Error deleting deal', error);

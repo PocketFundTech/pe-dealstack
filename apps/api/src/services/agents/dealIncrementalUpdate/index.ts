@@ -1,4 +1,4 @@
-import { openai } from '../../../openai.js';
+import { openai, trackedChatCompletion } from '../../../openai.js';
 import { MODEL_FAST } from '../../../utils/aiModels.js';
 import { log } from '../../../utils/logger.js';
 import { incrementalUpdateSchema, type DealIncrementalUpdate } from './schema.js';
@@ -37,7 +37,8 @@ export async function runDealIncrementalUpdate(
   };
 
   try {
-    const completion = await openai.chat.completions.create(
+    const completion = await trackedChatCompletion(
+      'deal_incremental_update',
       {
         model: MODEL_FAST,
         response_format: { type: 'json_object' },

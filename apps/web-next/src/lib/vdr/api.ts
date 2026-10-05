@@ -2,7 +2,7 @@
 // `api` helper for JSON calls; upload uses raw fetch since api is JSON-only.
 
 import { api, NotFoundError } from "@/lib/api";
-import { createClient } from "@/lib/supabase/client";
+import { uploadViaSignedUrl } from "@/lib/storageUpload";
 import type {
   APIDocument,
   APIFolder,
@@ -57,20 +57,17 @@ export async function renameFolder(folderId: string, newName: string): Promise<b
   }
 }
 
+/** Throws on failure: callers replace the visible file list with the result,
+ *  so returning [] on a failed request would wipe the list off screen. */
 export async function fetchDocuments(
   dealId: string,
   folderId?: string,
 ): Promise<APIDocument[]> {
-  try {
-    const path = folderId
-      ? `/folders/${folderId}/documents`
-      : `/deals/${dealId}/documents`;
-    const data = await api.get<APIDocument[] | { documents: APIDocument[] }>(path);
-    return Array.isArray(data) ? data : data.documents || [];
-  } catch (err) {
-    console.warn("[vdr] fetchDocuments failed:", err);
-    return [];
-  }
+  const path = folderId
+    ? `/folders/${folderId}/documents`
+    : `/deals/${dealId}/documents`;
+  const data = await api.get<APIDocument[] | { documents: APIDocument[] }>(path);
+  return Array.isArray(data) ? data : data.documents || [];
 }
 
 export async function uploadDocument(
@@ -79,28 +76,19 @@ export async function uploadDocument(
   file: File,
   options?: { autoUpdateDeal?: boolean },
 ): Promise<APIDocument | null> {
-  const supabase = createClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const token = sessionData.session?.access_token;
+  // Upload the bytes straight to Supabase Storage (bypasses the server's
+  // request-body size cap), then send only the small metadata as JSON.
+  const meta = await uploadViaSignedUrl(file, { purpose: "data-room", dealId });
 
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("folderId", folderId);
-  formData.append("type", "OTHER");
-  if (options?.autoUpdateDeal) {
-    formData.append("autoUpdateDeal", "true");
-  }
-
-  const res = await fetch(`/api/deals/${dealId}/documents`, {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
+  return api.post<APIDocument>(`/deals/${dealId}/documents`, {
+    storagePath: meta.storagePath,
+    fileName: meta.fileName,
+    mimeType: meta.mimeType,
+    size: meta.size,
+    folderId,
+    type: "OTHER",
+    ...(options?.autoUpdateDeal ? { autoUpdateDeal: true } : {}),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Upload failed (${res.status})`);
-  }
-  return res.json();
 }
 
 export async function deleteDocument(documentId: string): Promise<boolean> {
@@ -402,6 +390,17 @@ export function transformDocument(apiDoc: APIDocument): VDRFile {
     analysisLabel = "Processing...";
     analysisDescription = "Document is being analyzed.";
     analysisColor = "slate";
+  } else if (apiDoc.status === "failed") {
+    // Text extraction hard-failed (e.g. an encrypted/malformed PDF, or one
+    // pdf-parse's bundled pdf.js can't parse). Without this branch, status
+    // 'failed' fell through to the default below and rendered as "Pending
+    // Analysis" forever — indistinguishable from a file still queued to
+    // process. Surface it via the existing "warning" presentation instead
+    // of inventing a new one.
+    analysisType = "warning";
+    analysisLabel = "Extraction Failed";
+    analysisDescription = "We couldn't extract text from this document. Try re-uploading, or a different copy.";
+    analysisColor = "orange";
   }
 
   return {
@@ -427,6 +426,8 @@ export function transformDocument(apiDoc: APIDocument): VDRFile {
     folderId: apiDoc.folderId || "",
     isHighlighted: apiDoc.isHighlighted,
     tags: apiDoc.tags || [],
+    status: apiDoc.status,
+    docType: apiDoc.type,
   };
 }
 

@@ -1,14 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import { friendlyAuthError } from "@/lib/authErrors";
+
+// After sending, wait this long before allowing another send (Supabase
+// rate-limits reset emails); the field stays editable for typo fixes.
+const RESEND_COOLDOWN_SECONDS = 60;
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const id = setTimeout(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => clearTimeout(id);
+  }, [cooldown]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,10 +39,11 @@ export default function ForgotPasswordPage() {
       }
 
       setSubmitted(true);
+      setCooldown(RESEND_COOLDOWN_SECONDS);
     } catch (err: unknown) {
       const message =
         err instanceof Error
-          ? err.message
+          ? friendlyAuthError(err.message)
           : "Failed to send reset email. Please try again.";
       setError(message);
     } finally {
@@ -116,7 +129,6 @@ export default function ForgotPasswordPage() {
                   placeholder="name@firm.com"
                   type="email"
                   required
-                  disabled={submitted}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -145,11 +157,11 @@ export default function ForgotPasswordPage() {
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={loading || submitted}
+              disabled={loading || cooldown > 0}
               className="w-full h-12 rounded-lg text-white font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ backgroundColor: "#003366" }}
               onMouseEnter={(e) => {
-                if (!loading && !submitted)
+                if (!loading && cooldown === 0)
                   e.currentTarget.style.backgroundColor = "#002855";
               }}
               onMouseLeave={(e) => {
@@ -157,11 +169,13 @@ export default function ForgotPasswordPage() {
               }}
             >
               <span>
-                {submitted
-                  ? "Email Sent"
-                  : loading
-                    ? "Sending..."
-                    : "Send Reset Link"}
+                {loading
+                  ? "Sending..."
+                  : cooldown > 0
+                    ? `Email sent — resend in ${cooldown}s`
+                    : submitted
+                      ? "Send again"
+                      : "Send Reset Link"}
               </span>
               {loading && (
                 <svg

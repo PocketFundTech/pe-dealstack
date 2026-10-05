@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useEffect } from "react";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { ORGANIZATIONS_ME_KEY } from "./settings-api-keys";
 
 // Mirrors the in-app trust block from the legacy apps/web/js/settingsSecurity.js:
 // shows the customer their own org info (proof of isolation), the
@@ -23,25 +24,18 @@ const ENCRYPTION_CHECKS = [
 ];
 
 export function TrustPosture() {
-  const [org, setOrg] = useState<OrgMe | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Shared with SecuritySection.staffAccessLog and TeamSection.requireMfa,
+  // which also read /organizations/me -- useApiQuery dedupes the three
+  // mount-time fetches into one request. See settings-api-keys.ts.
+  const orgQuery = useApiQuery<OrgMe>(ORGANIZATIONS_ME_KEY);
+  const org = orgQuery.data ?? null;
+  const loading = orgQuery.isLoading;
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await api.get<OrgMe>("/organizations/me");
-        if (!cancelled) setOrg(data);
-      } catch (err) {
-        console.warn("[settings/security/trust] /organizations/me failed:", err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (orgQuery.error) {
+      console.warn("[settings/security/trust] /organizations/me failed:", orgQuery.error);
+    }
+  }, [orgQuery.error]);
 
   return (
     <div className="border-t border-border-subtle pt-4 space-y-4">

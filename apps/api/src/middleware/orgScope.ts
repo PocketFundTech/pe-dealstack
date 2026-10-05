@@ -99,30 +99,62 @@ export async function orgMiddleware(
           .single();
 
         if (newOrg) {
-          // Race guard: re-fetch User by authId — a parallel request may have
-          // already set organizationId. If so, prefer the existing org and
-          // discard the one we just created (it will be orphaned).
-          const { data: refetched } = await supabase
+          // Race guard: claim organizationId with a CONDITIONAL update —
+          // `.is('organizationId', null)` makes the write atomic at the DB
+          // row level, so with N concurrent requests racing here, at most
+          // one UPDATE can match the WHERE clause and actually flip the
+          // column. Everyone else's UPDATE matches zero rows.
+          //
+          // A prior version of this guard did a plain SELECT-then-UPDATE:
+          // it re-fetched User, and only skipped its own UPDATE if that
+          // read already showed someone else's org. That has a TOCTOU gap
+          // — with 2+ requests racing, ALL of them can perform the re-fetch
+          // (each sees organizationId still null) before ANY of them has
+          // written, so every racer falls into the "I'm first" branch and
+          // unconditionally overwrites organizationId. The last UPDATE to
+          // land silently wins in the DB while every other racer's request
+          // (already returned) proceeded — and any row it inserted, e.g. an
+          // NDA template — under its own now-orphaned organizationId. That
+          // row becomes permanently invisible to every future request,
+          // which now reads the single winning organizationId from Postgres
+          // every time, including after a full page reload.
+          const { data: claimed, error: claimErr } = await supabase
             .from('User')
-            .select('id, organizationId')
-            .eq('authId', req.user.id)
-            .single();
+            .update({ organizationId: newOrg.id })
+            .eq('id', userRecord.id)
+            .is('organizationId', null)
+            .select('organizationId')
+            .maybeSingle();
 
-          if (refetched?.organizationId && refetched.organizationId !== newOrg.id) {
-            log.warn('Org middleware: race detected — parallel request set organizationId, using existing', {
+          if (claimErr) {
+            log.error('Org middleware: failed to claim organizationId', claimErr);
+          }
+
+          if (claimed?.organizationId) {
+            // We won the race — our new org is now canonical.
+            req.user.organizationId = claimed.organizationId;
+            log.info('Org middleware: auto-created org for user without one', {
               userId: userRecord.id,
-              parallelOrgId: refetched.organizationId,
-              discardedOrgId: newOrg.id,
+              orgId: claimed.organizationId,
             });
-            req.user.organizationId = refetched.organizationId;
           } else {
-            await supabase
+            // Lost the race (or the row already had an org by the time our
+            // conditional update ran) — re-read the now-authoritative value
+            // rather than trusting our local newOrg, which may be orphaned.
+            const { data: refetched } = await supabase
               .from('User')
-              .update({ organizationId: newOrg.id })
-              .eq('id', userRecord.id);
+              .select('id, organizationId')
+              .eq('authId', req.user.id)
+              .single();
 
-            req.user.organizationId = newOrg.id;
-            log.info('Org middleware: auto-created org for user without one', { userId: userRecord.id, orgId: newOrg.id });
+            if (refetched?.organizationId) {
+              log.warn('Org middleware: race detected — parallel request set organizationId, using existing', {
+                userId: userRecord.id,
+                parallelOrgId: refetched.organizationId,
+                discardedOrgId: newOrg.id,
+              });
+              req.user.organizationId = refetched.organizationId;
+            }
           }
         }
       } catch (createErr) {
@@ -167,6 +199,82 @@ export function getOrgId(req: Request): string {
   }
   return orgId;
 }
+
+/**
+ * Middleware factory that restricts a router to a single organization,
+ * identified by slug. Use for features gated to one specific tenant (e.g.
+ * the Outreach pipeline board, currently Cicero Capital only) rather than
+ * gated by role.
+ *
+ * Must run after orgMiddleware (reads req.user.organizationId, which
+ * orgMiddleware attaches) — mount it after authMiddleware, orgMiddleware,
+ * enforceOrgMfaMiddleware, matching the other org-scoped routers in app.ts.
+ *
+ * req.user carries organizationId but NOT the org's slug (see
+ * types/express.d.ts) — orgMiddleware never looks it up — so this does one
+ * extra Organization lookup per request.
+ *
+ * SECURITY: this is a real authorization boundary, not a UX nicety — per
+ * this project's trust model (see rls-hardening-migration.sql), RLS is
+ * deny-all and Express is where access control actually happens. Unlike
+ * enforceOrgMfaMiddleware (which fails OPEN on a transient lookup error,
+ * because MFA is a soft policy), this fails CLOSED: any missing org, lookup
+ * error, or slug mismatch returns 403. Never let a lookup failure fall
+ * through to next().
+ */
+export function requireOrgSlug(slugOrSlugs: string | string[]) {
+  const allowedSlugs = Array.isArray(slugOrSlugs) ? slugOrSlugs : [slugOrSlugs];
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const orgId = req.user?.organizationId;
+    if (!orgId) {
+      res.status(403).json({
+        error: 'Forbidden',
+        message: 'You must belong to an organization to access this resource',
+      });
+      return;
+    }
+
+    try {
+      const { data: org, error } = await supabase
+        .from('Organization')
+        .select('slug')
+        .eq('id', orgId)
+        .single();
+
+      if (error || !org || !allowedSlugs.includes(org.slug)) {
+        res.status(403).json({
+          error: 'Forbidden',
+          message: 'This resource is not available to your organization',
+        });
+        return;
+      }
+
+      next();
+    } catch (err) {
+      log.error('requireOrgSlug middleware error', err);
+      // Fail closed — see SECURITY note above.
+      res.status(403).json({
+        error: 'Forbidden',
+        message: 'This resource is not available to your organization',
+      });
+    }
+  };
+}
+
+/** Gates a router to the Cicero Capital org, plus two wholly separate,
+ *  isolated test orgs created specifically for safe Outreach testing
+ *  (Enrich/Send) without touching the real org's 700+ imported companies
+ *  or its live Reply.io account — see cicero-test-org-outreach-stages.sql
+ *  for how each one's stages were seeded:
+ *    - 'pocket-fund': founding user pushkarrathod12@gmail.com
+ *    - 'cicero-capital-test-mtmtzb0d-ieqa': org "Cicero Capital Test",
+ *      founding user deepkeswani10@gmail.com — confirmed as a legitimate
+ *      team signup before being added here, not left in by default. */
+export const requireCiceroCapital = requireOrgSlug([
+  'cicero-capital',
+  'pocket-fund',
+  'cicero-capital-test-mtmtzb0d-ieqa',
+]);
 
 /**
  * Verify a deal belongs to the user's organization.
@@ -243,4 +351,35 @@ export async function verifyConversationAccess(conversationId: string, orgId: st
   if (!conv?.dealId) return null;
   const deal = await verifyDealAccess(conv.dealId, orgId);
   return deal ? conv : null;
+}
+
+/**
+ * Verify an Outreach pipeline stage belongs to the user's organization.
+ * Use before writing an OutreachContact.stageId (create or move) so a
+ * guessed/foreign stage id can't be used to file a contact under another
+ * org's stage.
+ * Returns the stage record or null if not found / not in org.
+ */
+export async function verifyOutreachStageAccess(stageId: string, orgId: string) {
+  const { data } = await supabase
+    .from('OutreachStage')
+    .select('id, organizationId')
+    .eq('id', stageId)
+    .eq('organizationId', orgId)
+    .single();
+  return data;
+}
+
+/**
+ * Verify an Outreach contact belongs to the user's organization.
+ * Returns the contact record or null if not found / not in org.
+ */
+export async function verifyOutreachContactAccess(contactId: string, orgId: string) {
+  const { data } = await supabase
+    .from('OutreachContact')
+    .select('id, organizationId, stageId')
+    .eq('id', contactId)
+    .eq('organizationId', orgId)
+    .single();
+  return data;
 }

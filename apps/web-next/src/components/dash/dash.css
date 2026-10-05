@@ -1,0 +1,177 @@
+/* Shared "refined banker" page styles (dashboard, Command Center) — see .impeccable.md.
+   Everything sits in the `components` cascade layer so Tailwind utilities
+   still win when a component needs to override a default. Tokens are scoped
+   under .dash so nothing leaks into other pages. Font: Inter (app-wide). */
+
+@layer components {
+  .dash {
+    /* Ink + paper, tinted toward Banker Blue (hue 252) */
+    --dash-ink: oklch(0.23 0.035 252);
+    --dash-ink-2: oklch(0.43 0.025 252);
+    --dash-ink-3: oklch(0.56 0.018 252);
+    --dash-paper: oklch(0.978 0.005 252);
+    --dash-panel: oklch(0.996 0.002 252);
+    --dash-wash: oklch(0.955 0.012 252);
+    --dash-rule: oklch(0.915 0.008 252);
+    --dash-rule-strong: oklch(0.83 0.014 252);
+
+    /* Banker Blue ramp — every categorical series uses it */
+    --dash-blue: #003366;
+    --dash-blue-2: oklch(0.44 0.1 252);
+    --dash-blue-3: oklch(0.6 0.085 250);
+    --dash-blue-4: oklch(0.75 0.055 250);
+    --dash-blue-5: oklch(0.87 0.03 250);
+
+    /* Signal colours — rare on purpose */
+    --dash-brass: oklch(0.55 0.11 70);
+    --dash-brass-wash: oklch(0.96 0.035 82);
+    --dash-red: oklch(0.52 0.17 27);
+    --dash-red-wash: oklch(0.965 0.02 27);
+    --dash-green: oklch(0.5 0.1 158);
+
+    --dash-ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
+
+    background: var(--dash-paper);
+    color: var(--dash-ink);
+    min-height: 100%;
+  }
+
+  /* Headings: same Inter as the rest of the app; hierarchy from weight + tracking */
+  .dash-display {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .dash-num {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  /* Large tabular numerals */
+  .dash-figure {
+    font-weight: 600;
+    font-variant-numeric: lining-nums tabular-nums;
+    letter-spacing: -0.035em;
+  }
+
+  /* Small-caps section label */
+  .dash-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--dash-ink-3);
+  }
+
+  /* Accounting double rule — under the masthead */
+  .dash-double-rule {
+    height: 4px;
+    border-top: 1px solid var(--dash-ink);
+    border-bottom: 1px solid var(--dash-ink);
+    opacity: 0.85;
+  }
+
+  /* Panels: flat sheet, hairline edge, no drop shadow */
+  .dash-panel {
+    background: var(--dash-panel);
+    border: 1px solid var(--dash-rule);
+    border-radius: 8px;
+  }
+
+  .dash-link {
+    color: var(--dash-blue);
+    font-weight: 600;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+  .dash-link:hover {
+    text-decoration-line: underline;
+  }
+
+  .dash-btn-primary {
+    background: var(--dash-blue);
+    color: oklch(0.99 0.004 252);
+    transition: background-color 150ms var(--dash-ease), transform 150ms var(--dash-ease);
+  }
+  .dash-btn-primary:hover {
+    background: oklch(0.27 0.085 252);
+  }
+  .dash-btn-primary:active,
+  .dash-btn-ghost:active {
+    transform: translateY(1px);
+  }
+  .dash-btn-ghost {
+    color: var(--dash-ink-2);
+    border: 1px solid var(--dash-rule-strong);
+    background: var(--dash-panel);
+    transition: color 150ms, border-color 150ms, background-color 150ms, transform 150ms var(--dash-ease);
+  }
+  .dash-btn-ghost:hover {
+    color: var(--dash-blue);
+    border-color: var(--dash-blue-3);
+  }
+  .dash-btn-ghost:disabled,
+  .dash-btn-primary:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .dash :focus-visible {
+    outline: 2px solid var(--dash-blue-2);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* ---- Motion ---------------------------------------------------------- */
+
+  /* Bars grow from zero (transform only — no layout animation) */
+  .dash-bar {
+    transform-origin: left center;
+    animation: dash-grow 900ms var(--dash-ease) both;
+  }
+
+  /* One staggered reveal on first paint */
+  .dash-reveal > * {
+    animation: dash-rise 600ms var(--dash-ease) both;
+  }
+  .dash-reveal > *:nth-child(2) { animation-delay: 50ms; }
+  .dash-reveal > *:nth-child(3) { animation-delay: 100ms; }
+  .dash-reveal > *:nth-child(4) { animation-delay: 150ms; }
+  .dash-reveal > *:nth-child(n + 5) { animation-delay: 200ms; }
+
+  .dash-sheet { animation: dash-slide 320ms var(--dash-ease) both; }
+  .dash-fade { animation: dash-fade-in 200ms ease-out both; }
+  .dash-pop { animation: dash-pop-in 160ms var(--dash-ease) both; transform-origin: top right; }
+  .dash-toast { animation: dash-rise 280ms var(--dash-ease) both; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dash-bar,
+    .dash-reveal > *,
+    .dash-sheet,
+    .dash-fade,
+    .dash-pop,
+    .dash-toast {
+      animation: none;
+    }
+  }
+}
+
+@keyframes dash-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes dash-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes dash-slide {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes dash-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dash-pop-in {
+  from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}

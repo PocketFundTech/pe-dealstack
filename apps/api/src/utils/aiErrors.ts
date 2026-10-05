@@ -69,6 +69,14 @@ function providerUnavailableMessage(provider: string, reason?: ProviderRejection
   }
 }
 
+/** Best-effort provider name from an SDK error message, for user-facing text. */
+function providerNameFromError(detail: string): string {
+  const lower = detail.toLowerCase();
+  if (lower.includes('anthropic') || lower.includes('claude')) return 'Anthropic';
+  if (lower.includes('openai')) return 'OpenAI';
+  return 'AI provider';
+}
+
 /**
  * Classify a raw SDK / LangChain error as a provider rejection, or null when
  * it is anything else (schema mismatch, parse failure, network, timeout…).
@@ -103,6 +111,18 @@ export function classifyProviderRejection(
 }
 
 /**
+ * A provider rejection as an AIProviderUnavailableError (already-wrapped
+ * errors pass through), or null for any other failure. For call sites that
+ * otherwise swallow errors into a null "no data" result — rethrow what this
+ * returns so the user hears "credits exhausted", not "nothing found".
+ */
+export function toProviderUnavailable(err: unknown, provider: string): AIProviderUnavailableError | null {
+  if (err instanceof AIProviderUnavailableError) return err;
+  const rejection = classifyProviderRejection(err);
+  return rejection ? new AIProviderUnavailableError(provider, rejection) : null;
+}
+
+/**
  * Classify an unknown error (Error object or string) into a structured
  * HTTP response descriptor. Handles UserBlockedError as a 403 so callers
  * don't need to import enforcement.ts themselves.
@@ -127,6 +147,18 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
     return {
       statusCode: 503,
       userMessage: err.message,
+      code: 'AI_PROVIDER_UNAVAILABLE',
+    };
+  }
+
+  // Provider rejections (out of credit, bad key, rate limit, overloaded)
+  // are never the user's fault — say exactly which, instead of letting an
+  // out-of-credit 400 fall through to a generic "AI error: 400 {…}".
+  const rejection = classifyProviderRejection(err);
+  if (rejection) {
+    return {
+      statusCode: 503,
+      userMessage: providerUnavailableMessage(providerNameFromError(rejection.detail), rejection.reason),
       code: 'AI_PROVIDER_UNAVAILABLE',
     };
   }
@@ -192,6 +224,18 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
     userMessage: classifyAIError(msg),
     code: 'AI_ERROR',
   };
+}
+
+/**
+ * Route helper: an AppError we raised on purpose (it already carries a
+ * specific message, status and code) passes straight through; anything
+ * else is classified by classifyAIErrorObject.
+ */
+export function aiErrorResponse(err: unknown): AIErrorResponse {
+  if (err instanceof AppError && !(err instanceof AIProviderUnavailableError)) {
+    return { statusCode: err.statusCode, userMessage: err.message, code: err.code };
+  }
+  return classifyAIErrorObject(err);
 }
 
 /** Classify an AI/LLM error into a specific user-facing message */

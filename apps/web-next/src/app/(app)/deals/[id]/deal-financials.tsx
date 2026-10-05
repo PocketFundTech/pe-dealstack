@@ -3,7 +3,11 @@
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { api, NotFoundError } from "@/lib/api";
+import { mutateApiCache } from "@/lib/useApiQuery";
 import { authFetchRaw } from "@/app/(app)/deal-intake/components";
+import { extractionErrorMessage } from "./deal-financials-errors";
+import { inferPeriodScope } from "./deal-financials-period-scope";
+import { runExtractAll } from "./deal-financials-extract-all";
 import { useToast } from "@/providers/ToastProvider";
 import { type FinancialStatement } from "./deal-financials-charts";
 
@@ -25,6 +29,7 @@ const BalanceSheetChart = dynamic(
 );
 import {
   TAB_CONFIG,
+  financialsKey,
   type ChartType,
   type StatementType,
 } from "./deal-financials-constants";
@@ -91,6 +96,12 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
         api.get<{ documents?: FinancialDocLite[] }>(`/deals/${dealId}`),
       ]);
 
+      // Also write-through to deal-layout.tsx's shared financials cache key.
+      const syncStatements = (next: FinancialStatement[]) => {
+        setStatements(next);
+        mutateApiCache(financialsKey(dealId), next);
+      };
+
       if (stmtData.status === "fulfilled") {
         // API returns raw array, but handle wrapped responses too
         const raw = stmtData.value as unknown;
@@ -101,13 +112,13 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
             : Array.isArray((raw as Record<string, unknown>)?.financials)
               ? (raw as Record<string, unknown>).financials as FinancialStatement[]
               : [];
-        setStatements(arr);
+        syncStatements(arr);
       } else {
         const err = stmtData.reason;
         const msg = err instanceof Error ? err.message : "Failed to load financials";
         // Treat 404/Not Found as empty data rather than an error
         if (err instanceof NotFoundError || msg.includes("404") || msg.toLowerCase().includes("not found")) {
-          setStatements([]);
+          syncStatements([]);
         } else {
           setError(msg);
         }
@@ -146,8 +157,18 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
     }
   }, [dealId, loadFinancials]);
 
-  // Progress messages matching legacy (cycle every 15s)
+  // Live elapsed-time label ("Extracting… 45s") — replaces the old fake
+  // 15s-cycling message set ("reading file" / "analyzing data" / "almost
+  // done") which showed "almost done" at the 30s mark regardless of actual
+  // progress. There is no real progress signal from the backend, so an
+  // honest elapsed timer is the least-misleading thing we can show.
   const [extractLabel, setExtractLabel] = useState("");
+
+  // Client-side hard stop. The backend's own per-doc budget is 240s
+  // (PER_DOC_BUDGET_MS in financials-extraction.ts); 290s gives it a little
+  // headroom to respond with its own error before we give up on the fetch
+  // entirely, while still being well under typical platform request limits.
+  const EXTRACT_CLIENT_TIMEOUT_MS = 290_000;
 
   // handleExtract accepts an optional (documentId, documentName) pair. When
   // provided, the request runs single-doc against that document only — the
@@ -158,31 +179,35 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
     if (extracting) return;
     setExtracting(true);
     if (documentId) setExtractingDocId(documentId);
-    setExtractLabel("Extracting… (30–60s)");
 
-    const progressMsgs = [
-      "Extracting… (reading file)",
-      "Extracting… (analyzing data)",
-      "Extracting… (almost done)",
-    ];
-    let idx = 0;
+    const startedAt = Date.now();
+    setExtractLabel("Extracting… 0s");
+    let progressDocs = "";
     const progressTimer = setInterval(() => {
-      idx = (idx + 1) % progressMsgs.length;
-      setExtractLabel(progressMsgs[idx]);
-    }, 15000);
+      const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+      setExtractLabel(`Extracting… ${elapsedSec}s${progressDocs}`);
+    }, 1000);
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), EXTRACT_CLIENT_TIMEOUT_MS);
 
     try {
       // Single-doc path passes documentId in the body; the API forces
       // mode='single' regardless of the mode field. Bulk path stays on
       // 'all_financials' which loops every CIM/FINANCIALS/spreadsheet doc
       // and merges by (statementType, period) inside runDeepPass.
-      const body = documentId
-        ? { documentId, mode: "single" as const }
-        : { mode: "all_financials" as const };
-      const result = await api.post<ExtractionResult>(
-        `/deals/${dealId}/financials/extract`,
-        body,
-      );
+      // Bulk: runExtractAll re-sends documents the API couldn't reach in one
+      // request (pendingDocumentIds) until all are processed.
+      const result: ExtractionResult = documentId
+        ? await api.post<ExtractionResult>(
+            `/deals/${dealId}/financials/extract`,
+            { documentId, mode: "single" as const },
+            { signal: controller.signal },
+          )
+        : await runExtractAll(api.post, dealId, {
+            timeoutMs: EXTRACT_CLIENT_TIMEOUT_MS,
+            onProgress: ({ done, total }) => { progressDocs = total > 0 ? ` · ${done}/${total} documents` : ""; },
+          });
 
       // Small delay before fetching — the API may return success before data
       // is fully committed to the database (observed in production).
@@ -191,6 +216,7 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
 
       const stored = result?.result?.periodsStored ?? 0;
       const warnings = result?.result?.warnings ?? [];
+      const allFailed = result?.result?.allFailed ?? false;
       const docsUsed =
         (result as unknown as { result?: { documentsUsed?: number } })?.result
           ?.documentsUsed;
@@ -199,11 +225,19 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
           ?.documentsFailed;
 
       if (stored === 0) {
+        // warnings[0] carries the real, humanized reason (e.g. "AI provider
+        // account is out of credits" or "took too long and was stopped")
+        // when the route classified one — surface that instead of the
+        // generic "no data found" copy, which was misleading every doc
+        // that failed for a reason that had nothing to do with the
+        // document's content (prod incident 2026-09-28).
         const warningMsg =
           warnings.length > 0
             ? warnings[0]
             : "No financial data found in the documents. Try uploading a P&L, Balance Sheet, or CIM.";
-        showToast(warningMsg, "warning", { title: "No Data Extracted" });
+        showToast(warningMsg, allFailed ? "error" : "warning", {
+          title: allFailed ? "Extraction Failed" : "No Data Extracted",
+        });
       } else {
         // Distinct toast for the single-doc path so the user sees which
         // doc was just re-extracted; bulk path keeps the across-N-docs copy.
@@ -220,13 +254,10 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
         setExtractionModalResult(result);
       }
     } catch (err) {
-      const msg =
-        err instanceof Error && err.name === "AbortError"
-          ? "Extraction timed out (>2 min). The file may be too large — try again or upload a simpler P&L."
-          : "Could not extract financial data — document may be encrypted or unsupported";
-      showToast(msg, "warning", { title: "No Data Extracted" });
+      showToast(extractionErrorMessage(err), "error", { title: "Extraction Failed" });
     } finally {
       clearInterval(progressTimer);
+      clearTimeout(abortTimer);
       setExtracting(false);
       setExtractingDocId(null);
       setExtractLabel("");
@@ -347,14 +378,16 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
   const availableTabs = TAB_CONFIG.filter((t) => statements.some((s) => s.statementType === t.key));
   const resolvedTab = availableTabs.find((t) => t.key === activeTab) ? activeTab : (availableTabs[0]?.key ?? "INCOME_STATEMENT");
 
+  // "FY2023 (Jan - Dec 2023)" is annual too — /^FY\b/ never matched it.
+  const isAnnualPeriod = (period: string) => inferPeriodScope(period) === "annual";
   const filteredStatements = statements.filter((s) => {
     if (periodFilter === "all") return true;
-    const isFY = /^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period);
+    const isFY = isAnnualPeriod(s.period);
     return periodFilter === "annual" ? isFY : !isFY;
   });
 
-  const hasAnnual = statements.some((s) => /^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period));
-  const hasQuarterly = statements.some((s) => !(/^FY\b/i.test(s.period) || /^\d{4}$/i.test(s.period)));
+  const hasAnnual = statements.some((s) => isAnnualPeriod(s.period));
+  const hasQuarterly = statements.some((s) => !isAnnualPeriod(s.period));
   const showPeriodToggle = hasAnnual && hasQuarterly;
   const detectedCurrency = statements.find((s) => s.currency)?.currency ?? "USD";
   const confidences = statements.map((s) => s.extractionConfidence).filter((c): c is number => c != null);

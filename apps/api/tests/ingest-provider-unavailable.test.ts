@@ -50,6 +50,11 @@ vi.mock('../src/routes/ingest-shared.js', async () => {
   return {
     extractTextFromPDF: async () => ({ text: 'A'.repeat(500), numPages: 1, source: 'pdf-parse', sparse: false }),
     upload: multer({ storage: multer.memoryStorage() }),
+    resolveUploadedFile: async (req: any) =>
+      req.file
+        ? { file: { buffer: req.file.buffer, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size } }
+        : { file: null },
+    cleanupStagingObject: async () => {},
   };
 });
 vi.mock('../src/middleware/orgScope.js', () => ({

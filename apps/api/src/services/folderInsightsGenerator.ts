@@ -1,5 +1,4 @@
-import { openai, isAIEnabled, trackedChatCompletion } from '../openai.js';
-import { MODEL_INSIGHTS } from '../utils/aiModels.js';
+import { trackedClaudeMessage, isAnthropicAvailable } from './ai/client.js';
 import { log } from '../utils/logger.js';
 
 export interface GeneratedInsights {
@@ -47,6 +46,42 @@ RULES:
 7. Limit missing documents to 5-10 most critical items.
 8. Reference actual document names when discussing what IS present.`;
 
+const FOLDER_INSIGHTS_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    completionPercent: { type: 'integer', description: '0-100' },
+    redFlags: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          severity: { type: 'string', enum: ['high', 'medium'] },
+          title: { type: 'string' },
+          description: { type: 'string' },
+        },
+        required: ['id', 'severity', 'title', 'description'],
+        additionalProperties: false,
+      },
+    },
+    missingDocuments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+        },
+        required: ['id', 'name'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['summary', 'completionPercent', 'redFlags', 'missingDocuments'],
+  additionalProperties: false,
+};
+
 export async function generateFolderInsights(
   folderName: string,
   dealContext: {
@@ -64,8 +99,8 @@ export async function generateFolderInsights(
     createdAt: string;
   }>
 ): Promise<GeneratedInsights | null> {
-  if (!isAIEnabled() || !openai) {
-    log.warn('Folder insights generation skipped: OpenAI not configured');
+  if (!isAnthropicAvailable()) {
+    log.warn('Folder insights generation skipped: Anthropic not configured');
     return null;
   }
 
@@ -96,27 +131,24 @@ Generate insights as JSON.`;
 
     log.info('Generating folder insights', { folderName, docCount: documents.length });
 
-    const response = await trackedChatCompletion('folder_insights', {
-      model: MODEL_INSIGHTS,
-      messages: [
-        { role: 'system', content: FOLDER_INSIGHTS_SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-      max_tokens: 2000,
+    const result = await trackedClaudeMessage({
+      operation: 'folder_insights',
+      role: 'chat',
+      system: FOLDER_INSIGHTS_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userPrompt }],
+      outputSchema: FOLDER_INSIGHTS_SCHEMA,
+      maxTokens: 2000,
     });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-      log.error('No content in GPT response for folder insights');
+    if (!result.text) {
+      log.error('No content in Claude response for folder insights');
       return null;
     }
 
-    const parsed = JSON.parse(content) as GeneratedInsights;
+    const parsed = JSON.parse(result.text) as GeneratedInsights;
 
     // Validate and normalize
-    const result: GeneratedInsights = {
+    const insights: GeneratedInsights = {
       summary: parsed.summary || 'Analysis complete.',
       completionPercent: Math.max(0, Math.min(100, Math.round(parsed.completionPercent || 0))),
       redFlags: (parsed.redFlags || []).map((rf, idx) => ({
@@ -133,14 +165,16 @@ Generate insights as JSON.`;
 
     log.info('Folder insights generated', {
       folderName,
-      completionPercent: result.completionPercent,
-      redFlagCount: result.redFlags.length,
-      missingDocCount: result.missingDocuments.length,
+      completionPercent: insights.completionPercent,
+      redFlagCount: insights.redFlags.length,
+      missingDocCount: insights.missingDocuments.length,
     });
 
-    return result;
+    return insights;
   } catch (error) {
+    // Rethrow: the route turns it into a readable reason (out of credit,
+    // rate limit, timeout…). null means only "Anthropic isn't configured".
     log.error('Error generating folder insights', error);
-    return null;
+    throw error;
   }
 }

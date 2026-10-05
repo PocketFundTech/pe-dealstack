@@ -6,9 +6,12 @@ import { useEffect } from "react";
 export function WelcomeView({
   onStart,
   onSample,
+  sampleBusy = false,
 }: {
   onStart: () => void;
   onSample: () => void;
+  /** True while the sample deal is being created — disables the button. */
+  sampleBusy?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -46,9 +49,10 @@ export function WelcomeView({
             <button
               type="button"
               onClick={onSample}
-              className="inline-flex items-center rounded-lg border border-border-subtle bg-white px-4 py-2.5 text-text-secondary font-medium text-sm hover:border-border-focus hover:text-text-main transition-colors"
+              disabled={sampleBusy}
+              className="inline-flex items-center rounded-lg border border-border-subtle bg-white px-4 py-2.5 text-text-secondary font-medium text-sm hover:border-border-focus hover:text-text-main transition-colors disabled:opacity-60 disabled:cursor-wait"
             >
-              Use a sample deal
+              {sampleBusy ? "Creating sample deal..." : "Use a sample deal"}
             </button>
             <span className="text-[12px] text-text-muted ml-2 hidden sm:inline">
               <kbd className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-gray-100 border border-gray-200">↵</kbd>

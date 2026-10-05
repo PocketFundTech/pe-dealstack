@@ -13,6 +13,7 @@
  * Wraps existing service functions — no extraction logic is duplicated.
  */
 
+import { claudeExtractionCacheTier } from '../../../extraction/extractionSchema.js';
 import { createRequire } from 'module';
 import { classifyFinancialsCrossVerified as classifyFinancials } from '../../../financialCrossVerify.js';
 import { classifyFinancialsVision } from '../../../visionExtractor.js';
@@ -36,6 +37,7 @@ import {
   type CachedExtractionResult,
 } from '../extractionCache.js';
 import { mapWithConcurrencyLimit } from '../../../../utils/limitConcurrency.js';
+import { AIProviderUnavailableError } from '../../../../utils/aiErrors.js';
 
 /** Bounded fan-out for per-sheet classifyFinancials() calls. Three is the
  *  same cap the multi-doc loop enforces (commit b9aea92) — keeps the
@@ -61,6 +63,7 @@ function step(node: string, message: string, detail?: string): AgentStep {
  */
 export async function extractNode(
   state: FinancialAgentStateType,
+  config?: { signal?: AbortSignal },
 ): Promise<Partial<FinancialAgentStateType>> {
   const steps: AgentStep[] = [];
   const { fileBuffer, fileName, fileType, forceExtraction } = state;
@@ -99,7 +102,9 @@ export async function extractNode(
   // model for up to the cache's 30-day TTL. Legacy path keeps the existing
   // default ('tier1') — unaffected, since modelTier is only overridden here
   // when the claude engine is active.
-  const modelTier = useClaudeEngine ? getModelConfig('extraction').model : undefined;
+  // ...and on the extraction schema version, so a fix to prompts/scale
+  // handling re-extracts instead of replaying results cached before it.
+  const modelTier = useClaudeEngine ? claudeExtractionCacheTier(getModelConfig('extraction').model) : undefined;
 
   if (!forceExtraction) {
     const cached = await getCachedExtraction({ contentHash, extractionMode: engineMode, modelTier });
@@ -121,6 +126,20 @@ export async function extractNode(
     steps.push(step('extract', 'forceExtraction=true — bypassing extraction cache'));
   }
 
+  // A provider rejection (out of credit, bad key, rate limit) swallowed by
+  // one of the per-sheet / per-chunk catches below. Remembered so a run
+  // that found nothing fails with that reason — "no financial data found"
+  // would tell the user their document is the problem when it isn't.
+  let providerDown: AIProviderUnavailableError | null = null;
+  const noteFailure = (err: unknown) => {
+    if (!providerDown && err instanceof AIProviderUnavailableError) providerDown = err;
+  };
+  const failedForProvider = (down: AIProviderUnavailableError): Partial<FinancialAgentStateType> => ({
+    status: 'failed',
+    error: down.message,
+    steps: [...steps, step('extract', 'AI provider rejected the request', down.message)],
+  });
+
   /** Persist a successful extraction to the cache (best-effort). */
   const cacheResult = (payload: CachedExtractionResult): void => {
     if (!payload.classification || payload.statements.length === 0) return;
@@ -134,7 +153,11 @@ export async function extractNode(
     if (useClaudeEngine) {
       steps.push(step('extract', 'EXTRACTION_ENGINE=claude — using structured-output engine'));
       const { extractWithClaude } = await import('../../../extraction/claudeEngine.js');
-      const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType });
+      // Forward the graph-level AbortSignal (set by runWithAgentBounds in
+      // index.ts) so a run abandoned on timeout actually cancels the
+      // in-flight Anthropic call instead of continuing to bill/run in the
+      // background after the route has already given up on this document.
+      const engineResult = await extractWithClaude({ fileBuffer, fileName, fileType }, config?.signal);
 
       if (!engineResult) {
         return {
@@ -286,6 +309,7 @@ export async function extractNode(
             try {
               return await classifyFinancials(chunk.text);
             } catch (err) {
+              noteFailure(err);
               steps.push(step('extract', `Sheet ${label} chunk ${ci + 1} failed`, String(err)));
               return null;
             }
@@ -303,6 +327,7 @@ export async function extractNode(
         if (r.status === 'fulfilled' && r.value && r.value.statements.length > 0) {
           validResults.push(r.value);
         } else if (r.status === 'rejected') {
+          noteFailure(r.reason);
           steps.push(step('extract', `Sheet ${sheetLabel} extraction threw — skipping`, String(r.reason)));
         } else if (r.status === 'fulfilled' && (!r.value || r.value.statements.length === 0)) {
           steps.push(step('extract', `Sheet ${sheetLabel} returned no financial statements`));
@@ -310,6 +335,7 @@ export async function extractNode(
       }
 
       if (validResults.length === 0) {
+        if (providerDown) return failedForProvider(providerDown);
         return {
           rawText: excelText,
           extractionSource: 'gpt4o',
@@ -379,6 +405,7 @@ export async function extractNode(
                 try {
                   return await classifyFinancials(chunk.text);
                 } catch (err) {
+                  noteFailure(err);
                   steps.push(step('extract', `LlamaParse chunk ${i + 1} failed`, String(err)));
                   return null;
                 }
@@ -423,6 +450,7 @@ export async function extractNode(
           steps.push(step('extract', 'LlamaParse returned no useful text — falling through'));
         }
       } catch (err) {
+        noteFailure(err);
         steps.push(step('extract', 'LlamaParse failed — falling through to pdf-parse', String(err)));
       }
     }
@@ -451,6 +479,7 @@ export async function extractNode(
               steps.push(step('extract', `Extracting from chunk ${i + 1}/${Math.min(chunks.length, MAX_CHUNKS)} (relevance: ${chunk.relevanceScore})`));
               return await classifyFinancials(chunk.text);
             } catch (err) {
+              noteFailure(err);
               steps.push(step('extract', `Chunk ${i + 1} extraction failed`, String(err)));
               return null;
             }
@@ -500,6 +529,10 @@ export async function extractNode(
       steps.push(step('extract', `Text too sparse (${pdfText?.trim().length ?? 0} chars) — trying Vision`));
     }
 
+    // The text layers failed because the provider rejected us, not because
+    // the PDF is image-only — Vision would hit the same wall.
+    if (providerDown) return failedForProvider(providerDown);
+
     // Layer 3: AI Vision (scanned / image-only PDFs)
     steps.push(step('extract', 'Switching to AI Vision (Layer 3)'));
     const visionClassification = await classifyFinancialsVision(
@@ -546,6 +579,11 @@ export async function extractNode(
       steps,
     };
   } catch (err) {
+    // Provider rejection: the message already says exactly what happened.
+    if (err instanceof AIProviderUnavailableError) {
+      log.warn('Extract node: AI provider rejected the request', { reason: err.reason, provider: err.provider });
+      return failedForProvider(err);
+    }
     log.error('Extract node: unexpected error', err);
     captureAgentError(err, { agent: 'financialAgent', node: 'extract' });
     return {

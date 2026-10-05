@@ -20,6 +20,29 @@ async function buildApp() {
   return app;
 }
 
+/** Organization list + a per-org active-deal count (the idle-org check). */
+function mockTables(orgIds: string[], activeDeals: Record<string, number | Error> = {}) {
+  mockSupabase.from.mockImplementation((table: string) => {
+    if (table === 'Organization') {
+      return { select: () => ({ eq: async () => ({ data: orgIds.map((id) => ({ id })), error: null }) }) };
+    }
+    if (table === 'Deal') {
+      let orgId = '';
+      const q: any = {
+        select: () => q,
+        eq: (_col: string, v: string) => { orgId = v; return q; },
+        neq: () => q,
+        then: (resolve: (r: unknown) => void) => {
+          const n = activeDeals[orgId] ?? 1;
+          resolve(n instanceof Error ? { count: null, error: { message: n.message } } : { count: n, error: null });
+        },
+      };
+      return q;
+    }
+    throw new Error(`Unexpected table: ${table}`);
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.CRON_SECRET = 'test-secret';
@@ -34,10 +57,7 @@ describe('POST /api/cron/signal-scan', () => {
   });
 
   it('fans out to every active org and returns a summary', async () => {
-    mockSupabase.from.mockImplementation((table: string) => {
-      if (table !== 'Organization') throw new Error(`Unexpected table: ${table}`);
-      return { select: () => ({ eq: async () => ({ data: [{ id: 'org-1' }, { id: 'org-2' }], error: null }) }) };
-    });
+    mockTables(['org-1', 'org-2']);
     runSignalMonitorViaManagedAgents.mockResolvedValue({ status: 'completed' });
 
     const app = await buildApp();
@@ -47,13 +67,11 @@ describe('POST /api/cron/signal-scan', () => {
     expect(runSignalMonitorViaManagedAgents).toHaveBeenCalledTimes(2);
     expect(runSignalMonitorViaManagedAgents).toHaveBeenCalledWith('org-1');
     expect(runSignalMonitorViaManagedAgents).toHaveBeenCalledWith('org-2');
-    expect(res.body).toEqual({ scanned: 2, failed: 0 });
+    expect(res.body).toEqual({ scanned: 2, skipped: 0, failed: 0 });
   });
 
   it('continues past a single org failure and reports it in the summary', async () => {
-    mockSupabase.from.mockImplementation(() => ({
-      select: () => ({ eq: async () => ({ data: [{ id: 'org-1' }, { id: 'org-2' }], error: null }) }),
-    }));
+    mockTables(['org-1', 'org-2']);
     runSignalMonitorViaManagedAgents.mockImplementation(async (orgId: string) =>
       orgId === 'org-1' ? { status: 'failed', error: 'boom' } : { status: 'completed' },
     );
@@ -62,6 +80,31 @@ describe('POST /api/cron/signal-scan', () => {
     const res = await request(app).post('/api/cron/signal-scan').set('Authorization', 'Bearer test-secret');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ scanned: 2, failed: 1 });
+    expect(res.body).toEqual({ scanned: 2, skipped: 0, failed: 1 });
+  });
+
+  // Each scan starts a paid Managed Agents session. An org with no active
+  // deals gives the agent nothing to look at, so the session is pure cost.
+  it('skips orgs with no active deals without starting an agent session', async () => {
+    mockTables(['org-1', 'org-idle'], { 'org-idle': 0 });
+    runSignalMonitorViaManagedAgents.mockResolvedValue({ status: 'completed' });
+
+    const app = await buildApp();
+    const res = await request(app).post('/api/cron/signal-scan').set('Authorization', 'Bearer test-secret');
+
+    expect(runSignalMonitorViaManagedAgents).toHaveBeenCalledTimes(1);
+    expect(runSignalMonitorViaManagedAgents).toHaveBeenCalledWith('org-1');
+    expect(res.body).toEqual({ scanned: 1, skipped: 1, failed: 0 });
+  });
+
+  it('still scans an org when its deal count cannot be read', async () => {
+    mockTables(['org-1'], { 'org-1': new Error('timeout') });
+    runSignalMonitorViaManagedAgents.mockResolvedValue({ status: 'completed' });
+
+    const app = await buildApp();
+    const res = await request(app).post('/api/cron/signal-scan').set('Authorization', 'Bearer test-secret');
+
+    expect(runSignalMonitorViaManagedAgents).toHaveBeenCalledWith('org-1');
+    expect(res.body).toEqual({ scanned: 1, skipped: 0, failed: 0 });
   });
 });

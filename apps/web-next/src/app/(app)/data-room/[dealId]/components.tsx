@@ -291,6 +291,8 @@ export function DataRoomHeader({
 /* ────────────────────────────────────────────────────────────────────── */
 
 interface UploadConfirmModalProps {
+  /** Selected files that won't be uploaded, and why. */
+  skipped?: { name: string; reason: string }[];
   files: File[];
   autoUpdateDeal: boolean;
   uploading: boolean;
@@ -301,6 +303,7 @@ interface UploadConfirmModalProps {
 
 export function UploadConfirmModal({
   files,
+  skipped = [],
   autoUpdateDeal,
   uploading,
   onAutoUpdateChange,
@@ -320,6 +323,18 @@ export function UploadConfirmModal({
           </button>
         </div>
         <div className="p-4">
+          {skipped.length > 0 && (
+            <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="status">
+              <p className="font-medium">
+                {skipped.length} file{skipped.length > 1 ? "s" : ""} won&apos;t be uploaded:
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {skipped.map((f) => (
+                  <li key={f.name} className="truncate">{f.name}: {f.reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <ul className="mb-4 space-y-1.5 max-h-40 overflow-y-auto">
             {files.map((f, i) => (
               <li key={i} className="text-sm text-slate-600 flex items-center gap-2">
@@ -443,35 +458,6 @@ export function LinkToDealModal({
           </ul>
         </div>
       </div>
-    </div>
-  );
-}
-
-/* ────────────────────────────────────────────────────────────────────── */
-/*  Toast notification (inline, no provider needed)                      */
-/* ────────────────────────────────────────────────────────────────────── */
-
-interface ToastProps {
-  message: string;
-  type: "success" | "error" | "info";
-  onDismiss: () => void;
-}
-
-const TOAST_STYLES: Record<string, { bg: string; border: string; icon: string; iconColor: string }> = {
-  success: { bg: "bg-green-50", border: "border-green-200", icon: "check_circle", iconColor: "text-green-600" },
-  error: { bg: "bg-red-50", border: "border-red-200", icon: "error", iconColor: "text-red-600" },
-  info: { bg: "bg-blue-50", border: "border-blue-200", icon: "info", iconColor: "text-blue-700" },
-};
-
-export function VDRToast({ message, type, onDismiss }: ToastProps) {
-  const s = TOAST_STYLES[type] || TOAST_STYLES.info;
-  return (
-    <div className={`fixed bottom-6 right-6 z-[9998] flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border max-w-sm ${s.bg} ${s.border}`}>
-      <span className={`material-symbols-outlined text-xl shrink-0 ${s.iconColor}`}>{s.icon}</span>
-      <p className="text-sm text-slate-800 flex-1">{message}</p>
-      <button type="button" onClick={onDismiss} className="text-slate-400 hover:text-slate-600 shrink-0">
-        <span className="material-symbols-outlined text-lg">close</span>
-      </button>
     </div>
   );
 }

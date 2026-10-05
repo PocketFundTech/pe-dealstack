@@ -1,11 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "@/providers/ToastProvider";
 import { useUser } from "@/providers/UserProvider";
 import { api } from "@/lib/api";
+import { useApiQuery, mutateApiCache } from "@/lib/useApiQuery";
 import { cn } from "@/lib/cn";
+import { OUTREACH_ALLOWED_ORG_SLUGS } from "@/lib/constants";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
+import { USERS_ME_KEY } from "./settings-api-keys";
 import { SecuritySection } from "./SecuritySection";
 import { type PrefsState } from "./PreferencesSection";
 import { ProfileSection, type UserProfile } from "./ProfileSection";
@@ -17,7 +22,10 @@ import { CriteriaSection } from "./CriteriaSection";
 import { FirmTeaserSection } from "./FirmTeaserSection";
 import { AiUsageSection } from "./AiUsageSection";
 import { IntegrationsSection } from "./IntegrationsSection";
+import { ApiKeysSection } from "./ApiKeysSection";
+import { WebhooksSection } from "./WebhooksSection";
 import { NDATemplatesSection } from "./NDATemplatesSection";
+import { OutreachPipelineSection } from "./OutreachPipelineSection";
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -31,7 +39,10 @@ const NAV_SECTIONS = [
   { id: "criteria", label: "Investment Criteria", icon: "grading" },
   { id: "firm-teaser", label: "Firm Teaser", icon: "auto_awesome" },
   { id: "integrations", label: "Integrations", icon: "extension" },
+  { id: "api-keys", label: "API Keys", icon: "key" },
+  { id: "webhooks", label: "Webhooks", icon: "webhook" },
   { id: "ai-usage", label: "AI Usage", icon: "analytics" },
+  { id: "outreach-pipeline", label: "Outreach Pipeline", icon: "campaign" },
 ] as const;
 
 const DEFAULT_PREFS: PrefsState = {
@@ -75,12 +86,26 @@ function parsePrefs(raw: UserProfile["preferences"]): {
 // ─── Page ───────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { refetch: refetchUser } = useUser();
+  const { user, refetch: refetchUser } = useUser();
+  // Outreach Pipeline settings only apply to orgs allowed to use Outreach at
+  // all — re-check here the same way apps/outreach/page.tsx and the sidebar
+  // (Sidebar.tsx's orgSlugAllowlist filter) do, so this section is never
+  // shown to orgs that can't even see the Outreach tab.
+  const showOutreachPipeline = OUTREACH_ALLOWED_ORG_SLUGS.includes(
+    user?.organization?.slug ?? "",
+  );
+  const visibleSections = useMemo(
+    () => NAV_SECTIONS.filter((s) => s.id !== "outreach-pipeline" || showOutreachPipeline),
+    [showOutreachPipeline],
+  );
+  // Shared with FirmProfileSection, which reads the same /users/me endpoint
+  // for org-settings fields -- useApiQuery dedupes the two into one request
+  // instead of two. See settings-api-keys.ts.
+  const usersMeQuery = useApiQuery<UserProfile>(USERS_ME_KEY);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  useUnsavedChanges(hasChanges);
   const [activeSection, setActiveSection] = useState<string>("general");
 
   const [name, setName] = useState("");
@@ -90,10 +115,9 @@ export default function SettingsPage() {
     DEFAULT_NOTIFICATION_PREFS,
   );
 
-  const showToast = useCallback((message: string, type: "success" | "error") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  }, []);
+  // App-wide toasts: supports info, and a newer toast is never dismissed by an
+  // older toast's timer (the page's own toast state had both problems).
+  const { showToast } = useToast();
 
   const markChanged = () => setHasChanges(true);
 
@@ -106,25 +130,31 @@ export default function SettingsPage() {
     setNotificationPrefs(notifications);
   }, []);
 
-  const loadProfile = useCallback(async () => {
-    try {
-      const data = await api.get<UserProfile>("/users/me");
-      applyProfile(data);
-    } catch (err) {
-      console.warn("[settings] load failed:", err);
-      showToast(err instanceof Error ? err.message : "Failed to load profile", "error");
-    } finally {
-      setLoading(false);
-    }
-  }, [applyProfile, showToast]);
-
+  // Editable fields (name/title/prefs/notificationPrefs) are seeded from
+  // /users/me exactly once per mount -- same as the old one-shot loadProfile
+  // -- so a background revalidation of the shared cache entry (e.g. because
+  // FirmProfileSection or another tab refetched it) never clobbers text the
+  // user is mid-typing. `profile` itself (read-only display data + the
+  // Cancel-to-last-saved snapshot) is likewise only synced on that first
+  // load and after an explicit save.
+  const appliedInitialProfile = useRef(false);
   useEffect(() => {
-    loadProfile();
-  }, [loadProfile]);
+    if (appliedInitialProfile.current) return;
+    if (usersMeQuery.data) {
+      applyProfile(usersMeQuery.data);
+      appliedInitialProfile.current = true;
+    } else if (usersMeQuery.error) {
+      console.warn("[settings] load failed:", usersMeQuery.error);
+      showToast(usersMeQuery.error.message || "Failed to load profile", "error");
+      appliedInitialProfile.current = true;
+    }
+  }, [usersMeQuery.data, usersMeQuery.error, applyProfile, showToast]);
+
+  const loading = usersMeQuery.isLoading;
 
   // Observe sections to highlight the active nav link while scrolling
   useEffect(() => {
-    const sectionIds = NAV_SECTIONS.map((s) => `section-${s.id}`);
+    const sectionIds = visibleSections.map((s) => `section-${s.id}`);
     const elements = sectionIds
       .map((id) => document.getElementById(id))
       .filter((el): el is HTMLElement => el !== null);
@@ -144,7 +174,7 @@ export default function SettingsPage() {
     );
     elements.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [loading]);
+  }, [loading, visibleSections]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -159,6 +189,9 @@ export default function SettingsPage() {
       };
       const updated = await api.patch<UserProfile>("/users/me", payload);
       applyProfile(updated);
+      // Keep the shared /users/me cache entry in sync so FirmProfileSection
+      // (and any other reader) sees the save without an extra fetch.
+      mutateApiCache(USERS_ME_KEY, updated);
       setHasChanges(false);
       showToast("Changes saved successfully", "success");
       refetchUser();
@@ -208,23 +241,6 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-[1400px] w-full p-4 md:p-6">
-      {/* Toast */}
-      {toast && (
-        <div
-          className={cn(
-            "fixed top-4 right-4 z-[60] flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-all border",
-            toast.type === "success"
-              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-              : "bg-red-50 text-red-700 border-red-200",
-          )}
-        >
-          <span className="material-symbols-outlined text-[18px]">
-            {toast.type === "success" ? "check_circle" : "error"}
-          </span>
-          {toast.message}
-        </div>
-      )}
-
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
         <div className="flex flex-col gap-1">
@@ -269,7 +285,7 @@ export default function SettingsPage() {
         {/* Sidebar */}
         <aside className="hidden lg:block w-56 shrink-0">
           <nav className="sticky top-6 flex flex-col gap-1">
-            {NAV_SECTIONS.map((section) => {
+            {visibleSections.map((section) => {
               const isActive = activeSection === section.id;
               return (
                 <a
@@ -314,6 +330,7 @@ export default function SettingsPage() {
             setTitle={setTitle}
             onAvatarUploaded={(updated) => {
               applyProfile(updated);
+              mutateApiCache(USERS_ME_KEY, updated);
               refetchUser();
             }}
             onToast={showToast}
@@ -342,9 +359,15 @@ export default function SettingsPage() {
 
           <IntegrationsSection onToast={showToast} />
 
+          <ApiKeysSection onToast={showToast} />
+
+          <WebhooksSection onToast={showToast} />
+
           <NDATemplatesSection />
 
           <AiUsageSection />
+
+          {showOutreachPipeline && <OutreachPipelineSection />}
 
           {/* Deactivate Account */}
           <div className="flex items-center justify-between p-4 bg-red-50 border border-red-200 rounded-lg">
