@@ -16,6 +16,7 @@ import { extractTextFromPDF, upload, resolveUploadedFile, cleanupStagingObject }
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
+import { runWithDealUsage } from '../middleware/usageContext.js';
 import { runInBackground } from '../utils/background.js';
 import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
 import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
@@ -742,7 +743,7 @@ export async function runIngestFromBuffer(
       // — never fail ingest on teaser error.
       if (!isUpdate) {
         try {
-          await generateTeasersForDeal({ dealId: deal.id, orgId });
+          await runWithDealUsage(deal.id, () => generateTeasersForDeal({ dealId: deal.id, orgId }));
         } catch (teaserErr) {
           log.error('Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
         }
@@ -758,20 +759,25 @@ export async function runIngestFromBuffer(
     if (!existingDuplicate && shouldRunIngestDeepPass(mimeType, documentName)) {
       runInBackground(
         `ingest-deep-pass:${deal.id}`,
-        runIngestDeepPass({
-          dealId: deal.id,
-          orgId,
-          documentId: document.id,
-          fileBuffer: buffer,
-          fileName: documentName,
-          mimeType,
-        }),
+        runWithDealUsage(deal.id, () =>
+          runIngestDeepPass({
+            dealId: deal.id,
+            orgId,
+            documentId: document.id,
+            fileBuffer: buffer,
+            fileName: documentName,
+            mimeType,
+          }),
+        ),
       );
       backgroundExtraction = 'started';
     } else if (!existingDuplicate) {
       // No deep pass (PDF / Word / text) — still auto-score the new deal,
       // which the deep pass would otherwise have done after extracting.
-      runInBackground(`ingest-score:${deal.id}`, maybeScoreAfterExtraction(deal.id, orgId));
+      runInBackground(
+        `ingest-score:${deal.id}`,
+        runWithDealUsage(deal.id, () => maybeScoreAfterExtraction(deal.id, orgId)),
+      );
     }
 
     log.info('Ingest complete', { dealId: deal.id, isUpdate, backgroundExtraction });
