@@ -193,6 +193,9 @@ export function DealPageLeftPanel({
           )}
           {activeTab === "Documents" && (
             <div className="flex flex-col gap-8">
+              {/* Asking for documents belongs next to receiving them — and
+                  above the list, so it's seen first (5 Oct testing, item 13). */}
+              <DocRequestsPanel dealId={deal.id} />
               <DocumentsTab
                 documents={documents}
                 uploading={uploading}
@@ -201,8 +204,6 @@ export function DealPageLeftPanel({
                 driveImporting={driveImporting}
                 onImportFromDrive={onImportFromDrive}
               />
-              {/* Asking for documents belongs next to receiving them. */}
-              <DocRequestsPanel dealId={deal.id} />
             </div>
           )}
           {activeTab === "Activity" && (
