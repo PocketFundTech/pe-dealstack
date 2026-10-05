@@ -241,4 +241,23 @@ describe("getDealDisplayName", () => {
   it("returns the raw name when it isn't a URL", () => {
     expect(getDealDisplayName({ name: "Pocket Fund" })).toBe("Pocket Fund");
   });
+
+  it("prefers the deal's own name over a company stub named the generic placeholder", () => {
+    // A deal imported from HubSpot with no company association (or a company
+    // with a blank HubSpot name) gets a Company stub literally named
+    // "Unknown Company" — that placeholder must never outrank a real,
+    // specific deal name like "At4 Software".
+    expect(
+      getDealDisplayName({ name: "At4 Software", company: { name: "Unknown Company" } })
+    ).toBe("At4 Software");
+    expect(
+      getDealDisplayName({ name: "Langua", companyName: "Unknown Company" })
+    ).toBe("Langua");
+  });
+
+  it("still falls back to the placeholder when the deal itself has no name either", () => {
+    expect(
+      getDealDisplayName({ name: "", company: { name: "Unknown Company" } })
+    ).toBe("Unknown Company");
+  });
 });
