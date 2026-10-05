@@ -14,6 +14,8 @@ export interface InvitationRow {
   role: string;
   status: string;
   expiresAt: string;
+  /** Deal to join on accept (invitation-deal-migration.sql; absent before it runs). */
+  dealId?: string | null;
   organization?: { id: string; name: string } | null;
 }
 
@@ -112,4 +114,35 @@ export function passwordProblem(password: unknown): string | null {
     return 'Password must contain uppercase, lowercase, number, and special character';
   }
   return null;
+}
+
+/**
+ * After an invitation is accepted, add the new member to the deal the
+ * invite was for (bulk invite "Deal" column, QA #4). Best-effort: the user is
+ * already in the org, so a failure here only logs.
+ */
+export async function applyInvitationDeal(invitation: InvitationRow, userId: string): Promise<void> {
+  if (!invitation.dealId) return;
+  try {
+    const { data: deal } = await supabase
+      .from('Deal')
+      .select('id')
+      .eq('id', invitation.dealId)
+      .eq('organizationId', invitation.organizationId)
+      .maybeSingle();
+    if (!deal) return; // deal deleted or moved since the invite
+    const { data: existing } = await supabase
+      .from('DealTeamMember')
+      .select('id')
+      .eq('dealId', invitation.dealId)
+      .eq('userId', userId)
+      .maybeSingle();
+    if (existing) return;
+    const { error } = await supabase
+      .from('DealTeamMember')
+      .insert({ dealId: invitation.dealId, userId, role: 'MEMBER' });
+    if (error) log.warn('Invite accept: could not add to deal team', { invitationId: invitation.id, error: error.message });
+  } catch (err) {
+    log.warn('Invite accept: deal team step failed', { invitationId: invitation.id, err: err instanceof Error ? err.message : String(err) });
+  }
 }

@@ -8,6 +8,7 @@
 //
 // Credentials come from env (set after the Azure app is registered):
 //   MS_CLIENT_ID, MS_CLIENT_SECRET, MS_TENANT (default 'common')
+import { IntegrationNotConfiguredError } from '../_platform/errors.js';
 
 const TENANT = process.env.MS_TENANT || 'common';
 const AUTHORIZE_URL = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`;
@@ -28,15 +29,18 @@ export interface MicrosoftUserInfo {
   displayName: string | null;
 }
 
+// Missing credentials are a server-config problem the user can't fix —
+// say so (503 INTEGRATION_NOT_CONFIGURED) instead of a generic 500, same as
+// Google (QA #6).
 function clientId(): string {
   const id = process.env.MS_CLIENT_ID;
-  if (!id) throw new Error('MS_CLIENT_ID is not configured');
+  if (!id) throw new IntegrationNotConfiguredError('Microsoft sign-in', ['MS_CLIENT_ID']);
   return id;
 }
 
 function clientSecret(): string {
   const secret = process.env.MS_CLIENT_SECRET;
-  if (!secret) throw new Error('MS_CLIENT_SECRET is not configured');
+  if (!secret) throw new IntegrationNotConfiguredError('Microsoft sign-in', ['MS_CLIENT_SECRET']);
   return secret;
 }
 

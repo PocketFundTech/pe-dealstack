@@ -19,7 +19,8 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   { id: "gmail",           name: "Gmail",           desc: "Sync deal-related emails",               icon: "mail",        available: true },
   { id: "google_calendar", name: "Google",           desc: "Drive files, Calendar & NDA docs",       icon: "workspaces",  available: true },
   { id: "outlook",         name: "Outlook",          desc: "Sync deal-related emails",              icon: "mail",        available: true },
-  { id: "microsoft365",    name: "Microsoft 365",    desc: "Calendar events + OneDrive files",      icon: "workspaces",  available: true },
+  // OneDrive file import isn't built yet (only calendar) — don't promise it.
+  { id: "microsoft365",    name: "Microsoft 365",    desc: "Sync calendar events",                  icon: "workspaces",  available: true },
   { id: "fireflies",       name: "Fireflies",       desc: "Auto-import meeting transcripts",        icon: "mic",         available: false },
   { id: "otter",           name: "Otter",           desc: "Auto-import meeting transcripts",        icon: "graphic_eq",  available: false },
 ];
@@ -195,6 +196,13 @@ export function IntegrationsSection({ onToast }: Props) {
       </div>
 
       <div className="p-6">
+        {/* QA #21: tools without a connector yet — point at the CSV route. */}
+        <p className="mb-4 text-xs text-text-muted">
+          Using Notion, Airtable, OneDrive, SharePoint or Xero? Export to CSV or Excel and use{" "}
+          <span className="font-semibold text-text-main">Deals → Import Deals</span> or{" "}
+          <span className="font-semibold text-text-main">Contacts → Import from CSV</span>.{" "}
+          <a href="/help-center" className="font-semibold text-primary hover:underline">How to export</a>
+        </p>
         {loading ? (
           <p className="text-sm text-text-muted">Loading integrations...</p>
         ) : (

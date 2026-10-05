@@ -207,6 +207,11 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
         : await runExtractAll(api.post, dealId, {
             timeoutMs: EXTRACT_CLIENT_TIMEOUT_MS,
             onProgress: ({ done, total }) => { progressDocs = total > 0 ? ` · ${done}/${total} documents` : ""; },
+            // Live "3/6 done · reading P&L.xlsx" while the request runs (QA #12).
+            get: api.get,
+            onLiveProgress: ({ done, total, running }) => {
+              progressDocs = ` · ${done}/${total} done${running.length ? ` · reading ${running.slice(0, 2).join(", ")}` : ""}`;
+            },
           });
 
       // Small delay before fetching — the API may return success before data

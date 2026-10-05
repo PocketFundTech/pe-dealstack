@@ -19,10 +19,16 @@ const createInvitationSchema = z.object({
   role: z.enum(['ADMIN', 'MEMBER', 'VIEWER']).default('MEMBER'),
 });
 
+// `invites` (QA #4) carries an optional deal per row; `emails` stays for
+// older clients. One of the two is required.
 const bulkInviteSchema = z.object({
-  emails: z.array(z.string().email()).min(1).max(20),
+  emails: z.array(z.string().email()).min(1).max(20).optional(),
+  invites: z.array(z.object({
+    email: z.string().email(),
+    dealId: z.string().uuid().nullable().optional(),
+  })).min(1).max(20).optional(),
   role: z.enum(['ADMIN', 'MEMBER', 'VIEWER']).default('MEMBER'),
-});
+}).refine((v) => v.emails || v.invites, { message: 'emails or invites is required' });
 
 // Helper: Generate secure token
 function generateToken(): string {
@@ -341,7 +347,19 @@ router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => 
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const { emails, role } = validation.data;
+    const { role } = validation.data;
+    const invites: { email: string; dealId?: string | null }[] =
+      validation.data.invites ?? (validation.data.emails ?? []).map((email) => ({ email }));
+    const emails = invites.map((i) => i.email);
+
+    // Every deal named in the file must belong to this org.
+    const dealIds = [...new Set(invites.map((i) => i.dealId).filter((d): d is string => !!d))];
+    if (dealIds.length > 0) {
+      const { data: deals } = await supabase.from('Deal').select('id').eq('organizationId', orgId).in('id', dealIds);
+      const known = new Set((deals ?? []).map((d: { id: string }) => d.id));
+      const unknown = dealIds.filter((d) => !known.has(d));
+      if (unknown.length > 0) return res.status(400).json({ error: 'One or more deals were not found', dealIds: unknown });
+    }
 
     // Get current user's info
     const { data: currentUser, error: userError } = await supabase
@@ -368,9 +386,15 @@ router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => 
 
     const orgName = org?.name || currentUser.firmName || 'your organization';
 
-    const results: { email: string; status: 'sent' | 'exists' | 'pending' | 'error'; error?: string }[] = [];
+    const results: {
+      email: string;
+      status: 'sent' | 'exists' | 'pending' | 'error';
+      error?: string;
+      /** Deal handling for this row: added now (existing member), saved for accept, or not saved. */
+      deal?: 'added' | 'on_accept' | 'not_saved';
+    }[] = [];
 
-    for (const email of emails) {
+    for (const { email, dealId } of invites) {
       try {
         // Check if user already exists in org
         const { data: existingUser } = await supabase
@@ -381,7 +405,15 @@ router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => 
           .maybeSingle();
 
         if (existingUser) {
-          results.push({ email, status: 'exists' });
+          // Already a member: put them on the deal right away.
+          if (dealId) {
+            const { data: onTeam } = await supabase
+              .from('DealTeamMember').select('id').eq('dealId', dealId).eq('userId', existingUser.id).maybeSingle();
+            if (!onTeam) await supabase.from('DealTeamMember').insert({ dealId, userId: existingUser.id, role: 'MEMBER' });
+            results.push({ email, status: 'exists', deal: 'added' });
+          } else {
+            results.push({ email, status: 'exists' });
+          }
           continue;
         }
 
@@ -395,18 +427,26 @@ router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => 
         const token = generateToken();
         const expiresAt = getExpirationDate();
 
-        const { error: insertError } = await supabase
-          .from('Invitation')
-          .insert({
-            email,
-            firmName: orgName,
-            organizationId: orgId,
-            role,
-            invitedBy: currentUser.id,
-            token,
-            expiresAt: expiresAt.toISOString(),
-            status: 'PENDING',
-          });
+        const row: Record<string, unknown> = {
+          email,
+          firmName: orgName,
+          organizationId: orgId,
+          role,
+          invitedBy: currentUser.id,
+          token,
+          expiresAt: expiresAt.toISOString(),
+          status: 'PENDING',
+        };
+        let dealOutcome: 'on_accept' | 'not_saved' | undefined;
+        let { error: insertError } = await supabase.from('Invitation').insert(dealId ? { ...row, dealId } : row);
+        if (insertError && dealId && (insertError.code === '42703' || insertError.code === 'PGRST204')) {
+          // invitation-deal-migration.sql not run yet — send without the deal.
+          log.warn('Invitation.dealId column missing — run invitation-deal-migration.sql');
+          ({ error: insertError } = await supabase.from('Invitation').insert(row));
+          dealOutcome = 'not_saved';
+        } else if (dealId) {
+          dealOutcome = 'on_accept';
+        }
 
         if (insertError) throw insertError;
 
@@ -420,7 +460,7 @@ router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => 
           req
         );
 
-        results.push({ email, status: 'sent' });
+        results.push(dealOutcome ? { email, status: 'sent', deal: dealOutcome } : { email, status: 'sent' });
       } catch (error) {
         results.push({ email, status: 'error', error: 'Failed to process' });
       }

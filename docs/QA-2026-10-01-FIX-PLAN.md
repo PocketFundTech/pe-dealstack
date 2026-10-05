@@ -115,7 +115,7 @@ hidden (self-deactivation later) and `isActive` is now enforced; extraction conc
 
 ---
 
-## Batch 2 — features (separate PRs)
+## Batch 2 — features — ✅ implemented in the batch-2 PR (stacked on #174)
 
 - **#4 Bulk invite preview**: `W/components/layout/InviteTeamModal.csv.tsx` (read-only table at `:226-264`; parse in
   `.csv.parse.ts`). Needed:
