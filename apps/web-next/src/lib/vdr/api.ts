@@ -376,10 +376,14 @@ export function transformDocument(apiDoc: APIDocument): VDRFile {
     analysisDescription = "Document has been analyzed.";
     analysisColor = "primary";
   } else if (apiDoc.status === "completed") {
-    analysisType = "complete";
-    analysisLabel = "Processed";
-    analysisDescription = "Document uploaded and text extracted.";
-    analysisColor = "primary";
+    // "completed" means TEXT extraction finished — it's also set when the AI
+    // step returned nothing or failed. Without aiAnalysis / aiAnalyzedAt it
+    // must not wear the AI sparkle or count as "AI Analyzed" (5 Oct testing,
+    // item 10: "Why is it mentioning AI analysed when it hasn't").
+    analysisType = "ready";
+    analysisLabel = "Text extracted";
+    analysisDescription = "Text extracted — not analysed by AI yet.";
+    analysisColor = "green";
   } else if (apiDoc.extractedText) {
     analysisType = "ready";
     analysisLabel = "Ready for AI";
