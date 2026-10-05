@@ -196,8 +196,8 @@ async function runFileImportRoute(
     });
   } catch (error) {
     log.error(`${sourceLabel} import error`, error);
-    const message = error instanceof Error ? error.message : `Failed to import ${sourceLabel} file`;
-    res.status(500).json({ error: message });
+    // Never echo the raw error — it can be a database message. Logged above.
+    res.status(500).json({ error: `Failed to import the ${sourceLabel} file. Please try again.` });
   }
 }
 
