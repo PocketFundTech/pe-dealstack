@@ -11,14 +11,16 @@ vi.mock('../src/supabase.js', () => ({
         eq: (k: string, v: unknown) => { queried[k] = v; return b; },
         is: (k: string, v: unknown) => { queried[`is:${k}`] = v; return b; },
         order: () => b,
-        limit: async () => ({ data: deals.filter((d) => d.organizationId === queried.organizationId && d.deletedAt == null), error: null }),
+        limit: async () => ({ data: live(), error: null }),
+        range: async (from: number, to: number) => ({ data: live().slice(from, to + 1), error: null }),
       };
       return b;
     },
   },
 }));
 vi.mock('../src/utils/logger.js', () => ({ log: { info() {}, warn() {}, error() {}, debug() {} } }));
-const { normaliseCompanyName, findLiveDealForCompany } = await import('../src/services/dealDuplicates.js');
+const live = () => deals.filter((d) => d.organizationId === queried.organizationId && d.deletedAt == null);
+const { normaliseCompanyName, findLiveDealForCompany, loadLiveDealIndex } = await import('../src/services/dealDuplicates.js');
 
 beforeEach(() => {
   queried = {};
@@ -52,5 +54,20 @@ describe('findLiveDealForCompany', () => {
   it('never matches on a too-short or missing name', async () => {
     await expect(findLiveDealForCompany('o1', 'Co.')).resolves.toBeNull();
     await expect(findLiveDealForCompany('o1', null)).resolves.toBeNull();
+  });
+});
+
+describe('loadLiveDealIndex', () => {
+  it('keys live deals by normalised company and deal name, skipping deleted and other-org deals', async () => {
+    const index = await loadLiveDealIndex('o1');
+    expect(index.get('strong ready mix')).toEqual({ id: 'd1', name: 'Strong Ready Mix' });
+    expect(index.has('acme')).toBe(false);
+    expect(index.has('northwind')).toBe(false);
+  });
+
+  it('pages past the first 1,000 deals', async () => {
+    deals = Array.from({ length: 1500 }, (_, i) => ({ id: `x${i}`, name: `Target ${i}`, organizationId: 'o1', deletedAt: null, company: null }));
+    const index = await loadLiveDealIndex('o1');
+    expect(index.get('target 1499')).toEqual({ id: 'x1499', name: 'Target 1499' });
   });
 });

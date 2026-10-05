@@ -56,3 +56,43 @@ export async function findLiveDealForCompany(orgId: string, companyName: string 
     return null;
   }
 }
+
+const INDEX_PAGE = 1000;
+const INDEX_MAX_PAGES = 10;
+
+/**
+ * Every live deal in the org keyed by normalised company name AND deal name,
+ * for batch paths (bulk import) that would otherwise look up row by row.
+ * The most recently updated deal wins a key. Empty on lookup failure, so a
+ * failed lookup never blocks an import — it just skips the duplicate check.
+ */
+export async function loadLiveDealIndex(orgId: string): Promise<Map<string, DealMatch>> {
+  const index = new Map<string, DealMatch>();
+  try {
+    for (let page = 0; page < INDEX_MAX_PAGES; page++) {
+      const from = page * INDEX_PAGE;
+      const { data, error } = await supabase
+        .from('Deal')
+        .select('id, name, updatedAt, company:Company(name)')
+        .eq('organizationId', orgId)
+        .is('deletedAt', null)
+        .order('updatedAt', { ascending: false })
+        .range(from, from + INDEX_PAGE - 1);
+      if (error) {
+        log.warn('loadLiveDealIndex: lookup failed', { error: error.message });
+        return index;
+      }
+      const rows = (data ?? []) as Array<{ id: string; name: string; company?: { name?: string | null } | Array<{ name?: string | null }> | null }>;
+      for (const d of rows) {
+        const company = Array.isArray(d.company) ? d.company[0] : d.company;
+        for (const key of [normaliseCompanyName(company?.name), normaliseCompanyName(d.name)]) {
+          if (key.length >= 3 && !index.has(key)) index.set(key, { id: d.id, name: d.name });
+        }
+      }
+      if (rows.length < INDEX_PAGE) break;
+    }
+  } catch (err) {
+    log.warn('loadLiveDealIndex: unexpected error', { err: err instanceof Error ? err.message : String(err) });
+  }
+  return index;
+}

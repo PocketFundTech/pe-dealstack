@@ -7,6 +7,7 @@ import { parseExcelToDealRows } from '../services/excelParser.js';
 import { getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId } from '../middleware/orgScope.js';
+import { loadLiveDealIndex, normaliseCompanyName } from '../services/dealDuplicates.js';
 import { extractTextFromPDF, upload, resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
 import { runIngestFromBuffer } from './ingest-upload.js';
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
@@ -74,12 +75,14 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
       const msg =
         result.reason === 'duplicate'
           ? 'A deal already exists for this email'
+          : result.reason === 'existing_company_deal'
+            ? `You already have a deal for this company (${result.companyName}). Upload the email to that deal instead.`
           : result.reason === 'insufficient_content'
             ? 'Email has insufficient content for deal extraction'
             : result.reason === 'extraction_failed'
               ? 'Could not extract deal data from email'
               : 'Could not create a deal from this email';
-      return res.status(400).json({ error: msg, reason: result.reason, existingDealId: result.dealId });
+      return res.status(result.reason === 'existing_company_deal' ? 409 : 400).json({ error: msg, reason: result.reason, existingDealId: result.dealId });
     }
 
     const dealId = result.dealId!;
@@ -185,8 +188,8 @@ subRouter.post('/bulk', upload.single('file'), async (req, res) => {
 
     log.info('Bulk ingest starting', { filename: file.originalname });
 
-    const dealRows = parseExcelToDealRows(file.buffer);
-    if (dealRows.length === 0) {
+    const parsedRows = parseExcelToDealRows(file.buffer);
+    if (parsedRows.length === 0) {
       // The intake form sends EVERY spreadsheet here in "new deal" mode, so a
       // financial model / CIM workbook (no "Company" column) lands on this
       // path too. Treat it as a single-company document and run the normal
@@ -208,15 +211,39 @@ subRouter.post('/bulk', upload.single('file'), async (req, res) => {
       return res.status(result.status).json(result.body);
     }
 
-    if (dealRows.length > 500) {
+    if (parsedRows.length > 500) {
       return res.status(400).json({ error: 'Maximum 500 deals per import. Split your file.' });
     }
 
-    const results: { success: any[]; failed: any[]; total: number } = {
+    const results: { success: any[]; failed: any[]; skipped: any[]; total: number } = {
       success: [],
       failed: [],
-      total: dealRows.length,
+      skipped: [],
+      total: parsedRows.length,
     };
+
+    // ─── Duplicate check (5 Oct testing, item 8) ───
+    // Skip rows for a company that already has a live deal, or that repeat an
+    // earlier row in the same file — re-importing a list must not double the
+    // pipeline. `forceCreate` imports every row anyway.
+    const forceCreate = req.body?.forceCreate === true || req.body?.forceCreate === 'true';
+    const liveDeals = forceCreate ? new Map() : await loadLiveDealIndex(orgId);
+    const seenInFile = new Set<string>();
+    const dealRows = parsedRows.filter((row) => {
+      if (forceCreate) return true;
+      const key = normaliseCompanyName(row.companyName);
+      const existing = key.length >= 3 ? liveDeals.get(key) : undefined;
+      if (existing) {
+        results.skipped.push({ companyName: row.companyName, reason: 'existing_deal', existingDeal: existing });
+        return false;
+      }
+      if (key.length >= 3 && seenInFile.has(key)) {
+        results.skipped.push({ companyName: row.companyName, reason: 'duplicate_row' });
+        return false;
+      }
+      seenInFile.add(key);
+      return true;
+    });
 
     // ─── Batch company resolution ───
     // One query for every existing company in this org, matched in-memory
@@ -339,13 +366,14 @@ subRouter.post('/bulk', upload.single('file'), async (req, res) => {
     await AuditLog.log(req, {
       action: 'AI_INGEST',
       resourceType: 'DEAL',
-      description: `Bulk import: ${results.success.length} deals imported, ${results.failed.length} failed`,
+      description: `Bulk import: ${results.success.length} deals imported, ${results.failed.length} failed, ${results.skipped.length} skipped as duplicates`,
       metadata: {
         source: 'bulk_import',
         filename: file.originalname,
         total: results.total,
         imported: results.success.length,
         failed: results.failed.length,
+        skipped: results.skipped.length,
       },
     });
 
@@ -361,8 +389,10 @@ subRouter.post('/bulk', upload.single('file'), async (req, res) => {
         total: results.total,
         imported: results.success.length,
         failed: results.failed.length,
+        skipped: results.skipped.length,
         deals: results.success,
         errors: results.failed,
+        skippedDeals: results.skipped,
       },
     });
   } catch (error) {

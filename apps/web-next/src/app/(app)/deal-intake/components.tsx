@@ -54,8 +54,11 @@ export interface IngestResponse {
     imported: number;
     failed: number;
     total: number;
+    /** Rows not imported because the company already has a deal, or repeats an earlier row. */
+    skipped?: number;
     deals?: Array<{ dealId: string; companyName: string }>;
     errors?: Array<{ companyName: string; error: string }>;
+    skippedDeals?: Array<{ companyName: string; reason: "existing_deal" | "duplicate_row"; existingDeal?: { id: string; name: string } }>;
   };
 }
 
@@ -374,7 +377,7 @@ export function ResultDisplay({ result, onReset, onNavigate }: ResultDisplayProp
 
       {/* Bulk summary */}
       {result.summary && (
-        <div className="grid grid-cols-3 gap-4 mb-5">
+        <div className={`grid ${result.summary.skipped ? "grid-cols-4" : "grid-cols-3"} gap-4 mb-5`}>
           <div className="bg-background-body rounded-lg p-3 text-center">
             <p className="text-lg font-bold text-emerald-600">{result.summary.imported}</p>
             <p className="text-xs text-text-muted">Imported</p>
@@ -383,10 +386,35 @@ export function ResultDisplay({ result, onReset, onNavigate }: ResultDisplayProp
             <p className="text-lg font-bold text-red-500">{result.summary.failed}</p>
             <p className="text-xs text-text-muted">Failed</p>
           </div>
+          {!!result.summary.skipped && (
+            <div className="bg-background-body rounded-lg p-3 text-center">
+              <p className="text-lg font-bold text-amber-600">{result.summary.skipped}</p>
+              <p className="text-xs text-text-muted">Already in pipeline</p>
+            </div>
+          )}
           <div className="bg-background-body rounded-lg p-3 text-center">
             <p className="text-lg font-bold text-text-main">{result.summary.total}</p>
             <p className="text-xs text-text-muted">Total</p>
           </div>
+        </div>
+      )}
+
+      {!!result.summary?.skippedDeals?.length && (
+        <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          <p className="mb-1">Skipped so the pipeline doesn&apos;t get duplicate deals:</p>
+          <ul className="list-disc list-inside text-xs space-y-0.5">
+            {result.summary.skippedDeals.slice(0, 10).map((s, i) => (
+              <li key={i}>
+                {s.companyName}
+                {s.reason === "existing_deal" && s.existingDeal ? (
+                  <> — you already have <Link href={`/deals/${s.existingDeal.id}`} onClick={onNavigate} className="underline">{s.existingDeal.name}</Link></>
+                ) : (
+                  " — repeated in the file"
+                )}
+              </li>
+            ))}
+            {result.summary.skippedDeals.length > 10 && <li>and {result.summary.skippedDeals.length - 10} more</li>}
+          </ul>
         </div>
       )}
 

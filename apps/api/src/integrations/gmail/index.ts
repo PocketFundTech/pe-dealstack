@@ -358,9 +358,10 @@ export const gmailProvider: IntegrationProvider = {
               messageId: fullHeaders['Message-ID'] ?? fullHeaders['Message-Id'] ?? null,
               integrationActivityId,
             });
-            // If a deal was created, backfill the activity row with the dealId
-            // so the activity feed shows the link immediately.
-            if (result.created && result.dealId && integrationActivityId) {
+            // Backfill the activity row with the deal — the new one, or the
+            // live deal for the same company it was not duplicated into — so
+            // the activity feed shows the link immediately.
+            if ((result.created || result.reason === 'existing_company_deal') && result.dealId && integrationActivityId) {
               await supabase
                 .from('IntegrationActivity')
                 .update({ dealIds: [result.dealId] })
