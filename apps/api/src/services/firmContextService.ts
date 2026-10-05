@@ -18,6 +18,8 @@ import { supabase } from '../supabase.js';
 import { getChatModel } from './llm.js';
 import { log } from '../utils/logger.js';
 import { formatFinancialValue } from '../utils/financialFormat.js';
+import { getTodayIso } from '../utils/dates.js';
+import { stripMarkdown } from '../utils/plainText.js';
 
 const SETTINGS_KEY = 'firmContext';
 
@@ -318,13 +320,18 @@ export async function generateFirmContext(orgId: string): Promise<FirmContext> {
   const sources = results.filter((r): r is SourceResult => r != null && r.text.trim().length > 0);
   const sourcesUsed = sources.map((s) => s.label);
 
-  const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  // CLAUDE.md: prompts take the current date from getTodayIso() at call time.
+  const today = getTodayIso();
 
+  // Plain "Label:" lines, not "### Label" headings — markdown in the input
+  // invites markdown back in the output (QA #13).
   const signalsBlock = sources.length > 0
-    ? sources.map((s) => `### ${s.label}\n${s.text}`).join('\n\n')
+    ? sources.map((s) => `${s.label.toUpperCase()}:\n${s.text}`).join('\n\n')
     : '(No signals are currently available for this firm.)';
 
   const systemPrompt = `Write a concise FIRM CONTEXT brief for an internal AI assistant at a PE firm — who the firm is, its thesis/strategy, sectors + check size, what it looks for in deals, how it communicates, and notable patterns. Ground ONLY in the provided signals; do not invent. Output prose the assistant can use as standing context.
+
+Format: PLAIN TEXT ONLY. No markdown — no # headings, no ** or __ emphasis, no bullet symbols, no tables. Write short paragraphs separated by a single blank line; if a list helps, use "Label: value" lines.
 
 Today's date: ${today}
 Firm name: ${orgName}`;
@@ -347,7 +354,8 @@ Firm name: ${orgName}`;
       : '';
 
   const ctx: FirmContext = {
-    text: (text || '').trim(),
+    // Belt and braces: strip any markdown the model still produced.
+    text: stripMarkdown(text || ''),
     generatedAt: new Date().toISOString(),
     sourcesUsed,
   };
@@ -361,7 +369,9 @@ export async function getFirmContext(orgId: string): Promise<FirmContext | null>
   const settings = await readSettings(orgId);
   const ctx = settings[SETTINGS_KEY] as FirmContext | undefined;
   if (!ctx || typeof ctx.text !== 'string') return null;
-  return ctx;
+  // Contexts generated before QA #13 were stored with markdown — clean on read
+  // so existing firms don't have to regenerate.
+  return { ...ctx, text: stripMarkdown(ctx.text) };
 }
 
 /**

@@ -13,6 +13,8 @@ import { supabase } from '../supabase.js';
 import { getSignedDownloadUrl } from '../utils/storage.js';
 import { log } from '../utils/logger.js';
 import { sendDocumentViewedEmail } from '../services/documentViewedEmail.js';
+import { recordDocumentDownload } from '../services/documentActivity.js';
+import { runInBackground } from '../utils/background.js';
 
 const router = Router();
 
@@ -81,11 +83,18 @@ async function notifyShareCreatorOfFirstView(share: ShareRow): Promise<void> {
 
 /**
  * Record a portal view and, only for a share's very first view, notify its
- * creator by email. Entirely fire-and-forget from the route handler's
- * perspective — the page response never awaits this, and every failure
- * (count query, insert, or the email itself) just logs.
+ * creator by email. Never throws: every failure (count query, insert, or
+ * the email itself) just logs.
  */
+/** A repeat open from the same browser within this window is one view (refreshes, double fetches). */
+const VIEW_DEDUPE_WINDOW_MS = 60_000;
+
 async function recordViewAndNotify(share: ShareRow, userAgent: string | null): Promise<void> {
+  // The view row is written BEFORE the response (awaited by the caller):
+  // as a fire-and-forget promise it was killed when Vercel froze the
+  // function after res.json, so share view counts never moved (QA #25b).
+  // Only the first-view email runs in the background (runInBackground keeps
+  // the invocation alive via waitUntil).
   try {
     const { count, error: countError } = await supabase
       .from('DealShareView')
@@ -93,6 +102,18 @@ async function recordViewAndNotify(share: ShareRow, userAgent: string | null): P
       .eq('shareId', share.id);
     if (countError) log.warn('portal view count failed', { error: countError });
     const isFirstView = !countError && (count ?? 0) === 0;
+
+    if (!isFirstView && userAgent) {
+      const since = new Date(Date.now() - VIEW_DEDUPE_WINDOW_MS).toISOString();
+      const { data: recent } = await supabase
+        .from('DealShareView')
+        .select('id')
+        .eq('shareId', share.id)
+        .eq('userAgent', userAgent)
+        .gte('viewedAt', since)
+        .limit(1);
+      if (recent && recent.length > 0) return; // same viewer, moments ago
+    }
 
     const { error: insertError } = await supabase
       .from('DealShareView')
@@ -103,7 +124,7 @@ async function recordViewAndNotify(share: ShareRow, userAgent: string | null): P
     }
 
     if (isFirstView) {
-      await notifyShareCreatorOfFirstView(share);
+      runInBackground('share-first-view-email', notifyShareCreatorOfFirstView(share));
     }
   } catch (error) {
     log.warn('portal view tracking failed', { error });
@@ -117,10 +138,10 @@ router.get('/:token', async (req, res) => {
     if (!resolved.share) return res.status(resolved.status!).json({ error: resolved.error });
     const share = resolved.share;
 
-    // Record the view (fire-and-forget — a failed insert never blocks the page).
-    // First-ever view for this share also emails the share's creator — see
-    // recordViewAndNotify.
-    void recordViewAndNotify(share, (req.headers['user-agent'] as string | undefined) ?? null);
+    // Record the view before responding (never throws — a failed insert
+    // never blocks the page). First-ever view also emails the share's
+    // creator, in the background — see recordViewAndNotify.
+    await recordViewAndNotify(share, (req.headers['user-agent'] as string | undefined) ?? null);
 
     const { data: deal } = await supabase
       .from('Deal')
@@ -229,7 +250,7 @@ router.get('/:token/documents/:documentId/download', async (req, res) => {
 
     const { data: doc } = await supabase
       .from('Document')
-      .select('id, dealId, fileUrl')
+      .select('id, dealId, fileUrl, name')
       .eq('id', req.params.documentId)
       .single();
     if (!doc || doc.dealId !== share.dealId || !doc.fileUrl) {
@@ -239,6 +260,11 @@ router.get('/:token/documents/:documentId/download', async (req, res) => {
     const signedUrl = await getSignedDownloadUrl(doc.fileUrl);
     if (!signedUrl) return res.status(500).json({ error: 'Failed to prepare download' });
 
+    // QA #19: share-link downloads were not logged anywhere.
+    await recordDocumentDownload({
+      dealId: doc.dealId, documentId: doc.id, documentName: doc.name,
+      by: share.label || 'share link', via: 'share_link',
+    });
     res.redirect(302, signedUrl);
   } catch (error: any) {
     log.error('Portal download failed', { error: error.message });

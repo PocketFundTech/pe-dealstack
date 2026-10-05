@@ -14,6 +14,7 @@ import type {
 } from '../_platform/types.js';
 import { validateKey, listNotesSince, getNoteWithTranscript } from './client.js';
 import { granolaNoteToIntegrationActivity } from './mapper.js';
+import { IntegrationNotConfiguredError } from '../_platform/errors.js';
 
 const DEFAULT_BACKFILL_DAYS = 30;
 
@@ -52,6 +53,11 @@ export const granolaProvider: IntegrationProvider = {
   },
 
   async connectWithApiKey(params): Promise<Integration> {
+    // The key is stored encrypted; without DATA_ENCRYPTION_KEY that fails
+    // after the round-trip to Granola with a generic 500 (QA #6).
+    if (process.env.NODE_ENV === 'production' && !process.env.DATA_ENCRYPTION_KEY) {
+      throw new IntegrationNotConfiguredError('Saving API keys', ['DATA_ENCRYPTION_KEY']);
+    }
     const userInfo = await validateKey(params.apiKey);
     const now = new Date().toISOString();
     const existingId = await findExistingIntegrationId(params.userId);

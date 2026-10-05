@@ -32,6 +32,7 @@ import {
   parseEmailAddress,
 } from './mapper.js';
 import { shouldSkipForAI } from './preFilter.js';
+import { appBaseUrl } from '../_platform/errors.js';
 
 const DEFAULT_BACKFILL_DAYS = 90;
 const TOKEN_REFRESH_SAFETY_MS = 60 * 1000;
@@ -47,8 +48,7 @@ const DEFAULT_CLASSIFIER_CAP_PER_RUN = Number(
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.85;
 
 function redirectUri(): string {
-  const base = process.env.APP_URL ?? 'http://localhost:3001';
-  return `${base}/api/integrations/oauth/gmail/callback`;
+  return `${appBaseUrl()}/api/integrations/oauth/gmail/callback`;
 }
 
 async function getOrgContactEmails(organizationId: string): Promise<string[]> {

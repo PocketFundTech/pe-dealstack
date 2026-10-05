@@ -45,11 +45,30 @@ export async function orgMiddleware(
     // (set by findOrCreateUser, updated by invitation/role-change flows).
     // Override req.user.role here once so every downstream admin check sees
     // the table value.
-    const { data: userRecord, error } = await supabase
+    let { data: userRecord, error } = await supabase
       .from('User')
-      .select('id, organizationId, role')
+      .select('id, organizationId, role, isActive')
       .eq('authId', req.user.id)
       .single();
+    if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+      // Defensive: never let a missing column break every request.
+      log.warn('Org middleware: User.isActive missing — skipping the deactivated-account check');
+      ({ data: userRecord, error } = await supabase
+        .from('User')
+        .select('id, organizationId, role')
+        .eq('authId', req.user.id)
+        .single());
+    }
+
+    // QA #16: a deactivated user (isActive=false, e.g. removed by an admin)
+    // could still sign in and use the API — only API keys checked it.
+    if (userRecord && (userRecord as { isActive?: boolean | null }).isActive === false) {
+      res.status(403).json({
+        error: 'This account has been deactivated. Contact your firm admin to restore access.',
+        code: 'ACCOUNT_DEACTIVATED',
+      });
+      return;
+    }
 
     if (userRecord?.role && req.user) {
       req.user.role = String(userRecord.role);

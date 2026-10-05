@@ -4,6 +4,7 @@ import { routeWebhook } from '../integrations/_platform/webhookRouter.js';
 import { getProvider, isProviderRegistered } from '../integrations/_platform/registry.js';
 import { syncAll } from '../integrations/_platform/syncEngine.js';
 import type { ProviderId } from '../integrations/_platform/types.js';
+import { AppError } from '../middleware/errorHandler.js';
 
 const router = Router();
 
@@ -28,8 +29,11 @@ router.get('/oauth/:provider/callback', async (req: Request, res: Response, _nex
   const code = String(req.query.code ?? '');
   const state = String(req.query.state ?? '');
   // Always land the user back in Settings — a raw 400 page strands them.
-  const backToSettings = (status: 'connected' | 'cancelled' | 'error') =>
-    res.redirect(`/settings?integrations=${status}&provider=${encodeURIComponent(provider)}#section-integrations`);
+  const backToSettings = (status: 'connected' | 'cancelled' | 'error', reason?: string) =>
+    res.redirect(
+      `/settings?integrations=${status}&provider=${encodeURIComponent(provider)}` +
+      `${reason ? `&reason=${encodeURIComponent(reason)}` : ''}#section-integrations`,
+    );
   // Cancel on the consent screen: ?error=access_denied and no code.
   if (req.query.error === 'access_denied') return backToSettings('cancelled');
   if (req.query.error || !code || !state) {
@@ -42,7 +46,8 @@ router.get('/oauth/:provider/callback', async (req: Request, res: Response, _nex
     backToSettings('connected');
   } catch (err) {
     log.error('OAuth callback failed', err);
-    backToSettings('error');
+    // A reason code (never the raw message) so Settings can say what happened.
+    backToSettings('error', err instanceof AppError ? err.code : 'callback_failed');
   }
 });
 
