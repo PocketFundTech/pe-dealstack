@@ -20,6 +20,7 @@ import { runInBackground } from '../utils/background.js';
 import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
+import { findLiveDealForCompany } from '../services/dealDuplicates.js';
 
 const router = Router();
 
@@ -370,23 +371,36 @@ export async function runIngestFromBuffer(
     let deal: any;
     let company: any;
     let isUpdate = false;
+
+    // No target deal: if a live deal already exists for this company, add the
+    // document to it instead of creating a duplicate (5 Oct testing, item 8).
+    // `forceCreate` keeps the old always-create behaviour on purpose.
+    const forceCreate = req.body.forceCreate === true || req.body.forceCreate === 'true';
+    const matchedDeal = !targetDealId && !forceCreate
+      ? await findLiveDealForCompany(orgId, aiData.companyName.value)
+      : null;
+    const mergeTargetId: string | undefined = targetDealId || matchedDeal?.id;
+    if (matchedDeal) log.info('Ingest matched an existing deal for this company', { dealId: matchedDeal.id, company: aiData.companyName.value });
     // Resolved from the concurrent upload (update path) or the sequential
     // Step 5 upload below (new-deal path).
     let fileUrl: string | null = null;
 
-    if (targetDealId) {
+    if (mergeTargetId) {
       // ─── Update Existing Deal path ───
-      // Access was already verified above, before the AI read, so the
-      // storage upload could run concurrently with it.
-      log.info('Ingest into existing deal', { dealId: targetDealId });
-      const result = await mergeIntoExistingDeal(targetDealId, aiData, req.user?.id, documentName);
+      // An explicit target was access-checked above, before the AI read, so
+      // its storage upload ran concurrently. A matched deal is org-scoped by
+      // the lookup; its upload runs now.
+      log.info('Ingest into existing deal', { dealId: mergeTargetId, matched: !!matchedDeal });
+      const result = await mergeIntoExistingDeal(mergeTargetId, aiData, req.user?.id, documentName);
       deal = result.deal;
       company = deal.company;
       isUpdate = true;
 
-      // Resolve the upload that's been running concurrently with the AI read.
       if (concurrentUploadPromise) {
         const uploadResult = await concurrentUploadPromise;
+        fileUrl = uploadResult.filePath;
+      } else {
+        const uploadResult = await uploadDocumentToStorage(mergeTargetId, documentName, buffer, mimeType);
         fileUrl = uploadResult.filePath;
       }
     } else {
@@ -394,12 +408,15 @@ export async function runIngestFromBuffer(
       log.debug('Step 3: Creating/finding company');
       const companyName = aiData.companyName.value || `Company from ${documentName}`;
 
+      // limit(1).maybeSingle(): .single() errored once two companies shared
+      // a name, the match came back empty and ANOTHER company was created.
       const { data: existingCompany } = await supabase
         .from('Company')
         .select('id, name')
         .ilike('name', companyName)
         .eq('organizationId', orgId)
-        .single();
+        .limit(1)
+        .maybeSingle();
 
       if (existingCompany) {
         company = existingCompany;
@@ -755,6 +772,9 @@ export async function runIngestFromBuffer(
       body: {
         success: true,
         isUpdate,
+        // Added to an existing deal for the same company (not the one the
+        // user picked) — the UI says so and offers "create separately".
+        ...(matchedDeal ? { matchedExistingDeal: { id: matchedDeal.id, name: matchedDeal.name } } : {}),
         backgroundExtraction,
         deal: {
           ...deal,

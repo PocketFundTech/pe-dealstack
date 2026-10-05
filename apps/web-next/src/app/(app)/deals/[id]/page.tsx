@@ -345,7 +345,7 @@ export default function DealDetailPage() {
 
   // Clear chat history (ported from deal-chat.js clearChatConfirm)
   const clearChatHistory = useCallback(
-    () => clearChatHistoryFn({ dealId, setMessages, showToast }),
+    () => clearChatHistoryFn({ dealId, setMessages, showToast, chatAbortRef }),
     [dealId, showToast],
   );
 

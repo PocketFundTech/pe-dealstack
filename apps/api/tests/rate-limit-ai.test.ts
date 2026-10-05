@@ -142,8 +142,10 @@ describe('src/app.ts limiter mount inspection', () => {
     // Match the deals chat path mount in any of the common forms:
     //   app.use('/api/deals/*/chat', aiLimiter)
     //   app.use('/api/deals/:dealId/chat', aiLimiter)
+    //   app.use('/api/deals/*/chat', (req, res, next) => (req.method === 'POST' ? aiLimiter(...) : next()))
+    //   — POST-only since 5 Oct (loading / clearing history isn't an AI call).
     const dealsChatMount =
-      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*chat['"`]\s*,\s*aiLimiter\s*\)/;
+      /app\.use\(\s*['"`]\/api\/deals\/[^'"`]*chat['"`]\s*,[^\n]*aiLimiter/;
     expect(appSource).toMatch(dealsChatMount);
   });
 

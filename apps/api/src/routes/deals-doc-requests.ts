@@ -170,6 +170,7 @@ router.post('/:dealId/doc-requests', async (req, res) => {
         message,
         url,
         items: checklist.items.map((i) => ({ label: i.label, required: i.required })),
+        replyTo: req.user?.email || null,
       });
     }
 
@@ -315,6 +316,7 @@ router.post('/:dealId/doc-requests/:id/remind', async (req, res) => {
       url: uploadUrl(docRequest.token),
       items: items ?? [],
       isReminder: true,
+      replyTo: req.user?.email || null,
     });
 
     const { error: updateError } = await supabase

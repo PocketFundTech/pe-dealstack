@@ -66,7 +66,13 @@ const QUOTA_HINTS = [
   'insufficient quota',
   'insufficient_quota',
   'insufficient_credit',
-  'billing',
+  // OpenAI's out-of-credit text. Not the bare word "billing": an unrelated
+  // provider error mentioning billing was reported as "out of credit"
+  // (5 Oct testing, item 9 — "it has tokens but says no credits").
+  'exceeded your current quota',
+  'plan and billing details',
+  // Anthropic workspace spend limit — credit may be fine, the cap isn't.
+  'api usage limits',
   'payment required',
   'organization is restricted',
 ];
@@ -89,8 +95,12 @@ function providerUnavailableMessage(provider: string, reason?: ProviderRejection
 /** Best-effort provider name from an SDK error message, for user-facing text. */
 function providerNameFromError(detail: string): string {
   const lower = detail.toLowerCase();
-  if (lower.includes('anthropic') || lower.includes('claude')) return 'Anthropic';
-  if (lower.includes('openai')) return 'OpenAI';
+  // Name the provider from its own wording too — OpenAI's quota error never
+  // says "OpenAI", and knowing WHICH provider is out of credit is the whole
+  // diagnosis (5 Oct testing, item 9).
+  if (lower.includes('anthropic') || lower.includes('claude') || lower.includes('credit balance is too low')
+    || lower.includes('workspace api usage') || /"request_id"\s*:\s*"req_/.test(lower)) return 'Anthropic';
+  if (lower.includes('openai') || lower.includes('exceeded your current quota') || lower.includes('insufficient_quota')) return 'OpenAI';
   return 'AI provider';
 }
 
@@ -174,9 +184,15 @@ export function classifyAIErrorObject(err: unknown): AIErrorResponse {
   const rejection = classifyProviderRejection(err);
   if (rejection) {
     if (rejection.reason === 'quota') noteQuotaExhausted(rejection.detail);
+    const provider = providerNameFromError(rejection.detail);
+    // A workspace spend limit is not "credits exhausted" — say which, so
+    // whoever fixes it raises the limit instead of topping up again.
+    const spendLimit = rejection.reason === 'quota' && /usage limits?|spend(ing)? limit/i.test(rejection.detail);
     return {
       statusCode: 503,
-      userMessage: providerUnavailableMessage(providerNameFromError(rejection.detail), rejection.reason),
+      userMessage: spendLimit
+        ? `AI service (${provider}) rejected the request: the workspace spending limit has been reached. This is a configuration issue on our side — please contact your administrator.`
+        : providerUnavailableMessage(provider, rejection.reason),
       code: 'AI_PROVIDER_UNAVAILABLE',
     };
   }

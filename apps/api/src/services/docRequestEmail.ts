@@ -23,6 +23,39 @@ export interface DocRequestEmailInput {
   items: Array<{ label: string; required: boolean; fulfilledAt?: string | null }>;
   /** Reminder copy instead of first-contact copy. */
   isReminder?: boolean;
+  /** The person who asked — replies go to them, not to a no-reply address. */
+  replyTo?: string | null;
+}
+
+/**
+ * Deliverability (5 Oct testing, item 11 — requests landing in spam): a
+ * named sender, a real Reply-To and a plain-text part all lower spam scores.
+ * DNS (SPF / DKIM / DMARC on the sending domain) is the other half — see
+ * docs/DEPENDENCIES.md §7.
+ */
+export function docRequestSender(fromEmail: string, firmName?: string | null): string {
+  const name = (firmName ? `${firmName} via Avise` : 'Avise').replace(/["<>\r\n]/g, '').slice(0, 70);
+  return `${name} <${fromEmail}>`;
+}
+
+export function docRequestText(input: DocRequestEmailInput, items: DocRequestEmailInput['items']): string {
+  const firm = input.firmName || 'A deal team';
+  const lines = [
+    input.recipientName ? `Hi ${input.recipientName},` : 'Hi,',
+    '',
+    input.isReminder
+      ? `Following up on the documents ${firm} requested for ${input.dealName}.`
+      : `${firm} has requested some documents for ${input.dealName}.`,
+    ...(input.message ? ['', input.message] : []),
+    '',
+    input.isReminder ? 'Still outstanding:' : 'What we need:',
+    ...items.map((i) => `- ${i.label}${i.required ? '' : ' (optional)'}`),
+    '',
+    `Upload documents: ${input.url}`,
+    '',
+    'No account or password needed — the link opens straight to an upload page. It is private to you, so please do not forward it.',
+  ];
+  return lines.join('\n');
 }
 
 function escapeHtml(value: string): string {
@@ -73,9 +106,11 @@ export async function sendDocRequestEmail(input: DocRequestEmailInput): Promise<
 
   try {
     const { error } = await resend.emails.send({
-      from: fromEmail,
+      from: docRequestSender(fromEmail, input.firmName),
       to: input.to,
+      ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       subject,
+      text: docRequestText(input, input.isReminder ? outstanding : input.items),
       html: `
         <div style="font-family:Inter,-apple-system,Segoe UI,sans-serif;max-width:560px;margin:0 auto;color:#111827;">
           <p>${greeting}</p>

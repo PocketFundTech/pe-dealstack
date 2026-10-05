@@ -48,6 +48,8 @@ export interface IngestResponse {
   deal?: { id: string; name: string };
   extraction?: ExtractionResult;
   isUpdate?: boolean;
+  /** The upload was added to an existing deal for the same company instead of creating a duplicate. */
+  matchedExistingDeal?: { id: string; name: string };
   summary?: {
     imported: number;
     failed: number;
@@ -307,9 +309,11 @@ export function ResultDisplay({ result, onReset, onNavigate }: ResultDisplayProp
           <h2 className="text-lg font-bold text-text-main">
               {result.summary
                 ? "Bulk Import Complete"
-                : result.isUpdate
-                  ? "Deal Updated"
-                  : "Deal Created"}
+                : result.matchedExistingDeal
+                  ? "Added to Existing Deal"
+                  : result.isUpdate
+                    ? "Deal Updated"
+                    : "Deal Created"}
           </h2>
         </div>
         {result.extraction?.needsReview && (
@@ -319,6 +323,13 @@ export function ResultDisplay({ result, onReset, onNavigate }: ResultDisplayProp
           </div>
         )}
       </div>
+
+      {result.matchedExistingDeal && (
+        <p className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          You already have a deal for this company, <strong>{result.matchedExistingDeal.name}</strong>. The document
+          was added to it instead of creating a duplicate.
+        </p>
+      )}
 
       {/* Extraction fields */}
       {result.extraction && (

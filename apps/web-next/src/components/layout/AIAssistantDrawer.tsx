@@ -189,6 +189,8 @@ interface DrawerProps {
   inputValue: string;
   setInputValue: (v: string) => void;
   onClose: () => void;
+  /** Clear this conversation; undefined while a reply is streaming. */
+  onClear?: () => void;
   onSend: () => void;
   onSendPrompt: (prompt: string) => void;
   /** Click handler for inert actions (navigate). */
@@ -208,6 +210,7 @@ export function AIAssistantDrawer({
   inputValue,
   setInputValue,
   onClose,
+  onClear,
   onSend,
   onSendPrompt,
   onActionClick,
@@ -270,15 +273,30 @@ export function AIAssistantDrawer({
               {getContextLabel(context)}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ai-close-btn"
-            style={S.closeBtn}
-            aria-label="Close AI Assistant"
-          >
-            <span className="material-symbols-outlined text-[16px]">close</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            {messages.some((m) => m.role === "user") && (
+              <button
+                type="button"
+                onClick={onClear}
+                disabled={!onClear}
+                className="ai-close-btn disabled:opacity-50"
+                style={S.closeBtn}
+                aria-label="Clear chat"
+                title="Clear chat"
+              >
+                <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="ai-close-btn"
+              style={S.closeBtn}
+              aria-label="Close AI Assistant"
+            >
+              <span className="material-symbols-outlined text-[16px]">close</span>
+            </button>
+          </div>
         </div>
 
         {/* Messages */}

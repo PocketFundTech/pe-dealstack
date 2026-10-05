@@ -291,6 +291,25 @@ export function DocRequestsPanel({ dealId }: { dealId: string }) {
     void load();
   }, [load]);
 
+  // Status changes when the other side uploads — on their device, not ours.
+  // Refresh on demand, when the tab regains focus, and every 30s while any
+  // request is still waiting on uploads (5 Oct testing, item 14).
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  }, [load]);
+  const waiting = requests.some((r) => !r.revokedAt && (r.status === "OPEN" || r.status === "PARTIAL"));
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === "visible") void load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = waiting ? setInterval(() => { if (document.visibilityState === "visible") void load(); }, 30_000) : null;
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      if (timer) clearInterval(timer);
+    };
+  }, [load, waiting]);
+
   const copyLink = useCallback(
     async (url: string) => {
       await navigator.clipboard.writeText(url);
@@ -333,13 +352,25 @@ export function DocRequestsPanel({ dealId }: { dealId: string }) {
         <h3 className="text-sm font-semibold text-text-main">
           Document requests{active.length > 0 ? ` (${active.length})` : ""}
         </h3>
-        <button
-          onClick={() => setModalOpen(true)}
-          className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-white px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-gray-50"
-        >
-          <span className="material-symbols-outlined text-[18px]">outgoing_mail</span>
-          Request documents
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+            aria-label="Refresh document requests"
+            title="Refresh status"
+            className="flex items-center rounded-lg border border-border-subtle bg-white p-2 text-text-secondary transition-colors hover:bg-gray-50 disabled:opacity-60"
+          >
+            <span className={`material-symbols-outlined text-[18px] ${refreshing ? "animate-spin" : ""}`}>refresh</span>
+          </button>
+          <button
+            onClick={() => setModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-white px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-gray-50"
+          >
+            <span className="material-symbols-outlined text-[18px]">outgoing_mail</span>
+            Request documents
+          </button>
+        </div>
       </div>
 
       {!loading && active.length === 0 && (

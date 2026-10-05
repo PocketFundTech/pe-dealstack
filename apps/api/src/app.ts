@@ -247,7 +247,9 @@ app.use('/api/memos/*/sections/*/generate', aiLimiter);
 // tool calls per message). Without this limiter, the general 600/15min
 // budget allows ~$300 of OpenAI spend in 15 minutes from one user.
 // See: REMEDIATION_ROADMAP.md Phase 4 Task 4.1, CONCERNS.md §1.7
-app.use('/api/deals/*/chat', aiLimiter);
+// Only sending a message costs AI — loading or clearing history (GET /
+// DELETE /chat/history) must not eat the 10/min AI budget (5 Oct, item 19).
+app.use('/api/deals/*/chat', (req, res, next) => (req.method === 'POST' ? aiLimiter(req, res, next) : next()));
 // Task 4.1b: remaining LangGraph / multi-call LLM endpoints surfaced by
 // the Task 4.1 audit. Each fans out into expensive agent or trackedChat
 // completions; the 10/min cap matches deal-chat.
