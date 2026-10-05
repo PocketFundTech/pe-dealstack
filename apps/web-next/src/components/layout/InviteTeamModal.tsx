@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError } from "@/lib/api";
+import { useToast } from "@/providers/ToastProvider";
 import { BulkCsvImportPanel } from "./InviteTeamModal.csv";
 import { RowDealPicker, type DealOption } from "./RowDealPicker";
 import { ROLE_OPTIONS, type ApiRole } from "@/lib/roles";
@@ -20,7 +21,8 @@ interface InviteRow {
 
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-export function InviteTeamModal({ onClose }: { onClose: () => void }) {
+export function InviteTeamModal({ onClose, onInvited }: { onClose: () => void; onInvited?: () => void }) {
+  const { showToast } = useToast();
   const [rows, setRows] = useState<InviteRow[]>([
     { id: 1, email: "", role: "MEMBER", deals: [] },
   ]);
@@ -149,6 +151,11 @@ export function InviteTeamModal({ onClose }: { onClose: () => void }) {
     setRowErrors(nextRowErrors);
 
     if (successCount > 0) {
+      // QA 2026-10-06 #8: the success banner vanished with the modal and the
+      // team list stayed stale until a reload. Refresh the list and confirm
+      // with a toast that outlives the modal.
+      onInvited?.();
+      showToast(`${successCount} invitation${successCount > 1 ? "s" : ""} sent`, "success");
       if (emailFailCount === successCount && lastInviteUrl) {
         setInviteUrl(lastInviteUrl);
         setMessage({

@@ -235,7 +235,7 @@ export default function DashboardPage() {
           now={now}
           isEditing={isEditing}
           onRefresh={data.refresh}
-          onNewDeal={openDealIntake}
+          onNewDeal={() => openDealIntake()}
           onAddWidget={() => setCustomizeOpen(true)}
           onToggleEdit={toggleEditMode}
         />

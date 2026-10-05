@@ -37,11 +37,11 @@ interface IncomeStatementRow {
 export function StagePipeline({
   deal,
   onStageClick,
-  onChangeStage,
+  onCloseDeal,
 }: {
   deal: DealDetail;
   onStageClick: (stage: string) => void;
-  onChangeStage?: () => void;
+  onCloseDeal?: () => void;
 }) {
   const currentStageIndex = PIPELINE_STAGES.findIndex((s) => s.key === deal.stage);
   const isTerminal = TERMINAL_STAGES.includes(deal.stage);
@@ -56,13 +56,9 @@ export function StagePipeline({
         <button
           onClick={() => {
             if (isTerminal) return;
-            if (onChangeStage) {
-              onChangeStage();
-            } else {
-              const nextIdx = currentStageIndex + 1;
-              if (nextIdx < PIPELINE_STAGES.length) {
-                onStageClick(PIPELINE_STAGES[nextIdx].key);
-              }
+            const nextIdx = currentStageIndex + 1;
+            if (nextIdx < PIPELINE_STAGES.length) {
+              onStageClick(PIPELINE_STAGES[nextIdx].key);
             }
           }}
           className="text-xs text-primary hover:text-blue-800 font-medium flex items-center gap-1 transition-colors"
@@ -70,6 +66,15 @@ export function StagePipeline({
           <span className="material-symbols-outlined text-sm">edit</span>
           Change Stage
         </button>
+        {!isTerminal && onCloseDeal && (
+          <button
+            onClick={onCloseDeal}
+            className="text-xs text-text-muted hover:text-text-main font-medium flex items-center gap-1 transition-colors"
+          >
+            <span className="material-symbols-outlined text-sm">flag</span>
+            Close deal
+          </button>
+        )}
       </div>
       <div className="flex items-center gap-1">
         {PIPELINE_STAGES.map((stage, index) => {

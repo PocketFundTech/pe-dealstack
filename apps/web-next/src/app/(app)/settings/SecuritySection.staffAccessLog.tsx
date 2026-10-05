@@ -6,7 +6,7 @@ import { useApiQuery, mutateApiCache } from "@/lib/useApiQuery";
 import { ORGANIZATIONS_ME_KEY } from "./settings-api-keys";
 import { useUser } from "@/providers/UserProvider";
 
-// Customer-visible Pocket Fund staff access log + Slack/email
+// Customer-visible Avise staff access log + Slack/email
 // notification config. The audit log feed is read by every user;
 // the notification config is admin-only. Default state for a new
 // org is "0 accesses" — that's the point.
@@ -112,7 +112,7 @@ function StaffAccessFeed() {
         </span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-text-main">
-            Pocket Fund staff has accessed your data{" "}
+            Avise staff has accessed your data{" "}
             <span className="text-green-700">0 times</span> in the last 90 days.
           </p>
           <p className="text-xs text-text-muted mt-1">
@@ -213,7 +213,7 @@ function NotificationConfig({
     return (
       <div className="border-t border-border-subtle pt-4">
         <p className="text-xs text-text-muted">
-          Your admin can configure real-time notifications for Pocket Fund staff
+          Your admin can configure real-time notifications for Avise staff
           access in Settings → Security &amp; Privacy.
         </p>
       </div>
@@ -281,7 +281,7 @@ function NotificationConfig({
           Real-time notifications
         </p>
         <p className="text-xs text-text-muted mt-0.5">
-          Page your security team the moment Pocket Fund staff accesses your
+          Page your security team the moment Avise staff accesses your
           data. Configure a Slack incoming webhook URL and/or an email address.
         </p>
       </div>
@@ -348,10 +348,10 @@ export function StaffAccessLog({
         </span>
         <div>
           <p className="text-sm font-semibold text-text-main">
-            Pocket Fund staff access log
+            Avise staff access log
           </p>
           <p className="text-xs text-text-muted">
-            Every time a Pocket Fund employee accesses your data, you see it
+            Every time an Avise employee accesses your data, you see it
             here in real-time.
           </p>
         </div>

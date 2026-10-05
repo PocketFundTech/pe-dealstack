@@ -49,7 +49,7 @@ export interface DealPageLeftPanelProps {
 
   // Stage interactions
   onStageClick: (targetStage: string) => void;
-  onChangeStage: () => void;
+  onCloseDeal: () => void;
 
   // Delete
   onDelete: () => void;
@@ -80,7 +80,7 @@ export function DealPageLeftPanel({
   activeTab,
   setActiveTab,
   onStageClick,
-  onChangeStage,
+  onCloseDeal,
   onDelete,
   activities,
   activitiesLoading,
@@ -138,7 +138,7 @@ export function DealPageLeftPanel({
         <StagePipeline
           deal={deal}
           onStageClick={onStageClick}
-          onChangeStage={onChangeStage}
+          onCloseDeal={onCloseDeal}
         />
 
         {/* Metadata row */}
