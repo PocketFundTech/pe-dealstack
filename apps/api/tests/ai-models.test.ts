@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL'] as const;
+const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL', 'AI_INGEST_MODEL'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => { for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
@@ -75,5 +75,20 @@ describe('getModelConfig', () => {
     process.env.AI_MEMO_MODEL = 'claude-opus-4-8';
     const { getModelConfig } = await getModels();
     expect(getModelConfig('memo').model).toBe('claude-opus-4-8');
+  });
+
+  it('defaults ingest (deal-summary read) to sonnet 5, not fable, with no fallback plumbing', async () => {
+    const { getModelConfig } = await getModels();
+    const cfg = getModelConfig('ingest');
+    expect(cfg.model).toBe('claude-sonnet-5');
+    expect(cfg.maxTokens).toBe(16000);
+    expect(cfg.fallbacks).toBeUndefined();
+    expect(cfg.betas).toEqual([]);
+  });
+
+  it('honors the ingest env override', async () => {
+    process.env.AI_INGEST_MODEL = 'claude-fable-5';
+    const { getModelConfig } = await getModels();
+    expect(getModelConfig('ingest').model).toBe('claude-fable-5');
   });
 });

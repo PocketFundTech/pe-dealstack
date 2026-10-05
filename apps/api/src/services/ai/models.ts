@@ -7,13 +7,15 @@
  *   chat       → claude-sonnet-5
  *   fast       → claude-haiku-4-5
  *   memo       → claude-sonnet-5 (section generation + rubric critique/revise)
+ *   ingest     → claude-sonnet-5 (deal-summary read at upload; ~20 overview
+ *                fields — Fable stays reserved for the financial extraction)
  *
  * Fable 5 request shaping handled here so call sites never branch:
  *   - never send a `thinking` param (explicit disable 400s on Fable 5)
  *   - server-side refusal fallback to claude-opus-4-8
  */
 
-export type AiRole = 'extraction' | 'chat' | 'fast' | 'memo';
+export type AiRole = 'extraction' | 'chat' | 'fast' | 'memo' | 'ingest';
 
 export interface ModelConfig {
   model: string;
@@ -29,6 +31,7 @@ const DEFAULTS: Record<AiRole, string> = {
   chat: 'claude-sonnet-5',
   fast: 'claude-haiku-4-5',
   memo: 'claude-sonnet-5',
+  ingest: 'claude-sonnet-5',
 };
 
 const ENV_OVERRIDES: Record<AiRole, string> = {
@@ -36,6 +39,7 @@ const ENV_OVERRIDES: Record<AiRole, string> = {
   chat: 'AI_CHAT_MODEL',
   fast: 'AI_FAST_MODEL',
   memo: 'AI_MEMO_MODEL',
+  ingest: 'AI_INGEST_MODEL',
 };
 
 const MAX_TOKENS: Record<AiRole, number> = {
@@ -43,6 +47,7 @@ const MAX_TOKENS: Record<AiRole, number> = {
   chat: 16000,
   fast: 4096,
   memo: 4000,
+  ingest: 16000,
 };
 
 export function getModelConfig(role: AiRole): ModelConfig {

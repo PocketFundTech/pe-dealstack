@@ -5,6 +5,40 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 104 — October 5, 2026
+
+#### Timestamp: October 05, 2026 — 18:30 IST
+
+#### Goal: Cut AI cost per deal — keep Fable 5 only for financial extraction.
+
+#### Problem / root cause
+
+A token-cost audit of every AI call site found that a new-deal upload reads the
+whole CIM with **Fable 5 ($10 / $50 per MTok) twice**: once for the deal-summary
+read (`claudeDealReader`, op `deal_ingest`, ~20 overview fields) and once for the
+financial extraction (`claudeEngine`, op `financial_extraction`). The summary
+read used the `extraction` model role, so it inherited Fable. Estimated at
+~$1.40–1.60 per CIM for the summary read alone — about half of the ~$3–4.50 it
+costs to upload one CIM.
+
+#### Fix
+
+- New `ingest` role in `services/ai/models.ts`: defaults to `claude-sonnet-5`
+  ($2 / $10), 16K max tokens, env override `AI_INGEST_MODEL`.
+- `claudeDealReader` now uses `role: 'ingest'`. Financial extraction is unchanged
+  (still Fable 5 via the `extraction` role).
+- Deal headline revenue/EBITDA shown in the deals list still comes from the
+  Fable-extracted `FinancialStatement` rows (`dealCacheWriteback`), so the
+  summary read's numbers are only the first-pass values.
+- Expected saving: ~$1.10–1.30 per CIM upload (~35–40% of ingest cost).
+- Rollback without a deploy: set `AI_INGEST_MODEL=claude-fable-5` in Vercel.
+- Tests: `ai-models.test.ts` (+2), `claude-deal-reader.test.ts` (role assertion).
+  Full API suite 2531 passed / 50 skipped; `tsc --noEmit` clean.
+- Not verified live: the local `ANTHROPIC_API_KEY` is stale, so no side-by-side
+  Sonnet-vs-Fable read on a real CIM yet — worth one spot check after deploy.
+
+---
+
 ### Session 103 — October 5, 2026
 
 #### Timestamp: October 05, 2026 — 13:48 IST
