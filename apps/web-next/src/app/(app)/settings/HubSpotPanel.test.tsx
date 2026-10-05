@@ -1,0 +1,90 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+
+const get = vi.fn();
+const post = vi.fn();
+vi.mock("@/lib/api", () => ({
+  api: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a) },
+  ApiError: class ApiError extends Error {},
+}));
+
+import { HubSpotPanel } from "./IntegrationsSection";
+
+const RUNNING_JOB = {
+  id: "job-resume-1",
+  status: "running",
+  currentObject: "contacts",
+  objectCounts: {
+    companies: { processed: 3837, created: 1539, updated: 1846, failed: 452 },
+    contacts: { processed: 600, created: 355, updated: 129, failed: 116 },
+  },
+  error: null,
+};
+
+const COMPLETED_JOB = {
+  id: "job-done-1",
+  status: "completed",
+  currentObject: null,
+  objectCounts: {
+    companies: { processed: 10, created: 10, updated: 0, failed: 0 },
+  },
+  error: null,
+};
+
+beforeEach(() => {
+  get.mockReset();
+  post.mockReset();
+});
+
+describe("HubSpotPanel", () => {
+  it("re-hydrates a running job's progress card on mount, without creating a new job", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: RUNNING_JOB });
+      if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(RUNNING_JOB);
+      throw new Error(`unexpected GET ${path}`);
+    });
+    post.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/import/job-resume-1/continue") return Promise.resolve({ more: false });
+      throw new Error(`unexpected POST ${path}`);
+    });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    expect(await screen.findByText(/syncing contacts/i)).toBeInTheDocument();
+    // Never re-created the job — only drove the existing one.
+    expect(post).not.toHaveBeenCalledWith("/integrations/hubspot/import", expect.anything());
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/integrations/hubspot/import/job-resume-1/continue", { mode: "fill" }),
+    );
+  });
+
+  it("shows a completed job's final counts as a persistent summary on mount", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: COMPLETED_JOB });
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    // Match the full "Status: completed" text, not just /completed/i — that
+    // regex alone would also match the inner <span>{job.status}</span>,
+    // which RTL treats as two separate matches and throws on.
+    expect(await screen.findByText(/status:\s*completed/i)).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing extra when the org has never run an import", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: null });
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    await screen.findByText(/HubSpot connected/i);
+    expect(screen.queryByText(/status:/i)).not.toBeInTheDocument();
+  });
+});
