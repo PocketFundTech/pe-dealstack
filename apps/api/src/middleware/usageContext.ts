@@ -11,6 +11,8 @@ export interface UsageContext {
   source: 'http' | 'background' | 'test';
   /** Set for cron / webhook / background work with no requesting user (e.g. "cron:signal-scan"). */
   systemSource?: string;
+  /** Deal the work belongs to, so per-deal AI cost can be read from UsageEvent.metadata.dealId. */
+  dealId?: string;
 }
 
 const storage = new AsyncLocalStorage<UsageContext>();
@@ -26,6 +28,13 @@ export function getUsageContext(): UsageContext | undefined {
 
 export function runWithUsageContext<T>(ctx: UsageContext, fn: () => T): T {
   return storage.run(ctx, fn);
+}
+
+/** Tag every usage record written inside `fn` with this deal. No-op without a bound context. */
+export function runWithDealUsage<T>(dealId: string, fn: () => T): T {
+  const ctx = storage.getStore();
+  if (!ctx) return fn();
+  return storage.run({ ...ctx, dealId }, fn);
 }
 
 // orgId → the internal User.id that system usage is attributed to.
