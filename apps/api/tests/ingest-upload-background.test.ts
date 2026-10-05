@@ -203,16 +203,14 @@ describe('POST /api/ingest — background work (embed, audit log, teasers)', () 
     expect(teaserResolved).toBe(false);
     expect(generateTeasersForDeal).not.toHaveBeenCalled();
 
-    // Exactly one background job was scheduled for this ingest.
+    // Exactly one background job (embed/audit) is scheduled; teasers are on demand.
     expect(scheduled.length).toBe(1);
 
-    // Now run the deferred job (what next/server's after() would do).
     await scheduled[0]();
 
     expect(embedResolved).toBe(true);
     expect(auditResolved).toBe(true);
-    expect(teaserResolved).toBe(true);
-    expect(generateTeasersForDeal).toHaveBeenCalledWith({ dealId: 'deal-1', orgId: 'org-A' });
+    expect(generateTeasersForDeal).not.toHaveBeenCalled();
   });
 
   it('without a runAfterResponse hook, awaits everything inline before responding (legacy behavior)', async () => {
@@ -227,10 +225,10 @@ describe('POST /api/ingest — background work (embed, audit log, teasers)', () 
     expect(scheduled.length).toBe(0);
     expect(embedResolved).toBe(true);
     expect(auditResolved).toBe(true);
-    expect(teaserResolved).toBe(true);
+    expect(generateTeasersForDeal).not.toHaveBeenCalled();
   });
 
-  it('a PDF ingest never starts the Fable deep pass but still auto-scores the new deal', async () => {
+  it('a PDF ingest starts no AI deep pass, scoring, or teaser work on upload', async () => {
     runInBackground.mockClear();
     maybeScoreAfterExtraction.mockClear();
     const { appPromise } = buildApp({ withAfterResponseHook: false });
@@ -239,9 +237,8 @@ describe('POST /api/ingest — background work (embed, audit log, teasers)', () 
       .post('/api/ingest')
       .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
     expect(res.status).toBe(201);
-    const labels = runInBackground.mock.calls.map((c: any[]) => c[0]);
-    expect(labels).toContain('ingest-score:deal-1');
-    expect(labels.some((l: string) => l.startsWith('ingest-deep-pass:'))).toBe(false);
-    expect(maybeScoreAfterExtraction).toHaveBeenCalledWith('deal-1', 'org-A');
+    expect(runInBackground.mock.calls.map((c: any[]) => c[0])).toEqual([]);
+    expect(maybeScoreAfterExtraction).not.toHaveBeenCalled();
+    expect(generateTeasersForDeal).not.toHaveBeenCalled();
   });
 });

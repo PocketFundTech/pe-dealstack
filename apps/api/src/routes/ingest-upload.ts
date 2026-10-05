@@ -15,11 +15,6 @@ import { AIProviderUnavailableError } from '../utils/aiErrors.js';
 import { extractTextFromPDF, upload, resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
-import { generateTeasersForDeal } from '../services/firmTeaserService.js';
-import { runWithDealUsage } from '../middleware/usageContext.js';
-import { runInBackground } from '../utils/background.js';
-import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
-import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 import { findLiveDealForCompany } from '../services/dealDuplicates.js';
@@ -722,65 +717,9 @@ export async function runIngestFromBuffer(
 
       await Promise.all(tasks);
 
-      // Auto-trigger multi-doc analysis if 2+ documents exist
-      const { count: docCount } = await supabase
-        .from('Document')
-        .select('id', { count: 'exact', head: true })
-        .eq('dealId', deal.id);
-
-      if (docCount && docCount >= 2) {
-        try {
-          const { analyzeMultipleDocuments } = await import('../services/multiDocAnalyzer.js');
-          const result = await analyzeMultipleDocuments(deal.id);
-          if (result) log.info('Auto multi-doc analysis complete', { dealId: deal.id, conflicts: result.conflicts.length });
-        } catch (err) {
-          log.error('Auto multi-doc analysis failed', err);
-          captureAgentError(err, { context: 'multi_doc_analysis:background' });
-        }
-      }
-
-      // Auto-generate firm-teaser blurbs for newly-created deals. Best-effort
-      // — never fail ingest on teaser error.
-      if (!isUpdate) {
-        try {
-          await runWithDealUsage(deal.id, () => generateTeasersForDeal({ dealId: deal.id, orgId }));
-        } catch (teaserErr) {
-          log.error('Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
-        }
-      }
     });
 
-    // Background deep pass: financial-statement extraction + auto-score, so
-    // the deal page fills in (financials, red flags, scorecard) without a
-    // manual Re-extract. Survives the serverless response freeze via
-    // waitUntil (utils/background.ts). Skipped for duplicate re-uploads
-    // (already extracted) and file types that carry no statements.
-    let backgroundExtraction: 'started' | 'skipped' = 'skipped';
-    if (!existingDuplicate && shouldRunIngestDeepPass(mimeType, documentName)) {
-      runInBackground(
-        `ingest-deep-pass:${deal.id}`,
-        runWithDealUsage(deal.id, () =>
-          runIngestDeepPass({
-            dealId: deal.id,
-            orgId,
-            documentId: document.id,
-            fileBuffer: buffer,
-            fileName: documentName,
-            mimeType,
-          }),
-        ),
-      );
-      backgroundExtraction = 'started';
-    } else if (!existingDuplicate) {
-      // No deep pass (PDF / Word / text) — still auto-score the new deal,
-      // which the deep pass would otherwise have done after extracting.
-      runInBackground(
-        `ingest-score:${deal.id}`,
-        runWithDealUsage(deal.id, () => maybeScoreAfterExtraction(deal.id, orgId)),
-      );
-    }
-
-    log.info('Ingest complete', { dealId: deal.id, isUpdate, backgroundExtraction });
+    log.info('Ingest complete', { dealId: deal.id, isUpdate });
 
     return {
       status: isUpdate ? 200 : 201,
@@ -790,7 +729,6 @@ export async function runIngestFromBuffer(
         // Added to an existing deal for the same company (not the one the
         // user picked) — the UI says so and offers "create separately".
         ...(matchedDeal ? { matchedExistingDeal: { id: matchedDeal.id, name: matchedDeal.name } } : {}),
-        backgroundExtraction,
         deal: {
           ...deal,
           company: company || deal.company,
