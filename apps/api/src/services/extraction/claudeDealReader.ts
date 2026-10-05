@@ -170,7 +170,7 @@ export async function readDealDocument(input: ClaudeDealReaderInput): Promise<Ex
   try {
     const res = await trackedClaudeMessage({
       operation: 'deal_ingest',
-      role: 'extraction',
+      role: 'ingest',
       system: buildExtractionSystemPrompt(getTodayIso()),
       extraBetas,
       messages: [

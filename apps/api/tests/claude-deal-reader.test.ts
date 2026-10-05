@@ -72,7 +72,7 @@ describe('readDealDocument — PDF (native) mode', () => {
     expect(deleteMock).toHaveBeenCalledTimes(1);
     const req = calls[0];
     expect(req.operation).toBe('deal_ingest');
-    expect(req.role).toBe('extraction');
+    expect(req.role).toBe('ingest');
     expect(req.extraBetas).toContain('files-api-2025-04-14');
     const content = req.messages[0].content;
     expect(content.some((b: any) => b.type === 'document' && b.source?.file_id === 'file_dr_1')).toBe(true);
