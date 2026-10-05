@@ -122,7 +122,11 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     return name;
   }
   async function resolveCompanyIdCached(orgId: string, name: string | null) {
-    const key = (name ?? 'Unknown Company').toLowerCase();
+    // A null name means "no resolvable HubSpot company for this deal" — every
+    // such deal must get its own stub (see resolveCompanyId), so it must
+    // never share a cache entry with another null-name deal.
+    if (name === null) return resolveCompanyId(orgId, null);
+    const key = name.toLowerCase();
     if (companyIdCache.has(key)) return companyIdCache.get(key) ?? null;
     const id = await resolveCompanyId(orgId, name);
     companyIdCache.set(key, id);
@@ -197,10 +201,16 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     try {
       if (current === 'companies') {
         const m = mapCompany(rec);
+        // mapCompany falls back to the literal 'Unknown Company' when HubSpot's
+        // own name property is blank — that string is not a real identity, so
+        // it must never be used as a natural-key match. Doing so used to
+        // collapse every blank-named company onto one shared row, each import
+        // overwriting the previous one's hubspotId.
+        const hasRealName = !!rec.properties.name?.trim();
         const res = await upsertByHubspotId('Company', job.organizationId, m.hubspotId, {
           name: m.name, industry: m.industry, website: m.website,
           description: m.description, hubspotProperties: m.hubspotProperties,
-        }, { column: 'name', value: m.name }, mode);
+        }, hasRealName ? { column: 'name', value: m.name } : undefined, mode);
         counts.companies[res] += 1;
       } else if (current === 'contacts') {
         // Prefer the associations API; `associatedcompanyid` is a legacy
@@ -312,16 +322,25 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
 
 /** Find the local Company by name (case-insensitive); create a stub if absent. */
 async function resolveCompanyId(orgId: string, name: string | null): Promise<string | null> {
-  const target = name ?? 'Unknown Company';
+  if (name === null) {
+    // No HubSpot company association for this deal — give it its own stub
+    // rather than searching for (and silently merging into) a shared
+    // 'Unknown Company' placeholder. That placeholder isn't a real identity:
+    // reusing it used to wire unrelated deals to whichever one of them
+    // happened to resolve last.
+    const { data: created } = await supabase
+      .from('Company').insert({ name: 'Unknown Company', organizationId: orgId }).select('id').maybeSingle();
+    return (created as { id?: string } | null)?.id ?? null;
+  }
   // .limit(1) not .maybeSingle(): two companies may legitimately share a name,
   // and PGRST116 would fail the whole deal record. .order() makes which
   // duplicate gets adopted deterministic instead of Postgres's unspecified order.
   const { data: found } = await supabase
-    .from('Company').select('id').eq('organizationId', orgId).ilike('name', target)
+    .from('Company').select('id').eq('organizationId', orgId).ilike('name', name)
     .order('createdAt', { ascending: true }).limit(1);
   const hit = (found as Array<{ id: string }> | null)?.[0];
   if (hit) return hit.id;
   const { data: created } = await supabase
-    .from('Company').insert({ name: target, organizationId: orgId }).select('id').maybeSingle();
+    .from('Company').insert({ name, organizationId: orgId }).select('id').maybeSingle();
   return (created as { id?: string } | null)?.id ?? null;
 }

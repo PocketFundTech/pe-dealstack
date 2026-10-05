@@ -31,7 +31,12 @@ vi.mock('../src/services/hubspot/mappers.js', () => ({
   mapCompany: vi.fn(), mapContact: vi.fn(),
   mapDeal: vi.fn().mockReturnValue({
     hubspotId: 'hs-1', name: 'Deal', dealSize: null, stage: null,
-    description: null, associatedCompanyHubspotId: null, customFields: {}, hubspotProperties: {},
+    // A real association (not null) — resolveCompanyId's natural-key fallback
+    // (and its deterministic ordering) only runs for a deal with an actual
+    // HubSpot company name to search for. A null association now skips
+    // straight to a fresh stub insert (see hubspot-engine-unknown-company-
+    // collision.test.ts) and must never share/search an existing row.
+    description: null, associatedCompanyHubspotId: 'hs-company-1', customFields: {}, hubspotProperties: {},
   }),
 }));
 
@@ -112,14 +117,16 @@ describe('runImportBatch — resolveCompanyId natural-key ordering', () => {
         data: { id: 'job-x', organizationId: 'org-A', status: 'running', objectCounts: {}, currentObject: 'deals', cursor: null },
       }),
     });
+    const companyNameChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { name: 'Acme Inc' } }) });
     const companyLookupChain = makeChain({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'company-1' }] }) });
     const finalUpdateChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job-x' } }) });
 
     let call = 0;
     mockFrom.mockImplementation(() => {
       call += 1;
-      if (call === 1) return loadJobChain;      // loadJob
-      if (call === 2) return companyLookupChain; // resolveCompanyId natural-key fallback
+      if (call === 1) return loadJobChain;       // loadJob
+      if (call === 2) return companyNameChain;   // companyNameForHubspotId("hs-company-1") → "Acme Inc"
+      if (call === 3) return companyLookupChain; // resolveCompanyId("Acme Inc") natural-key fallback
       return finalUpdateChain;                   // advance-cursor / complete
     });
     mockListPage.mockResolvedValue({ results: [{ id: 'hs-1', properties: { dealname: 'X' } }], nextCursor: null });
