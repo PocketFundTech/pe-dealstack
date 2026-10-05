@@ -18,6 +18,7 @@ import { findExistingDocument, logDuplicateSkip } from '../services/documentDedu
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { runInBackground } from '../utils/background.js';
 import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
+import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 import { findLiveDealForCompany } from '../services/dealDuplicates.js';
@@ -276,11 +277,15 @@ export async function runIngestFromBuffer(
     // failure falls through to the legacy chain below — deal creation is
     // never blocked by the new engine.
     if (isClaudeIngestEnabled()) {
-      const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
+      const { readDealDocument, hasUsablePdfText } = await import('../services/extraction/claudeDealReader.js');
       aiData = await readDealDocument({
         fileBuffer: mimeType === 'application/pdf' ? buffer : undefined,
         fileName: documentName,
-        fullText: mimeType === 'application/pdf' ? undefined : extractedText,
+        // A PDF whose text layer is thin for its page count (scanned, or only
+        // a cover/footer OCR'd) is read natively instead — the cheap text
+        // read would miss most of it.
+        fullText:
+          mimeType === 'application/pdf' && !hasUsablePdfText(extractedText, numPages) ? undefined : extractedText,
         sourceLength: extractedText.length,
       });
       if (!aiData) {
@@ -763,6 +768,10 @@ export async function runIngestFromBuffer(
         }),
       );
       backgroundExtraction = 'started';
+    } else if (!existingDuplicate) {
+      // No deep pass (PDF / Word / text) — still auto-score the new deal,
+      // which the deep pass would otherwise have done after extracting.
+      runInBackground(`ingest-score:${deal.id}`, maybeScoreAfterExtraction(deal.id, orgId));
     }
 
     log.info('Ingest complete', { dealId: deal.id, isUpdate, backgroundExtraction });

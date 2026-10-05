@@ -13,7 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { log } from '../../utils/logger.js';
 import { recordUsageEvent } from '../usage/trackedLLM.js';
 import { resolveAnthropicAuth, hasAnthropicCredentials } from '../anthropic.js';
-import { getModelConfig, type AiRole } from './models.js';
+import { getModelConfig, type AiRole, type AiEffort } from './models.js';
 import { normalizeOutputSchema } from './schemaCompat.js';
 
 let _client: Anthropic | null = null;
@@ -77,6 +77,8 @@ export interface ClaudeCallOptions {
    */
   tools?: unknown[];
   maxTokens?: number;
+  /** Overrides the role's effort (e.g. NDA review on the chat role stays at high). */
+  effort?: AiEffort;
   signal?: AbortSignal;
 }
 
@@ -145,6 +147,10 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     // additionalProperties:false, number min/max, type arrays) can never
     // 400 a production call again — see schemaCompat.ts for the incident log.
     request.output_config = { format: { type: 'json_schema', schema: normalizeOutputSchema(opts.outputSchema) } };
+  }
+  const effort = opts.effort ?? cfg.effort;
+  if (effort) {
+    request.output_config = { ...((request.output_config as Record<string, unknown> | undefined) ?? {}), effort };
   }
   // `signal` is SDK RequestOptions (2nd argument to .stream()), NEVER a body
   // field — a body-level `signal` serializes into the JSON payload and the
@@ -303,6 +309,7 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
       ...(opts.system ? { system: opts.system as never } : {}),
       ...(opts.autoCache ? { cache_control: { type: 'ephemeral' as const } } : {}),
       ...(cfg.fallbacks ? { fallbacks: cfg.fallbacks as never } : {}),
+      ...(cfg.effort ? { output_config: { effort: cfg.effort } as never } : {}),
     },
     opts.signal ? { signal: opts.signal } : undefined,
   );

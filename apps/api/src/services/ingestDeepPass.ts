@@ -28,9 +28,14 @@ export interface IngestDeepPassInput {
   mimeType: string;
 }
 
-/** Only PDFs and spreadsheets carry extractable financial statements. */
+/**
+ * Only spreadsheets (Excel / CSV) carry the deep financials (P&L, balance
+ * sheet, cash flow) — founder decision 2026-10-06. PDFs (CIMs, teasers)
+ * get the cheap deal-summary read only, never a Fable extraction run; the
+ * Re-extract button can still force one on any file.
+ */
 export function shouldRunIngestDeepPass(mimeType: string, fileName: string): boolean {
-  return mimeType === 'application/pdf' || isExcelFile(mimeType, fileName);
+  return isExcelFile(mimeType, fileName);
 }
 
 export async function runIngestDeepPass(input: IngestDeepPassInput): Promise<void> {

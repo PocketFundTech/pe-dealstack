@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL', 'AI_INGEST_MODEL'] as const;
+const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL', 'AI_INGEST_MODEL', 'AI_CHAT_EFFORT', 'AI_MEMO_EFFORT'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => { for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
@@ -90,5 +90,30 @@ describe('getModelConfig', () => {
     process.env.AI_INGEST_MODEL = 'claude-fable-5';
     const { getModelConfig } = await getModels();
     expect(getModelConfig('ingest').model).toBe('claude-fable-5');
+  });
+
+  it('runs chat and memo drafting at medium effort by default; other roles keep the model default', async () => {
+    const { getModelConfig } = await getModels();
+    expect(getModelConfig('chat').effort).toBe('medium');
+    expect(getModelConfig('memo').effort).toBe('medium');
+    process.env.AI_MEMO_EFFORT = 'high';
+    expect(getModelConfig('memo').effort).toBe('high');
+    expect(getModelConfig('extraction').effort).toBeUndefined();
+    expect(getModelConfig('ingest').effort).toBeUndefined();
+    expect(getModelConfig('fast').effort).toBeUndefined();
+  });
+
+  it('honors AI_CHAT_EFFORT and ignores invalid values', async () => {
+    const { getModelConfig } = await getModels();
+    process.env.AI_CHAT_EFFORT = 'high';
+    expect(getModelConfig('chat').effort).toBe('high');
+    process.env.AI_CHAT_EFFORT = 'turbo';
+    expect(getModelConfig('chat').effort).toBe('medium');
+  });
+
+  it('never sends effort to Haiku 4.5, which rejects it', async () => {
+    process.env.AI_CHAT_MODEL = 'claude-haiku-4-5';
+    const { getModelConfig } = await getModels();
+    expect(getModelConfig('chat').effort).toBeUndefined();
   });
 });

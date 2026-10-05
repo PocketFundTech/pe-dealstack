@@ -7,35 +7,56 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ### Session 104 — October 5, 2026
 
-#### Timestamp: October 05, 2026 — 18:30 IST
+#### Timestamp: October 05, 2026 — 22:23 IST
 
-#### Goal: Cut AI cost per deal — keep Fable 5 only for financial extraction.
+#### Goal: Cut AI cost per deal drastically everywhere except the Fable financial extraction.
 
 #### Problem / root cause
 
-A token-cost audit of every AI call site found that a new-deal upload reads the
-whole CIM with **Fable 5 ($10 / $50 per MTok) twice**: once for the deal-summary
-read (`claudeDealReader`, op `deal_ingest`, ~20 overview fields) and once for the
-financial extraction (`claudeEngine`, op `financial_extraction`). The summary
-read used the `extraction` model role, so it inherited Fable. Estimated at
-~$1.40–1.60 per CIM for the summary read alone — about half of the ~$3–4.50 it
-costs to upload one CIM.
+A token-cost audit of every AI call site found:
+
+- **The deal-summary read ran on Fable 5.** A new-deal upload read the whole CIM with Fable 5 ($10 / $50 per MTok) twice: the ~20-field overview (`claudeDealReader`, op `deal_ingest`) and the financial extraction. The overview borrowed the `extraction` role, so it inherited Fable. That cost ~$1.40–1.60 per CIM.
+- **Every data-room upload ran GPT-4o** (`extractDealDataFromText`) to top up deal fields.
+- **Sonnet 4.6 ($3 / $15) was hard-coded** for firm teasers (one call per investment profile per new deal), reply-intent classification and outreach CSV cleaning.
+- **Deal chat, scorecard and folder insights ran Sonnet 5 at the default "high" effort.** Thinking is billed as output.
 
 #### Fix
 
-- New `ingest` role in `services/ai/models.ts`: defaults to `claude-sonnet-5`
-  ($2 / $10), 16K max tokens, env override `AI_INGEST_MODEL`.
-- `claudeDealReader` now uses `role: 'ingest'`. Financial extraction is unchanged
-  (still Fable 5 via the `extraction` role).
-- Deal headline revenue/EBITDA shown in the deals list still comes from the
-  Fable-extracted `FinancialStatement` rows (`dealCacheWriteback`), so the
-  summary read's numbers are only the first-pass values.
-- Expected saving: ~$1.10–1.30 per CIM upload (~35–40% of ingest cost).
-- Rollback without a deploy: set `AI_INGEST_MODEL=claude-fable-5` in Vercel.
-- Tests: `ai-models.test.ts` (+2), `claude-deal-reader.test.ts` (role assertion).
-  Full API suite 2531 passed / 50 skipped; `tsc --noEmit` clean.
-- Not verified live: the local `ANTHROPIC_API_KEY` is stale, so no side-by-side
-  Sonnet-vs-Fable read on a real CIM yet — worth one spot check after deploy.
+- **Deal-summary read** (`claudeDealReader`):
+  - A PDF with a usable text layer, plus Word, Excel and pasted text, is read on **Haiku 4.5** (`fast` role, 8K max tokens) from the free extracted text.
+  - PDFs send only the first 80K chars (~30 pages) and are told the rest is cut off.
+  - Scanned PDFs keep the native whole-file read on the new `ingest` role (**Sonnet 5**, env `AI_INGEST_MODEL`).
+  - "Scanned" is judged per page by `hasUsablePdfText`: under 500 chars/page goes native.
+- **Data-room uploads** (`documents-upload.ts`): with `INGEST_ENGINE=claude`, the deal-field top-up uses the Haiku reader on the first 40K chars. GPT-4o runs only if that read fails.
+- **Firm teaser**: Sonnet 4.6 → Haiku 4.5. The rare "write my profile prompt" call moves to Sonnet 5.
+- **Reply-intent classifier and outreach import cleaner**: Sonnet 4.6 → Haiku 4.5.
+- **Effort**: the `chat` role (deal chat, scorecard, folder insights) now sends `output_config.effort: "medium"`. Env `AI_CHAT_EFFORT=high` reverts it. NDA review overrides back to `high`. Haiku never gets an effort param, because it rejects one.
+- **Unchanged**: Fable 5 financial extraction, and memo generation (Sonnet 5, high).
+
+**Estimated saving: ~$1.20–2.20 per deal.** Everything except Fable goes from ~$1.30–2.30 to ~$0.40–0.80.
+
+**Rollback without a deploy:** `AI_CHAT_EFFORT=high`. The model switches are code constants.
+
+**Tests:** `ai-models`, `ai-client` (effort), `claude-deal-reader` (text / native / truncation / density) and `documents-upload-background` (Haiku read + GPT-4o fallback). Full API suite 2544 passed / 50 skipped; `tsc --noEmit` clean.
+
+#### Update October 06, 2026 — 00:09 IST — Fable for spreadsheets only, memo drafting at medium effort
+
+- **Founder decision:** the deep financials (P&L, balance sheet, cash flow) only live in spreadsheets, never in PDFs.
+- `shouldRunIngestDeepPass` now runs the Fable extraction for **Excel/CSV only**. PDFs (CIMs, teasers) get just the cheap Haiku deal-summary read.
+- The PDF ingest path still auto-scores the new deal (`maybeScoreAfterExtraction`), which the deep pass used to do.
+- The Re-extract button can still force a Fable run on any file.
+- **Consequence:** a deal with only PDFs has no `FinancialStatement` rows. The Financials tab and the memo's financial sections show their "no financials yet" placeholders until a spreadsheet is uploaded.
+- **Memo:** section drafting runs at `effort: "medium"` (env `AI_MEMO_EFFORT=high` reverts). The critique and revise quality gate is pinned to `high`.
+- **Per deal now:**
+  - Fable is $0 for a PDF-only deal, or ~$0.60–1.50 per Excel model.
+  - Everything else is ~$0.70–1.20.
+  - A typical deal with one model: **~$1.30–2.70**, down from $4.50–7.60.
+- Tests: full API suite 2546 passed / 50 skipped; `tsc --noEmit` clean.
+
+#### Found, not changed
+
+- **The nightly signal-scan cron is silently failing in prod.** It always uses Managed Agents, and the `MANAGED_AGENTS_*` env vars aren't set in Vercel, so it throws for every org: $0 cost, no signals. Re-enabling it is a product call. Pointing it at the legacy single-call monitor would add ~$0.03–0.05 per org per day.
+- **Not verified live:** the local `ANTHROPIC_API_KEY` is stale. After deploy, spot-check one CIM upload, a teaser and a few chat answers.
 
 ---
 

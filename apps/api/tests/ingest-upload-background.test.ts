@@ -100,7 +100,12 @@ vi.mock('../src/services/langExtractClient.js', () => ({ deepExtract: vi.fn(), i
 vi.mock('../src/services/financialValidator.js', () => ({ validateFinancials: () => ({ isValid: true, warnings: [] }) }));
 vi.mock('../src/routes/notifications.js', () => ({ resolveUserId: vi.fn(async () => 'internal-user-1') }));
 vi.mock('../src/services/ingestDeepPass.js', () => ({ shouldRunIngestDeepPass: () => false, runIngestDeepPass: vi.fn() }));
-vi.mock('../src/utils/background.js', () => ({ runInBackground: vi.fn() }));
+const runInBackground = vi.fn();
+vi.mock('../src/utils/background.js', () => ({ runInBackground: (...a: any[]) => runInBackground(...a) }));
+const maybeScoreAfterExtraction = vi.fn(async () => {});
+vi.mock('../src/services/agents/dealScorecard/index.js', () => ({
+  maybeScoreAfterExtraction: (...a: any[]) => maybeScoreAfterExtraction(...a),
+}));
 vi.mock('../src/utils/sentryHelpers.js', () => ({ captureAgentError: vi.fn() }));
 vi.mock('../src/routes/ingest-shared.js', async () => {
   const multer = (await import('multer')).default;
@@ -223,5 +228,20 @@ describe('POST /api/ingest — background work (embed, audit log, teasers)', () 
     expect(embedResolved).toBe(true);
     expect(auditResolved).toBe(true);
     expect(teaserResolved).toBe(true);
+  });
+
+  it('a PDF ingest never starts the Fable deep pass but still auto-scores the new deal', async () => {
+    runInBackground.mockClear();
+    maybeScoreAfterExtraction.mockClear();
+    const { appPromise } = buildApp({ withAfterResponseHook: false });
+    const app = await appPromise;
+    const res = await request(app)
+      .post('/api/ingest')
+      .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+    const labels = runInBackground.mock.calls.map((c: any[]) => c[0]);
+    expect(labels).toContain('ingest-score:deal-1');
+    expect(labels.some((l: string) => l.startsWith('ingest-deep-pass:'))).toBe(false);
+    expect(maybeScoreAfterExtraction).toHaveBeenCalledWith('deal-1', 'org-A');
   });
 });

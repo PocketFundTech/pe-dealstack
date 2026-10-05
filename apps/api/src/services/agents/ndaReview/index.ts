@@ -203,6 +203,8 @@ export async function reviewNda(input: ReviewNdaInput): Promise<NdaReview> {
         messages: [{ role: 'user', content: userPrompt }],
         outputSchema: NDA_REVIEW_SCHEMA,
         maxTokens: 8000,
+        // Legal review — keep full reasoning even though the chat role runs at medium.
+        effort: 'high',
       }),
       timeoutPromise,
     ]);
