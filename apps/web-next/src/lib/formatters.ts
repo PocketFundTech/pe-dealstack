@@ -509,9 +509,19 @@ export function getDocIcon(name: string | null | undefined): string {
 }
 
 /**
+ * A HubSpot import gives a company (or a deal with no company association at
+ * all) this literal placeholder name when HubSpot itself has no real name on
+ * file — see apps/api/.../hubspot/mappers.ts + importEngine.ts. It must never
+ * outrank the deal's own (often perfectly good) name in display priority.
+ */
+const GENERIC_COMPANY_PLACEHOLDER = "Unknown Company";
+
+/**
  * Resolve the best display name for a deal.
  *
- * Priority: companyName > company.name > name (cleaned).
+ * Priority: companyName > company.name > name (cleaned) — except the generic
+ * "Unknown Company" placeholder is treated as "no real company name", so the
+ * deal's own name wins over it instead of masking it.
  * If the final value looks like a URL, extract a readable domain name from it
  * (e.g. "https://www.backlift.com/about" -> "Backlift").
  */
@@ -520,7 +530,11 @@ export function getDealDisplayName(deal: {
   companyName?: string | null;
   company?: { name?: string | null } | null;
 }): string {
-  const raw = deal.companyName || deal.company?.name || deal.name;
+  const companyName = deal.companyName || deal.company?.name || null;
+  const raw = (companyName && companyName !== GENERIC_COMPANY_PLACEHOLDER ? companyName : null)
+    || deal.name
+    || companyName
+    || "";
   return cleanNameIfUrl(raw);
 }
 
