@@ -213,6 +213,20 @@ router.post('/import/:id/continue', async (req: Request, res: Response) => {
   res.json({ more });
 });
 
+// GET /import/latest → most recent HubSpot ImportJob for the org, or null.
+// Lets the client re-hydrate progress/history after a reload — the job id
+// isn't known client-side until a job already exists, so this is the only
+// way to find one. Must be registered before GET /import/:id, or Express
+// would match "latest" as the :id param.
+router.get('/import/latest', async (req: Request, res: Response) => {
+  const orgId = getOrgId(req);
+  const { data } = await supabase
+    .from('ImportJob').select('*')
+    .eq('organizationId', orgId).eq('source', 'hubspot')
+    .order('startedAt', { ascending: false }).limit(1).maybeSingle();
+  res.json({ job: data ?? null });
+});
+
 // GET /import/:id → status
 router.get('/import/:id', async (req: Request, res: Response) => {
   const orgId = getOrgId(req);

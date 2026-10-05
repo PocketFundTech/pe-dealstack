@@ -244,7 +244,7 @@ interface HubSpotPanelProps {
   onToast: (message: string, type: "success" | "error" | "info") => void;
 }
 
-function HubSpotPanel({ onToast }: HubSpotPanelProps) {
+export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   const [connected, setConnected] = useState(false);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -253,13 +253,74 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   const [overwrite, setOverwrite] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Refreshes `job` from the server and stops polling once it reaches a
+  // terminal state. Shared by the manual-start flow and the mount-resume
+  // flow below so both drive the exact same completion/toast logic.
+  const pollJobOnce = useCallback(async (jobId: string) => {
+    const j = await api.get<HubSpotImportJob>(`/integrations/hubspot/import/${jobId}`);
+    setJob(j);
+    if (POLL_TERMINAL.has(j.status) && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+      if (j.status === "completed") onToast("HubSpot import finished", "success");
+      else onToast(`Import ended with status: ${j.status}`, "error");
+    }
+    return j;
+  }, [onToast]);
+
+  const startPolling = useCallback((jobId: string) => {
+    if (pollRef.current) return;
+    void pollJobOnce(jobId);
+    pollRef.current = setInterval(() => {
+      pollJobOnce(jobId).catch(console.warn);
+    }, 2000);
+  }, [pollJobOnce]);
+
+  // Keeps calling /continue until the server says there's nothing left.
+  // Used both right after starting a brand-new import and when resuming one
+  // found already `running` on mount (reload / new tab).
+  const driveContinue = useCallback(async (jobId: string, mode: "fill" | "refresh", initialMore: boolean) => {
+    let hasMore = initialMore;
+    let rounds = 0;
+    while (hasMore && rounds < MAX_CONTINUE_ROUNDS) {
+      const next = await api.post<{ more: boolean }>(`/integrations/hubspot/import/${jobId}/continue`, { mode });
+      hasMore = next.more;
+      rounds += 1;
+    }
+    return hasMore;
+  }, []);
+
   useEffect(() => {
     api.get<{ connected: boolean }>("/integrations/hubspot/connect")
       .then((r) => setConnected(r.connected))
       .catch(() => {});
+
+    // Re-hydrate the progress card / "last import" summary after a reload —
+    // without this, a running job becomes invisible the moment the tab that
+    // started it closes or refreshes, even though it's still working
+    // server-side (confirmed 2026-10-05: a job kept advancing for hours
+    // with zero browser tabs driving it visibly).
+    api.get<{ job: HubSpotImportJob | null }>("/integrations/hubspot/import/latest")
+      .then(async (r) => {
+        if (!r.job) return;
+        setJob(r.job);
+        if (r.job.status === "running") {
+          const mode: "fill" | "refresh" = overwrite ? "refresh" : "fill";
+          startPolling(r.job.id);
+          const hasMore = await driveContinue(r.job.id, mode, true);
+          if (hasMore) {
+            setError("Import is taking unusually long. Click \"Import from HubSpot\" again to resume where it left off.");
+          }
+        }
+      })
+      .catch(() => {});
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
+    // Intentionally mount-only: `overwrite` reflects the checkbox's default
+    // state at load time, not a value this effect should re-run on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function connect() {
@@ -301,42 +362,15 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
     setBusy(true);
     setError(null);
     try {
-      const mode = overwrite ? "refresh" : "fill";
+      const mode: "fill" | "refresh" = overwrite ? "refresh" : "fill";
       const { jobId, more } = await api.post<{ jobId: string; more: boolean }>(
         "/integrations/hubspot/import",
         { mode },
       );
 
-      // Poll status for the live progress card.
-      const fetchJob = async () => {
-        const j = await api.get<HubSpotImportJob>(`/integrations/hubspot/import/${jobId}`);
-        setJob(j);
-        if (POLL_TERMINAL.has(j.status) && pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-          if (j.status === "completed") onToast("HubSpot import finished", "success");
-          else onToast(`Import ended with status: ${j.status}`, "error");
-        }
-      };
-      void fetchJob();
-      pollRef.current = setInterval(() => {
-        fetchJob().catch(console.warn);
-      }, 2000);
+      startPolling(jobId);
 
-      // The API runs the import inside the request and yields when it hits its
-      // time budget (serverless can't keep working after responding). Keep
-      // calling continue until the server says there's nothing left, otherwise
-      // the job would sit at 'running' with no one advancing it.
-      let hasMore = more;
-      let rounds = 0;
-      while (hasMore && rounds < MAX_CONTINUE_ROUNDS) {
-        const next = await api.post<{ more: boolean }>(
-          `/integrations/hubspot/import/${jobId}/continue`,
-          { mode },
-        );
-        hasMore = next.more;
-        rounds += 1;
-      }
+      const hasMore = await driveContinue(jobId, mode, more);
       if (hasMore) {
         // Far beyond any realistic import size — stop rather than hammer the
         // server. The job is still resumable: clicking Import again picks it up.
@@ -344,7 +378,7 @@ function HubSpotPanel({ onToast }: HubSpotPanelProps) {
       }
       // Final refresh so the card reflects the terminal state immediately
       // rather than waiting for the next poll tick.
-      await fetchJob().catch(console.warn);
+      await pollJobOnce(jobId).catch(console.warn);
     } catch (err) {
       const msg =
         err instanceof ApiError ? err.message :

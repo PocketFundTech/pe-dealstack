@@ -5,6 +5,70 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 103 — October 5, 2026
+
+#### Timestamp: October 05, 2026 — 13:48 IST
+
+#### Goal: A live HubSpot import (thousands of companies/contacts) went invisible in the UI after a page reload, with no way to tell whether it was still running or see what a past import had done.
+
+#### Root cause
+
+`HubSpotPanel` (`apps/web-next/.../settings/IntegrationsSection.tsx`) only ever checked
+`GET /integrations/hubspot/connect` on mount — it never fetched the org's `ImportJob`
+history. The progress card, and the client-side loop that drives `/continue` to actually
+advance the import past each ~3.5-minute serverless request window, existed only in the
+one browser tab's React state. Confirmed via direct read of the `ImportJob` row that the
+import kept progressing for hours server-side (companies: 3,837 processed; contacts
+climbing past 2,300) with zero visible UI state once the tab was reloaded.
+
+#### Fix (PR #132 — `fix/ingest-provider-rejection`, merged into `main` here)
+
+- `GET /api/integrations/hubspot/import/latest` (new) — returns the org's most recent
+  HubSpot `ImportJob`, or `null`. Registered before `GET /import/:id` so Express doesn't
+  match "latest" as the `:id` param.
+- `HubSpotPanel` now calls it on mount: a `running` job resumes polling + the `/continue`
+  drive loop; a terminal job's final per-object counts render as a persistent "last
+  import" summary. Refactored the poll/continue logic (previously only inline in
+  `startImport()`) into shared `pollJobOnce`/`startPolling`/`driveContinue` helpers so both
+  the manual-start and mount-resume paths use identical completion/toast handling.
+- Tests: 2 new backend tests (`hubspot-routes.test.ts`, both green — full API suite 1883
+  passed, 2 pre-existing unrelated `dealChatAgent*-bounds` timing flakes). 3 new frontend
+  tests (`HubSpotPanel.test.tsx`) — **could not execute**: a pre-existing, repo-wide
+  duplicate-React-copies issue (`npm ls react` shows both `react@19.2.4` and
+  `react@19.3.0` resolving) breaks React Testing Library's hook calls for every component
+  test in `apps/web-next`, including untouched files (`ConfirmDialog.test.tsx` fails
+  identically). Verified the frontend change via `tsc --noEmit` (clean) and manual review
+  instead.
+
+#### Note on this PR's other commits
+
+PR #132 originally also carried a Sept 19 fix for AI-provider-rejection error handling
+(`aiErrors.ts`, `ingest-email.ts`, `ingest-upload.ts` — surfacing a 503 instead of "no deal
+information" on billing/quota errors). That work was independently cherry-picked into
+`main` weeks ago via PR #144 (see Session 74 below) while PR #132 itself sat unmerged —
+merging `main` into this branch resolved to identical file content on both sides (verified
+byte-for-byte identical diffs), so no functional change ships from that half of this PR;
+this session's actual content is the HubSpot fix above.
+
+#### Known follow-ups (not in this fix)
+
+- **Frontend component test suite is broken repo-wide** (duplicate React versions —
+  `react@19.2.4` vs `react@19.3.0`) — needs a dependency-tree fix before any RTL-based test
+  can run; worth prioritizing since it silently blocks verification for every future
+  frontend PR.
+- No dedicated "Companies" page exists in `apps/web-next` — imported Company records
+  (HubSpot auto-creates one per contact/website domain, so counts routinely run 4-10x
+  actual Deal counts) are only visible if linked to a Deal. `GET /api/companies` already
+  exists and is unused by the frontend. Discussed with founder as a separate follow-up,
+  not built yet.
+- Per-record import failures (companies/contacts failure rate was running 12-20% on this
+  org's import) are only logged server-side (`[hubspot] record {id} failed: ...`), not
+  surfaced anywhere in the UI or stored on the job row. Worth adding structured failure
+  reasons if this rate turns out to be a recurring pattern rather than one portal's data
+  quality.
+
+---
+
 ### Session 102 — October 3, 2026
 
 #### Timestamp: October 3, 2026 — 04:25 IST
@@ -994,6 +1058,7 @@ The direction was agreed through a short brainstorm: lead with "what needs me to
 - 19/19 dashboard tests pass: 11 for the triage logic, plus queue/undo component tests and the existing signals test.
 - `tsc` is clean, and ESLint shows only the 2 existing warnings in untouched widgets.
 - Visual check at 1600px and 390px through a temporary mock-data harness (since deleted), covering the assign flow, drawer, undo bar and add-task.
+
 
 ---
 

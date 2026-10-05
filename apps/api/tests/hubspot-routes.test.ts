@@ -30,6 +30,7 @@ const chain = (overrides: Record<string, any> = {}) => ({
   update: vi.fn().mockReturnThis(), delete: vi.fn().mockReturnThis(),
   upsert: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(),
   neq: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(),
+  order: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(),
   single: vi.fn().mockResolvedValue({ data: null }),
   maybeSingle: vi.fn().mockResolvedValue({ data: null }), ...overrides,
 });
@@ -161,6 +162,30 @@ describe('hubspot-import routes', () => {
     const res = await request(await buildApp()).get('/api/integrations/hubspot/import/job-1');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('running');
+  });
+});
+
+describe('GET /import/latest', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns the most recent job for the org', async () => {
+    const job = { id: 'job-42', status: 'running', currentObject: 'contacts', objectCounts: {}, error: null };
+    const maybeSingleMock = vi.fn().mockResolvedValueOnce({ data: job });
+    mockSupabase.from.mockReturnValue(chain({ maybeSingle: maybeSingleMock }));
+
+    const res = await request(await buildApp()).get('/api/integrations/hubspot/import/latest');
+
+    expect(res.status).toBe(200);
+    expect(res.body.job).toEqual(job);
+  });
+
+  it('returns job: null when the org has never run an import', async () => {
+    mockSupabase.from.mockReturnValue(chain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) }));
+
+    const res = await request(await buildApp()).get('/api/integrations/hubspot/import/latest');
+
+    expect(res.status).toBe(200);
+    expect(res.body.job).toBeNull();
   });
 });
 
