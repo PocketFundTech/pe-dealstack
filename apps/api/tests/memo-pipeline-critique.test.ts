@@ -159,4 +159,27 @@ describe('critiqueAndRevise', () => {
     expect(result).toEqual(original);
     expect(captureAgentError).toHaveBeenCalled();
   });
+
+  it('runs the critique and revise passes at high effort (section drafting runs at the memo role default)', async () => {
+    trackedClaudeMessage
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          overallPass: false,
+          dimensions: [{ name: 'thesis_clarity', score: 2, pass: false, issue: 'vague' }],
+          sectionsNeedingRevision: ['EXECUTIVE_SUMMARY'],
+        }),
+        model: 'claude-sonnet-5',
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ revisedSections: [{ type: 'EXECUTIVE_SUMMARY', content: '<p>Sharper.</p>' }] }),
+        model: 'claude-sonnet-5',
+      });
+    const { critiqueAndRevise } = await getPipeline();
+    await critiqueAndRevise(sections(), context);
+    expect(trackedClaudeMessage.mock.calls[0][0].operation).toBe('memo_critique');
+    expect(trackedClaudeMessage.mock.calls[0][0].effort).toBe('high');
+    expect(trackedClaudeMessage.mock.calls[1][0].operation).toBe('memo_revise');
+    expect(trackedClaudeMessage.mock.calls[1][0].effort).toBe('high');
+  });
 });
+

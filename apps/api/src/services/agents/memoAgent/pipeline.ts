@@ -492,6 +492,8 @@ export async function critiqueAndRevise(
           }],
           outputSchema: CRITIQUE_SCHEMA,
           maxTokens: 2000,
+          // The quality gate keeps full reasoning; only section drafting runs at medium.
+          effort: 'high',
           signal: critiqueController.signal,
         }),
         critiqueTimeoutPromise,
@@ -548,6 +550,7 @@ export async function critiqueAndRevise(
           }],
           outputSchema: REVISE_SCHEMA,
           maxTokens: 6000,
+          effort: 'high',
           signal: reviseController.signal,
         }),
         reviseTimeoutPromise,

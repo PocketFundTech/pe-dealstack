@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL', 'AI_INGEST_MODEL', 'AI_CHAT_EFFORT'] as const;
+const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL', 'AI_INGEST_MODEL', 'AI_CHAT_EFFORT', 'AI_MEMO_EFFORT'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => { for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
@@ -92,11 +92,13 @@ describe('getModelConfig', () => {
     expect(getModelConfig('ingest').model).toBe('claude-fable-5');
   });
 
-  it('runs chat at medium effort by default; other roles keep the model default', async () => {
+  it('runs chat and memo drafting at medium effort by default; other roles keep the model default', async () => {
     const { getModelConfig } = await getModels();
     expect(getModelConfig('chat').effort).toBe('medium');
+    expect(getModelConfig('memo').effort).toBe('medium');
+    process.env.AI_MEMO_EFFORT = 'high';
+    expect(getModelConfig('memo').effort).toBe('high');
     expect(getModelConfig('extraction').effort).toBeUndefined();
-    expect(getModelConfig('memo').effort).toBeUndefined();
     expect(getModelConfig('ingest').effort).toBeUndefined();
     expect(getModelConfig('fast').effort).toBeUndefined();
   });

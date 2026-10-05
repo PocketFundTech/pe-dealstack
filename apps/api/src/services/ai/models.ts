@@ -55,15 +55,18 @@ const MAX_TOKENS: Record<AiRole, number> = {
 
 /**
  * Effort below the default `high`, per role. Chat (deal chat, scorecard,
- * folder insights) is conversational/short-form and holds quality at medium
- * while thinking — billed as output — drops. Memo and extraction keep `high`.
- * Env override: AI_CHAT_EFFORT=high reverts without a deploy.
+ * folder insights) and memo section drafting hold quality at medium while
+ * thinking — billed as output — drops. The memo critique/revise pass and
+ * extraction keep `high`.
+ * Env overrides (no deploy): AI_CHAT_EFFORT / AI_MEMO_EFFORT=high.
  */
 const EFFORT_DEFAULTS: Partial<Record<AiRole, AiEffort>> = {
   chat: 'medium',
+  memo: 'medium',
 };
 const EFFORT_ENV: Partial<Record<AiRole, string>> = {
   chat: 'AI_CHAT_EFFORT',
+  memo: 'AI_MEMO_EFFORT',
 };
 const EFFORTS: readonly AiEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
