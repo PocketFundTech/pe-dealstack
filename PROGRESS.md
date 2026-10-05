@@ -39,6 +39,20 @@ A token-cost audit of every AI call site found:
 
 **Tests:** `ai-models`, `ai-client` (effort), `claude-deal-reader` (text / native / truncation / density) and `documents-upload-background` (Haiku read + GPT-4o fallback). Full API suite 2544 passed / 50 skipped; `tsc --noEmit` clean.
 
+#### Update October 06, 2026 — 00:09 IST — Fable for spreadsheets only, memo drafting at medium effort
+
+- **Founder decision:** the deep financials (P&L, balance sheet, cash flow) only live in spreadsheets, never in PDFs.
+- `shouldRunIngestDeepPass` now runs the Fable extraction for **Excel/CSV only**. PDFs (CIMs, teasers) get just the cheap Haiku deal-summary read.
+- The PDF ingest path still auto-scores the new deal (`maybeScoreAfterExtraction`), which the deep pass used to do.
+- The Re-extract button can still force a Fable run on any file.
+- **Consequence:** a deal with only PDFs has no `FinancialStatement` rows. The Financials tab and the memo's financial sections show their "no financials yet" placeholders until a spreadsheet is uploaded.
+- **Memo:** section drafting runs at `effort: "medium"` (env `AI_MEMO_EFFORT=high` reverts). The critique and revise quality gate is pinned to `high`.
+- **Per deal now:**
+  - Fable is $0 for a PDF-only deal, or ~$0.60–1.50 per Excel model.
+  - Everything else is ~$0.70–1.20.
+  - A typical deal with one model: **~$1.30–2.70**, down from $4.50–7.60.
+- Tests: full API suite 2546 passed / 50 skipped; `tsc --noEmit` clean.
+
 #### Found, not changed
 
 - **The nightly signal-scan cron is silently failing in prod.** It always uses Managed Agents, and the `MANAGED_AGENTS_*` env vars aren't set in Vercel, so it throws for every org: $0 cost, no signals. Re-enabling it is a product call. Pointing it at the legacy single-call monitor would add ~$0.03–0.05 per org per day.

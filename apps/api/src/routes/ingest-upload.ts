@@ -18,6 +18,7 @@ import { findExistingDocument, logDuplicateSkip } from '../services/documentDedu
 import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { runInBackground } from '../utils/background.js';
 import { runIngestDeepPass, shouldRunIngestDeepPass } from '../services/ingestDeepPass.js';
+import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
@@ -750,6 +751,10 @@ export async function runIngestFromBuffer(
         }),
       );
       backgroundExtraction = 'started';
+    } else if (!existingDuplicate) {
+      // No deep pass (PDF / Word / text) — still auto-score the new deal,
+      // which the deep pass would otherwise have done after extracting.
+      runInBackground(`ingest-score:${deal.id}`, maybeScoreAfterExtraction(deal.id, orgId));
     }
 
     log.info('Ingest complete', { dealId: deal.id, isUpdate, backgroundExtraction });

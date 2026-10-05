@@ -52,9 +52,9 @@ const baseInput = {
 };
 
 describe('shouldRunIngestDeepPass', () => {
-  it('runs for PDFs and spreadsheets, skips other types', async () => {
+  it('runs for spreadsheets only — deep financials never live in PDFs', async () => {
     const { shouldRunIngestDeepPass } = await getService();
-    expect(shouldRunIngestDeepPass('application/pdf', 'cim.pdf')).toBe(true);
+    expect(shouldRunIngestDeepPass('application/pdf', 'cim.pdf')).toBe(false);
     expect(shouldRunIngestDeepPass('text/csv', 'fin.csv')).toBe(true);
     expect(shouldRunIngestDeepPass('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'model.xlsx')).toBe(true);
     expect(shouldRunIngestDeepPass('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'memo.docx')).toBe(false);
