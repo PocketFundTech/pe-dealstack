@@ -53,9 +53,8 @@ import { makeAnthropicUsageCallback } from './usage/trackedAnthropic.js';
 
 // ─── Config ──────────────────────────────────────────────────────────
 
-/** Sonnet 4.6 — exact model ID per Anthropic SDK spec, matching
- *  replyIntentClassifier.ts. Do not append a date suffix. */
-const SONNET_MODEL = 'claude-sonnet-4-6';
+/** Haiku 4.5 — splitting and tidying name fields in small row batches doesn't need Sonnet; ~3x cheaper. */
+const MODEL = 'claude-haiku-4-5';
 
 /** Rows per Claude call. Small enough that one call's output (~30-40 tokens
  *  per cleaned row) comfortably fits well inside MAX_OUTPUT_TOKENS even at
@@ -80,7 +79,7 @@ function getModel(): ChatAnthropic | null {
   const authFields = getChatAnthropicAuthFields();
   if (!authFields) return null;
   cachedModel = new ChatAnthropic({
-    model: SONNET_MODEL,
+    model: MODEL,
     ...authFields,
     maxTokens: MAX_OUTPUT_TOKENS,
     temperature: 0,
@@ -193,7 +192,7 @@ async function cleanOneBatch(batch: RawImportNameFields[]): Promise<Map<number, 
         {
           runName: 'outreachImportCleaner',
           tags: ['outreach', 'import-cleaning'],
-          callbacks: [makeAnthropicUsageCallback('outreach_import_cleaning', SONNET_MODEL)],
+          callbacks: [makeAnthropicUsageCallback('outreach_import_cleaning', MODEL)],
         },
       );
 

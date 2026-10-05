@@ -16,6 +16,7 @@
  */
 
 export type AiRole = 'extraction' | 'chat' | 'fast' | 'memo' | 'ingest';
+export type AiEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ModelConfig {
   model: string;
@@ -24,6 +25,8 @@ export interface ModelConfig {
   betas: string[];
   /** Server-side refusal fallback chain (Fable 5 only). */
   fallbacks?: Array<{ model: string }>;
+  /** output_config.effort; undefined = the model's default (high). */
+  effort?: AiEffort;
 }
 
 const DEFAULTS: Record<AiRole, string> = {
@@ -50,9 +53,38 @@ const MAX_TOKENS: Record<AiRole, number> = {
   ingest: 16000,
 };
 
+/**
+ * Effort below the default `high`, per role. Chat (deal chat, scorecard,
+ * folder insights) is conversational/short-form and holds quality at medium
+ * while thinking — billed as output — drops. Memo and extraction keep `high`.
+ * Env override: AI_CHAT_EFFORT=high reverts without a deploy.
+ */
+const EFFORT_DEFAULTS: Partial<Record<AiRole, AiEffort>> = {
+  chat: 'medium',
+};
+const EFFORT_ENV: Partial<Record<AiRole, string>> = {
+  chat: 'AI_CHAT_EFFORT',
+};
+const EFFORTS: readonly AiEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** Haiku 4.5 rejects output_config.effort. */
+function supportsEffort(model: string): boolean {
+  return !model.startsWith('claude-haiku');
+}
+
+function resolveEffort(role: AiRole, model: string): AiEffort | undefined {
+  if (!supportsEffort(model)) return undefined;
+  const envName = EFFORT_ENV[role];
+  const fromEnv = envName ? process.env[envName] : undefined;
+  if (fromEnv && (EFFORTS as readonly string[]).includes(fromEnv)) return fromEnv as AiEffort;
+  return EFFORT_DEFAULTS[role];
+}
+
 export function getModelConfig(role: AiRole): ModelConfig {
   const model = process.env[ENV_OVERRIDES[role]] || DEFAULTS[role];
   const cfg: ModelConfig = { model, maxTokens: MAX_TOKENS[role], betas: [] };
+  const effort = resolveEffort(role, model);
+  if (effort) cfg.effort = effort;
   if (model === 'claude-fable-5') {
     cfg.betas.push('server-side-fallback-2026-06-01');
     cfg.fallbacks = [{ model: 'claude-opus-4-8' }];

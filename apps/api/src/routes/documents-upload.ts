@@ -14,6 +14,8 @@ import { acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot }
 
 /** How long an upload waits for an extraction slot before skipping (see B3). */
 const UPLOAD_SLOT_WAIT_MS = 30_000;
+/** Text the deal-field top-up read sees on a data-room upload (~16 pages). */
+const DATA_ROOM_TEXT_CHARS = 40_000;
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { runAfterResponse, type RequestWithAfterResponse } from '../utils/afterResponse.js';
 import { resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
@@ -460,7 +462,19 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       if (needsAiWork) {
         try {
           log.info('Starting AI data extraction', { documentName });
-          const aiData = await extractDealDataFromText(extractedText as string);
+          // INGEST_ENGINE=claude: Haiku on the first ~16 pages of text
+          // (~$0.01) instead of GPT-4o; GPT-4o only if that read fails.
+          let aiData: ExtractedDealData | null = null;
+          if ((process.env.INGEST_ENGINE || 'legacy') === 'claude') {
+            const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
+            aiData = await readDealDocument({
+              fileName: documentName,
+              fullText: extractedText as string,
+              sourceLength: (extractedText as string).length,
+              maxTextChars: DATA_ROOM_TEXT_CHARS,
+            });
+          }
+          if (!aiData) aiData = await extractDealDataFromText(extractedText as string);
           if (aiData) {
             aiExtractedData = aiData;
             finalStatus = 'analyzed';

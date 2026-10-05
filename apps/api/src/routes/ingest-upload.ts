@@ -275,11 +275,15 @@ export async function runIngestFromBuffer(
     // failure falls through to the legacy chain below — deal creation is
     // never blocked by the new engine.
     if (isClaudeIngestEnabled()) {
-      const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
+      const { readDealDocument, hasUsablePdfText } = await import('../services/extraction/claudeDealReader.js');
       aiData = await readDealDocument({
         fileBuffer: mimeType === 'application/pdf' ? buffer : undefined,
         fileName: documentName,
-        fullText: mimeType === 'application/pdf' ? undefined : extractedText,
+        // A PDF whose text layer is thin for its page count (scanned, or only
+        // a cover/footer OCR'd) is read natively instead — the cheap text
+        // read would miss most of it.
+        fullText:
+          mimeType === 'application/pdf' && !hasUsablePdfText(extractedText, numPages) ? undefined : extractedText,
         sourceLength: extractedText.length,
       });
       if (!aiData) {

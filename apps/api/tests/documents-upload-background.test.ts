@@ -14,7 +14,7 @@
  * response only sent after every step (including AI extraction) completes.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
@@ -106,6 +106,11 @@ const extractDealDataFromText = vi.fn(async () => {
 });
 vi.mock('../src/services/aiExtractor.js', () => ({
   extractDealDataFromText: (...args: any[]) => extractDealDataFromText(...args),
+}));
+
+const readDealDocument = vi.fn(async (): Promise<any> => null);
+vi.mock('../src/services/extraction/claudeDealReader.js', () => ({
+  readDealDocument: (...args: any[]) => readDealDocument(...args),
 }));
 
 const embedDocument = vi.fn(async () => ({ success: true, chunkCount: 3 }));
@@ -255,5 +260,38 @@ describe('POST /api/deals/:dealId/documents — background AI extraction', () =>
       .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
 
     expect(resolveUserId).toHaveBeenCalledWith('auth-user-1');
+  });
+});
+
+describe('POST /api/deals/:dealId/documents — deal-field read model (INGEST_ENGINE=claude)', () => {
+  const saved = process.env.INGEST_ENGINE;
+  beforeEach(() => { process.env.INGEST_ENGINE = 'claude'; });
+  afterEach(() => { if (saved === undefined) delete process.env.INGEST_ENGINE; else process.env.INGEST_ENGINE = saved; });
+
+  it('uses the cheap Claude reader on a capped excerpt and skips GPT-4o when it succeeds', async () => {
+    readDealDocument.mockResolvedValueOnce({ companyName: 'Acme Corp', industry: 'Healthcare', revenue: 50, ebitda: 10 });
+    const { appPromise } = buildApp({ withAfterResponseHook: false });
+    const app = await appPromise;
+    const res = await request(app)
+      .post('/api/deals/deal-1/documents')
+      .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+    expect(readDealDocument).toHaveBeenCalledTimes(1);
+    const arg = (readDealDocument.mock.calls[0] as any[])[0];
+    expect(arg.maxTextChars).toBe(40_000);
+    expect(arg.fileBuffer).toBeUndefined();
+    expect(extractDealDataFromText).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the legacy extractor when the Claude read returns null', async () => {
+    readDealDocument.mockResolvedValueOnce(null);
+    const { appPromise } = buildApp({ withAfterResponseHook: false });
+    const app = await appPromise;
+    const res = await request(app)
+      .post('/api/deals/deal-1/documents')
+      .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+    expect(readDealDocument).toHaveBeenCalledTimes(1);
+    expect(extractDealDataFromText).toHaveBeenCalledTimes(1);
   });
 });
