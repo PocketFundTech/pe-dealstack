@@ -70,6 +70,7 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     setFiles((prev) => prev.map((f) => ({ ...f, status: "pending" as const, message: undefined })));
 
     let createdDealId: string | null = null;
+    let matchedExisting = false;
     let createdDealName: string | null = null;
     let stopReason: string | null = null;
     let lastSuccessResult: IngestResponse | null = null;
@@ -125,6 +126,9 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
           } else if (resolved.dealId) {
             createdDealId = resolved.dealId;
             createdDealName = resolved.dealName;
+            // Went into an existing deal for the same company (5 Oct, item 8):
+            // later files follow it there, but it isn't a NEW deal.
+            if (data.matchedExistingDeal) matchedExisting = true;
           }
         }
       } catch (err) {
@@ -148,7 +152,7 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
 
     if (lastSuccessResult) {
       setResult(lastSuccessResult);
-      if (mode === "new" && createdDealId) {
+      if (mode === "new" && createdDealId && !matchedExisting) {
         maybeShowTeaserPopup({ id: createdDealId, name: createdDealName || lastSuccessResult.deal?.name || "" });
       }
     }

@@ -88,7 +88,7 @@ function mockDealTables() {
   mockSupabaseFrom.mockImplementation((table: string) => {
     if (table === 'Company') {
       return {
-        select: () => ({ ilike: () => ({ eq: () => ({ single: async () => ({ data: null, error: null }) }) }) }),
+        select: () => ({ ilike: () => ({ eq: () => ({ single: async () => ({ data: null, error: null }), limit: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) }),
         insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'co-1', name: 'Northwind' }, error: null }) }) }),
       };
     }
