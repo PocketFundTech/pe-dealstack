@@ -77,6 +77,9 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     let lastSuccessResult: IngestResponse | null = null;
     let anySucceeded = false;
     const failedNames: string[] = [];
+    // A single failed file shows its real reason (e.g. "AI credits are
+    // exhausted"), not a bare "Upload failed" (6 Oct testing).
+    let lastError = "Upload failed";
 
     for (let i = 0; i < files.length; i++) {
       if (stopReason) {
@@ -138,6 +141,7 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
         }
       } catch (err) {
         failedNames.push(current.file.name);
+        lastError = errorMessage(err);
         setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: errorMessage(err) } : f)));
       }
     }
@@ -163,7 +167,7 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     }
 
     if (!anySucceeded) {
-      setError(files.length > 1 ? "All uploads failed. See the status next to each file above." : "Upload failed");
+      setError(files.length > 1 ? "All uploads failed. See the status next to each file above." : lastError);
       return;
     }
 

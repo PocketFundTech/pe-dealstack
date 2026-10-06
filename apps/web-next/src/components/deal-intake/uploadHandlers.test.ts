@@ -151,6 +151,14 @@ describe("createHandleUploadFiles", () => {
     expect(deps.setWarning).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Multiple deals created" }));
   });
 
+  it("shows the real reason when a single file fails", async () => {
+    uploadViaSignedUrlMock.mockResolvedValue({ storagePath: "p/cim.pdf", fileName: "cim.pdf", mimeType: "application/pdf", size: 10 });
+    apiPostMock.mockRejectedValue(new Error("AI service (openai/gpt-4o) rejected the request: API credits are exhausted."));
+    const deps = makeUploadFilesDeps({ files: [makeFileItem("cim.pdf")] });
+    await createHandleUploadFiles(deps)();
+    expect(deps.setError).toHaveBeenCalledWith(expect.stringMatching(/credits are exhausted/));
+  });
+
   it("routes an existing-mode upload to /ingest with the selected deal id", async () => {
     uploadViaSignedUrlMock.mockResolvedValue({
       storagePath: "p/model.xlsx", fileName: "model.xlsx", mimeType: "application/vnd.ms-excel", size: 99,
