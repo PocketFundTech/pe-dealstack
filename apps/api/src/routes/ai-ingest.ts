@@ -13,8 +13,6 @@ import { getOrgId } from '../middleware/orgScope.js';
 import { findLiveDealForCompany } from '../services/dealDuplicates.js';
 import { extractTextFromPDF } from './ingest-shared.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
-import { generateTeasersForDeal } from '../services/firmTeaserService.js';
-import { runAfterResponse } from '../utils/afterResponse.js';
 
 // Configure multer for file uploads
 const upload = multer({
@@ -334,18 +332,6 @@ subRouter.post('/ai/ingest', upload.single('file'), async (req, res) => {
         captureAgentError(err, { context: 'notification:ai_ingest' }, 'warning');
       });
     }
-
-    // Auto-generate firm-teaser blurbs for the new deal. Never blocks the
-    // response — deferred via runAfterResponse (awaited inline when no
-    // post-response hook is present). Best-effort: never fail ingest on
-    // teaser error.
-    await runAfterResponse(req, async () => {
-      try {
-        await generateTeasersForDeal({ dealId: deal.id, orgId });
-      } catch (teaserErr) {
-        log.error('AI Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
-      }
-    });
 
     log.info('AI Ingest complete', { dealId: deal.id, filename: safeName, confidence: extractedData.overallConfidence });
 

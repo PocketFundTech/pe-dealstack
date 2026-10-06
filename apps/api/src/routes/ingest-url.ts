@@ -15,8 +15,6 @@ import { formatValueWithUnit } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { isPrivateUrl } from '../utils/urlHelpers.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
-import { generateTeasersForDeal } from '../services/firmTeaserService.js';
-import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const subRouter = Router();
@@ -356,20 +354,6 @@ subRouter.post('/url', async (req, res) => {
     }
 
     await AuditLog.aiIngest(req, `Web Research — ${url}`, deal.id);
-
-    // Auto-generate firm-teaser blurbs for newly-created deals. Never blocks
-    // the response — deferred via runAfterResponse (awaited inline when no
-    // post-response hook is present). Best-effort: a teaser failure must
-    // never fail ingest.
-    if (!isUpdate) {
-      await runAfterResponse(req, async () => {
-        try {
-          await generateTeasersForDeal({ dealId: deal.id, orgId });
-        } catch (teaserErr) {
-          log.error('URL ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
-        }
-      });
-    }
 
     log.info('URL research ingest complete', { dealId: deal.id, url, isUpdate });
 

@@ -10,7 +10,6 @@ import { getOrgId } from '../middleware/orgScope.js';
 import { loadLiveDealIndex, normaliseCompanyName } from '../services/dealDuplicates.js';
 import { extractTextFromPDF, upload, resolveUploadedFile, cleanupStagingObject } from './ingest-shared.js';
 import { runIngestFromBuffer } from './ingest-upload.js';
-import { generateTeasersForDeal } from '../services/firmTeaserService.js';
 import { createDealFromEmail } from '../integrations/gmail/autoCreateDeal.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
@@ -121,17 +120,6 @@ subRouter.post('/email', upload.single('file'), async (req: any, res) => {
 
     // 4. Audit log (route layer holds `req`).
     await AuditLog.aiIngest(req, `Email — ${emailData.subject}`, dealId);
-
-    // Auto-generate firm-teaser blurbs for the new deal. Never blocks the
-    // response — deferred via runAfterResponse (awaited inline when no
-    // post-response hook is present). Best-effort: never fail ingest.
-    await runAfterResponse(req, async () => {
-      try {
-        await generateTeasersForDeal({ dealId, orgId });
-      } catch (teaserErr) {
-        log.error('Email ingest: firm-teaser auto-gen failed', teaserErr, { dealId });
-      }
-    });
 
     log.info('Email ingest complete', {
       dealId,
@@ -339,23 +327,6 @@ subRouter.post('/bulk', upload.single('file'), async (req, res) => {
           }
         }
       }
-    }
-
-    // Auto-generate firm-teaser blurbs for every imported deal. Never blocks
-    // the response — ONE deferred job (not one await per row) with bounded
-    // parallelism, so a 40-60+ row import doesn't serially eat into
-    // maxDuration. Best-effort: a teaser failure must never fail the import.
-    if (results.success.length > 0) {
-      const createdDeals = results.success;
-      await runAfterResponse(req, async () => {
-        await mapWithConcurrency(createdDeals, 3, async (s) => {
-          try {
-            await generateTeasersForDeal({ dealId: s.dealId, orgId });
-          } catch (teaserErr) {
-            log.error('Bulk ingest: firm-teaser auto-gen failed', teaserErr, { dealId: s.dealId });
-          }
-        });
-      });
     }
 
     if (cleanupStoragePath) {
