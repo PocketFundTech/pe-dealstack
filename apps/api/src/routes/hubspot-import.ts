@@ -219,6 +219,11 @@ router.post('/import/:id/continue', async (req: Request, res: Response) => {
     return res.status(conn ? 500 : 400).json({ error: reason });
   }
 
+  // Reconnected since a /continue reported the connection missing: drop that
+  // now-stale message so the panel doesn't show it next to live progress.
+  await supabase.from('ImportJob').update({ error: null })
+    .eq('id', req.params.id).like('error', 'HubSpot was disconnected%');
+
   const mode = importSchema.safeParse(req.body).data?.mode ?? 'fill';
   const { more } = await driveImport(req.params.id, token, mode, MAX_BATCHES);
   res.json({ more });
