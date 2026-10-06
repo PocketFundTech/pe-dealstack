@@ -243,6 +243,28 @@ router.get('/import/latest', async (req: Request, res: Response) => {
   res.json({ job: data ?? null });
 });
 
+// GET /import/history → the org's last 10 HubSpot imports (newest first),
+// with who started each, for the "Past imports" list. Registered before
+// /import/:id for the same reason as /import/latest.
+router.get('/import/history', async (req: Request, res: Response) => {
+  const orgId = getOrgId(req);
+  const { data, error } = await supabase
+    .from('ImportJob').select('id, status, startedAt, finishedAt, objectCounts, error, startedBy')
+    .eq('organizationId', orgId).eq('source', 'hubspot')
+    .order('startedAt', { ascending: false }).limit(10);
+  if (error) return res.status(500).json({ error: 'Could not load import history' });
+  const jobs = (data ?? []) as Array<{ startedBy?: string | null } & Record<string, unknown>>;
+  const userIds = [...new Set(jobs.map((j) => j.startedBy).filter((id): id is string => !!id))];
+  const names = new Map<string, string>();
+  if (userIds.length > 0) {
+    const { data: users } = await supabase.from('User').select('id, name, email').in('id', userIds);
+    for (const u of (users ?? []) as Array<{ id: string; name?: string | null; email?: string | null }>) {
+      names.set(u.id, u.name || u.email || 'Unknown');
+    }
+  }
+  res.json({ jobs: jobs.map((j) => ({ ...j, startedByName: j.startedBy ? names.get(j.startedBy) ?? null : null })) });
+});
+
 // GET /import/:id → status
 router.get('/import/:id', async (req: Request, res: Response) => {
   const orgId = getOrgId(req);

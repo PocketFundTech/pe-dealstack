@@ -157,6 +157,27 @@ export class HubSpotClient {
     return out;
   }
 
+  /**
+   * How many records of `object` the portal has, for "X of Y" progress.
+   * The search API returns `total` even with limit 1. Null on any failure —
+   * progress then shows counts without a total; the import itself is
+   * unaffected.
+   */
+  async countObjects(object: HubSpotObjectType): Promise<number | null> {
+    try {
+      const res = await fetch(`${BASE}/crm/v3/objects/${object}/search`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: 1, properties: ['hs_object_id'] }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { total?: number };
+      return typeof data.total === 'number' ? data.total : null;
+    } catch {
+      return null;
+    }
+  }
+
   async listPage(
     object: HubSpotObjectType,
     opts: { limit?: number; after?: string; properties?: string[] },

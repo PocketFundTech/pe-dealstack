@@ -127,7 +127,7 @@ describe('runImportBatch — engagement contact-resolution accounting', () => {
     );
 
     const savedCounts = capturedUpdates.at(-1)?.objectCounts as any;
-    expect(savedCounts.notes).toEqual({ processed: 2, created: 1, updated: 0, failed: 0, skipped: 1 });
+    expect(savedCounts.notes).toMatchObject({ processed: 2, created: 1, updated: 0, failed: 0, skipped: 1 });
   });
 
   it('falls back to the deal activity feed when no contact resolves but a deal does', async () => {
@@ -160,6 +160,6 @@ describe('runImportBatch — engagement contact-resolution accounting', () => {
     );
 
     const savedCounts = capturedUpdates.at(-1)?.objectCounts as any;
-    expect(savedCounts.notes).toEqual({ processed: 1, created: 1, updated: 0, failed: 0, skipped: 0 });
+    expect(savedCounts.notes).toMatchObject({ processed: 1, created: 1, updated: 0, failed: 0, skipped: 0 });
   });
 });

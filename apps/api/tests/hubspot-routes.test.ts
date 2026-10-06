@@ -272,4 +272,21 @@ describe('hubspot-import routes — serverless continuation', () => {
     expect(c.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', error: expect.stringMatching(/Reconnect HubSpot/) }));
     expect(runImportBatch).not.toHaveBeenCalled();
   });
+
+  it('GET /import/history lists recent imports with who started them', async () => {
+    const jobs = [
+      { id: 'j2', status: 'running', startedAt: '2026-10-06T17:00:00Z', finishedAt: null, objectCounts: {}, error: null, startedBy: 'u1' },
+      { id: 'j1', status: 'completed', startedAt: '2026-10-05T10:00:00Z', finishedAt: '2026-10-05T10:30:00Z', objectCounts: {}, error: null, startedBy: null },
+    ];
+    mockSupabase.from.mockImplementation((table: string) => table === 'ImportJob'
+      ? chain({ limit: vi.fn().mockResolvedValue({ data: jobs, error: null }) })
+      : chain({ in: vi.fn().mockResolvedValue({ data: [{ id: 'u1', name: 'Pushkar', email: 'p@x.com' }] }) }));
+
+    const res = await request(await buildApp()).get('/api/integrations/hubspot/import/history');
+
+    expect(res.status).toBe(200);
+    expect(res.body.jobs.map((j: { id: string }) => j.id)).toEqual(['j2', 'j1']);
+    expect(res.body.jobs[0].startedByName).toBe('Pushkar');
+    expect(res.body.jobs[1].startedByName).toBeNull();
+  });
 });
