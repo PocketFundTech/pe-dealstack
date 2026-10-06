@@ -19,7 +19,7 @@ vi.mock('../src/services/llm.js', () => {
     isLLMAvailable: () => true,
     getExtractionModel: () => model,
     getModel: () => model,
-    getChatProviderName: () => 'openai/gpt-4o',
+    getChatProviderName: () => 'anthropic/claude-sonnet-4-6',
   };
 });
 
@@ -70,6 +70,25 @@ describe('extractDealDataFromText provider rejection', () => {
       expect(e.message).toMatch(/credit|billing/i);
       expect(e.message).not.toMatch(/deal information/i);
     });
+  });
+
+  it('names the FALLBACK model when it is the one that rejected (6 Oct: OpenAI out of credit read as Anthropic)', async () => {
+    invoke.mockReset();
+    invoke
+      .mockRejectedValueOnce(new Error('Zod parse failed')) // primary (Claude): not a rejection
+      .mockRejectedValueOnce(quotaError);                    // fallback (OpenAI): out of credit
+    const { extractDealDataFromText } = await import('../src/services/aiExtractor.js');
+    const err = await extractDealDataFromText(TEXT, { throwOnProviderError: true }).catch((e) => e);
+    expect(err.provider).toMatch(/^(openai|openrouter)\//);
+    expect(err.message).not.toMatch(/anthropic/i);
+  });
+
+  it('when both models reject, reports the fallback (the last one tried)', async () => {
+    invoke.mockReset();
+    invoke.mockRejectedValue(quotaError);
+    const { extractDealDataFromText } = await import('../src/services/aiExtractor.js');
+    const err = await extractDealDataFromText(TEXT, { throwOnProviderError: true }).catch((e) => e);
+    expect(err.provider).toMatch(/^(openai|openrouter)\//);
   });
 
   it('still returns null for non-provider errors even when surfacing is on', async () => {
