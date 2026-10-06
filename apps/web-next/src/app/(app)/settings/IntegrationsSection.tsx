@@ -330,7 +330,9 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
           }
         }
       })
-      .catch(() => {});
+      // Resuming can fail (e.g. HubSpot was disconnected mid-import — the
+      // server then ends the job); say why instead of spinning silently.
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't resume the HubSpot import."));
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);

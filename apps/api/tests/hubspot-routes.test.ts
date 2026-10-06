@@ -255,4 +255,21 @@ describe('hubspot-import routes — serverless continuation', () => {
     expect(res.body.more).toBe(false);
     expect(runImportBatch).not.toHaveBeenCalled();
   });
+
+  it('POST /import/:id/continue ends a running job when HubSpot is no longer connected', async () => {
+    const c = chain({
+      maybeSingle: vi.fn()
+        .mockResolvedValueOnce({ data: { id: 'job-7', status: 'running' } }) // job lookup
+        .mockResolvedValueOnce({ data: null }),                              // no connection
+    });
+    mockSupabase.from.mockReturnValue(c);
+
+    const res = await request(await buildApp())
+      .post('/api/integrations/hubspot/import/job-7/continue').send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/disconnected/i);
+    expect(c.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', error: expect.stringMatching(/Reconnect HubSpot/) }));
+    expect(runImportBatch).not.toHaveBeenCalled();
+  });
 });
