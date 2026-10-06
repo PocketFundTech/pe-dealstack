@@ -55,6 +55,18 @@ const POLL_TERMINAL = new Set(["completed", "failed", "cancelled"]);
  */
 const MAX_CONTINUE_ROUNDS = 200;
 
+/** Backoff for transient /continue failures (5xx, network) before giving up. */
+const CONTINUE_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000];
+
+/** The import stopped driving: say why and that Resume picks it up. */
+function pausedMessage(err: unknown): string {
+  const transient = !(err instanceof ApiError) || err.status >= 500;
+  if (transient) {
+    return "Import paused: lost connection to the server. Click \"Resume import\" to continue — it picks up where it stopped.";
+  }
+  return err.message || "Failed to start import";
+}
+
 // ────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -269,6 +281,13 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   const [job, setJob] = useState<HubSpotImportJob | null>(null);
   const [overwrite, setOverwrite] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Whether THIS tab is currently driving the import (calling /continue).
+  // A job can be 'running' with nobody driving it — e.g. the connection
+  // dropped — and the button must then offer "Resume import", not sit on a
+  // disabled "Importing…" next to an error (6 Oct testing).
+  const [driving, setDriving] = useState(false);
+  const drivingRef = useRef(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Refreshes `job` from the server and stops polling once it reaches a
   // terminal state. Shared by the manual-start flow and the mount-resume
@@ -296,15 +315,40 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   // Keeps calling /continue until the server says there's nothing left.
   // Used both right after starting a brand-new import and when resuming one
   // found already `running` on mount (reload / new tab).
+  //
+  // A dropped connection, a deploy, or a function timeout (5xx / network
+  // error) is retried with backoff instead of stopping the import and
+  // leaving the user to guess that a refresh resumes it. A 4xx (job gone,
+  // HubSpot disconnected) is final and surfaces as an error.
   const driveContinue = useCallback(async (jobId: string, mode: "fill" | "refresh", initialMore: boolean) => {
-    let hasMore = initialMore;
-    let rounds = 0;
-    while (hasMore && rounds < MAX_CONTINUE_ROUNDS) {
-      const next = await api.post<{ more: boolean }>(`/integrations/hubspot/import/${jobId}/continue`, { mode });
-      hasMore = next.more;
-      rounds += 1;
+    if (drivingRef.current) return false; // another loop in this tab is already driving
+    drivingRef.current = true;
+    setDriving(true);
+    try {
+      let hasMore = initialMore;
+      let rounds = 0;
+      let transientFailures = 0;
+      while (hasMore && rounds < MAX_CONTINUE_ROUNDS) {
+        try {
+          const next = await api.post<{ more: boolean }>(`/integrations/hubspot/import/${jobId}/continue`, { mode });
+          hasMore = next.more;
+          rounds += 1;
+          transientFailures = 0;
+          setNotice(null);
+        } catch (err) {
+          const transient = !(err instanceof ApiError) || err.status >= 500;
+          if (!transient || transientFailures >= CONTINUE_RETRY_DELAYS_MS.length) throw err;
+          const waitMs = CONTINUE_RETRY_DELAYS_MS[transientFailures];
+          transientFailures += 1;
+          setNotice(`Lost connection to the server — retrying in ${Math.round(waitMs / 1000)}s. The import keeps its place.`);
+          await new Promise((res) => setTimeout(res, waitMs));
+        }
+      }
+      return hasMore;
+    } finally {
+      drivingRef.current = false;
+      setDriving(false);
     }
-    return hasMore;
   }, []);
 
   useEffect(() => {
@@ -332,7 +376,10 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
       })
       // Resuming can fail (e.g. HubSpot was disconnected mid-import — the
       // server then ends the job); say why instead of spinning silently.
-      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't resume the HubSpot import."));
+      .catch((err) => {
+        setNotice(null);
+        setError(pausedMessage(err));
+      });
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -377,7 +424,9 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   }
 
   async function startImport() {
-    if (pollRef.current) return;
+    // Polling may still be running for a job nobody is driving (the Resume
+    // case), so only bail if this tab is actively driving one.
+    if (drivingRef.current) return;
     setBusy(true);
     setError(null);
     try {
@@ -399,17 +448,16 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
       // rather than waiting for the next poll tick.
       await pollJobOnce(jobId).catch(console.warn);
     } catch (err) {
-      const msg =
-        err instanceof ApiError ? err.message :
-        err instanceof Error ? err.message :
-        "Failed to start import";
-      setError(msg);
+      setNotice(null);
+      setError(pausedMessage(err));
     } finally {
       setBusy(false);
     }
   }
 
   const isImporting = job?.status === "running";
+  // Running on the server but no tab is driving it: let the user resume.
+  const canResume = isImporting && !driving && !busy;
 
   return (
     <div className="px-6 py-5">
@@ -508,11 +556,11 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
           <button
             type="button"
             onClick={startImport}
-            disabled={busy || isImporting}
+            disabled={busy || (isImporting && !canResume)}
             className="rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             style={{ backgroundColor: "#003366" }}
           >
-            {isImporting ? "Importing…" : "Import from HubSpot"}
+            {canResume ? "Resume import" : isImporting ? "Importing…" : "Import from HubSpot"}
           </button>
 
           {job && (
@@ -536,7 +584,8 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
             </div>
           )}
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {notice && <p className="text-sm text-amber-700">{notice}</p>}
+          {error && !driving && <p className="text-sm text-red-600">{error}</p>}
         </div>
       )}
     </div>
