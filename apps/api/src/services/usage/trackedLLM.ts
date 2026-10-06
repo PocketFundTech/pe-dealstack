@@ -134,6 +134,7 @@ export async function recordUsageEvent(input: RecordUsageEventInput): Promise<vo
         ...(input.metadata ?? {}),
         ...extraMetadata,
         requestId: ctx.requestId,
+        ...(ctx.dealId ? { dealId: ctx.dealId } : {}),
         // Cron / webhook / background work has no requesting user: it is
         // attributed to an org admin (UsageEvent.userId is NOT NULL) and
         // flagged here so per-user reports can exclude it.

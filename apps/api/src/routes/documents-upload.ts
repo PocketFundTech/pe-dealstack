@@ -10,10 +10,7 @@ import { log } from '../utils/logger.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { extractTextFromPDF } from '../services/pdfExtractor.js';
-import { acquireExtractionSlot, acquireExtractionSlotBy, releaseExtractionSlot } from '../services/agents/financialAgent/concurrency.js';
 
-/** How long an upload waits for an extraction slot before skipping (see B3). */
-const UPLOAD_SLOT_WAIT_MS = 30_000;
 /** Text the deal-field top-up read sees on a data-room upload (~16 pages). */
 const DATA_ROOM_TEXT_CHARS = 40_000;
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
@@ -75,7 +72,6 @@ export async function handleDocumentUpload(req: Request, res: Response) {
     const { tryCompleteOnboardingStep } = await import('./onboarding.js');
     const { excelToMarkdown } = await import('../services/excelToMarkdown.js');
     const { isExcelFile } = await import('../services/excelFinancialExtractor.js');
-    const { runDeepPass } = await import('../services/financialExtractionOrchestrator.js');
     const { dealId } = req.params;
     const orgId = getOrgId(req);
     const dealAccess = await verifyDealAccess(dealId, orgId);
@@ -487,81 +483,6 @@ export async function handleDocumentUpload(req: Request, res: Response) {
           // Log AI error but don't fail the upload - text extraction still worked
           log.error('AI extraction failed', aiError, { documentName });
           finalStatus = 'completed';
-        }
-
-        // Excel-only follow-up: populate FinancialStatement rows so the
-        // Financial Analysis tab can show per-period revenue / EBITDA / line
-        // items extracted from the spreadsheet. Failures are logged but
-        // never fail the upload (text + AI fields are already saved). Only
-        // fires for Excel because PDFs have a different financial
-        // extraction path.
-        if (file && isExcelFile(mimeType, documentName) && extractedText) {
-          // Concurrency-slot guard mirrors /api/deals/:id/financials/extract
-          // (financials-extraction.ts:173). Without it, parallel uploads from
-          // the same org both run runDeepPass concurrently and can blow
-          // Vercel's function memory on a multi-statement workbook. If the
-          // slot isn't free, wait a short while for one (a multi-file upload
-          // arrives as parallel requests); only then log and skip — the user
-          // can Re-extract rather than the upload failing. The wait is short
-          // because the upload response is waiting on it.
-          const slotAcquired = await acquireExtractionSlotBy(orgId, Date.now() + UPLOAD_SLOT_WAIT_MS);
-          if (!slotAcquired) {
-            log.warn('Deep financial extraction skipped — org at concurrency cap', {
-              documentId: document.id,
-              dealId,
-              orgId,
-            });
-          } else {
-            try {
-              // EXTRACTION_ENGINE=claude routes upload-time spreadsheet
-              // extraction through the same flag-aware agent the Re-extract
-              // button uses (extractNode → claudeEngine, container mode), with
-              // the raw workbook buffer. runDeepPass remains the legacy-only
-              // path.
-              const useClaudeEngine = (process.env.EXTRACTION_ENGINE || 'legacy') === 'claude';
-              if (useClaudeEngine) {
-                log.info('Running deep financial extraction (claude engine)', { documentId: document.id, dealId });
-                const { runFinancialAgent } = await import('../services/agents/financialAgent/index.js');
-                const agentResult = await runFinancialAgent({
-                  dealId,
-                  documentId: document.id,
-                  fileBuffer: file.buffer,
-                  fileName: documentName,
-                  fileType: 'excel',
-                  organizationId: orgId,
-                });
-                log.info('Deep financial extraction complete (claude engine)', {
-                  documentId: document.id,
-                  status: agentResult.status,
-                  statementsStored: agentResult.statementIds.length,
-                  periodsStored: agentResult.periodsStored,
-                  overallConfidence: agentResult.overallConfidence,
-                });
-              } else {
-                log.info('Running deep financial extraction', { documentId: document.id, dealId });
-                const deepResult = await runDeepPass({
-                  text: extractedText,
-                  dealId,
-                  documentId: document.id,
-                });
-                if (deepResult) {
-                  log.info('Deep financial extraction complete', {
-                    documentId: document.id,
-                    statementsStored: deepResult.statementsStored,
-                    periodsStored: deepResult.periodsStored,
-                    overallConfidence: deepResult.overallConfidence,
-                    warnings: deepResult.warnings,
-                  });
-                } else {
-                  log.info('Deep financial extraction: no statements detected', { documentId: document.id });
-                }
-              }
-            } catch (deepErr) {
-              log.error('Deep financial extraction failed', deepErr, { documentId: document.id });
-            } finally {
-              releaseExtractionSlot(orgId);
-            }
-          }
         }
 
         // Persist the AI results onto the Document row now that they exist
