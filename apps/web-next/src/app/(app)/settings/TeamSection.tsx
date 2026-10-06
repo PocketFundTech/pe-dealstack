@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { InviteTeamModal } from "@/components/layout/InviteTeamModal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { RequireMfaToggle } from "./TeamSection.requireMfa";
+import { DeactivatedMembers } from "./TeamSection.deactivated";
 import { InviteRow, type Invitation } from "./TeamSection.inviteRow";
 
 // ─── Component ──────────────────────────────────────────────────────
@@ -178,6 +179,7 @@ export function TeamSection({
             </div>
           )}
           <RequireMfaToggle onToast={onToast} />
+          <DeactivatedMembers onToast={onToast} />
         </div>
       </section>
 
