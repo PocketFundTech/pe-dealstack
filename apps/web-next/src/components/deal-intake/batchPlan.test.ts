@@ -25,6 +25,15 @@ describe("planFileUpload", () => {
     ).toEqual({ endpoint: "/ingest", dealId: "deal-1" });
   });
 
+  it("lets a later file create the deal when every earlier file failed (no deal yet)", () => {
+    expect(
+      planFileUpload({ fileName: "transcript.pdf", index: 2, mode: "new", selectedDealId: null, createdDealId: null }),
+    ).toEqual({ endpoint: "/ingest" });
+    expect(
+      planFileUpload({ fileName: "financials.xlsx", index: 1, mode: "new", selectedDealId: null, createdDealId: null }),
+    ).toEqual({ endpoint: "/ingest/bulk" });
+  });
+
   it("routes every file in 'existing' mode to /ingest with the selected deal id, regardless of file type", () => {
     expect(
       planFileUpload({ fileName: "model.xlsx", index: 0, mode: "existing", selectedDealId: "deal-9", createdDealId: null }),

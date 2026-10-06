@@ -121,6 +121,26 @@ describe("createHandleUploadFiles", () => {
     expect(deps.setResult).toHaveBeenCalledWith({ deal: { id: "deal-2", name: "Beta" } });
   });
 
+  it("when the first file fails, the next one creates the deal and the rest join it (no deal per file)", async () => {
+    uploadViaSignedUrlMock.mockImplementation(async (file: File) => (
+      { storagePath: `p/${file.name}`, fileName: file.name, mimeType: "application/pdf", size: 10 }
+    ));
+    const posts: Array<string> = [];
+    apiPostMock.mockImplementation(async (path: string, body: Record<string, unknown>) => {
+      posts.push(`${body.fileName}:${body.dealId ?? "new"}`);
+      if (body.fileName === "cim.pdf") throw new Error("AI service rejected the request");
+      return { deal: { id: "deal-csp", name: "Community Solar Platform" } };
+    });
+
+    const deps = makeUploadFilesDeps({
+      files: [makeFileItem("cim.pdf"), makeFileItem("transcript.pdf"), makeFileItem("letter.pdf"), makeFileItem("msa.pdf")],
+    });
+    await createHandleUploadFiles(deps)();
+
+    expect(posts).toEqual(["cim.pdf:new", "transcript.pdf:new", "letter.pdf:deal-csp", "msa.pdf:deal-csp"]);
+    expect(deps.maybeShowTeaserPopup).toHaveBeenCalledWith({ id: "deal-csp", name: "Community Solar Platform" });
+  });
+
   it("routes an existing-mode upload to /ingest with the selected deal id", async () => {
     uploadViaSignedUrlMock.mockResolvedValue({
       storagePath: "p/model.xlsx", fileName: "model.xlsx", mimeType: "application/vnd.ms-excel", size: 99,
