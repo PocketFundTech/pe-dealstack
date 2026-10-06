@@ -46,6 +46,7 @@ async function loadJob(jobId: string) {
   return data as null | {
     id: string; organizationId: string; status: string;
     objectCounts: Record<string, Counters>; currentObject: string | null; cursor: string | null;
+    error?: string | null;
   };
 }
 
@@ -168,6 +169,14 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     page = await client.listPage(current, { limit: BATCH, after: job.cursor ?? undefined, properties });
   } catch (err) {
     log.error(`[hubspot] batch fetch failed for ${current}: ${(err as Error).message}`);
+    // Say what was skipped. Before, a failure on a LATER page advanced to the
+    // next object type silently: the job read "completed" with only the
+    // first few hundred companies imported (6 Oct testing).
+    const done = counts[current]?.processed ?? 0;
+    const note = job.cursor
+      ? `${current}: stopped after ${done} records (${shortError(err)}). Run the import again to pick up the rest — imported records won't be duplicated.`
+      : `${current}: not imported (${shortError(err)}).`;
+    const errorSoFar = job.error ? `${job.error} | ${note}` : note;
     // A fetch failure for ONE object type (e.g. a missing HubSpot scope for
     // engagement objects — some portals can't even grant those scopes) must
     // not discard records already imported for prior object types. Skip this
@@ -177,7 +186,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     const nextObject = ORDER[objectIndex + 1] ?? null;
     if (nextObject) {
       const { data: updated } = await supabase.from('ImportJob')
-        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running' })
+        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: errorSoFar })
         .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
       if (!updated) return false; // cancelled mid-batch
       return true;
@@ -191,7 +200,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     await saveJob(jobId, {
       status: anySucceeded ? 'completed' : 'failed',
       currentObject: null, cursor: null,
-      error: (err as Error).message,
+      error: errorSoFar,
       finishedAt: new Date().toISOString(),
     });
     return false;
@@ -318,6 +327,12 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
   // If updated is null the job was cancelled — status already 'cancelled', return false.
   void updated;
   return false;
+}
+
+/** HubSpot error bodies are long JSON; keep the status line for the UI. */
+function shortError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.length > 160 ? `${msg.slice(0, 157)}…` : msg;
 }
 
 /** Find the local Company by name (case-insensitive); create a stub if absent. */

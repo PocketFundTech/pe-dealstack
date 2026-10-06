@@ -31,14 +31,31 @@ describe('HubSpotClient', () => {
   });
 
   it('validateToken tolerates a non-JSON error body', async () => {
+    // 4xx: a 5xx would now be retried first (covered below).
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: false, status: 500,
+      ok: false, status: 400,
       headers: { get: () => null },
       json: async () => { throw new Error('not json'); },
       text: async () => 'Internal Server Error',
     }));
     const c = new HubSpotClient('tok');
-    expect(await c.validateToken()).toEqual({ ok: false, status: 500, category: null });
+    expect(await c.validateToken()).toEqual({ ok: false, status: 400, category: null });
+  });
+
+  it('retries a HubSpot 5xx and a network error instead of giving up on the page', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mkRes(502, { message: 'bad gateway' }))
+      .mockRejectedValueOnce(new Error('ECONNRESET'))
+      .mockResolvedValueOnce(mkRes(200, { results: [{ id: '1', properties: {} }], paging: { next: { after: 'c2' } } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const c = new HubSpotClient('tok');
+    const p = c.listPage('companies', { limit: 100 });
+    await vi.runAllTimersAsync();
+    const page = await p;
+    vi.useRealTimers();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(page.nextCursor).toBe('c2');
   });
 
   it('listPage returns results and next cursor', async () => {

@@ -67,9 +67,27 @@ export class HubSpotClient {
 
   private async requestWithBackoff(url: string): Promise<Response> {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-      });
+      let res: Awaited<ReturnType<typeof fetch>>;
+      try {
+        res = await fetch(url, {
+          headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+        });
+      } catch (err) {
+        // Network blip (reset / DNS / timeout). Used to end the whole object
+        // type mid-import, silently dropping every record after this page.
+        if (attempt === MAX_RETRIES) throw err;
+        const waitMs = Math.min(MAX_BACKOFF_MS, 2 ** attempt * 500);
+        log.warn(`[hubspot] network error, retry ${attempt + 1}/${MAX_RETRIES} in ${waitMs}ms: ${(err as Error).message}`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      // HubSpot 5xx are transient; retry them like a 429 (no Retry-After).
+      if (res.status >= 500 && attempt < MAX_RETRIES) {
+        const waitMs = Math.min(MAX_BACKOFF_MS, 2 ** attempt * 500);
+        log.warn(`[hubspot] ${res.status} from HubSpot, retry ${attempt + 1}/${MAX_RETRIES} in ${waitMs}ms`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
       if (res.status !== 429) return res as unknown as Response;
       const retryAfter = Number(res.headers.get('Retry-After') ?? '1');
       const waitMs = Math.min(MAX_BACKOFF_MS, Math.max(0, retryAfter) * 1000 || 2 ** attempt * 250);
