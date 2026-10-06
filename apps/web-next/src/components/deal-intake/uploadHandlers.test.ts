@@ -141,6 +141,16 @@ describe("createHandleUploadFiles", () => {
     expect(deps.maybeShowTeaserPopup).toHaveBeenCalledWith({ id: "deal-csp", name: "Community Solar Platform" });
   });
 
+  it("a deal-list spreadsheet uploaded on its own doesn't warn about held-back files", async () => {
+    uploadViaSignedUrlMock.mockResolvedValue({ storagePath: "p/list.csv", fileName: "list.csv", mimeType: "text/csv", size: 10 });
+    apiPostMock.mockResolvedValue({ summary: { imported: 3, failed: 0, total: 3, deals: [
+      { dealId: "d1", companyName: "A" }, { dealId: "d2", companyName: "B" }, { dealId: "d3", companyName: "C" },
+    ] } });
+    const deps = makeUploadFilesDeps({ files: [makeFileItem("list.csv")] });
+    await createHandleUploadFiles(deps)();
+    expect(deps.setWarning).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Multiple deals created" }));
+  });
+
   it("routes an existing-mode upload to /ingest with the selected deal id", async () => {
     uploadViaSignedUrlMock.mockResolvedValue({
       storagePath: "p/model.xlsx", fileName: "model.xlsx", mimeType: "application/vnd.ms-excel", size: 99,

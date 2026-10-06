@@ -73,12 +73,14 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     let matchedExisting = false;
     let createdDealName: string | null = null;
     let stopReason: string | null = null;
+    let skippedAfterStop = 0;
     let lastSuccessResult: IngestResponse | null = null;
     let anySucceeded = false;
     const failedNames: string[] = [];
 
     for (let i = 0; i < files.length; i++) {
       if (stopReason) {
+        skippedAfterStop += 1;
         setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: stopReason! } : f)));
         continue;
       }
@@ -151,7 +153,9 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
       });
     }
 
-    if (stopReason) {
+    // Only when files were actually held back: a deal-list import on its own
+    // creating several deals is the expected result, not a warning.
+    if (stopReason && skippedAfterStop > 0) {
       setWarning({
         title: "Multiple deals created",
         message: "The first file created several deals, so the remaining files weren't attached to any of them. Use \"Update Existing Deal\" to add them once you've picked the right deal.",
