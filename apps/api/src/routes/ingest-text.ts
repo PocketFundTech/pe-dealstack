@@ -10,10 +10,9 @@ import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
+import { findLiveDealForCompany } from '../services/dealDuplicates.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
-import { generateTeasersForDeal } from '../services/firmTeaserService.js';
-import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const subRouter = Router();
@@ -28,6 +27,8 @@ const textIngestSchema = z.object({
   sourceName: z.string().max(500).optional(),
   sourceType: z.enum(['email', 'note', 'slack', 'whatsapp', 'other']).optional(),
   dealId: z.string().uuid().optional(),
+  // Skip the same-company match and always create a new deal.
+  forceCreate: z.boolean().optional(),
 });
 
 // POST /api/ingest/text — Create deal from raw pasted text
@@ -39,7 +40,7 @@ subRouter.post('/text', async (req, res) => {
       return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
     }
 
-    const { text, sourceName, sourceType, dealId: targetDealId } = validation.data;
+    const { text, sourceName, sourceType, dealId: targetDealId, forceCreate } = validation.data;
     log.info('Text ingest starting', { textLength: text.length, sourceType, targetDealId });
 
     // Step 1: Extract deal data. INGEST_ENGINE=claude uses the native reader
@@ -83,7 +84,19 @@ subRouter.post('/text', async (req, res) => {
     let company: any;
     let isUpdate = false;
 
-    if (targetDealId) {
+    // No target deal: add to the live deal for the same company instead of
+    // creating a duplicate (5 Oct testing, item 8) — same rule as upload.
+    const matchedDeal = !targetDealId && !forceCreate
+      ? await findLiveDealForCompany(orgId, aiData.companyName.value)
+      : null;
+
+    if (matchedDeal) {
+      log.info('Text ingest matched an existing deal for this company', { dealId: matchedDeal.id });
+      const result = await mergeIntoExistingDeal(matchedDeal.id, aiData, req.user?.id, docName);
+      deal = result.deal;
+      company = deal.company;
+      isUpdate = true;
+    } else if (targetDealId) {
       // ─── Update Existing Deal path ───
       // Verify the caller's org owns this deal before merging extracted data
       // and dropping a Document row pointing at it. Without this, a client
@@ -106,7 +119,8 @@ subRouter.post('/text', async (req, res) => {
         .select('id, name')
         .ilike('name', companyName)
         .eq('organizationId', orgId)
-        .single();
+        .limit(1)
+        .maybeSingle();
 
       if (existingCompany) {
         company = existingCompany;
@@ -260,26 +274,13 @@ subRouter.post('/text', async (req, res) => {
 
     await AuditLog.aiIngest(req, docName, deal.id);
 
-    // Auto-generate firm-teaser blurbs for newly-created deals. Never blocks
-    // the response — deferred via runAfterResponse (awaited inline when no
-    // post-response hook is present, e.g. local dev/tests). Best-effort: a
-    // teaser failure must never fail ingest.
-    if (!isUpdate) {
-      await runAfterResponse(req, async () => {
-        try {
-          await generateTeasersForDeal({ dealId: deal.id, orgId });
-        } catch (teaserErr) {
-          log.error('Text ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
-        }
-      });
-    }
-
     log.info('Text ingest complete', { dealId: deal.id, isUpdate });
 
     emitWebhookEvent(req, orgId, isUpdate ? 'deal.updated' : 'deal.created', { ...deal, company: company || deal.company });
     res.status(isUpdate ? 200 : 201).json({
       success: true,
       isUpdate,
+      ...(matchedDeal ? { matchedExistingDeal: { id: matchedDeal.id, name: matchedDeal.name } } : {}),
       deal: { ...deal, company: company || deal.company },
       document,
       extraction: {

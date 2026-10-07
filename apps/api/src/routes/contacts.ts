@@ -321,7 +321,7 @@ router.post('/', async (req: Request, res) => {
         });
       }
       log.error('Supabase insert error', { code: error.code, message: error.message, details: error.details, hint: error.hint });
-      return res.status(500).json({ error: 'Failed to create contact', details: error.message });
+      return res.status(500).json({ error: 'Failed to create contact' });
     }
 
     log.info('Contact created', { contactId: contact.id, name: `${data.firstName} ${data.lastName}` });
@@ -349,7 +349,7 @@ router.post('/', async (req: Request, res) => {
     res.status(201).json(contact);
   } catch (error: any) {
     log.error('Create contact error', error);
-    res.status(500).json({ error: 'Failed to create contact', details: error?.message });
+    res.status(500).json({ error: 'Failed to create contact' });
   }
 });
 

@@ -138,7 +138,11 @@ router.post('/contacts', async (req: Request, res) => {
 
     if (error) {
       log.error('Supabase insert error', { code: error.code, message: error.message, details: error.details, hint: error.hint });
-      return res.status(500).json({ error: 'Failed to create outreach contact', details: error.message });
+      // Foreign-key violation: the stage was deleted (e.g. in another tab).
+      if (error.code === '23503') {
+        return res.status(400).json({ error: 'That pipeline stage no longer exists. Refresh and try again.' });
+      }
+      return res.status(500).json({ error: 'Failed to create outreach contact' });
     }
 
     log.info('Outreach contact created', { contactId: contact.id, orgId });
@@ -146,7 +150,7 @@ router.post('/contacts', async (req: Request, res) => {
     res.status(201).json(contact);
   } catch (error: any) {
     log.error('Create outreach contact error', error);
-    res.status(500).json({ error: 'Failed to create outreach contact', details: error?.message });
+    res.status(500).json({ error: 'Failed to create outreach contact' });
   }
 });
 

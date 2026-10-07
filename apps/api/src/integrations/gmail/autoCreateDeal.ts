@@ -6,6 +6,7 @@ import { getIconForIndustry } from '../../services/dealMerger.js';
 import { findExistingDocument, logDuplicateSkip } from '../../services/documentDedup.js';
 import { embedDocument } from '../../rag.js';
 import { resolveUserId } from '../../routes/notifications.js';
+import { findLiveDealForCompany } from '../../services/dealDuplicates.js';
 
 // Source tags used on Deal.source so downstream UI can distinguish how a deal
 // was created. Keep these in sync with any UI badge logic.
@@ -29,7 +30,7 @@ export interface AutoCreateDealInput {
 
 export interface AutoCreateDealResult {
   created: boolean;
-  reason?: 'duplicate' | 'insufficient_content' | 'extraction_failed' | 'no_company_name';
+  reason?: 'duplicate' | 'existing_company_deal' | 'insufficient_content' | 'extraction_failed' | 'no_company_name';
   dealId?: string;
   documentId?: string;
   extraction?: ExtractedDealData;
@@ -127,6 +128,13 @@ export async function createDealFromEmail(
     return { created: false, reason: 'no_company_name' };
   }
   companyName = companyName.trim();
+
+  // 5b. A live deal for the same company already exists → don't duplicate it
+  // (5 Oct testing, item 8; the rule Outlook auto-create follows).
+  const existingDeal = await findLiveDealForCompany(organizationId, companyName);
+  if (existingDeal) {
+    return { created: false, reason: 'existing_company_deal', dealId: existingDeal.id, companyName: existingDeal.name };
+  }
 
   // 6. Find-or-create Company (case-insensitive name match within org).
   const { data: existingCompany } = await supabase

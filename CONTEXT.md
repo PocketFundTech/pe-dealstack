@@ -1,4 +1,4 @@
-# CONTEXT — where things stand (updated 3 Oct 2026, 04:10 IST)
+# CONTEXT — where things stand (updated 6 Oct 2026)
 
 The one-page handoff for whoever picks up next (person or agent). The detailed day-by-day log is
 [`PROGRESS.md`](PROGRESS.md); working rules are in [`CLAUDE.md`](CLAUDE.md).
@@ -9,70 +9,59 @@ The one-page handoff for whoever picks up next (person or agent). The detailed d
 One Vercel project `pocket-funds-projects/pe-dealstack` serves `deals.avise.io` and `app.avise.io`.
 
 ## 🔴 Blocking right now
-1. **Production is out of AI credit.** Anthropic: *"Your credit balance is too low"*; OpenAI: *"429 no credits remaining"*.
-   Every AI feature fails — extraction, PDF ingest, chat, memos, insights — including for real customers
-   (seen on a "Kliniva" deal). Founder must top up (Anthropic Console → Plans & Billing). Check first with
-   `vercel logs --environment production --since 1h --query "credit balance"`.
+1. **AI credit.** Anthropic and OpenAI have both run out more than once (28 Sep, 1 Oct, 5 Oct). Every AI feature fails while
+   either is out. Check first: `vercel logs --environment production --since 1h --query "ai_quota_exhausted"`.
+2. **Google sign-in on production.** Gmail / Google connect needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   `APP_URL=https://app.avise.io`, `OAUTH_STATE_SECRET` and `CRON_SECRET` in Vercel (someone with Vercel access), then a
+   redeploy. Works locally already. The Google app is in Testing mode (≤100 named users, reconnect every 7 days).
+3. **GitHub Actions runners.** PR checks (#203, #206, #208) were cancelled after 15 min with "job was not acquired by
+   Runner" — not a code failure. Re-run; if it repeats, check the org's Actions minutes / billing.
 
-## Open PRs
-None from the financials work — everything below is merged.
+Everything that needs an outside account (AI, Google, Microsoft, Resend, Supabase SMTP, Dropbox Sign, Kondo) is mapped in
+[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 
-## Recently shipped (all on `main`)
-- **Smooth Flows** user-flow fixes — Batch 1 (#158), Batch 0 (#160), Batch 2 onboarding/invites/auth (#170).
-  List: [`docs/USERFLOW-SMOOTHING-TODO.md`](docs/USERFLOW-SMOOTHING-TODO.md).
-- **Financials fix plan** from Pushkar's Strong Ready Mix (SRM) test — every item A1–F1:
-  periods/growth/EBITDA/signs/queue/P&L layout/model base (#163), real statements beat valuation models +
-  canonical periods + account parents (#164), cash-flow red flags (#165), customer concentration from the CIM (#166),
-  every P&L line + Low/Base/High scenarios + working capital/capex/debt (#169, carrying #167 + #168).
-  Plan + notes: [`docs/FINANCIALS-FIX-PLAN.md`](docs/FINANCIALS-FIX-PLAN.md), [`docs/FINANCIALS-INVESTIGATION-NOTES.md`](docs/FINANCIALS-INVESTIGATION-NOTES.md).
-- **Financials Phase G — post-SRM hardening (G1–G16)**, from three audits after A–F (plan: FINANCIALS-FIX-PLAN.md → Phase G):
-  - **#173**: the model .xlsx carries a computed value for every formula, so it no longer opens blank in Protected View or previews. QA guide: `docs/MODEL-EXPORT-TESTING-GUIDE.md`.
-  - **#181 (A)**:
-    - entry multiple vs deal-record EBITDA mismatch → 5× plus a warning;
-    - bottom-up EBITDA strips other income / expense;
-    - nested cash-flow signs;
-    - revenue per employee divides by headcount.
-  - **#182 (B)**:
-    - provider rejections (out of credit) fail extraction with the reason instead of "no financial data";
-    - no placeholder AI insights;
-    - Analysis / Build model panel show real reasons;
-    - model route DB errors are explicit.
-  - **#183 (C)**: one active row per canonical period (dedup, conflict resolution, DB index), and analysis uses one currency.
-  - **#184 (D1)**: Low/High margin delta through Fixed costs; "summary" names; model always in millions.
-  - **#185 (D2)**: fiscal year-end hint for bare "FY2025"; restatements win; the fast deal read's units are re-checked in code.
-- **Financials Phase H — model extras while AI credit is out** (founder's pick, 3 Oct 2026; plan: FINANCIALS-FIX-PLAN.md → Phase H):
-  - **#188 (H1)**: a parity test checks every cached workbook value against the live preview (`projectModel`/`summariseCase`). Found and fixed a real bug: `INDEX` over another sheet's range cached as 0, so exported-model previews showed exit EV 0 / IRR "n/a" until opened in Excel with editing enabled.
-  - **#189 (H2)**: a revolving credit facility — off by default (commitment 0). Draws only to hold minimum cash, repaid first from spare cash before the sweep, interest on the opening drawn balance + fee on the undrawn commitment (no circularity).
-  - **#191 (H3)**: an integrated balance sheet with a balance check. Entry uses a goodwill plug (founder's choice): goodwill = entry EV − net working capital − PP&E − other net operating assets bought; fees expensed at close; no dividends during the hold. New `Balance Sheet` sheet in the workbook + a read-only panel section with a "Balances" / "Check off by …" badge.
-  - **H4 (per-account label/order)** is the only item left in Phase H — held until AI credit is back, since it needs an extraction schema change.
-- Earlier the same week: token/cost work (#145, #149, #150, #154–#156), uploads (#151), bugs (#152), icon font (#153).
+## Open PRs (newest first)
+- **#208** QA report 6 Oct — memo, UI, branding fixes.
+- **#207** "Generate teasers" button in the deal's empty state (goes with #206).
+- **#204** Granola could never connect (`validateKey` hit a nonexistent endpoint) — merge soon.
+- **#203** QA follow-ups:
+  - no duplicate deals from text / URL / AI ingest / bulk / email / Gmail;
+  - no raw DB errors from contacts / outreach;
+  - Settings toggle for Gmail auto-create;
+  - self-deactivation + Reactivate in Settings → Team;
+  - teasers on demand on every intake path (finishes #206).
+- **#196** financials unit-scale mismatch checks.
+
+## Recently shipped (on `main`)
+- **#206** upload runs only the deal summary; scoring, teasers, financials and discrepancy checks are buttons.
+- **#205** ingest AI spend tagged with `dealId` (per-deal cost). **#202** cheapest model that holds quality on every non-Fable path.
+- **#201** "Unknown Company" placeholder no longer masks a deal's real name.
+- **#200** 5 Oct testing doc: duplicate deals on upload, "AI analysed" wording, layout, refresh, Clear chat, doc-request email
+  sender/Reply-To, provider-named AI-credit errors; `docs/DEPENDENCIES.md`.
+- **#178 / #174** 1 Oct QA report (27 items): tasks for every role but Viewer, `isActive` enforced, extraction concurrency 4,
+  portal redesign + view-count dedupe, bulk invite preview, live extraction progress, per-deal chat history.
+- **Financials** A–F (#163–#169), Phase G (#173, #181–#185), Phase H (#188–#191) — plan in
+  [`docs/FINANCIALS-FIX-PLAN.md`](docs/FINANCIALS-FIX-PLAN.md). H4 (per-account label/order) waits for AI credit.
 
 ## Migrations
-**Pending (founder runs, in this order)** — from #183, steps + verify query in [`docs/PENDING-MIGRATIONS.md`](docs/PENDING-MIGRATIONS.md):
-1. `cd apps/api && npx tsx scripts/backfill-statement-period-keys.ts --dry-run`, then without the flag.
-2. `apps/api/financials-period-key-unique-migration.sql` in the Supabase SQL Editor (refuses to run before step 1).
-3. Verify query → expect 1, 0, 0.
-The app works before and after; the SQL cleans up existing duplicate periods and adds the guard index.
+All migrations from #174 / #178 / #200 have been run. Still check [`docs/PENDING-MIGRATIONS.md`](docs/PENDING-MIGRATIONS.md)
+for the #183 period-key backfill + unique index (founder runs; the app works before and after).
 
-## Waiting on the founder
-- Top up Anthropic (and OpenAI, or keep moving features to Claude).
-- With the team's OK: **Re-extract** the SRM deal; Pushkar re-tests with his document.
-- Team decision: SRM FY2024 EBITDA — $2.21M (from the P&L) vs $6.1M (deal record).
-- #170 decisions taken with defaults: users in another org can't be invited (409); **Analyst = view-only** (consider MEMBER);
-  founders can't invite Admins; only admin/founder can change an existing firm profile.
-- Ops checklist: [`docs/PENDING-OPS-CHECKLIST.md`](docs/PENDING-OPS-CHECKLIST.md) — Google OAuth keys in Vercel (Gmail/Google
-  connect 500s), delete `Antropic_api_avise`, set `ANTHROPIC_ADMIN_KEY`, revoke keys pasted in chat, test invite email with a
-  real address, rotate the QA account password after testing.
+## Waiting on the founder / ops
+- Top up Anthropic **and** OpenAI; delete the misspelled `Antropic_api_avise` Vercel var.
+- Vercel env for Google (above); Microsoft (`MS_*`), Dropbox Sign key, Kondo API docs.
+- Email: Resend domain (SPF/DKIM/DMARC) for app email; **Supabase custom SMTP before real sign-ups** — the built-in sender
+  only delivers to project-team addresses. Supabase URL Configuration: Site URL + `/reset-password` redirects.
+- Google publishing: domain verification, Google-user-data section in the privacy policy, and the paid CASA assessment that
+  `gmail.readonly` needs.
+- After credit is back: re-extract SRM; Pushkar and Dev re-test.
 
 ## What's next (engineering)
-1. After credit is back:
-   - Re-run the live QA checks that failed only on credit: Excel re-extract on "Northwind Cold Chain", PDF upload, model entry/IRR, data-room insights.
-   - Check the Phase G warnings show (Build model panel, Analysis currency note) and the Phase H Balance Sheet section renders and balances on a real deal.
-   - Then re-extract SRM and have Pushkar re-test.
-   - While credit is still out, #182 is verifiable: extraction should say the AI provider is out of credits, not "no financial data".
-2. **Financials H4 / PR E — headcount extraction + per-account label/order** (founder's choice; G17/H4 in the plan). Held until credit is back, because both change the extraction prompt and bump `EXTRACTION_SCHEMA_VERSION`. Founder's design choices already recorded: headcount extracted (not deferred); labels/order stored as `<key>_label`/`<key>_order` inside `lineItems` (no migration), not a separate `lineItemMeta` column.
-3. Smooth Flows **Batch 3** (stop losing work) → **Batch 4** (pagination, extraction status, public large uploads, mobile nav, shared Dialog).
-4. Financials deferred items remaining: none — integrated BS, balance check and revolver all shipped in Phase H (#188–#191).
+1. Merge #203 / #204 / #207 / #208 once CI runs and they're tested.
+2. Kondo / LinkedIn Deal Finder (1 Oct #23) — blocked on API docs.
+3. Optional: split Google scopes so Calendar / Drive / Docs can be published without the Gmail assessment.
+4. Re-enable NDA signature push detection on the verified domain (`docs/nda-signature-detection-setup.md`).
+5. Financials H4 / headcount extraction once credit is back.
 
 ## Testing on production
 QA login `qa.tester@example.com` (ADMIN) in its own org **"Avise QA Test Org"**; password in the session scratchpad

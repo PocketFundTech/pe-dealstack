@@ -5,6 +5,42 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 105 — October 6, 2026
+
+#### Goal: Finish the code-only follow-ups from the 1 Oct QA report and the 5 Oct testing doc (PR #203), and set up Google sign-in locally.
+
+#### Changes (PR #203)
+
+- **No duplicate deals (5 Oct #8).** Upload already joined the company's live deal; now every other intake path does too:
+  - paste text and URL merge into the matched deal;
+  - bulk import skips rows whose company has a live deal or repeats in the file (`loadLiveDealIndex`);
+  - `/ai/ingest` and `.eml` return 409;
+  - Gmail auto-create links the email to the existing deal (`existing_company_deal`, as Outlook does).
+
+  `forceCreate` overrides everywhere.
+- **No raw DB errors (1 Oct #14 follow-up)** from contact / outreach-contact create and outreach import.
+- **Gmail auto-create toggle:**
+  - `GET/PATCH /api/integrations/auto-deal`; PATCH is admin-only.
+  - Settings → Integrations switch with a 75 / 85 / 95% threshold.
+  - Default off.
+- **Self-deactivation (1 Oct #16):**
+  - `POST /api/users/me/deactivate` (type DEACTIVATE): `isActive=false`, revokes API keys + integrations, global sign-out.
+  - The last admin is refused (409 `LAST_ADMIN`).
+  - Any `ACCOUNT_DEACTIVATED` response signs the user out to `/login` with an explanation.
+  - Settings → Team lists deactivated members with **Reactivate** (ADMIN / OPS).
+- **Teasers on demand everywhere.** #206 stopped auto-teasers on upload. Text, URL, `.eml`, bulk, `/ai/ingest` and review-approve no longer generate them either. The "Generate teasers" button (#207) covers it.
+
+#### Ops
+
+- Google OAuth client created (Testing mode); keys in local `apps/api/.env`. Prod env vars wait on Vercel access.
+- Supabase auth email stays on the built-in sender for now. Custom SMTP is needed before real sign-ups.
+
+#### Tests
+
+New: `ingest-bulk-duplicates`, `integrations-auto-deal`, `users-self-deactivate`, `loadLiveDealIndex` cases. `ingest-bulk-background` now asserts no teasers.
+
+---
+
 ### Session 104 — October 5, 2026
 
 #### Timestamp: October 05, 2026 — 22:23 IST

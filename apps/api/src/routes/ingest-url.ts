@@ -10,12 +10,11 @@ import { researchCompany, buildResearchText } from '../services/companyResearche
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
+import { findLiveDealForCompany } from '../services/dealDuplicates.js';
 import { formatValueWithUnit } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { isPrivateUrl } from '../utils/urlHelpers.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
-import { generateTeasersForDeal } from '../services/firmTeaserService.js';
-import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const subRouter = Router();
@@ -27,6 +26,8 @@ const urlResearchSchema = z.object({
   companyName: z.string().max(500).optional(),
   autoCreateDeal: z.boolean().optional().default(true),
   dealId: z.string().uuid().optional(),
+  // Skip the same-company match and always create a new deal.
+  forceCreate: z.boolean().optional(),
 });
 
 // POST /api/ingest/url — Research company from website URL (scrapes multiple pages)
@@ -38,7 +39,7 @@ subRouter.post('/url', async (req, res) => {
       return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
     }
 
-    const { url, companyName: userCompanyName, autoCreateDeal, dealId: targetDealId } = validation.data;
+    const { url, companyName: userCompanyName, autoCreateDeal, dealId: targetDealId, forceCreate } = validation.data;
 
     // SECURITY: block SSRF — refuse URLs pointing to loopback / RFC1918 / .local before fetch.
     if (isPrivateUrl(url)) {
@@ -115,7 +116,19 @@ subRouter.post('/url', async (req, res) => {
     let company: any;
     let isUpdate = false;
 
-    if (targetDealId) {
+    // No target deal: add to the live deal for the same company instead of
+    // creating a duplicate (5 Oct testing, item 8) — same rule as upload.
+    const matchedDeal = !targetDealId && !forceCreate
+      ? await findLiveDealForCompany(orgId, companyName)
+      : null;
+
+    if (matchedDeal) {
+      log.info('URL ingest matched an existing deal for this company', { dealId: matchedDeal.id });
+      const result = await mergeIntoExistingDeal(matchedDeal.id, aiData, req.user?.id, `Web Research — ${url}`);
+      deal = result.deal;
+      company = deal.company;
+      isUpdate = true;
+    } else if (targetDealId) {
       // ─── Update Existing Deal path ───
       // Verify the caller's org owns this deal before merging extracted data
       // and dropping a Document row pointing at it. Without this, a client
@@ -137,7 +150,8 @@ subRouter.post('/url', async (req, res) => {
         .select('id, name')
         .ilike('name', companyName)
         .eq('organizationId', orgId)
-        .single();
+        .limit(1)
+        .maybeSingle();
 
       if (existingCompany) {
         company = existingCompany;
@@ -341,26 +355,13 @@ subRouter.post('/url', async (req, res) => {
 
     await AuditLog.aiIngest(req, `Web Research — ${url}`, deal.id);
 
-    // Auto-generate firm-teaser blurbs for newly-created deals. Never blocks
-    // the response — deferred via runAfterResponse (awaited inline when no
-    // post-response hook is present). Best-effort: a teaser failure must
-    // never fail ingest.
-    if (!isUpdate) {
-      await runAfterResponse(req, async () => {
-        try {
-          await generateTeasersForDeal({ dealId: deal.id, orgId });
-        } catch (teaserErr) {
-          log.error('URL ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
-        }
-      });
-    }
-
     log.info('URL research ingest complete', { dealId: deal.id, url, isUpdate });
 
     emitWebhookEvent(req, orgId, isUpdate ? 'deal.updated' : 'deal.created', { ...deal, company: company || deal.company });
     res.status(isUpdate ? 200 : 201).json({
       success: true,
       isUpdate,
+      ...(matchedDeal ? { matchedExistingDeal: { id: matchedDeal.id, name: matchedDeal.name } } : {}),
       deal: { ...deal, company: company || deal.company },
       document,
       extraction: {

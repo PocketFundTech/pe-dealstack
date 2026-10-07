@@ -1,10 +1,7 @@
 /**
- * POST /api/ingest/bulk — firm-teaser generation for every imported deal
- * must run as ONE deferred background job (bounded parallelism), not one
- * `await generateTeasersForDeal(...)` per row. A 40-60+ row spreadsheet
- * serially awaiting a teaser call per row can exceed Vercel's 300s
- * maxDuration; deferring it via runAfterResponse (with bounded concurrency)
- * keeps the response fast and the background work safe either way.
+ * POST /api/ingest/bulk — firm teasers are generated on demand (Generate
+ * teasers button, POST /deals/:id/teasers), never automatically per imported
+ * row (#206: upload paths no longer fire background AI jobs).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
@@ -128,8 +125,8 @@ beforeEach(() => {
   mockTables();
 });
 
-describe('POST /api/ingest/bulk — teaser generation is a single background job', () => {
-  it('schedules exactly ONE background job for teasers (not one per row) when a hook is present', async () => {
+describe('POST /api/ingest/bulk — teasers are on demand (#206)', () => {
+  it('imports every row without generating teasers or scheduling background AI work', async () => {
     const { appPromise, scheduled } = buildApp({ withAfterResponseHook: true });
     const app = await appPromise;
 
@@ -139,28 +136,7 @@ describe('POST /api/ingest/bulk — teaser generation is a single background job
 
     expect(res.status).toBe(201);
     expect(res.body.summary.imported).toBe(8);
-    expect(generateTeasersForDeal).not.toHaveBeenCalled();
-    // Exactly one job scheduled for the whole batch, not one per row.
-    expect(scheduled.length).toBe(1);
-
-    await scheduled[0]();
-
-    expect(generateTeasersForDeal).toHaveBeenCalledTimes(8);
-    // Bounded parallelism: at most 3 in flight at once.
-    expect(maxInFlight).toBeLessThanOrEqual(3);
-    expect(maxInFlight).toBeGreaterThan(1); // actually ran concurrently, not serially
-  });
-
-  it('without a hook, runs teaser generation inline before responding (legacy behavior)', async () => {
-    const { appPromise, scheduled } = buildApp({ withAfterResponseHook: false });
-    const app = await appPromise;
-
-    const res = await request(app)
-      .post('/api/ingest/bulk')
-      .attach('file', excelBuffer(3), { filename: 'deals.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
-    expect(res.status).toBe(201);
     expect(scheduled.length).toBe(0);
-    expect(generateTeasersForDeal).toHaveBeenCalledTimes(3);
+    expect(generateTeasersForDeal).not.toHaveBeenCalled();
   });
 });
