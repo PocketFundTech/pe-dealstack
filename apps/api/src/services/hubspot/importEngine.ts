@@ -38,7 +38,11 @@ export function resetStageLabelCache(): void {
   stageLabelCache.clear();
 }
 
-interface Counters { processed: number; created: number; updated: number; failed: number; skipped: number; }
+interface Counters {
+  processed: number; created: number; updated: number; failed: number; skipped: number;
+  /** Records HubSpot says this object has (for "X of Y" progress); null if unknown. */
+  total?: number | null;
+}
 const emptyCounters = (): Counters => ({ processed: 0, created: 0, updated: 0, failed: 0, skipped: 0 });
 
 async function loadJob(jobId: string) {
@@ -148,6 +152,19 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     const id = await dealIdForHubspotId(orgId, hubspotDealId);
     dealIdCache.set(hubspotDealId, id);
     return id;
+  }
+
+  // Totals for every object, fetched once per job (null = unknown, not
+  // re-fetched), so the panel can show "X of Y" and an ETA from the start
+  // instead of an open-ended counter (6 Oct testing: "users feel lost").
+  const missingTotals = ORDER.filter((o) => counts[o].total === undefined);
+  // One at a time: HubSpot's search API has its own low rate limit (a few
+  // requests/second), and firing all eight at once 429'd some of them, so
+  // companies and deals showed no total (7 Oct testing).
+  for (const o of missingTotals) {
+    let total: number | null = null;
+    try { total = await client.countObjects(o); } catch { total = null; }
+    counts[o] = { ...counts[o], total };
   }
 
   // Pick the current object (first not-yet-finished in ORDER).

@@ -6,6 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PasteKeyModal, type PasteKeyInstructions } from "./IntegrationsSection.PasteKeyModal";
 import { ProviderCard, type Integration, type ProviderCatalogEntry } from "./IntegrationsSection.providerCard";
+import { HubSpotImportHistory, HubSpotImportProgress, type HubSpotImportJob } from "./IntegrationsSection.hubspotProgress";
 import { GmailAutoDealToggle } from "./IntegrationsSection.autoDeal";
 
 interface InitiateAuthResponse {
@@ -25,26 +26,6 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   { id: "fireflies",       name: "Fireflies",       desc: "Auto-import meeting transcripts",        icon: "mic",         available: false },
   { id: "otter",           name: "Otter",           desc: "Auto-import meeting transcripts",        icon: "graphic_eq",  available: false },
 ];
-
-// ─── HubSpot types ──────────────────────────────────────────────────
-
-interface HubSpotJobCounts {
-  processed: number;
-  created: number;
-  updated: number;
-  failed: number;
-  skipped?: number;
-}
-
-interface HubSpotImportJob {
-  id: string;
-  status: string;
-  currentObject: string | null;
-  objectCounts: Record<string, HubSpotJobCounts>;
-  error?: string | null;
-}
-
-const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "meetings", "emails", "tasks"] as const;
 
 const POLL_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
@@ -565,26 +546,9 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
             {canResume ? "Resume import" : isImporting ? "Importing…" : "Import from HubSpot"}
           </button>
 
-          {job && (
-            <div className="rounded-lg border border-border-subtle bg-gray-50 p-4 space-y-2">
-              {HUBSPOT_OBJECTS.map((obj) => {
-                const c = job.objectCounts?.[obj];
-                return (
-                  <div key={obj} className="flex items-center justify-between text-sm">
-                    <span className="capitalize text-text-secondary">{obj}</span>
-                    <span className="text-text-main font-medium">
-                      {c ? `${c.created + c.updated} imported · ${c.failed} failed` : "—"}
-                    </span>
-                  </div>
-                );
-              })}
-              <div className="pt-1 text-xs text-text-muted" data-testid="hubspot-job-status">
-                Status: <span className="font-semibold">{job.status}</span>
-                {job.currentObject ? ` (syncing ${job.currentObject})` : ""}
-                {job.error ? ` — ${job.error}` : ""}
-              </div>
-            </div>
-          )}
+          {job && <HubSpotImportProgress job={job} driving={driving} />}
+
+          <HubSpotImportHistory refreshKey={`${job?.id ?? "none"}:${job?.status ?? ""}`} />
 
           {notice && <p className="text-sm text-amber-700">{notice}</p>}
           {error && !driving && <p className="text-sm text-red-600">{error}</p>}

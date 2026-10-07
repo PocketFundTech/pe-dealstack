@@ -46,6 +46,7 @@ describe("HubSpotPanel", () => {
       if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
       if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: RUNNING_JOB });
       if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(RUNNING_JOB);
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
       throw new Error(`unexpected GET ${path}`);
     });
     post.mockImplementation((path: string) => {
@@ -67,6 +68,7 @@ describe("HubSpotPanel", () => {
     get.mockImplementation((path: string) => {
       if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
       if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: COMPLETED_JOB });
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
       throw new Error(`unexpected GET ${path}`);
     });
 
@@ -86,6 +88,7 @@ describe("HubSpotPanel", () => {
     get.mockImplementation((path: string) => {
       if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
       if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: null });
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
       throw new Error(`unexpected GET ${path}`);
     });
 
@@ -100,6 +103,7 @@ describe("HubSpotPanel", () => {
       if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
       if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: RUNNING_JOB });
       if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(RUNNING_JOB);
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
       throw new Error(`unexpected GET ${path}`);
     });
     post
@@ -118,6 +122,7 @@ describe("HubSpotPanel", () => {
       if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
       if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: RUNNING_JOB });
       if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(RUNNING_JOB);
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
       throw new Error(`unexpected GET ${path}`);
     });
     post.mockRejectedValue(new (ApiError as unknown as new (m: string, s: number) => Error)("Import job not found", 404));
@@ -127,5 +132,48 @@ describe("HubSpotPanel", () => {
     expect(await screen.findByText("Import job not found")).toBeInTheDocument();
     const button = await screen.findByRole("button", { name: "Resume import" });
     expect(button).not.toBeDisabled();
+  });
+
+  it("shows X of Y per object and an overall percentage from HubSpot's totals", async () => {
+    const job = {
+      ...RUNNING_JOB,
+      currentObject: "contacts",
+      objectCounts: {
+        companies: { processed: 3971, created: 3949, updated: 0, failed: 22, total: 3971 },
+        contacts: { processed: 500, created: 480, updated: 0, failed: 20, total: 2029 },
+      },
+    };
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job });
+      if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(job);
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
+      throw new Error(`unexpected GET ${path}`);
+    });
+    post.mockResolvedValue({ more: true });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    expect(await screen.findByText("3,949 of 3,971 imported · 22 failed")).toBeInTheDocument();
+    expect(screen.getByText("480 of 2,029 imported · 20 failed")).toBeInTheDocument();
+    expect(screen.getByTestId("hubspot-overall")).toHaveTextContent("4,471 of 6,000 records (74%)");
+  });
+
+  it("lists past imports with who ran them", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: null });
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [
+        { ...COMPLETED_JOB, startedAt: "2026-10-05T10:00:00Z", finishedAt: "2026-10-05T10:42:00Z", startedByName: "Pushkar" },
+      ] });
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    const history = await screen.findByTestId("hubspot-history");
+    expect(history).toHaveTextContent("Past imports (1)");
+    expect(history).toHaveTextContent("Pushkar");
+    expect(history).toHaveTextContent("10 imported · 0 failed · took 42 min");
   });
 });

@@ -131,7 +131,7 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
     await runImportBatch('job-3', 'tok');
 
     const updateCall = (advanceChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as { objectCounts: Record<string, unknown> };
-    expect(updateCall.objectCounts.companies).toEqual({ processed: 5, created: 5, updated: 0, failed: 0 });
+    expect(updateCall.objectCounts.companies).toMatchObject({ processed: 5, created: 5, updated: 0, failed: 0 });
   });
 
   it('marks the job completed (not failed) when the last object type fails but an earlier type succeeded', async () => {
@@ -239,5 +239,31 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
     expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({
       status: 'completed', currentObject: null, cursor: null,
     }));
+  });
+});
+
+describe('runImportBatch — totals for progress', () => {
+  it('fetches every object total once and stores it, null when HubSpot cannot say', async () => {
+    const { HubSpotClient } = await import('../src/services/hubspot/client.js');
+    const countObjects = vi.fn(async (o: string) => (o === 'companies' ? 3971 : o === 'emails' ? null : 10));
+    (HubSpotClient as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(function () {
+      return { listPage, listPropertyNames, countObjects, listDealStageLabels: vi.fn().mockResolvedValue({}) };
+    });
+    const jobChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: { id: 'job-1', organizationId: 'org-A', status: 'running', objectCounts: {}, currentObject: 'notes', cursor: null },
+      }),
+    });
+    const advanceChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job-1' } }) });
+    let calls = 0;
+    mockFrom.mockImplementation(() => (++calls === 1 ? jobChain : advanceChain));
+    listPage.mockResolvedValue({ results: [], nextCursor: null });
+
+    await runImportBatch('job-1', 'tok');
+
+    expect(countObjects).toHaveBeenCalledTimes(8);
+    const saved = (advanceChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0].objectCounts;
+    expect(saved.companies.total).toBe(3971);
+    expect(saved.emails.total).toBeNull();
   });
 });
