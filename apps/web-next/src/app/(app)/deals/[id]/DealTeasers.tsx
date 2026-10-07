@@ -32,6 +32,10 @@ interface RegenerateResponse {
   teaser: DealTeaser;
 }
 
+interface FirmTeaserProfilesResponse {
+  profiles: Array<{ id: string; name: string }>;
+}
+
 export function DealTeasers({ dealId }: { dealId: string }) {
   const { showToast } = useToast();
   const [teasers, setTeasers] = useState<DealTeaser[]>([]);
@@ -39,13 +43,19 @@ export function DealTeasers({ dealId }: { dealId: string }) {
   const [error, setError] = useState("");
   // profileId currently regenerating (disables just that card's button).
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<Array<{ id: string; name: string }>>([]);
+  const [generatingAll, setGeneratingAll] = useState(false);
 
   const loadTeasers = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await api.get<DealTeasersResponse>(`/deals/${dealId}/teasers`);
+      const [data, profileData] = await Promise.all([
+        api.get<DealTeasersResponse>(`/deals/${dealId}/teasers`),
+        api.get<FirmTeaserProfilesResponse>("/firm-teaser").catch(() => ({ profiles: [] })),
+      ]);
       setTeasers(data.teasers ?? []);
+      setProfiles(profileData.profiles ?? []);
     } catch (err) {
       // 404 = endpoint/migration not deployed yet. Treat as an empty state
       // (no profiles, no teasers) rather than an error so the tab still works.
@@ -98,6 +108,35 @@ export function DealTeasers({ dealId }: { dealId: string }) {
     [dealId, showToast],
   );
 
+  const handleGenerateAll = useCallback(async () => {
+    setGeneratingAll(true);
+    const created: DealTeaser[] = [];
+    const failed: string[] = [];
+    for (const profile of profiles) {
+      try {
+        const { teaser } = await api.post<RegenerateResponse>(
+          `/deals/${dealId}/teasers`,
+          { profileId: profile.id },
+        );
+        created.push(teaser);
+      } catch (err) {
+        console.warn("[deal] generate teaser failed:", err);
+        failed.push(profile.name);
+      }
+    }
+    setTeasers((prev) => [...prev, ...created]);
+    setGeneratingAll(false);
+    if (failed.length > 0) {
+      showToast(`Could not generate for: ${failed.join(", ")}`, "error", { title: "Some teasers failed" });
+    } else {
+      showToast(
+        `Generated ${created.length} teaser${created.length === 1 ? "" : "s"}.`,
+        "success",
+        { title: "Teasers ready" },
+      );
+    }
+  }, [dealId, profiles, showToast]);
+
   if (loading) {
     return <TeaserSkeleton />;
   }
@@ -120,7 +159,13 @@ export function DealTeasers({ dealId }: { dealId: string }) {
   }
 
   if (teasers.length === 0) {
-    return <TeaserEmptyState />;
+    return (
+      <TeaserEmptyState
+        profiles={profiles}
+        generating={generatingAll}
+        onGenerate={handleGenerateAll}
+      />
+    );
   }
 
   return (
@@ -243,24 +288,53 @@ function TeaserSkeleton() {
   );
 }
 
-function TeaserEmptyState() {
+function TeaserEmptyState({
+  profiles,
+  generating,
+  onGenerate,
+}: {
+  profiles: Array<{ id: string; name: string }>;
+  generating: boolean;
+  onGenerate: () => void;
+}) {
+  const count = profiles.length;
   return (
     <div className="rounded-xl border border-dashed border-border-subtle bg-white py-10 text-center">
       <span className="material-symbols-outlined text-4xl text-text-muted">
         center_focus_weak
       </span>
       <h3 className="mt-2 text-sm font-semibold text-text-main">No teasers yet</h3>
-      <p className="mx-auto mt-1 max-w-sm text-sm text-text-secondary">
-        {SETTINGS_HINT}
-      </p>
-      <a
-        href="/settings"
-        className="mt-4 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-        style={{ backgroundColor: "#003366" }}
-      >
-        <span className="material-symbols-outlined text-[16px]">settings</span>
-        Go to Settings → Firm Teaser
-      </a>
+      {count > 0 ? (
+        <>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-text-secondary">
+            Generate a teaser for each of your {count} investment{" "}
+            {count === 1 ? "profile" : "profiles"}. Nothing is generated until you click.
+          </p>
+          <button
+            onClick={onGenerate}
+            disabled={generating}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+            style={{ backgroundColor: "#003366" }}
+          >
+            <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+            {generating ? "Generating…" : "Generate teasers"}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-text-secondary">
+            {SETTINGS_HINT}
+          </p>
+          <a
+            href="/settings"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: "#003366" }}
+          >
+            <span className="material-symbols-outlined text-[16px]">settings</span>
+            Go to Settings → Firm Teaser
+          </a>
+        </>
+      )}
     </div>
   );
 }
