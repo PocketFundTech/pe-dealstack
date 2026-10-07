@@ -12,19 +12,28 @@ afterEach(() => {
 });
 
 describe('granola client', () => {
-  it('validateKey returns user info on 200', async () => {
+  it('validateKey hits the real /v1/notes endpoint, not the nonexistent /v1/me', async () => {
+    // BUG (found 2026-10-06): validateKey called GET /v1/me, which Granola's
+    // public API has never implemented (confirmed against docs.granola.ai —
+    // only /v1/notes and /v1/notes/{id} are documented; a live check against
+    // the real API returns a bare 404 for /v1/me but a proper structured 401
+    // for /v1/notes with a bad key). Every connection attempt failed with a
+    // generic "unexpected error" regardless of plan or key validity — nobody
+    // could ever connect Granola.
     global.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ email: 'a@b.com', name: 'Alice', plan: 'business' }), {
+      new Response(JSON.stringify({ data: [], hasMore: false, nextCursor: null }), {
         status: 200, headers: { 'Content-Type': 'application/json' },
       })
     ) as unknown as typeof fetch;
 
     const { validateKey } = await import('../../../src/integrations/granola/client.js');
     const info = await validateKey('grn_test123');
-    expect(info.email).toBe('a@b.com');
+    // Granola's API has no account/profile endpoint — a working key already
+    // proves Business/Enterprise (Free/Pro can't generate a key at all), so
+    // there's no real email/name to report back.
     expect(info.plan).toBe('business');
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringMatching(/\/v1\/me$/),
+      expect.stringMatching(/\/v1\/notes$/),
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: 'Bearer grn_test123' }),
       })

@@ -50,7 +50,13 @@ async function granolaFetch(
 export async function validateKey(apiKey: string): Promise<GranolaUserInfo> {
   let res: Response;
   try {
-    res = await granolaFetch(apiKey, '/v1/me');
+    // Granola's public API has no account/profile endpoint — confirmed
+    // against docs.granola.ai, which documents only /v1/notes and
+    // /v1/notes/{id}. The previous call to GET /v1/me 404'd for every key
+    // regardless of validity (verified live: /v1/me -> bare 404, /v1/notes
+    // with a bad key -> proper structured 401), so nobody could ever connect
+    // Granola. Validate against the real notes endpoint instead.
+    res = await granolaFetch(apiKey, '/v1/notes');
   } catch (err) {
     log.warn('granola: validateKey network error', { error: err instanceof Error ? err.message : String(err) });
     throw new IntegrationUpstreamError("Couldn't reach Granola to check the key. Please try again.");
@@ -65,7 +71,10 @@ export async function validateKey(apiKey: string): Promise<GranolaUserInfo> {
     log.warn('granola: validateKey failed', { status: res.status, body });
     throw new IntegrationUpstreamError(`Granola couldn't verify this key (HTTP ${res.status}${body ? `: ${body}` : ''}).`);
   }
-  return (await res.json()) as GranolaUserInfo;
+  // Granola exposes no account email/name/plan — a working key already
+  // proves Business/Enterprise, since Free/Pro accounts can't generate an
+  // API key at all in Granola's own settings UI.
+  return { email: '', name: null, plan: 'business' };
 }
 
 export async function listNotesSince(
