@@ -18,7 +18,8 @@ const SPREADSHEET_RE = /\.(xlsx|xls|csv)$/i;
 
 export interface PlanFileUploadParams {
   fileName: string;
-  /** Position of this file within the current batch (0-based). */
+  /** Position of this file within the current batch (0-based). Informational:
+   *  whether this file creates the deal depends on `createdDealId`. */
   index: number;
   mode: "new" | "existing";
   /** The deal selected in "Update Existing Deal" mode, if any. */
@@ -38,15 +39,17 @@ export interface PlannedUpload {
  *
  * - "existing" mode: every file goes to /ingest with the selected dealId —
  *   it only ever updates that one deal.
- * - "new" mode, first file: creates the deal. Spreadsheets go to
+ * - "new" mode, no deal yet: this file creates it. That's the first file —
+ *   or, when earlier files failed, the first one to get through (6 Oct
+ *   testing: a CIM failing with a 503 left every later file creating its own
+ *   deal, so one company came out as five deals). Spreadsheets go to
  *   /ingest/bulk (which can import a deal list, or falls back server-side to
  *   single-document ingest for a non-deal-list spreadsheet like a financial
  *   model). Everything else goes to /ingest.
- * - "new" mode, subsequent files: attach to the deal the first file created.
+ * - "new" mode, once a deal exists: attach to it.
  */
 export function planFileUpload({
   fileName,
-  index,
   mode,
   selectedDealId,
   createdDealId,
@@ -55,12 +58,12 @@ export function planFileUpload({
     return { endpoint: "/ingest", dealId: selectedDealId ?? undefined };
   }
 
-  if (index === 0) {
+  if (!createdDealId) {
     const isSpreadsheet = SPREADSHEET_RE.test(fileName);
     return { endpoint: isSpreadsheet ? "/ingest/bulk" : "/ingest" };
   }
 
-  return { endpoint: "/ingest", dealId: createdDealId ?? undefined };
+  return { endpoint: "/ingest", dealId: createdDealId };
 }
 
 export interface IngestResponseShape {

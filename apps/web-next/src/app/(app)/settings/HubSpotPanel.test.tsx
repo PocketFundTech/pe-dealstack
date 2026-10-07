@@ -5,10 +5,14 @@ const get = vi.fn();
 const post = vi.fn();
 vi.mock("@/lib/api", () => ({
   api: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a) },
-  ApiError: class ApiError extends Error {},
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(message: string, status = 500) { super(message); this.status = status; }
+  },
 }));
 
 import { HubSpotPanel } from "./IntegrationsSection";
+import { ApiError } from "@/lib/api";
 
 const RUNNING_JOB = {
   id: "job-resume-1",
@@ -89,5 +93,39 @@ describe("HubSpotPanel", () => {
 
     await screen.findByText(/HubSpot connected/i);
     expect(screen.queryByText(/status:/i)).not.toBeInTheDocument();
+  });
+
+  it("retries a dropped connection while driving instead of stopping the import", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: RUNNING_JOB });
+      if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(RUNNING_JOB);
+      throw new Error(`unexpected GET ${path}`);
+    });
+    post
+      .mockRejectedValueOnce(new (ApiError as unknown as new (m: string, s: number) => Error)("Internal Server Error", 500))
+      .mockResolvedValueOnce({ more: false });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    expect(await screen.findByText(/Lost connection to the server — retrying/i)).toBeInTheDocument();
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(screen.queryByText(/Internal Server Error/)).not.toBeInTheDocument();
+  });
+
+  it("offers Resume import when a running job stops being driven", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: RUNNING_JOB });
+      if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(RUNNING_JOB);
+      throw new Error(`unexpected GET ${path}`);
+    });
+    post.mockRejectedValue(new (ApiError as unknown as new (m: string, s: number) => Error)("Import job not found", 404));
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    expect(await screen.findByText("Import job not found")).toBeInTheDocument();
+    const button = await screen.findByRole("button", { name: "Resume import" });
+    expect(button).not.toBeDisabled();
   });
 });

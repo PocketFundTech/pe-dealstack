@@ -121,6 +121,44 @@ describe("createHandleUploadFiles", () => {
     expect(deps.setResult).toHaveBeenCalledWith({ deal: { id: "deal-2", name: "Beta" } });
   });
 
+  it("when the first file fails, the next one creates the deal and the rest join it (no deal per file)", async () => {
+    uploadViaSignedUrlMock.mockImplementation(async (file: File) => (
+      { storagePath: `p/${file.name}`, fileName: file.name, mimeType: "application/pdf", size: 10 }
+    ));
+    const posts: Array<string> = [];
+    apiPostMock.mockImplementation(async (path: string, body: Record<string, unknown>) => {
+      posts.push(`${body.fileName}:${body.dealId ?? "new"}`);
+      if (body.fileName === "cim.pdf") throw new Error("AI service rejected the request");
+      return { deal: { id: "deal-csp", name: "Community Solar Platform" } };
+    });
+
+    const deps = makeUploadFilesDeps({
+      files: [makeFileItem("cim.pdf"), makeFileItem("transcript.pdf"), makeFileItem("letter.pdf"), makeFileItem("msa.pdf")],
+    });
+    await createHandleUploadFiles(deps)();
+
+    expect(posts).toEqual(["cim.pdf:new", "transcript.pdf:new", "letter.pdf:deal-csp", "msa.pdf:deal-csp"]);
+    expect(deps.maybeShowTeaserPopup).toHaveBeenCalledWith({ id: "deal-csp", name: "Community Solar Platform" });
+  });
+
+  it("a deal-list spreadsheet uploaded on its own doesn't warn about held-back files", async () => {
+    uploadViaSignedUrlMock.mockResolvedValue({ storagePath: "p/list.csv", fileName: "list.csv", mimeType: "text/csv", size: 10 });
+    apiPostMock.mockResolvedValue({ summary: { imported: 3, failed: 0, total: 3, deals: [
+      { dealId: "d1", companyName: "A" }, { dealId: "d2", companyName: "B" }, { dealId: "d3", companyName: "C" },
+    ] } });
+    const deps = makeUploadFilesDeps({ files: [makeFileItem("list.csv")] });
+    await createHandleUploadFiles(deps)();
+    expect(deps.setWarning).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Multiple deals created" }));
+  });
+
+  it("shows the real reason when a single file fails", async () => {
+    uploadViaSignedUrlMock.mockResolvedValue({ storagePath: "p/cim.pdf", fileName: "cim.pdf", mimeType: "application/pdf", size: 10 });
+    apiPostMock.mockRejectedValue(new Error("AI service (openai/gpt-4o) rejected the request: API credits are exhausted."));
+    const deps = makeUploadFilesDeps({ files: [makeFileItem("cim.pdf")] });
+    await createHandleUploadFiles(deps)();
+    expect(deps.setError).toHaveBeenCalledWith(expect.stringMatching(/credits are exhausted/));
+  });
+
   it("routes an existing-mode upload to /ingest with the selected deal id", async () => {
     uploadViaSignedUrlMock.mockResolvedValue({
       storagePath: "p/model.xlsx", fileName: "model.xlsx", mimeType: "application/vnd.ms-excel", size: 99,

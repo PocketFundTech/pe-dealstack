@@ -30,6 +30,11 @@ const nextConfig: NextConfig = {
   // reuse can't show stale deal data.
   experimental: {
     staleTimes: { dynamic: 30 },
+    // Local dev only: /api/* is proxied to the Express server on :3001, and
+    // the proxy's 30s default cut long requests (HubSpot import runs up to
+    // ~210s per call) with "socket hang up" → 500. Production serves the API
+    // as a Vercel Function, not through this proxy, so it's unaffected.
+    proxyTimeout: 300_000,
   },
   // Tell Next/webpack not to try to bundle Express + its node-side deps —
   // they're full of dynamic requires and platform-specifics that don't

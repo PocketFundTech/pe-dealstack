@@ -204,9 +204,25 @@ router.post('/import/:id/continue', async (req: Request, res: Response) => {
 
   const { data: conn } = await supabase
     .from('HubSpotConnection').select('accessToken').eq('organizationId', orgId).maybeSingle();
-  if (!conn) return res.status(400).json({ error: 'Connect HubSpot before importing' });
-  const token = decryptField((conn as { accessToken: string }).accessToken);
-  if (!token) return res.status(500).json({ error: 'HubSpot connection could not be decrypted' });
+  const token = conn ? decryptField((conn as { accessToken: string }).accessToken) : null;
+  if (!token) {
+    // A running job can't continue without a usable connection (disconnected
+    // mid-import, or a key change). End it with the reason instead of leaving
+    // it 'running' forever: every visit to Settings re-drove it into the same
+    // 400 and the panel showed "importing" indefinitely (6 Oct testing).
+    const reason = conn
+      ? 'HubSpot connection could not be decrypted. Reconnect HubSpot, then run the import again.'
+      : 'HubSpot was disconnected during the import. Reconnect HubSpot, then run the import again — imported records won\'t be duplicated.';
+    await supabase.from('ImportJob')
+      .update({ status: 'failed', error: reason, finishedAt: new Date().toISOString() })
+      .eq('id', req.params.id).eq('status', 'running');
+    return res.status(conn ? 500 : 400).json({ error: reason });
+  }
+
+  // Reconnected since a /continue reported the connection missing: drop that
+  // now-stale message so the panel doesn't show it next to live progress.
+  await supabase.from('ImportJob').update({ error: null })
+    .eq('id', req.params.id).like('error', 'HubSpot was disconnected%');
 
   const mode = importSchema.safeParse(req.body).data?.mode ?? 'fill';
   const { more } = await driveImport(req.params.id, token, mode, MAX_BATCHES);

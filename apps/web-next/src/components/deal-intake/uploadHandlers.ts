@@ -73,11 +73,17 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     let matchedExisting = false;
     let createdDealName: string | null = null;
     let stopReason: string | null = null;
+    let skippedAfterStop = 0;
     let lastSuccessResult: IngestResponse | null = null;
     let anySucceeded = false;
+    const failedNames: string[] = [];
+    // A single failed file shows its real reason (e.g. "AI credits are
+    // exhausted"), not a bare "Upload failed" (6 Oct testing).
+    let lastError = "Upload failed";
 
     for (let i = 0; i < files.length; i++) {
       if (stopReason) {
+        skippedAfterStop += 1;
         setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: stopReason! } : f)));
         continue;
       }
@@ -119,7 +125,9 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
         emitDealsChanged({ dealId: data.deal?.id, source: "ingest-upload" });
         fireFollowUp(data);
 
-        if (mode === "new" && i === 0) {
+        // The first file to SUCCEED creates the deal — not file 0, which may
+        // have failed (see planFileUpload).
+        if (mode === "new" && !createdDealId) {
           const resolved = resolveDealFromResponse(data);
           if (resolved.multipleDeals) {
             stopReason = "Skipped — the first file created several deals. Add this document via \"Update Existing Deal\" once you know which one it belongs to.";
@@ -132,13 +140,26 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
           }
         }
       } catch (err) {
+        failedNames.push(current.file.name);
+        lastError = errorMessage(err);
         setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, status: "failed", message: errorMessage(err) } : f)));
       }
     }
 
     endProcessing();
 
-    if (stopReason) {
+    // Some files failed but the deal exists: say how to add them, instead of
+    // the user re-uploading the whole batch (which used to duplicate the deal).
+    if (!stopReason && mode === "new" && createdDealId && failedNames.length > 0) {
+      setWarning({
+        title: `${failedNames.length} file${failedNames.length === 1 ? "" : "s"} not added`,
+        message: `${failedNames.join(", ")} failed. Use "Update Existing Deal" and pick ${createdDealName || "this deal"} to add ${failedNames.length === 1 ? "it" : "them"}. Re-uploading the whole batch as a new deal isn't needed.`,
+      });
+    }
+
+    // Only when files were actually held back: a deal-list import on its own
+    // creating several deals is the expected result, not a warning.
+    if (stopReason && skippedAfterStop > 0) {
       setWarning({
         title: "Multiple deals created",
         message: "The first file created several deals, so the remaining files weren't attached to any of them. Use \"Update Existing Deal\" to add them once you've picked the right deal.",
@@ -146,7 +167,7 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     }
 
     if (!anySucceeded) {
-      setError(files.length > 1 ? "All uploads failed. See the status next to each file above." : "Upload failed");
+      setError(files.length > 1 ? "All uploads failed. See the status next to each file above." : lastError);
       return;
     }
 

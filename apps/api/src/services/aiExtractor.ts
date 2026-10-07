@@ -317,6 +317,10 @@ export async function extractDealDataFromText(
     return null;
   }
 
+  // Which model the error came from: the fallback's rejection used to be
+  // reported under the primary's name, so an OpenAI out-of-credit error read
+  // "anthropic/claude-sonnet-4-6 rejected the request" (6 Oct testing).
+  let fallbackProvider: string | null = null;
   try {
     const truncatedText = text.slice(0, 20000);
     const sourceLen = text.length;
@@ -360,6 +364,7 @@ export async function extractDealDataFromText(
     } catch (primaryErr: any) {
       log.warn('AI extraction primary model failed; retrying with fallback', describeAIError(primaryErr));
       const fallbackModelName = isOpenRouterEnabled() ? AI_MODELS.TIER2 : 'gpt-4o';
+      fallbackProvider = isOpenRouterEnabled() ? `openrouter/${fallbackModelName}` : `openai/${fallbackModelName}`;
       const fallbackModel = getModel('openai', fallbackModelName, 0.1, 3000);
       const structuredFallback = fallbackModel.withStructuredOutput(ExtractionOutputSchema, {
         method: 'functionCalling',
@@ -376,9 +381,9 @@ export async function extractDealDataFromText(
     return finalizeExtractedDealData(extracted, sourceLen);
   } catch (error) {
     const rejection = classifyProviderRejection(error);
-    log.error('AI extraction error', undefined, { ...describeAIError(error), providerRejection: rejection?.reason ?? null });
+    log.error('AI extraction error', undefined, { ...describeAIError(error), provider: fallbackProvider ?? 'primary', providerRejection: rejection?.reason ?? null });
     if (rejection && options.throwOnProviderError) {
-      throw new AIProviderUnavailableError(getChatProviderName(), rejection);
+      throw new AIProviderUnavailableError(fallbackProvider ?? getChatProviderName(), rejection);
     }
     return null;
   }

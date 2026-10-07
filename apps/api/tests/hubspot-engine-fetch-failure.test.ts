@@ -65,6 +65,27 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
     expect(advanceChain.update).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
   });
 
+  it('records how far it got when a LATER page fails, instead of advancing silently', async () => {
+    const jobChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: 'job-1', organizationId: 'org-A', status: 'running', currentObject: 'companies', cursor: 'page-4',
+          objectCounts: { companies: { processed: 300, created: 300, updated: 0, failed: 0, skipped: 0 } },
+        },
+      }),
+    });
+    const advanceChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job-1' } }) });
+    let calls = 0;
+    mockFrom.mockImplementation(() => (++calls === 1 ? jobChain : advanceChain));
+    listPage.mockRejectedValue(new Error('HubSpot companies list failed: 502 Bad Gateway'));
+
+    expect(await runImportBatch('job-1', 'tok')).toBe(true);
+    expect(advanceChain.update).toHaveBeenCalledWith(expect.objectContaining({
+      currentObject: 'contacts',
+      error: expect.stringMatching(/^companies: stopped after 300 records .*502.*Run the import again/),
+    }));
+  });
+
   it('still fails the job when the LAST object type fetch fails, with nowhere left to advance', async () => {
     const jobChain = makeChain({
       maybeSingle: vi.fn().mockResolvedValue({
