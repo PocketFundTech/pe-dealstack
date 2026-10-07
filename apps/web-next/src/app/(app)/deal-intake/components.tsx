@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { formatCurrency } from "@/lib/formatters";
 import { createClient } from "@/lib/supabase/client";
 import { INGEST_MAX_FILE_SIZE } from "@/lib/storageUpload";
+import type { DuplicateCheck } from "@/components/deal-intake/duplicateCheck";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -50,6 +51,10 @@ export interface IngestResponse {
   isUpdate?: boolean;
   /** The upload was added to an existing deal for the same company instead of creating a duplicate. */
   matchedExistingDeal?: { id: string; name: string };
+  /** Interactive intake only: a likely existing deal was found and NOTHING was created — ask the user. */
+  duplicateCheck?: DuplicateCheck;
+  /** Pass back with the user's choice so the server reuses its AI read. */
+  extractionToken?: string;
   summary?: {
     imported: number;
     failed: number;

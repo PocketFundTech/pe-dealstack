@@ -10,7 +10,9 @@ import { researchCompany, buildResearchText } from '../services/companyResearche
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
-import { findLiveDealForCompany } from '../services/dealDuplicates.js';
+import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
+import { hashContent, signExtractionToken, verifyExtractionToken } from '../services/extractionToken.js';
+import type { ExtractedDealData } from '../services/aiExtractor.js';
 import { formatValueWithUnit } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
 import { isPrivateUrl } from '../utils/urlHelpers.js';
@@ -28,7 +30,19 @@ const urlResearchSchema = z.object({
   dealId: z.string().uuid().optional(),
   // Skip the same-company match and always create a new deal.
   forceCreate: z.boolean().optional(),
+  // Interactive intake: ask before adding to / creating next to a deal that
+  // looks like the same company (returns `duplicateCheck` + `extractionToken`).
+  checkDuplicates: z.boolean().optional(),
+  // From a previous `duplicateCheck` response — reuses that scrape + AI read.
+  extractionToken: z.string().max(8 * 1024 * 1024).optional(),
 });
+
+/** What the duplicate-check token carries for a URL: the scrape and the AI read. */
+interface UrlExtraction {
+  aiData: ExtractedDealData;
+  researchText: string;
+  scrapedPages: string[];
+}
 
 // POST /api/ingest/url — Research company from website URL (scrapes multiple pages)
 subRouter.post('/url', async (req, res) => {
@@ -39,7 +53,10 @@ subRouter.post('/url', async (req, res) => {
       return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
     }
 
-    const { url, companyName: userCompanyName, autoCreateDeal, dealId: targetDealId, forceCreate } = validation.data;
+    const {
+      url, companyName: userCompanyName, autoCreateDeal, dealId: targetDealId, forceCreate,
+      checkDuplicates: wantsCheck, extractionToken,
+    } = validation.data;
 
     // SECURITY: block SSRF — refuse URLs pointing to loopback / RFC1918 / .local before fetch.
     if (isPrivateUrl(url)) {
@@ -48,28 +65,47 @@ subRouter.post('/url', async (req, res) => {
 
     log.info('URL research starting', { url, targetDealId });
 
-    // Step 1: Research company (scrapes multiple pages in parallel)
-    const research = await researchCompany(url);
-    const researchText = buildResearchText(research);
+    const checkDuplicates = !targetDealId && !forceCreate && autoCreateDeal && wantsCheck === true;
+    const contentHash = extractionToken || checkDuplicates ? hashContent(url) : '';
 
-    if (researchText.length < 100) {
-      return res.status(400).json({
-        error: 'Could not extract enough content from website',
-        pagesAttempted: research.companyWebsite.scrapedPages.length,
+    // Second step of the duplicate check: reuse the scrape + AI read from the
+    // first step (see ingest-upload.ts). A token that doesn't verify is ignored.
+    const reused = extractionToken
+      ? verifyExtractionToken<UrlExtraction>(extractionToken, { orgId, kind: 'url', contentHash })
+      : null;
+    if (extractionToken && !reused) log.warn('URL ingest: extraction token rejected — researching again');
+
+    let researchText: string;
+    let scrapedPages: string[];
+    let aiData: ExtractedDealData | null;
+    if (reused) {
+      ({ researchText, scrapedPages, aiData } = reused);
+    } else {
+      // Step 1: Research company (scrapes multiple pages in parallel)
+      const research = await researchCompany(url);
+      researchText = buildResearchText(research);
+      scrapedPages = research.companyWebsite.scrapedPages;
+
+      if (researchText.length < 100) {
+        return res.status(400).json({
+          error: 'Could not extract enough content from website',
+          pagesAttempted: scrapedPages.length,
+        });
+      }
+
+      log.debug('Company research complete', {
+        url,
+        pagesScraped: scrapedPages.length,
+        charCount: researchText.length,
       });
+
+      // Step 2: AI extraction from combined research text
+      aiData = await extractDealDataFromText(researchText);
     }
-
-    log.debug('Company research complete', {
-      url,
-      pagesScraped: research.companyWebsite.scrapedPages.length,
-      charCount: researchText.length,
-    });
-
-    // Step 2: AI extraction from combined research text
-    const aiData = await extractDealDataFromText(researchText);
     if (!aiData) {
       return res.status(400).json({ error: 'AI could not extract deal data from website content' });
     }
+    const extractionForToken: UrlExtraction = { aiData: JSON.parse(JSON.stringify(aiData)), researchText, scrapedPages };
 
     if (userCompanyName) {
       aiData.companyName.value = userCompanyName;
@@ -105,7 +141,7 @@ subRouter.post('/url', async (req, res) => {
           reviewReasons: aiData.reviewReasons,
         },
         research: {
-          pagesScraped: research.companyWebsite.scrapedPages,
+          pagesScraped: scrapedPages,
           textLength: researchText.length,
         },
       });
@@ -116,9 +152,22 @@ subRouter.post('/url', async (req, res) => {
     let company: any;
     let isUpdate = false;
 
-    // No target deal: add to the live deal for the same company instead of
-    // creating a duplicate (5 Oct testing, item 8) — same rule as upload.
-    const matchedDeal = !targetDealId && !forceCreate
+    // Interactive intake: ask before creating or merging when a live deal
+    // looks like the same company (same two-step as ingest-upload.ts).
+    if (checkDuplicates) {
+      const candidates = await findDuplicateCandidates(orgId, companyName);
+      if (candidates.length > 0) {
+        return res.status(200).json({
+          success: true,
+          duplicateCheck: { candidates, extractedCompanyName: companyName },
+          extractionToken: signExtractionToken({ orgId, kind: 'url', contentHash, data: extractionForToken }),
+        });
+      }
+    }
+
+    // No target deal (legacy callers): add to the live deal for the same
+    // company instead of creating a duplicate (5 Oct testing, item 8).
+    const matchedDeal = !targetDealId && !forceCreate && !checkDuplicates
       ? await findLiveDealForCompany(orgId, companyName)
       : null;
 
@@ -254,7 +303,7 @@ subRouter.post('/url', async (req, res) => {
     }
 
     overviewSections.push(`\n---\n*Generated from web research of ${url}*`);
-    overviewSections.push(`*${research.companyWebsite.scrapedPages.length} pages analyzed · ${aiData.overallConfidence}% confidence*`);
+    overviewSections.push(`*${scrapedPages.length} pages analyzed · ${aiData.overallConfidence}% confidence*`);
 
     const overviewText = overviewSections.join('\n');
     const overviewDocName = `Deal Overview — ${companyName}.md`;
@@ -305,7 +354,7 @@ subRouter.post('/url', async (req, res) => {
           mimeType: 'text/markdown',
           metadata: {
             sourceUrl: url,
-            pagesScraped: research.companyWebsite.scrapedPages,
+            pagesScraped: scrapedPages,
           },
         })
         .select()
@@ -319,11 +368,11 @@ subRouter.post('/url', async (req, res) => {
         dealId: deal.id,
         type: 'DEAL_CREATED',
         title: 'Deal created from web research',
-        description: `"${companyName}" auto-created from ${url} (${research.companyWebsite.scrapedPages.length} pages) with ${aiData.overallConfidence}% confidence`,
+        description: `"${companyName}" auto-created from ${url} (${scrapedPages.length} pages) with ${aiData.overallConfidence}% confidence`,
         metadata: {
           sourceType: 'web_research',
           url,
-          pagesScraped: research.companyWebsite.scrapedPages,
+          pagesScraped: scrapedPages,
           overallConfidence: aiData.overallConfidence,
         },
       });
@@ -375,7 +424,7 @@ subRouter.post('/url', async (req, res) => {
         reviewReasons: aiData.reviewReasons,
       },
       research: {
-        pagesScraped: research.companyWebsite.scrapedPages,
+        pagesScraped: scrapedPages,
         textLength: researchText.length,
       },
     });
