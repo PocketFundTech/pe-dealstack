@@ -305,7 +305,7 @@ export function createHandlePickGoogleDrive(deps: NonFileIngestDeps) {
       setResult(data);
       emitDealsChanged({ dealId: data.deal?.id, source: "ingest-drive" });
       fireFollowUp(data);
-      if (mode === "new" && data.deal?.id) {
+      if (mode === "new" && data.deal?.id && !data.matchedExistingDeal) {
         maybeShowTeaserPopup({ id: data.deal.id, name: data.deal.name });
       }
     } catch (err) { setError(err instanceof Error ? err.message : "Drive import failed"); }
@@ -331,7 +331,7 @@ export function createHandleExtractText(deps: ExtractTextDeps) {
       setResult(data);
       emitDealsChanged({ dealId: data.deal?.id, source: "ingest-text" });
       fireFollowUp(data);
-      if (mode === "new" && data.deal?.id) {
+      if (mode === "new" && data.deal?.id && !data.matchedExistingDeal) {
         maybeShowTeaserPopup({ id: data.deal.id, name: data.deal.name });
       }
     } catch (err) { setError(err instanceof Error ? err.message : "Text extraction failed"); }

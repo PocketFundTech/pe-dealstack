@@ -254,7 +254,7 @@ export default function DealDetailPage() {
   const handleStageClick = (targetStage: string) =>
     openStageModal(targetStage, { deal, setStageModal, setStageNote });
 
-  const handleChangeStageBtn = () =>
+  const handleCloseDealBtn = () =>
     openTerminalModal({ deal, setShowTerminalModal });
 
   const confirmStageChange = () =>
@@ -388,7 +388,7 @@ export default function DealDetailPage() {
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             onStageClick={handleStageClick}
-            onChangeStage={handleChangeStageBtn}
+            onCloseDeal={handleCloseDealBtn}
             onDelete={handleDeleteDeal}
             activities={activities}
             activitiesLoading={activitiesLoading}

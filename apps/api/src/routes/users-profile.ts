@@ -4,6 +4,9 @@ import multer from 'multer';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { findOrCreateUser } from '../services/userService.js';
+import { invalidateUserContext } from '../middleware/authContextCache.js';
+import { PERMISSIONS, ROLES, hasPermission } from '../middleware/rbac.js';
+import { AuditLog } from '../services/auditLog.js';
 
 // Configure multer for avatar uploads (images only, max 5MB)
 const avatarUpload = multer({
@@ -44,6 +47,92 @@ router.get('/me', async (req: Request, res: Response, next: NextFunction) => {
 
     const userData = await findOrCreateUser(user);
     res.json(userData);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/users/me/deactivate — the user deactivates their own account
+// (QA #16). Soft: User.isActive=false, which orgScope already blocks on
+// every request, and the user's API keys stop resolving. Their deals,
+// notes and documents stay with the firm; an admin can reactivate them
+// (PATCH /api/users/:id { isActive: true }). Also: their own integrations
+// stop syncing and every session is signed out.
+const deactivateSelfSchema = z.object({ confirm: z.literal('DEACTIVATE') });
+
+// Roles that can manage the firm (settings, team). A firm must keep one.
+// User.role is stored upper-case ('ADMIN'); match either case.
+// Computed per call, not at import: tests that mock rbac load this module too.
+const managingRoles = () => Object.values(ROLES)
+  .filter((r) => hasPermission(r, PERMISSIONS.ADMIN_SETTINGS))
+  .flatMap((r) => [r, r.toUpperCase()]);
+
+router.post('/me/deactivate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const authUser = req.user;
+    if (!authUser?.id) return res.status(401).json({ error: 'Not authenticated' });
+    if (!deactivateSelfSchema.safeParse(req.body).success) {
+      return res.status(400).json({ error: 'Type DEACTIVATE to confirm.' });
+    }
+
+    const { data: me, error: meError } = await supabase
+      .from('User')
+      .select('id, email, role, organizationId')
+      .eq('authId', authUser.id)
+      .maybeSingle();
+    if (meError) throw meError;
+    if (!me) return res.status(404).json({ error: 'User not found' });
+
+    // The last active admin can't leave: nobody could manage the firm, or
+    // reactivate anyone, afterwards.
+    if (me.organizationId && hasPermission(me.role, PERMISSIONS.ADMIN_SETTINGS)) {
+      const { count, error: countError } = await supabase
+        .from('User')
+        .select('id', { count: 'exact', head: true })
+        .eq('organizationId', me.organizationId)
+        .eq('isActive', true)
+        .in('role', managingRoles())
+        .neq('id', me.id);
+      if (countError) throw countError;
+      if (!count) {
+        return res.status(409).json({
+          error: "You're the only admin of your firm. Make a teammate an admin first, or contact support to close the firm's account.",
+          code: 'LAST_ADMIN',
+        });
+      }
+    }
+
+    const now = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from('User')
+      .update({ isActive: false, updatedAt: now })
+      .eq('id', me.id);
+    if (updateError) throw updateError;
+    invalidateUserContext(authUser.id);
+
+    // Best-effort clean-up — the isActive flag above already blocks access.
+    const cleanups = await Promise.allSettled([
+      supabase.from('ApiKey').update({ revokedAt: now }).eq('userId', me.id).is('revokedAt', null),
+      supabase.from('Integration').update({ status: 'revoked', updatedAt: now }).eq('userId', me.id).neq('status', 'revoked'),
+    ]);
+    cleanups.forEach((c, i) => {
+      const err = c.status === 'rejected' ? c.reason : c.value.error;
+      if (err) log.warn('Self-deactivation clean-up failed', { step: i === 0 ? 'api_keys' : 'integrations', userId: me.id, err: String(err?.message ?? err) });
+    });
+
+    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    if (bearer) {
+      try {
+        const { error } = await supabase.auth.admin.signOut(bearer, 'global');
+        if (error) log.warn('Self-deactivation: global sign-out failed', { userId: me.id, err: error.message });
+      } catch (err) {
+        log.warn('Self-deactivation: global sign-out threw', { userId: me.id, err: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    await AuditLog.userUpdated(req, me.id, me.email, { isActive: false, selfDeactivated: true });
+    log.info('User deactivated their own account', { userId: me.id, orgId: me.organizationId });
+    res.json({ success: true });
   } catch (error) {
     next(error);
   }

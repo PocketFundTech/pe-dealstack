@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PasteKeyModal, type PasteKeyInstructions } from "./IntegrationsSection.PasteKeyModal";
 import { ProviderCard, type Integration, type ProviderCatalogEntry } from "./IntegrationsSection.providerCard";
 import { HubSpotImportHistory, HubSpotImportProgress, type HubSpotImportJob } from "./IntegrationsSection.hubspotProgress";
+import { GmailAutoDealToggle } from "./IntegrationsSection.autoDeal";
 
 interface InitiateAuthResponse {
   mode: "oauth" | "api_key";
@@ -213,6 +214,7 @@ export function IntegrationsSection({ onToast }: Props) {
             ))}
           </div>
         )}
+        {byProvider.has("gmail") && <GmailAutoDealToggle onToast={onToast} />}
       </div>
 
       {pasteModal && (

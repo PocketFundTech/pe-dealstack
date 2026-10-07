@@ -60,3 +60,26 @@ export const SECTION_TYPE_MAP: Record<string, string> = {
   'situation overview': 'EXECUTIVE_SUMMARY',
   'turnaround plan': 'VALUE_CREATION',
 };
+
+// Normalize a memoAgent generator section type (its own SectionType enum)
+// to the DB CHECK constraint's type set — the same remapping SECTION_TYPE_MAP
+// above applies to template section titles, but keyed by the generator's
+// type instead of a title string. Several generator types collapse onto a
+// DB type shared with other generator types (both MANAGEMENT_ASSESSMENT and
+// OPERATIONAL_DEEP_DIVE store as CUSTOM), so callers matching a generated
+// section back to an existing MemoSection row must normalize through this
+// BEFORE comparing types, and disambiguate CUSTOM rows by title (see
+// `memoSectionKey`) — matching on the raw generator type, or on type alone
+// for CUSTOM, caused duplicate/misdirected section rows (QA 2026-10-06 #16b).
+export const GENERATOR_TYPE_TO_DB_TYPE: Record<string, string> = {
+  'EXIT_ANALYSIS': 'EXIT_STRATEGY',
+  'VALUE_CREATION_PLAN': 'VALUE_CREATION',
+  'QUALITY_OF_EARNINGS': 'FINANCIAL_PERFORMANCE',
+  'MANAGEMENT_ASSESSMENT': 'CUSTOM',
+  'OPERATIONAL_DEEP_DIVE': 'CUSTOM',
+};
+
+/** Match key for a MemoSection: CUSTOM rows are ambiguous on type alone, so title disambiguates. */
+export function memoSectionKey(type: string, title: string): string {
+  return type === 'CUSTOM' ? `CUSTOM:${title}` : type;
+}

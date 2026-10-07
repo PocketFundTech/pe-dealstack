@@ -83,6 +83,18 @@ async function refreshSessionOnce(): Promise<boolean> {
   return refreshPromise;
 }
 
+// The account was deactivated (by the user or an admin; API 403
+// ACCOUNT_DEACTIVATED). End the local session and say why on /login,
+// instead of leaving every section of the app failing.
+let deactivatedRedirecting = false;
+function handleAccountDeactivated(): void {
+  if (typeof window === "undefined" || deactivatedRedirecting) return;
+  deactivatedRedirecting = true;
+  void createClient().auth.signOut().catch(() => {}).finally(() => {
+    window.location.href = "/login?deactivated=1";
+  });
+}
+
 // Redirects to /login with `next` set to the current path, so a successful
 // re-login returns the user to what they were doing instead of /dashboard.
 function redirectToLogin(): never {
@@ -144,6 +156,9 @@ async function request<T>(path: string, options: RequestInit = {}, _retried = fa
     // — see apps/web-next/src/components/layout/MfaLockoutGate.tsx.
     if (res.status === 403 && code === "MFA_REQUIRED") {
       triggerMfaLockout(message);
+    }
+    if (res.status === 403 && code === "ACCOUNT_DEACTIVATED") {
+      handleAccountDeactivated();
     }
 
     throw new ApiError(message, res.status, code);
@@ -264,6 +279,9 @@ async function requestStream(
 
     if (res.status === 403 && code === "MFA_REQUIRED") {
       triggerMfaLockout(message);
+    }
+    if (res.status === 403 && code === "ACCOUNT_DEACTIVATED") {
+      handleAccountDeactivated();
     }
 
     throw new ApiError(message, res.status, code);

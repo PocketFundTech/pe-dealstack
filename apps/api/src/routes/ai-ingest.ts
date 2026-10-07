@@ -10,10 +10,9 @@ import { AIProviderUnavailableError } from '../utils/aiErrors.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { createNotification, resolveUserId } from './notifications.js';
 import { getOrgId } from '../middleware/orgScope.js';
+import { findLiveDealForCompany } from '../services/dealDuplicates.js';
 import { extractTextFromPDF } from './ingest-shared.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
-import { generateTeasersForDeal } from '../services/firmTeaserService.js';
-import { runAfterResponse } from '../utils/afterResponse.js';
 
 // Configure multer for file uploads
 const upload = multer({
@@ -118,6 +117,19 @@ subRouter.post('/ai/ingest', upload.single('file'), async (req, res) => {
     // Create or find company (use .value for new format with confidence scores)
     let companyId: string | null = null;
     const companyName = extractedData.companyName.value;
+
+    // This route only ever creates a deal, so a live deal for the same
+    // company means the upload would be a duplicate (5 Oct testing, item 8).
+    // Point the caller at the existing deal; `forceCreate` overrides.
+    const forceCreate = req.body?.forceCreate === true || req.body?.forceCreate === 'true';
+    const existingDeal = forceCreate ? null : await findLiveDealForCompany(orgId, companyName);
+    if (existingDeal) {
+      return res.status(409).json({
+        error: `You already have a deal for this company (${existingDeal.name}). Upload the document to that deal, or resend with forceCreate=true to create a separate deal.`,
+        code: 'DUPLICATE_DEAL',
+        matchedExistingDeal: existingDeal,
+      });
+    }
     const industryValue = extractedData.industry.value;
     const descriptionValue = extractedData.description.value;
     // Per-field confidence floor — same gate as the other ingest routes.
@@ -135,7 +147,8 @@ subRouter.post('/ai/ingest', upload.single('file'), async (req, res) => {
         .select('id')
         .ilike('name', companyName)
         .eq('organizationId', orgId)
-        .single();
+        .limit(1)
+        .maybeSingle();
 
       if (existingCompany) {
         companyId = existingCompany.id;
@@ -319,18 +332,6 @@ subRouter.post('/ai/ingest', upload.single('file'), async (req, res) => {
         captureAgentError(err, { context: 'notification:ai_ingest' }, 'warning');
       });
     }
-
-    // Auto-generate firm-teaser blurbs for the new deal. Never blocks the
-    // response — deferred via runAfterResponse (awaited inline when no
-    // post-response hook is present). Best-effort: never fail ingest on
-    // teaser error.
-    await runAfterResponse(req, async () => {
-      try {
-        await generateTeasersForDeal({ dealId: deal.id, orgId });
-      } catch (teaserErr) {
-        log.error('AI Ingest: firm-teaser auto-gen failed', teaserErr, { dealId: deal.id });
-      }
-    });
 
     log.info('AI Ingest complete', { dealId: deal.id, filename: safeName, confidence: extractedData.overallConfidence });
 

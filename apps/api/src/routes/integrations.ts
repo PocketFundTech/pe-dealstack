@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
+import { PERMISSIONS, hasPermission, requirePermission } from '../middleware/rbac.js';
 import { syncIntegration } from '../integrations/_platform/syncEngine.js';
 import { getProvider, isProviderRegistered } from '../integrations/_platform/registry.js';
 import type { ProviderId, Integration } from '../integrations/_platform/types.js';
@@ -122,6 +123,65 @@ router.get('/activities', async (req: Request, res: Response, next: NextFunction
     const { data, error } = await q;
     if (error) throw error;
     res.json({ activities: data ?? [] });
+  } catch (err) { next(err); }
+});
+
+// ─── Gmail auto-deal toggle ─────────────────────────────────────────
+// Organization.settings.autoDeal drives what Gmail sync does with deal
+// emails (integrations/gmail/index.ts → getAutoDealSettings): OFF (default)
+// only scores them; ON also updates matched deals and creates new ones at
+// or above the confidence threshold. Other autoDeal keys are preserved.
+
+const DEFAULT_AUTO_CREATE_THRESHOLD = 0.85;
+
+const autoDealPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  // Below 0.5 the classifier is guessing; 1.0 would never fire.
+  createThreshold: z.number().min(0.5).max(0.99).optional(),
+}).refine(v => v.enabled !== undefined || v.createThreshold !== undefined, {
+  message: 'Nothing to update',
+});
+
+async function loadOrgSettings(orgId: string): Promise<Record<string, unknown>> {
+  const { data, error } = await supabase
+    .from('Organization').select('settings').eq('id', orgId).maybeSingle();
+  if (error) throw error;
+  return (data?.settings ?? {}) as Record<string, unknown>;
+}
+
+function autoDealView(settings: Record<string, unknown>) {
+  const ad = (settings.autoDeal ?? {}) as Record<string, unknown>;
+  const t = ad.createThreshold;
+  return {
+    enabled: ad.enabled === true,
+    createThreshold: typeof t === 'number' && t > 0 && t <= 1 ? t : DEFAULT_AUTO_CREATE_THRESHOLD,
+  };
+}
+
+router.get('/auto-deal', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const settings = await loadOrgSettings(getOrgId(req));
+    res.json({
+      ...autoDealView(settings),
+      canEdit: hasPermission(req.user?.role, PERMISSIONS.ADMIN_SETTINGS),
+    });
+  } catch (err) { next(err); }
+});
+
+router.patch('/auto-deal', requirePermission(PERMISSIONS.ADMIN_SETTINGS), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = autoDealPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid settings' });
+    }
+    const orgId = getOrgId(req);
+    const settings = await loadOrgSettings(orgId);
+    const autoDeal = { ...((settings.autoDeal ?? {}) as Record<string, unknown>), ...parsed.data };
+    const updated = { ...settings, autoDeal };
+    const { error } = await supabase.from('Organization').update({ settings: updated }).eq('id', orgId);
+    if (error) throw error;
+    log.info('Gmail auto-deal settings updated', { orgId, ...parsed.data });
+    res.json({ ...autoDealView(updated), canEdit: true });
   } catch (err) { next(err); }
 });
 

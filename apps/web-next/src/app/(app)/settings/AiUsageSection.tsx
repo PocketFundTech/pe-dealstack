@@ -62,7 +62,7 @@ export function AiUsageSection() {
       <div className="p-6 border-b border-border-subtle">
         <h3 className="text-lg font-bold text-text-main">AI Usage</h3>
         <p className="text-sm text-text-secondary mt-1">
-          Free during beta. Tracking helps us understand how Pocket Fund is used.
+          Free during beta. Tracking helps us understand how Avise is used.
         </p>
       </div>
 

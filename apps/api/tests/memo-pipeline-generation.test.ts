@@ -139,8 +139,8 @@ describe('generateSection', () => {
     const section = await generateSection('FINANCIAL_PERFORMANCE', baseContext());
 
     expect(section.content).not.toBe('');
-    expect(section.content).toContain('Section generation failed');
-    expect(section.content).toContain('token budget');
+    expect(section.content).toContain("AI couldn't generate this section");
+    expect(section.content).not.toContain('Section generation failed');
     expect(section.aiModel).toBe('error');
     expect(section.aiGenerated).toBe(false);
   });
@@ -154,7 +154,8 @@ describe('generateSection', () => {
     });
     const { generateSection } = await getPipeline();
     const section = await generateSection('EXECUTIVE_SUMMARY', baseContext());
-    expect(section.content).toContain('Section generation failed');
+    expect(section.content).toContain("AI couldn't generate this section");
+    expect(section.content).not.toContain('Section generation failed');
     expect(section.aiModel).toBe('error');
   });
 

@@ -10,7 +10,7 @@ import {
 export const metadata: Metadata = {
   title: "Security & Trust",
   description:
-    "How Pocket Fund protects PE deal data: encryption, tenant isolation, sub-processors, compliance roadmap.",
+    "How Avise protects PE deal data: encryption, tenant isolation, sub-processors, compliance roadmap.",
 };
 
 const SUB_PROCESSORS: Array<{
@@ -107,7 +107,7 @@ export default function SecurityPage() {
       <section className="bg-[#f1f5f9] rounded-xl p-8">
         <LegalH2>Your deal data, secured.</LegalH2>
         <LegalP>
-          Pocket Fund is built for private equity firms handling LOIs, signed
+          Avise is built for private equity firms handling LOIs, signed
           NDAs, and confidential CIMs. Security is foundational — not a
           checklist.
         </LegalP>
@@ -143,9 +143,9 @@ export default function SecurityPage() {
       <section id="data-location">
         <LegalH2>Where your data lives</LegalH2>
         <LegalP>
-          All Pocket Fund data is processed and stored on infrastructure
+          All Avise data is processed and stored on infrastructure
           operated by the providers below. The certifications listed are{" "}
-          <strong>held by those providers, not by Pocket Fund</strong> — our own
+          <strong>held by those providers, not by Avise</strong> — our own
           certification status is set out further down this page:
         </LegalP>
         <LegalList>
@@ -224,7 +224,7 @@ export default function SecurityPage() {
       <section id="ai">
         <LegalH2>AI &amp; LLM data handling</LegalH2>
         <LegalP>
-          Pocket Fund uses AI from OpenAI, Anthropic, Google, and Azure. We
+          Avise uses AI from OpenAI, Anthropic, Google, and Azure. We
           use the <strong>API tiers</strong> of each, which contractually do
           not train models on customer data.
         </LegalP>
@@ -406,7 +406,7 @@ export default function SecurityPage() {
       <section id="founder-pledge" className="bg-[#f8fafc] rounded-xl p-8 border border-border-subtle">
         <LegalH2>Founder pledge</LegalH2>
         <LegalP>
-          I, Ganesh Jagtap, founder of Pocket Fund, commit to the following — in
+          I, Ganesh Jagtap, founder of Avise, commit to the following — in
           plain language, signed and dated, with my name on it:
         </LegalP>
         <ul className="list-disc pl-6 space-y-2 my-4 text-text-secondary">
@@ -422,7 +422,7 @@ export default function SecurityPage() {
             customer data from training.
           </li>
           <li>
-            <strong>Pocket Fund staff access is logged.</strong> Every time any
+            <strong>Avise staff access is logged.</strong> Every time any
             member of our team accesses your data, you see it in real-time in
             Settings → Security &amp; Privacy. Today, the count is zero. We
             intend to keep it there.
@@ -457,7 +457,7 @@ export default function SecurityPage() {
           <strong className="block text-lg" style={{ color: "#003366" }}>
             Ganesh Jagtap
           </strong>
-          <span className="text-sm text-text-muted">Founder, Pocket Fund</span>
+          <span className="text-sm text-text-muted">Founder, Avise</span>
         </p>
         <p className="text-xs text-text-muted mt-2">
           Last signed: May 2026
