@@ -153,6 +153,12 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
         description: "Companies with their deals. POST with { name, industry, website } creates one.",
         queryParams: "updatedSince, offset + limit (paging applies when offset is sent)",
       },
+      {
+        method: "GET",
+        path: "/api/companies/list",
+        description: "Paged { companies, total, limit, offset } with dealCount, contactCount and source (hubspot | avise) per company.",
+        queryParams: "search, hasDeals (all|yes|no), source (all|hubspot|avise), sortBy (name|updatedAt), sortOrder, limit (≤100), offset",
+      },
     ],
   },
   {

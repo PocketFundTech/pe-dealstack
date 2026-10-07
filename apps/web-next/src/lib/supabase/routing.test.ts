@@ -9,6 +9,8 @@ describe("isAppRouteRequiringAuth", () => {
     expect(isAppRouteRequiringAuth("/admin")).toBe(true);
     expect(isAppRouteRequiringAuth("/settings")).toBe(true);
     expect(isAppRouteRequiringAuth("/data-room")).toBe(true);
+    // The logged-in Companies list — not caught by the public "/company" (About us) prefix.
+    expect(isAppRouteRequiringAuth("/companies")).toBe(true);
   });
 
   it("lets the public root through unauthenticated", () => {

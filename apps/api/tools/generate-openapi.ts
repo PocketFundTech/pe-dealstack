@@ -71,6 +71,14 @@ const DETAILS: Record<string, Detail> = {
   },
   'POST /api/contacts/:id/deals': { summary: 'Link a contact to a deal', requestBodyExample: { dealId: '00000000-0000-0000-0000-000000000000' } },
   'GET /api/companies': { summary: 'List companies', description: 'All companies with their deals.' },
+  'GET /api/companies/list': {
+    summary: 'Companies page list',
+    description: 'Paged `{ companies, total, limit, offset }` with `dealCount` (soft-deleted deals excluded), `contactCount` (contacts whose free-text company matches the name, case-insensitively) and `source` (`hubspot` | `avise`). Query: `search`, `hasDeals` (all|yes|no), `source` (all|hubspot|avise), `sortBy` (name|updatedAt), `sortOrder`, `limit` (≤100), `offset`.',
+  },
+  'GET /api/companies/:id/overview': {
+    summary: 'Company overview',
+    description: 'One company with its live deals and up to 100 name-matched contacts (`contactTotal` has the full count).',
+  },
   'POST /api/companies': { summary: 'Create a company', requestBodyExample: { name: 'Falcon Logistics', industry: 'Logistics', website: 'https://falconlogistics.com' } },
   'GET /api/tasks': { summary: 'List tasks', description: 'Paged: `{ tasks, count, limit, offset }`.' },
   'GET /api/tasks/:id': { summary: 'Get a task' },
