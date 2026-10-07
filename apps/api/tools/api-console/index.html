@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Avise API Console</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#14181f; --mut:#5d6675; --line:#e2e5ea; --ok:#12794a; --okbg:#e4f5ec; --bad:#b42318; --badbg:#fde8e6; --warn:#8a5a00; --warnbg:#fff3d6; --brand:#14305c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1218; --card:#171c25; --ink:#e8ebf0; --mut:#9aa4b2; --line:#2a313d; --ok:#5ad19a; --okbg:#12301f; --bad:#ff8a80; --badbg:#3a1714; --warn:#f5c35a; --warnbg:#33290d; --brand:#8fb3ff; } }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,sans-serif }
+  main { max-width:1000px; margin:0 auto; padding:20px 16px 80px }
+  h1 { font-size:20px; margin:0 0 4px } .sub { color:var(--mut); margin:0 0 16px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end }
+  label { display:block; font-size:12px; color:var(--mut); margin-bottom:3px }
+  input, select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink) }
+  input[type=password], input.wide { min-width:340px }
+  button { font:inherit; padding:7px 12px; border-radius:7px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer }
+  button.primary { background:var(--brand); color:#fff; border-color:var(--brand) } @media (prefers-color-scheme: dark){ button.primary{color:#0f1218} }
+  button:disabled { opacity:.45; cursor:not-allowed }
+  h2 { font-size:14px; margin:0 0 8px; display:flex; justify-content:space-between; align-items:center }
+  .case { display:grid; grid-template-columns:20px 54px 1fr auto auto; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line) }
+  .case:first-of-type { border-top:0 } .m { font:600 11px ui-monospace,monospace; color:var(--mut) } .p { font:12px ui-monospace,monospace; word-break:break-all }
+  .chip { font:600 11px ui-monospace,monospace; padding:2px 7px; border-radius:99px; background:var(--line); color:var(--mut) }
+  .chip.ok { background:var(--okbg); color:var(--ok) } .chip.bad { background:var(--badbg); color:var(--bad) } .chip.warn { background:var(--warnbg); color:var(--warn) }
+  .tag { font-size:11px; color:var(--warn); margin-left:6px } .note { color:var(--mut); font-size:12px }
+  pre { margin:6px 0 0; padding:8px; background:var(--bg); border:1px solid var(--line); border-radius:7px; max-height:220px; overflow:auto; font:12px ui-monospace,monospace; white-space:pre-wrap; grid-column:1/-1 }
+  .summary { font-weight:600 } .banner { padding:8px 10px; border-radius:7px; background:var(--warnbg); color:var(--warn); margin-bottom:10px; font-size:13px }
+</style>
+</head>
+<body>
+<main>
+  <h1>Avise API Console</h1>
+  <p class="sub">Try an <code>avise_sk_…</code> key against the API. Reads are safe; writes create <code>QA-API-TEST</code> records and delete them again.</p>
+
+  <div class="card">
+    <div class="row">
+      <div><label>API base</label>
+        <select id="base">
+          <option>http://localhost:3101</option><option>http://localhost:3102</option><option>http://localhost:3103</option>
+        </select></div>
+      <div><label>API key (kept in this tab's memory only)</label><input id="key" type="password" placeholder="avise_sk_…" autocomplete="off"></div>
+      <div><label>&nbsp;</label><button class="primary" id="whoami">Who am I?</button></div>
+    </div>
+    <p class="note" id="who" style="margin:8px 0 0">Not checked yet.</p>
+    <p class="note" style="margin:6px 0 0">Serve this folder on a port the API allows (non-production allows 3000–3003):
+      <code>cd apps/api/tools/api-console &amp;&amp; python3 -m http.server 3000</code>, then open <code>http://localhost:3000</code>.
+      Browsers can't call the production host from here (CORS), so use the local instances.</p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button class="primary" id="runReads">Run all reads</button>
+      <button id="runNeg">Run auth checks</button>
+      <label style="display:flex;gap:6px;align-items:center;margin:0 0 0 12px"><input type="checkbox" id="allowWrites"> Allow writes (QA-API-TEST, auto-cleanup)</label>
+      <button id="runWrites" disabled>Run write lifecycle</button>
+      <span class="summary" id="summary" style="margin-left:auto"></span>
+    </div>
+  </div>
+
+  <div id="groups"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const READS = {
+  'Deals': ['/api/deals', '/api/deals/stats/summary', '/api/deals/trash', '/api/deals/reactivations', '/api/deals/financial-summaries', '/api/deals?updatedSince=2026-01-01&limit=5', '/api/deals?limit=2&offset=1', '/api/export/deals', '/api/export/deals?format=csv'],
+  'Contacts & companies': ['/api/contacts', '/api/contacts/insights/duplicates', '/api/contacts/insights/follow-ups', '/api/contacts/insights/network', '/api/contacts/insights/scores', '/api/contacts/insights/stale', '/api/contacts/insights/timeline', '/api/contacts/export', '/api/contacts?updatedSince=2026-01-01', '/api/companies', '/api/companies?limit=5'],
+  'Work': ['/api/tasks', '/api/tasks?updatedSince=2026-01-01', '/api/activities/recent', '/api/memos', '/api/templates', '/api/watchlist', '/api/graphs', '/api/legal-documents', '/api/legal-document-templates', '/api/documents/alerts', '/api/ingest/pending-review'],
+  'Organization': ['/api/users/me', '/api/users/me/team', '/api/users', '/api/organizations/me', '/api/organizations/criteria', '/api/organizations/nda-playbook', '/api/invitations', '/api/firm-context', '/api/firm-teaser', '/api/onboarding/status', '/api/integrations', '/api/usage/me'],
+  'Audit & webhooks': ['/api/audit', '/api/audit/summary', '/api/audit/export.csv', '/api/webhook-subscriptions', '/api/webhook-subscriptions/events', '/api/notifications'],
+  'AI (may fail: AI credits)': ['/api/ai/status', '/api/ai/email-templates'],
+  'Known failing': ['/api/data-rooms/summary', '/api/conversations'],
+};
+const NOTES = { '/api/data-rooms/summary': 'known 500 (batched .in() lookup)', '/api/conversations': 'known 500 (ChatMessage.conversationId missing in DB)' };
+const AUTH_CHECKS = [
+  { name: 'No key → 401', method: 'GET', path: '/api/users/me', key: null, expect: [401] },
+  { name: 'Wrong key → 401', method: 'GET', path: '/api/users/me', key: 'avise_sk_' + 'A'.repeat(43), expect: [401] },
+  { name: 'Key cannot list keys → 403', method: 'GET', path: '/api/api-keys', expect: [403] },
+  { name: 'Key cannot mint keys → 403', method: 'POST', path: '/api/api-keys', body: { name: 'should-not-exist' }, expect: [403] },
+];
+const state = { total: 0, pass: 0, fail: 0 };
+
+async function call(method, path, { body, key = $('key').value.trim() } = {}) {
+  const t = Date.now();
+  try {
+    if (location.port === '4000') { // served by server.mjs: forward through /run
+      const r = await fetch('/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base: $('base').value, method, path, key, body }) });
+      const x = await r.json(); let json = null; try { json = JSON.parse(x.text) } catch {}
+      return { status: x.status, ms: x.ms, text: x.text, json };
+    }
+    const r = await fetch($('base').value + path, { method, headers: { ...(key ? { Authorization: 'Bearer ' + key } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    const text = await r.text(); let json = null; try { json = JSON.parse(text) } catch {}
+    return { status: r.status, ms: Date.now() - t, text, json };
+  } catch (e) { return { status: 0, ms: Date.now() - t, text: 'Network/CORS error: ' + e.message + ' (is the API up, and is this page served from localhost:3000–3003?)', json: null }; }
+}
+function row(group, method, path, tag) {
+  const el = document.createElement('div'); el.className = 'case';
+  el.innerHTML = `<span></span><span class="m">${method}</span><span class="p"></span><span class="chip">idle</span><button>Run</button>`;
+  el.querySelector('.p').textContent = path; if (tag) { const s = document.createElement('span'); s.className = 'tag'; s.textContent = tag; el.querySelector('.p').append(s); }
+  group.append(el); return el;
+}
+function show(el, r, ok) {
+  const chip = el.querySelector('.chip'); chip.textContent = `${r.status || 'ERR'} · ${r.ms}ms`; chip.className = 'chip ' + (ok ? 'ok' : 'bad');
+  el.querySelector('span').textContent = ok ? '✓' : '✗';
+  let pre = el.querySelector('pre'); if (!pre) { pre = document.createElement('pre'); pre.hidden = true; el.append(pre); chip.style.cursor = 'pointer'; chip.onclick = () => pre.hidden = !pre.hidden; }
+  pre.textContent = r.text.slice(0, 4000);
+}
+function tally(ok) { state.total++; ok ? state.pass++ : state.fail++; $('summary').textContent = `${state.pass}/${state.total} passed${state.fail ? ', ' + state.fail + ' failed' : ''}`; }
+function resetTally() { state.total = state.pass = state.fail = 0; $('summary').textContent = ''; }
+
+const rows = [];
+for (const [name, paths] of Object.entries(READS)) {
+  const card = document.createElement('div'); card.className = 'card'; card.innerHTML = `<h2>${name}</h2>`; $('groups').append(card);
+  for (const p of paths) {
+    const known = name === 'Known failing';
+    const el = row(card, 'GET', p, NOTES[p] || (name.startsWith('AI') ? 'AI credits' : ''));
+    const run = async () => { const r = await call('GET', p); const ok = r.status === 200; show(el, r, ok); tally(ok); return ok; };
+    el.querySelector('button').onclick = () => { resetTally(); run(); };
+    rows.push({ run, known });
+  }
+}
+$('runReads').onclick = async () => { resetTally(); for (const r of rows) await r.run(); };
+$('runNeg').onclick = async () => {
+  resetTally(); const card = document.createElement('div'); card.className = 'card'; card.innerHTML = '<h2>Auth checks</h2>'; $('groups').prepend(card);
+  for (const c of AUTH_CHECKS) { const el = row(card, c.method, c.path, c.name); const r = await call(c.method, c.path, { body: c.body, key: c.key === undefined ? undefined : c.key }); const ok = c.expect.includes(r.status); show(el, r, ok); tally(ok); }
+};
+$('allowWrites').onchange = (e) => $('runWrites').disabled = !e.target.checked;
+$('runWrites').onclick = async () => {
+  resetTally(); const card = document.createElement('div'); card.className = 'card'; card.innerHTML = '<h2>Write lifecycle</h2>'; $('groups').prepend(card);
+  const tag = 'QA-API-TEST ' + new Date().toISOString().slice(0, 16); const clean = [];
+  const step = async (method, path, expect, body, label) => { const el = row(card, method, path, label); const r = await call(method, path, { body }); const ok = expect.includes(r.status); show(el, r, ok); tally(ok); return r; };
+  const id = (r) => r.json?.id || r.json?.data?.id || r.json?.deal?.id;
+  try {
+    const co = await step('POST', '/api/companies', [201], { name: tag + ' Co', industry: 'Software' }, 'create company'); const coId = id(co); if (coId) clean.push(['DELETE', '/api/companies/' + coId]);
+    if (coId) await step('PATCH', '/api/companies/' + coId, [200], { description: 'console test' }, 'update company');
+    await step('POST', '/api/deals', [400], { industry: 'Software' }, 'validation: missing name');
+    const d = await step('POST', '/api/deals', [201], { name: tag + ' Deal', companyName: tag + ' Target', industry: 'Software', revenue: 12.5, ebitda: 2.1, priority: 'HIGH', source: 'api-console', tags: ['qa'] }, 'create deal'); const dId = id(d);
+    if (dId) { clean.unshift(['DELETE', '/api/deals/' + dId]);
+      await step('GET', '/api/deals/' + dId, [200], undefined, 'read deal');
+      await step('PATCH', '/api/deals/' + dId, [200], { stage: 'DUE_DILIGENCE', stageNote: 'console test' }, 'move stage');
+      await step('POST', `/api/deals/${dId}/activities`, [201], { type: 'NOTE_ADDED', title: tag + ' note', description: 'from console' }, 'add note');
+      await step('GET', `/api/deals/${dId}/activities`, [200], undefined, 'list notes'); }
+  } finally {
+    for (const [m, p] of clean) await step(m, p, [200, 204, 404], undefined, 'cleanup');
+    // the company auto-created for the deal target is named "<tag> Target"
+    const list = await call('GET', '/api/companies?limit=500'); const arr = Array.isArray(list.json) ? list.json : (list.json?.data || []);
+    for (const c of arr.filter((c) => (c.name || '').startsWith(tag))) await step('DELETE', '/api/companies/' + c.id, [200, 204, 404], undefined, 'cleanup company');
+  }
+};
+$('whoami').onclick = async () => { const r = await call('GET', '/api/users/me'); $('who').textContent = r.status === 200 ? `Key acts as ${r.json.email} (${r.json.role}) in "${r.json.organization?.name}"` : `Rejected: ${r.status} ${r.text.slice(0, 120)}`; };
+</script>
+</body>
+</html>
