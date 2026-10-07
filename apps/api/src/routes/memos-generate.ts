@@ -10,6 +10,7 @@ import { getOrgId } from '../middleware/orgScope.js';
 import { generateAllSectionsStreaming, GeneratedSection } from '../services/agents/memoAgent/index.js';
 import { isAnthropicAvailable } from '../services/ai/client.js';
 import { classifyAIError } from '../utils/aiErrors.js';
+import { GENERATOR_TYPE_TO_DB_TYPE, memoSectionKey } from './memos-schemas.js';
 
 const router = Router();
 
@@ -21,21 +22,13 @@ const router = Router();
 async function persistGeneratedSections(memoId: string, generated: GeneratedSection[]) {
   const { data: existingRows } = await supabase
     .from('MemoSection')
-    .select('id, type')
+    .select('id, type, title')
     .eq('memoId', memoId);
-  const existingByType = new Map<string, { id: string }>();
+  const existingByKey = new Map<string, { id: string }>();
   for (const row of existingRows || []) {
-    if (!existingByType.has(row.type)) existingByType.set(row.type, { id: row.id });
+    const key = memoSectionKey(row.type, row.title);
+    if (!existingByKey.has(key)) existingByKey.set(key, { id: row.id });
   }
-
-  // Normalize type to match DB CHECK constraint (unchanged from prior code)
-  const DB_TYPE_MAP: Record<string, string> = {
-    'EXIT_ANALYSIS': 'EXIT_STRATEGY',
-    'VALUE_CREATION_PLAN': 'VALUE_CREATION',
-    'QUALITY_OF_EARNINGS': 'FINANCIAL_PERFORMANCE',
-    'MANAGEMENT_ASSESSMENT': 'CUSTOM',
-    'OPERATIONAL_DEEP_DIVE': 'CUSTOM',
-  };
 
   let completed = 0;
   // PostgrestFilterBuilder is PromiseLike (thenable), not a real Promise.
@@ -52,13 +45,21 @@ async function persistGeneratedSections(memoId: string, generated: GeneratedSect
     if (gen.tableData) updateData.tableData = gen.tableData;
     if (gen.chartConfig) updateData.chartConfig = gen.chartConfig;
 
-    const existing = existingByType.get(gen.type);
+    // Look up by the SAME normalized type (+ title, for CUSTOM) that an
+    // existing row would have been cloned/inserted with — matching on the
+    // raw generator type here is what caused QA 2026-10-06 #16b: every
+    // template-cloned section whose type gets remapped (Quality of
+    // Earnings, Management Assessment, Operational Deep Dive, Value
+    // Creation Plan, Exit Analysis) never matched its existing row, so a
+    // second, duplicate row was inserted for it on every "Generate all".
+    const normalizedType = GENERATOR_TYPE_TO_DB_TYPE[gen.type] || gen.type;
+    const key = memoSectionKey(normalizedType, gen.title);
+    const existing = existingByKey.get(key);
     if (existing) {
       updatePromises.push(
         supabase.from('MemoSection').update(updateData).eq('id', existing.id)
       );
     } else {
-      const normalizedType = DB_TYPE_MAP[gen.type] || gen.type;
       toInsert.push({
         memoId, type: normalizedType, title: gen.title,
         sortOrder: (gen as any).sortOrder || completed + 1,

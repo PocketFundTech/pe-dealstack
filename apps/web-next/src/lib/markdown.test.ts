@@ -28,7 +28,7 @@ describe("renderMarkdown — link sanitisation", () => {
   });
 
   it("opens external http/https links in a new tab with rel noopener", () => {
-    const html = renderMarkdown("[Pocket Fund](https://pocket-fund.com)");
+    const html = renderMarkdown("[Avise](https://pocket-fund.com)");
     expect(html).toContain('href="https://pocket-fund.com"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');

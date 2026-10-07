@@ -12,6 +12,7 @@ import { trackedClaudeMessage, isAnthropicAvailable } from '../../ai/client.js';
 import { log } from '../../../utils/logger.js';
 import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { resolveTimeoutMs } from '../agentBounds.js';
+import { classifyAIErrorObject } from '../../../utils/aiErrors.js';
 
 // ─── Bounds ──────────────────────────────────────────────────────────
 // Each section is a single LLM call (not a multi-step agent). Cap each
@@ -254,10 +255,17 @@ export async function generateSection(
     }
     log.error(`[memoAgent/pipeline] Error generating section ${sectionType}: ${err?.message}`);
     captureAgentError(err, { agent: 'memoAgent', node: `pipeline.${sectionType}` }, 'warning');
+    // QA 2026-10-06 #12/#16d: this used to bake the raw provider error
+    // (including request IDs and, during an outage, the literal Anthropic
+    // billing message) straight into the section — then into the exported
+    // PDF. classifyAIErrorObject() gives the same friendly, never-the-
+    // customer's-fault message routes already use; never show err.message
+    // directly here.
+    const { userMessage } = classifyAIErrorObject(err);
     return makePlaceholder(
       sectionType,
       title,
-      `<p><em>[Section generation failed: ${err?.message ?? 'Unknown error'}]</em></p>`,
+      `<p><em>[AI couldn't generate this section: ${userMessage}]</em></p>`,
       'error',
       sortOrder,
     );

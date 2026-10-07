@@ -24,6 +24,7 @@ vi.mock('../src/services/agents/memoAgent/index.js', () => ({
 
 const updateSpy = vi.fn(() => ({ eq: async () => ({ error: null }) }));
 const insertSpy = vi.fn(async () => ({ error: null }));
+let existingSectionRows: Array<{ id: string; type: string; title: string }> = [];
 
 function tableMock() {
   return (table: string) => {
@@ -34,7 +35,7 @@ function tableMock() {
       return {
         select: () => ({ eq: () => ({
           // First call (existing rows pre-fetch): no eq chain further, just resolves.
-          then: (resolve: any) => resolve({ data: [] }),
+          then: (resolve: any) => resolve({ data: existingSectionRows }),
           order: async () => ({ data: [{ id: 'sec-1', type: 'EXECUTIVE_SUMMARY', content: 'final', sortOrder: 1 }] }),
         }) }),
         update: updateSpy,
@@ -56,6 +57,7 @@ async function buildApp() {
 beforeEach(() => {
   vi.clearAllMocks();
   anthropicAvailable = true;
+  existingSectionRows = [];
   mockSupabase.from.mockImplementation(tableMock());
 });
 
@@ -109,6 +111,48 @@ describe('POST /api/memos/:id/generate-all — SSE', () => {
 
     expect(res.text).toContain('"type":"error"');
     expect(res.text).toContain('saved');
+  });
+
+  // QA 2026-10-06 #16b: a memo created from the Standard IC Memo template
+  // clones MemoSection rows typed via SECTION_TYPE_MAP (the DB-normalized
+  // type), e.g. "Exit Analysis" -> EXIT_STRATEGY, "Management Assessment"
+  // and "Operational Deep Dive" -> CUSTOM. The generator emits its OWN raw
+  // type names (EXIT_ANALYSIS, MANAGEMENT_ASSESSMENT, ...) for those same
+  // sections. Matching on the raw type never found the existing row, so
+  // "Generate all" inserted a second, duplicate row for every one of these
+  // five sections on every run.
+  it('updates the existing cloned row instead of inserting a duplicate for a remapped type', async () => {
+    existingSectionRows = [
+      { id: 'existing-exit', type: 'EXIT_STRATEGY', title: 'Exit Analysis' },
+      { id: 'existing-mgmt', type: 'CUSTOM', title: 'Management Assessment' },
+      { id: 'existing-ops', type: 'CUSTOM', title: 'Operational Deep Dive' },
+    ];
+    generateAllSectionsStreaming.mockReturnValue((async function* () {
+      yield {
+        type: 'section_complete',
+        sectionType: 'EXIT_ANALYSIS',
+        section: { type: 'EXIT_ANALYSIS', title: 'Exit Analysis', content: 'exit content', aiGenerated: true },
+        index: 1, total: 3,
+      };
+      yield {
+        type: 'section_complete',
+        sectionType: 'MANAGEMENT_ASSESSMENT',
+        section: { type: 'MANAGEMENT_ASSESSMENT', title: 'Management Assessment', content: 'mgmt content', aiGenerated: true },
+        index: 2, total: 3,
+      };
+      yield {
+        type: 'section_complete',
+        sectionType: 'OPERATIONAL_DEEP_DIVE',
+        section: { type: 'OPERATIONAL_DEEP_DIVE', title: 'Operational Deep Dive', content: 'ops content', aiGenerated: true },
+        index: 3, total: 3,
+      };
+    })());
+
+    const app = await buildApp();
+    await request(app).post('/api/memos/memo-1/generate-all').send({});
+
+    expect(insertSpy).not.toHaveBeenCalled();
+    expect(updateSpy).toHaveBeenCalledTimes(3);
   });
 
   it('returns 503 JSON (not SSE) when Anthropic is unavailable, without opening a stream', async () => {

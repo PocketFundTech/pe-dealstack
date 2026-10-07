@@ -61,7 +61,7 @@ export function ProviderCard({ provider, integration, busy, onConnect, onDisconn
   return (
     <div className="bg-white border border-border-subtle rounded-lg p-4 flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex flex-1 items-center gap-3 min-w-0">
           <div
             className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
             style={{ backgroundColor: "#E6EEF5", color: "#003366" }}

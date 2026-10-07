@@ -36,7 +36,7 @@ function MfaLockoutScreen() {
     const supabase = createClient();
     const { data, error: enrollErr } = await supabase.auth.mfa.enroll({
       factorType: "totp",
-      issuer: "Pocket Fund",
+      issuer: "Avise",
     });
     setStarting(false);
     if (enrollErr || !data) {

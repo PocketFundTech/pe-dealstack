@@ -193,6 +193,7 @@ export function TeamSection({
 
       {showInviteModal && (
         <InviteTeamModal
+          onInvited={() => void loadInvitations()}
           onClose={() => {
             setShowInviteModal(false);
             // Refresh the list after closing to pick up any new invites

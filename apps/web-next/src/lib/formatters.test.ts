@@ -239,7 +239,7 @@ describe("getDealDisplayName", () => {
   });
 
   it("returns the raw name when it isn't a URL", () => {
-    expect(getDealDisplayName({ name: "Pocket Fund" })).toBe("Pocket Fund");
+    expect(getDealDisplayName({ name: "Avise" })).toBe("Avise");
   });
 
   it("prefers the deal's own name over a company stub named the generic placeholder", () => {

@@ -66,7 +66,7 @@ export function headline(data: SecurityDashboardData): { ok: boolean; title: str
     return { ok: true, title: "All clear", detail: `No staff access or anomalies in the last ${data.windowDays} days.` };
   }
   if (staff > 0) {
-    return { ok: false, title: `${staff} staff access ${staff === 1 ? "event" : "events"}`, detail: "Pocket Fund staff accessed your data. Review the access log." };
+    return { ok: false, title: `${staff} staff access ${staff === 1 ? "event" : "events"}`, detail: "Avise staff accessed your data. Review the access log." };
   }
   return { ok: false, title: `${failed} failed logins`, detail: "Higher than usual. Check the activity log for patterns." };
 }
