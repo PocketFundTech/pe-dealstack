@@ -3,7 +3,9 @@ import { log } from '../../utils/logger.js';
 import { HubSpotClient } from './client.js';
 import { mapCompany, mapContact, mapDeal } from './mappers.js';
 import { mapEngagement } from './engagementMappers.js';
-import { upsertByHubspotId, upsertContactInteractionByHubspotId, upsertDealActivityByHubspotId, type ImportMode } from './dedup.js';
+import { upsertByHubspotId, upsertContactInteractionByHubspotId, upsertDealActivityByHubspotId, type ImportMode, type RecordUpsertResult } from './dedup.js';
+import { escapeIlike } from './ilike.js';
+import { loadLiveDealIndex, normaliseCompanyName, type DealMatch } from '../dealDuplicates.js';
 import type { EngagementType, HubSpotObjectType } from './types.js';
 
 const ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals', 'notes', 'calls', 'meetings', 'emails', 'tasks'];
@@ -42,8 +44,31 @@ interface Counters {
   processed: number; created: number; updated: number; failed: number; skipped: number;
   /** Records HubSpot says this object has (for "X of Y" progress); null if unknown. */
   total?: number | null;
+  /**
+   * Of `updated`, how many were existing Avise rows that no HubSpot record
+   * owned yet and were linked rather than duplicated (for deals: the deal a
+   * CIM upload already created). Absent on jobs stored before this existed.
+   */
+  matched?: number;
 }
 const emptyCounters = (): Counters => ({ processed: 0, created: 0, updated: 0, failed: 0, skipped: 0 });
+
+/** Count an upsert outcome; a `linked` row is an update that is also `matched`. */
+function tally(c: Counters, res: RecordUpsertResult): void {
+  if (res === 'linked') {
+    c.updated += 1;
+    c.matched = (c.matched ?? 0) + 1;
+  } else {
+    c[res] += 1;
+  }
+}
+
+/** Company names that are placeholders, not identities — never match a deal on them. */
+function dealMatchKey(companyName: string | null): string | null {
+  if (!companyName || companyName.trim().toLowerCase() === 'unknown company') return null;
+  const key = normaliseCompanyName(companyName);
+  return key.length >= 3 ? key : null;
+}
 
 async function loadJob(jobId: string) {
   const { data } = await supabase.from('ImportJob').select('*').eq('id', jobId).maybeSingle();
@@ -62,12 +87,13 @@ async function saveJob(jobId: string, patch: Record<string, unknown>) {
  * Resolve a HubSpot company id → the local Company name we imported for it.
  * Contacts/Deals reference companies by HubSpot id; we store the name as free text.
  */
-async function companyNameForHubspotId(orgId: string, hubspotCompanyId: string | null): Promise<string | null> {
-  if (!hubspotCompanyId) return null;
+async function companyForHubspotId(orgId: string, hubspotCompanyId: string | null): Promise<{ id: string | null; name: string | null }> {
+  if (!hubspotCompanyId) return { id: null, name: null };
   const { data } = await supabase
-    .from('Company').select('name')
+    .from('Company').select('id, name')
     .eq('organizationId', orgId).eq('hubspotId', hubspotCompanyId).maybeSingle();
-  return (data as { name?: string } | null)?.name ?? null;
+  const row = data as { id?: string; name?: string } | null;
+  return { id: row?.id ?? null, name: row?.name ?? null };
 }
 
 /**
@@ -117,14 +143,18 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
   // Deals in a batch commonly share a company — a portfolio CRM has far
   // fewer companies than deals. Cache both lookups per batch so a shared
   // company costs one round-trip instead of one per deal.
-  const companyNameCache = new Map<string, string | null>();
+  const companyCache = new Map<string, { id: string | null; name: string | null }>();
   const companyIdCache = new Map<string, string | null>();
+  async function companyForHubspotIdCached(orgId: string, hubspotCompanyId: string | null) {
+    if (!hubspotCompanyId) return { id: null, name: null };
+    const hit = companyCache.get(hubspotCompanyId);
+    if (hit) return hit;
+    const company = await companyForHubspotId(orgId, hubspotCompanyId);
+    companyCache.set(hubspotCompanyId, company);
+    return company;
+  }
   async function companyNameForHubspotIdCached(orgId: string, hubspotCompanyId: string | null) {
-    if (!hubspotCompanyId) return null;
-    if (companyNameCache.has(hubspotCompanyId)) return companyNameCache.get(hubspotCompanyId) ?? null;
-    const name = await companyNameForHubspotId(orgId, hubspotCompanyId);
-    companyNameCache.set(hubspotCompanyId, name);
-    return name;
+    return (await companyForHubspotIdCached(orgId, hubspotCompanyId)).name;
   }
   async function resolveCompanyIdCached(orgId: string, name: string | null) {
     // A null name means "no resolvable HubSpot company for this deal" — every
@@ -144,6 +174,17 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     const id = await contactIdForHubspotId(orgId, hubspotContactId);
     contactIdCache.set(hubspotContactId, id);
     return id;
+  }
+
+  // Live deals no HubSpot deal owns yet, keyed by normalised company / deal
+  // name — loaded once per batch on the first deal that needs it, so linking
+  // a HubSpot deal to the deal a CIM upload already created costs no query
+  // per record. A deal is removed once linked, so two HubSpot deals for the
+  // same company never both claim it.
+  let unlinkedDeals: Promise<Map<string, DealMatch>> | null = null;
+  function unlinkedDealIndex(orgId: string) {
+    unlinkedDeals ??= loadLiveDealIndex(orgId, { unlinkedOnly: true });
+    return unlinkedDeals;
   }
 
   const dealIdCache = new Map<string, string | null>();
@@ -237,7 +278,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
           name: m.name, industry: m.industry, website: m.website,
           description: m.description, hubspotProperties: m.hubspotProperties,
         }, hasRealName ? { column: 'name', value: m.name } : undefined, mode);
-        counts.companies[res] += 1;
+        tally(counts.companies, res);
       } else if (current === 'contacts') {
         // Prefer the associations API; `associatedcompanyid` is a legacy
         // property that is frequently empty even when an association exists.
@@ -250,20 +291,37 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
           firstName: m.firstName, lastName: m.lastName, email: m.email, phone: m.phone,
           title: m.title, company: m.company, hubspotProperties: m.hubspotProperties,
         }, { column: 'email', value: m.email }, mode);
-        counts.contacts[res] += 1;
+        tally(counts.contacts, res);
       } else if (current === 'deals') {
         const m = mapDeal(rec, stageLabels[rec.properties.dealstage ?? ''] ?? null);
-        const companyName = await companyNameForHubspotIdCached(job.organizationId, m.associatedCompanyHubspotId);
-        // Deal requires a companyId — resolve or create the Company row.
-        const companyId = await resolveCompanyIdCached(job.organizationId, companyName);
+        const company = await companyForHubspotIdCached(job.organizationId, m.associatedCompanyHubspotId);
+        const companyName = company.name;
+        // Deal requires a companyId. Use the imported HubSpot company itself
+        // when we have it — two HubSpot companies may share a name, and a
+        // name lookup would wire this deal to whichever came first. Otherwise
+        // resolve by name or create the Company row.
+        const companyId = company.id ?? await resolveCompanyIdCached(job.organizationId, companyName);
+        // The deal may already exist in Avise without a hubspotId — typically
+        // created from a CIM upload for the same company. Link it instead of
+        // creating a duplicate (exact normalised-name match only; no fuzzy
+        // matching in an unattended import). upsertByHubspotId still checks
+        // the hubspotId first and only adopts the row while it's unlinked.
+        const matchKey = dealMatchKey(companyName);
+        const candidate = matchKey ? (await unlinkedDealIndex(job.organizationId)).get(matchKey) ?? null : null;
         const res = await upsertByHubspotId('Deal', job.organizationId, m.hubspotId, {
           name: m.name, companyId, dealSize: m.dealSize, description: m.description,
           // Omit when unmapped: Deal.stage is NOT NULL and a null would either
           // fail the write or reset the deal to the INITIAL_REVIEW default.
           ...(m.stage ? { stage: m.stage } : {}),
           customFields: m.customFields, hubspotProperties: m.hubspotProperties,
-        }, { column: 'name', value: m.name }, mode);
-        counts.deals[res] += 1;
+        }, { column: 'name', value: m.name, adoptId: candidate?.id ?? null }, mode);
+        tally(counts.deals, res);
+        if (res === 'linked' && candidate) {
+          // Drop every key pointing at the now-linked deal (its company AND
+          // deal name are both indexed).
+          const index = await unlinkedDealIndex(job.organizationId);
+          for (const [k, v] of index) if (v.id === candidate.id) index.delete(k);
+        }
       } else {
         // One of the 5 engagement types (notes/calls/meetings/emails/tasks).
         const m = mapEngagement(current as EngagementType, rec);
@@ -368,7 +426,7 @@ async function resolveCompanyId(orgId: string, name: string | null): Promise<str
   // and PGRST116 would fail the whole deal record. .order() makes which
   // duplicate gets adopted deterministic instead of Postgres's unspecified order.
   const { data: found } = await supabase
-    .from('Company').select('id').eq('organizationId', orgId).ilike('name', name)
+    .from('Company').select('id').eq('organizationId', orgId).ilike('name', escapeIlike(name))
     .order('createdAt', { ascending: true }).limit(1);
   const hit = (found as Array<{ id: string }> | null)?.[0];
   if (hit) return hit.id;

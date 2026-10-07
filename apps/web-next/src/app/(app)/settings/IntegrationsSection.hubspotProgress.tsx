@@ -17,6 +17,8 @@ export interface HubSpotJobCounts {
   skipped?: number;
   /** Records HubSpot reports for this object; null/undefined when unknown. */
   total?: number | null;
+  /** Of `updated`: existing Avise records linked instead of duplicated. Absent on older jobs. */
+  matched?: number;
 }
 
 export interface HubSpotImportJob {
@@ -127,6 +129,11 @@ export function HubSpotImportProgress({ job, driving }: { job: HubSpotImportJob;
                   : "—"}
               </span>
             </div>
+            {obj === "deals" && (c?.matched ?? 0) > 0 && (
+              <p className="text-[11px] text-text-muted" data-testid="hubspot-deals-matched">
+                {fmt(c!.matched!)} linked to deals already in Avise
+              </p>
+            )}
             {isCurrent && objPct !== null && (
               <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-gray-200">
                 <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${objPct}%` }} />

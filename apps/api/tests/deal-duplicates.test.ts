@@ -19,7 +19,8 @@ vi.mock('../src/supabase.js', () => ({
   },
 }));
 vi.mock('../src/utils/logger.js', () => ({ log: { info() {}, warn() {}, error() {}, debug() {} } }));
-const live = () => deals.filter((d) => d.organizationId === queried.organizationId && d.deletedAt == null);
+const live = () => deals.filter((d) => d.organizationId === queried.organizationId && d.deletedAt == null
+  && (!('is:hubspotId' in queried) || d.hubspotId == null));
 const { normaliseCompanyName, findLiveDealForCompany, loadLiveDealIndex } = await import('../src/services/dealDuplicates.js');
 
 beforeEach(() => {
@@ -69,5 +70,16 @@ describe('loadLiveDealIndex', () => {
     deals = Array.from({ length: 1500 }, (_, i) => ({ id: `x${i}`, name: `Target ${i}`, organizationId: 'o1', deletedAt: null, company: null }));
     const index = await loadLiveDealIndex('o1');
     expect(index.get('target 1499')).toEqual({ id: 'x1499', name: 'Target 1499' });
+  });
+
+  it('unlinkedOnly leaves out deals a HubSpot deal already owns (HubSpot import)', async () => {
+    deals = [
+      { id: 'cim', name: 'Acme', organizationId: 'o1', deletedAt: null, hubspotId: null, company: { name: 'Acme Inc' } },
+      { id: 'hs', name: 'Beta', organizationId: 'o1', deletedAt: null, hubspotId: '123', company: { name: 'Beta LLC' } },
+    ];
+    const index = await loadLiveDealIndex('o1', { unlinkedOnly: true });
+    expect(queried['is:hubspotId']).toBeNull();
+    expect(index.get('acme')).toEqual({ id: 'cim', name: 'Acme' });
+    expect(index.has('beta')).toBe(false);
   });
 });

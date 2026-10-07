@@ -12,6 +12,7 @@ function makeChain(overrides: Record<string, unknown> = {}) {
     update: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     ilike: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: [] }),
     maybeSingle: vi.fn().mockResolvedValue({ data: null }),
@@ -162,6 +163,115 @@ describe('upsertByHubspotId', () => {
     await expect(
       upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'Acme', hubspotProperties: {} }),
     ).rejects.toThrow(/duplicate key/);
+  });
+});
+
+describe('upsertByHubspotId — adoption only takes rows no HubSpot record owns', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * Two HubSpot companies both called "Acme": the second used to adopt the
+   * first one's row by name and overwrite its hubspotId, so one company went
+   * missing (and the two flip-flopped on every re-import).
+   */
+  it('restricts the natural-key fallback to rows with no hubspotId, so a same-named HubSpot record gets its own row', async () => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const naturalKeyMatch = makeChain({ limit: vi.fn().mockResolvedValue({ data: [] }) });
+    const insertChain = makeChain();
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(naturalKeyMatch).mockReturnValueOnce(insertChain);
+
+    const res = await upsertByHubspotId('Company', 'org-A', 'hs-2', { name: 'Acme', hubspotProperties: {} }, { column: 'name', value: 'Acme' });
+
+    expect(naturalKeyMatch.is).toHaveBeenCalledWith('hubspotId', null);
+    expect(res).toBe('created');
+    expect(insertChain.insert).toHaveBeenCalledWith(expect.objectContaining({ name: 'Acme', hubspotId: 'hs-2' }));
+  });
+
+  it.each([
+    ['Contact', 'email', 'a@b.com'],
+    ['Deal', 'name', 'Project Falcon'],
+  ] as const)('applies the same unlinked-only rule to %s (%s)', async (table, column, value) => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const naturalKeyMatch = makeChain({ limit: vi.fn().mockResolvedValue({ data: [] }) });
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(naturalKeyMatch).mockReturnValueOnce(makeChain());
+
+    await upsertByHubspotId(table, 'org-A', 'hs-1', { hubspotProperties: {} }, { column, value });
+
+    expect(naturalKeyMatch.is).toHaveBeenCalledWith('hubspotId', null);
+    expect(naturalKeyMatch.ilike).toHaveBeenCalledWith(column, value);
+  });
+
+  it('returns "linked" when it adopts a user-created row by natural key', async () => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const naturalKeyMatch = makeChain({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'row-9', name: 'Acme', hubspotId: null }] }) });
+    const updateChain = makeChain();
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(naturalKeyMatch).mockReturnValueOnce(updateChain);
+
+    const res = await upsertByHubspotId('Company', 'org-A', 'hs-1', { name: 'Acme', hubspotProperties: {} }, { column: 'name', value: 'Acme' });
+
+    expect(res).toBe('linked');
+    expect(updateChain.update).toHaveBeenCalledWith(expect.objectContaining({ hubspotId: 'hs-1' }));
+    expect(updateChain.eq).toHaveBeenCalledWith('id', 'row-9');
+  });
+
+  it('escapes LIKE wildcards so "100%_Co" only matches that exact name', async () => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const naturalKeyMatch = makeChain({ limit: vi.fn().mockResolvedValue({ data: [] }) });
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(naturalKeyMatch).mockReturnValueOnce(makeChain());
+
+    await upsertByHubspotId('Company', 'org-A', 'hs-1', { name: '100%_Co', hubspotProperties: {} }, { column: 'name', value: '100%_Co\\x' });
+
+    expect(naturalKeyMatch.ilike).toHaveBeenCalledWith('name', '100\\%\\_Co\\\\x');
+  });
+
+  it('adopts the caller-picked row (adoptId) before trying the natural key, in fill mode, only while it is unlinked', async () => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const adoptChain = makeChain({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'cim-deal', name: 'Acme — CIM', dealSize: 50, hubspotId: null } }),
+    });
+    const updateChain = makeChain();
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(adoptChain).mockReturnValueOnce(updateChain);
+
+    const res = await upsertByHubspotId('Deal', 'org-A', 'hs-deal-1',
+      { name: 'Acme Deal', dealSize: 75, description: 'From HubSpot', hubspotProperties: {} },
+      { column: 'name', value: 'Acme Deal', adoptId: 'cim-deal' }, 'refresh');
+
+    expect(res).toBe('linked');
+    expect(adoptChain.eq).toHaveBeenCalledWith('id', 'cim-deal');
+    expect(adoptChain.is).toHaveBeenCalledWith('hubspotId', null);
+    // Never overwrites what the user / CIM already had; fills blanks only.
+    expect(updateChain.update).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Acme — CIM', dealSize: 50, description: 'From HubSpot', hubspotId: 'hs-deal-1',
+    }));
+    // Natural-key query never ran (3 from() calls: hubspotId, adoptId, update).
+    expect(mockFrom).toHaveBeenCalledTimes(3);
+  });
+
+  it('falls back to the natural key when the adoptId row has since been linked to another HubSpot deal', async () => {
+    const noHubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const adoptChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: null }) });
+    const naturalKeyMatch = makeChain({ limit: vi.fn().mockResolvedValue({ data: [] }) });
+    const insertChain = makeChain();
+    mockFrom.mockReturnValueOnce(noHubspotIdMatch).mockReturnValueOnce(adoptChain)
+      .mockReturnValueOnce(naturalKeyMatch).mockReturnValueOnce(insertChain);
+
+    const res = await upsertByHubspotId('Deal', 'org-A', 'hs-deal-2', { name: 'Acme Deal 2', hubspotProperties: {} },
+      { column: 'name', value: 'Acme Deal 2', adoptId: 'cim-deal' });
+
+    expect(res).toBe('created');
+    expect(naturalKeyMatch.ilike).toHaveBeenCalledWith('name', 'Acme Deal 2');
+  });
+
+  it('a hubspotId match wins over adoptId (re-import of an already linked deal)', async () => {
+    const hubspotIdMatch = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'deal-1', name: 'X' } }) });
+    const updateChain = makeChain();
+    mockFrom.mockReturnValueOnce(hubspotIdMatch).mockReturnValueOnce(updateChain);
+
+    const res = await upsertByHubspotId('Deal', 'org-A', 'hs-deal-1', { name: 'X', hubspotProperties: {} },
+      { column: 'name', value: 'X', adoptId: 'other-deal' });
+
+    expect(res).toBe('updated');
+    expect(updateChain.eq).toHaveBeenCalledWith('id', 'deal-1');
   });
 });
 

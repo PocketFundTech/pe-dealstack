@@ -1,4 +1,5 @@
 import { supabase } from '../../supabase.js';
+import { escapeIlike } from './ilike.js';
 
 function isBlank(v: unknown): boolean {
   return v === null || v === undefined || v === '';
@@ -42,8 +43,32 @@ export function mergeBlankOnly<T extends Record<string, unknown>>(existing: T, i
 export type UpsertResult = 'created' | 'updated';
 
 /**
+ * `upsertByHubspotId` outcome. `linked` = an existing Avise row that no
+ * HubSpot record owned yet (the user created it, or it came from a CIM
+ * upload) was adopted and now carries this hubspotId. It is an update, so
+ * callers count it under `updated` too.
+ */
+export type RecordUpsertResult = UpsertResult | 'linked';
+
+export interface NaturalKeyMatch {
+  column: string;
+  value: string | null;
+  /**
+   * A specific row the caller has already identified as this record's
+   * counterpart (e.g. the live deal for the same company). Tried before the
+   * natural key, and adopted only if it still has no hubspotId.
+   */
+  adoptId?: string | null;
+}
+
+/**
  * Upsert a mapped row into `table`, scoped to org.
- * Match priority: hubspotId, then a natural key column (`matchColumn`).
+ * Match priority: hubspotId, then `match.adoptId`, then a natural key column
+ * (`match.column`, exact case-insensitive). Adoption (the last two) only ever
+ * takes a row with NO hubspotId: a row already linked to a different HubSpot
+ * record is a different record that happens to share a name or email — two
+ * HubSpot companies called "Acme" must stay two rows, not collapse into one
+ * whose hubspotId flips on every re-import.
  * `row` must include hubspotProperties; organizationId + hubspotId are applied here.
  */
 export async function upsertByHubspotId(
@@ -51,24 +76,36 @@ export async function upsertByHubspotId(
   orgId: string,
   hubspotId: string,
   row: Record<string, unknown>,
-  match?: { column: string; value: string | null },
+  match?: NaturalKeyMatch,
   mode: ImportMode = 'fill',
-): Promise<UpsertResult> {
+): Promise<RecordUpsertResult> {
   // 1. Match by hubspotId first.
   let { data: existing } = await supabase
     .from(table).select('*')
     .eq('organizationId', orgId).eq('hubspotId', hubspotId).maybeSingle();
 
-  // 2. Fall back to natural key (case-insensitive) when provided.
+  let adopted = false;
+
+  // 2. A row the caller picked out (still unlinked).
+  if (!existing && match?.adoptId) {
+    const res = await supabase
+      .from(table).select('*')
+      .eq('organizationId', orgId).eq('id', match.adoptId).is('hubspotId', null)
+      .maybeSingle();
+    existing = res.data ?? null;
+    adopted = !!existing;
+  }
+
+  // 3. Fall back to natural key (exact, case-insensitive) among unlinked rows.
   //    .limit(1) rather than .maybeSingle(): duplicate names are legitimate and
   //    must not throw PGRST116 and fail the record. .order() makes which
   //    duplicate gets adopted deterministic instead of Postgres's unspecified
   //    default order.
-  let adopted = false;
   if (!existing && match?.value) {
     const res = await supabase
       .from(table).select('*')
-      .eq('organizationId', orgId).ilike(match.column, match.value)
+      .eq('organizationId', orgId).is('hubspotId', null)
+      .ilike(match.column, escapeIlike(match.value))
       .order('createdAt', { ascending: true }).limit(1);
     existing = (res.data as Array<Record<string, unknown>> | null)?.[0] ?? null;
     adopted = !!existing;
@@ -82,7 +119,7 @@ export async function upsertByHubspotId(
     merged.hubspotProperties = row.hubspotProperties;
     const { error } = await supabase.from(table).update(merged).eq('id', (existing as { id: string }).id);
     if (error) throw new Error(`HubSpot ${table} update failed: ${error.message}`);
-    return 'updated';
+    return adopted ? 'linked' : 'updated';
   }
 
   const { error } = await supabase.from(table).insert({ ...row, organizationId: orgId, hubspotId });
