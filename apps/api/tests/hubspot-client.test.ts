@@ -58,6 +58,24 @@ describe('HubSpotClient', () => {
     expect(page.nextCursor).toBe('c2');
   });
 
+  it('countObjects retries a search-API 429 instead of reporting no total', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mkRes(429, { status: 'error' }))
+      .mockResolvedValueOnce(mkRes(200, { total: 4015, results: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = new HubSpotClient('tok').countObjects('companies');
+    await vi.runAllTimersAsync();
+    expect(await p).toBe(4015);
+    vi.useRealTimers();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('countObjects is null when the token lacks the scope (403)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mkRes(403, { category: 'MISSING_SCOPES' })));
+    expect(await new HubSpotClient('tok').countObjects('emails')).toBeNull();
+  });
+
   it('listPage returns results and next cursor', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       mkRes(200, { results: [{ id: '1', properties: {} }], paging: { next: { after: '20' } } }),

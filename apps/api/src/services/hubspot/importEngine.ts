@@ -158,11 +158,13 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
   // re-fetched), so the panel can show "X of Y" and an ETA from the start
   // instead of an open-ended counter (6 Oct testing: "users feel lost").
   const missingTotals = ORDER.filter((o) => counts[o].total === undefined);
-  if (missingTotals.length > 0) {
-    const totals = await Promise.all(missingTotals.map(async (o) => {
-      try { return await client.countObjects(o); } catch { return null; }
-    }));
-    missingTotals.forEach((o, i) => { counts[o] = { ...counts[o], total: totals[i] }; });
+  // One at a time: HubSpot's search API has its own low rate limit (a few
+  // requests/second), and firing all eight at once 429'd some of them, so
+  // companies and deals showed no total (7 Oct testing).
+  for (const o of missingTotals) {
+    let total: number | null = null;
+    try { total = await client.countObjects(o); } catch { total = null; }
+    counts[o] = { ...counts[o], total };
   }
 
   // Pick the current object (first not-yet-finished in ORDER).

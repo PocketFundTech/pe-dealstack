@@ -164,18 +164,27 @@ export class HubSpotClient {
    * unaffected.
    */
   async countObjects(object: HubSpotObjectType): Promise<number | null> {
-    try {
-      const res = await fetch(`${BASE}/crm/v3/objects/${object}/search`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limit: 1, properties: ['hs_object_id'] }),
-      });
-      if (!res.ok) return null;
-      const data = (await res.json()) as { total?: number };
-      return typeof data.total === 'number' ? data.total : null;
-    } catch {
-      return null;
+    // The search API allows only a few calls per second; retry a 429 after a
+    // short wait instead of reporting "size unknown".
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(`${BASE}/crm/v3/objects/${object}/search`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 1, properties: ['hs_object_id'] }),
+        });
+        if (res.status === 429) {
+          await new Promise((r) => setTimeout(r, 1100 * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) return null;
+        const data = (await res.json()) as { total?: number };
+        return typeof data.total === 'number' ? data.total : null;
+      } catch {
+        return null;
+      }
     }
+    return null;
   }
 
   async listPage(
