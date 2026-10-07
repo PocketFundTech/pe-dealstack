@@ -4,6 +4,7 @@ import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { runSignalMonitorViaManagedAgents } from '../services/managedAgents/signalMonitorOrchestrator.js';
 import { runAsOrgSystem } from '../middleware/usageContext.js';
+import { isBackgroundAiEnabled } from '../services/usage/aiOnDemand.js';
 
 const router = Router();
 const BATCH_SIZE = 5;
@@ -32,6 +33,13 @@ router.post('/', async (req: Request, res: Response) => {
   const auth = req.headers.authorization || '';
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Every scan is an AI agent session. AI runs on click only unless
+  // AI_BACKGROUND_JOBS=on; the dashboard "Scan signals" button still works.
+  if (!isBackgroundAiEnabled()) {
+    log.info('Nightly signal scan skipped: AI_BACKGROUND_JOBS is off');
+    return res.json({ scanned: 0, skipped: 0, failed: 0, aiBackgroundJobs: 'off' });
   }
 
   const { data: orgs, error } = await supabase.from('Organization').select('id').eq('isActive', true);

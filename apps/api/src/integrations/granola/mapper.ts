@@ -1,4 +1,5 @@
 import { log } from '../../utils/logger.js';
+import { canRunAiNow } from '../../services/usage/aiOnDemand.js';
 import type { MeetingInsight } from '../../services/agents/meetingTranscriptAgent/schema.js';
 import type { GranolaNoteWithTranscript } from './types.js';
 
@@ -49,20 +50,24 @@ export async function granolaNoteToIntegrationActivity(params: {
   const transcriptText = transcriptToText(note);
 
   let aiExtraction: MeetingInsight | null = null;
-  try {
-    const { runTranscriptAnalysis } = await import('../../services/agents/meetingTranscriptAgent/index.js');
-    aiExtraction = await runTranscriptAnalysis({
-      title: note.title,
-      attendees: note.attendees,
-      durationSeconds,
-      transcript: transcriptText,
-    });
-  } catch (err) {
-    log.warn('granola mapper: transcript agent threw, continuing without aiExtraction', {
-      noteId: note.id,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    aiExtraction = null;
+  // The scheduled sync stores the note without the AI read unless
+  // AI_BACKGROUND_JOBS=on. "Sync now" still runs it.
+  if (canRunAiNow()) {
+    try {
+      const { runTranscriptAnalysis } = await import('../../services/agents/meetingTranscriptAgent/index.js');
+      aiExtraction = await runTranscriptAnalysis({
+        title: note.title,
+        attendees: note.attendees,
+        durationSeconds,
+        transcript: transcriptText,
+      });
+    } catch (err) {
+      log.warn('granola mapper: transcript agent threw, continuing without aiExtraction', {
+        noteId: note.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      aiExtraction = null;
+    }
   }
 
   return {

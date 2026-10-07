@@ -24,6 +24,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { classifyReplyIntent } from './replyIntentClassifier.js';
 import { recordTouch } from './outreachTouchLog.js';
+import { canRunAiNow } from './usage/aiOnDemand.js';
 
 export interface RecordOutreachReplyInput {
   /** Required to write the OutreachTouch row below — not used for
@@ -60,12 +61,16 @@ export interface RecordOutreachReplyResult {
  * rather than thrown, matching this feature area's soft-fail idiom.
  */
 export async function recordOutreachReply(input: RecordOutreachReplyInput): Promise<RecordOutreachReplyResult> {
-  const classification = await classifyReplyIntent({
-    replyText: input.replyText || '',
-    name: input.name,
-    company: input.company,
-    channel: input.channel,
-  });
+  // A webhook delivery stores the reply without the AI intent read unless
+  // AI_BACKGROUND_JOBS=on; a user's "Sync replies" click still classifies.
+  const classification = canRunAiNow()
+    ? await classifyReplyIntent({
+      replyText: input.replyText || '',
+      name: input.name,
+      company: input.company,
+      channel: input.channel,
+    })
+    : null;
 
   const updates: Record<string, any> = {
     lastReplyText: input.replyText ? input.replyText.slice(0, 20000) : null,

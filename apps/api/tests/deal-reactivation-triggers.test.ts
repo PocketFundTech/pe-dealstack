@@ -93,10 +93,23 @@ describe('PATCH /api/organizations/criteria', () => {
   });
 
   it('re-scores dormant deals against the new criteria in the background', async () => {
-    const app = await buildCriteriaApp();
-    await request(app).patch('/api/organizations/criteria').send(validCriteria);
+    process.env.AI_BACKGROUND_JOBS = 'on';
+    try {
+      const app = await buildCriteriaApp();
+      await request(app).patch('/api/organizations/criteria').send(validCriteria);
 
-    expect(sweepPassedDeals).toHaveBeenCalledWith('org-1', 'CRITERIA_CHANGED');
+      expect(sweepPassedDeals).toHaveBeenCalledWith('org-1', 'CRITERIA_CHANGED');
+    } finally {
+      delete process.env.AI_BACKGROUND_JOBS;
+    }
+  });
+
+  it('saves without re-scoring when AI_BACKGROUND_JOBS is off', async () => {
+    const app = await buildCriteriaApp();
+    const res = await request(app).patch('/api/organizations/criteria').send(validCriteria);
+
+    expect(res.status).toBe(200);
+    expect(sweepPassedDeals).not.toHaveBeenCalled();
   });
 
   it('does not make the user wait for the sweep', async () => {

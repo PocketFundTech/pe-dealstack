@@ -112,6 +112,26 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
     loadData();
   }, [loadData]);
 
+  // AI runs on click only: page load reads cached results; this button
+  // reads customer concentration from the documents, then writes the
+  // narrative insights.
+  const [generating, setGenerating] = useState(false);
+  const generateInsights = useCallback(async () => {
+    if (generating) return;
+    setGenerating(true);
+    setInsightsError(null);
+    try {
+      const analysisData = await api.get<AnalysisData>(`/deals/${dealId}/financials/analysis?generate=1`);
+      if (analysisData?.hasData) setAnalysis(analysisData);
+      const res = await api.get<InsightsResponse>(`/deals/${dealId}/financials/insights?generate=1`);
+      setInsights(res.insights);
+    } catch (err) {
+      setInsightsError(describeLoadError(err, "AI insights could not be generated."));
+    } finally {
+      setGenerating(false);
+    }
+  }, [dealId, generating]);
+
   // Hide section entirely when loaded, not an error, but no data exists
   if (!loading && !analysis && !error && !noData) return null;
 
@@ -245,7 +265,7 @@ export function DealAnalysisSection({ dealId, onFullscreen }: { dealId: string; 
               {activeTab === "cashcap"    && <CashCapitalPanel analysis={analysis} />}
               {activeTab === "valuation"  && <ValuationPanel analysis={analysis} benchmark={benchmark} />}
               {activeTab === "diligence"  && <DiligencePanel analysis={analysis} crossDoc={crossDoc} />}
-              {activeTab === "aiinsights" && <AIInsightsPanel insights={insights} error={insightsError} onRetry={loadData} />}
+              {activeTab === "aiinsights" && <AIInsightsPanel insights={insights} error={insightsError} onGenerate={generateInsights} generating={generating} />}
               {activeTab === "memo"       && <MemoPanel analysis={analysis} dealId={dealId} />}
 
               {/* Footer */}

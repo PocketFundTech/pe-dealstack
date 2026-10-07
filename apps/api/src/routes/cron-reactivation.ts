@@ -13,6 +13,7 @@ import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
 import { sweepPassedDeals } from '../services/agents/dealReactivation/index.js';
 import { runAsOrgSystem } from '../middleware/usageContext.js';
+import { isBackgroundAiEnabled } from '../services/usage/aiOnDemand.js';
 
 const router = Router();
 const BATCH_SIZE = 5;
@@ -32,6 +33,13 @@ router.post('/', async (req: Request, res: Response) => {
   }
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Re-scoring is an AI call per deal. AI runs on click only unless
+  // AI_BACKGROUND_JOBS=on; the deal's Score button still works.
+  if (!isBackgroundAiEnabled()) {
+    log.info('Reactivation sweep skipped: AI_BACKGROUND_JOBS is off');
+    return res.json({ rescored: 0, reactivated: 0, failed: 0, aiBackgroundJobs: 'off' });
   }
 
   const { data: orgs, error } = await supabase

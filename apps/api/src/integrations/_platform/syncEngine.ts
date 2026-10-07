@@ -3,6 +3,7 @@ import { log } from '../../utils/logger.js';
 import { getProvider } from './registry.js';
 import type { Integration, SyncOptions, SyncResult } from './types.js';
 import { runAsOrgSystem } from '../../middleware/usageContext.js';
+import { isBackgroundAiEnabled } from '../../services/usage/aiOnDemand.js';
 
 export async function syncIntegration(
   integration: Integration,
@@ -109,10 +110,18 @@ export async function syncAll(options: {
   if (error) throw new Error(`syncAll: ${error.message}`);
   if (!integrations) return { ranFor: 0, succeeded: 0, failed: 0 };
 
+  // Outlook sync is AI from its first step (every message goes through the
+  // classifier), so the scheduled run leaves it alone unless
+  // AI_BACKGROUND_JOBS=on — lastSyncAt stays put and "Sync now" picks the
+  // mail up. Gmail and Granola still sync; they skip only their AI steps.
+  const toSync = (integrations as Integration[]).filter(
+    (row) => row.provider !== 'outlook' || isBackgroundAiEnabled(),
+  );
+
   let succeeded = 0;
   let failed = 0;
 
-  await runWithConcurrency(integrations as Integration[], concurrency, async (row) => {
+  await runWithConcurrency(toSync, concurrency, async (row) => {
     try {
       await withTimeout(
         syncIntegration(row),
@@ -125,7 +134,7 @@ export async function syncAll(options: {
     }
   });
 
-  return { ranFor: integrations.length, succeeded, failed };
+  return { ranFor: toSync.length, succeeded, failed };
 }
 
 async function emitSyncFailedNotification(integration: Integration, message: string): Promise<void> {

@@ -158,23 +158,13 @@ function MemoBuilderPageInner() {
   /* ---- Create memo ---- */
   const openCreateModal = useOpenCreateModal({ setShowCreate, setCreateForm, setDeals, setTemplates });
 
-  // Defer-fire mechanism for handleGenerateAll: handlers below need to call
-  // it after creating a memo, but it's defined further down (depends on
-  // sectionDeps which itself depends on selectedMemo). We stash a memoId in
-  // state; a useEffect lower in the file watches selectedMemo and fires
-  // handleGenerateAll when the memoId matches. Avoids stale-closure bugs
-  // where handleGenerateAll's selectedMemo would be the previous memo.
-  const [pendingGenerateMemoId, setPendingGenerateMemoId] = useState<string | null>(null);
-
+  // Creating a memo no longer starts /generate-all on its own — the AI runs
+  // when the user clicks "Generate All" in the header (AI on click only).
+  //
   // useCallback so these have stable identity across renders. Otherwise
   // useDealIdEffect's dep array changes every render, the effect tears
   // down + reruns, and the cleanup sets cancelled=true on the in-flight
-  // IIFE — which means the trailing onTriggerGenerateAll(createdId) call
-  // (gated by !cancelled) gets skipped. That's why /generate-all wasn't
-  // firing on chat-redirect even though suggest-meta + create succeeded.
-  const triggerGenerateAll = useCallback((memoId: string) => {
-    setPendingGenerateMemoId(memoId);
-  }, []);
+  // IIFE.
   const handleAutoCreateStart = useCallback(() => setAutoCreating(true), []);
   const handleAutoCreateEnd = useCallback(() => setAutoCreating(false), []);
 
@@ -187,7 +177,6 @@ function MemoBuilderPageInner() {
     handleAutoCreateStart,
     handleAutoCreateEnd,
     setError,
-    triggerGenerateAll,
   );
   useMemoIdEffect(urlMemoId, loadMemo);
 
@@ -199,7 +188,6 @@ function MemoBuilderPageInner() {
     setCreatingMemo,
     setError,
     loadMemo,
-    triggerGenerateAll,
   });
 
   /* ---- Section actions ---- */
@@ -236,23 +224,6 @@ function MemoBuilderPageInner() {
   // function call made synchronously during render.
   const handleGenerateAll = () => createGenerateAll(sectionDeps, generateAllAbortRef)();
   const handleCancelGenerateAll = () => createCancelGenerateAll(generateAllAbortRef)();
-
-  // Fire deferred /generate-all once selectedMemo matches the pending id.
-  // Ref avoids re-firing on handleGenerateAll identity churn (it's recreated
-  // every render). Effect depends only on the trigger flag + memo identity.
-  const handleGenerateAllRef = useRef(handleGenerateAll);
-  useEffect(() => {
-    handleGenerateAllRef.current = handleGenerateAll;
-  }, [handleGenerateAll]);
-  useEffect(() => {
-    if (!pendingGenerateMemoId) return;
-    if (!selectedMemo || selectedMemo.id !== pendingGenerateMemoId) return;
-    // Clear the trigger flag so the effect only fires once per pending id.
-    // Without this clear we'd re-enter every render until the memo changes.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPendingGenerateMemoId(null);
-    handleGenerateAllRef.current();
-  }, [pendingGenerateMemoId, selectedMemo]);
 
   /* ---- Export + Share ---- */
 
@@ -303,8 +274,7 @@ function MemoBuilderPageInner() {
 
   // Pick the highest-priority overlay status (one overlay at a time).
   // Note: creation is fast now (autoGenerate: false). Section generation runs
-  // after via /generate-all and surfaces under the generatingAll slot, so the
-  // overlay text transitions create → generate as the flow progresses.
+  // when the user clicks "Generate All" and surfaces under the generatingAll slot.
   const overlayStatus = autoCreating
     ? "Setting up memo from deal context..."
     : creatingMemo

@@ -24,6 +24,7 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/providers/ToastProvider";
 import { api, NotFoundError } from "@/lib/api";
+import { describeLoadError } from "@/lib/errorMessage";
 import { FinancialStatementsPanel } from "./deal-financials";
 import {
   OverviewPanel,
@@ -191,6 +192,25 @@ function AnalysisFullView({ dealId }: { dealId: string }) {
   // open (and the inline DealAnalysisSection separately fires its own
   // request, which the server now dedupes).
   const inFlightRef = useRef(false);
+
+  // AI runs on click only — see DealAnalysisSection.generateInsights.
+  const [generating, setGenerating] = useState(false);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+  const generateInsights = async () => {
+    if (generating) return;
+    setGenerating(true);
+    setInsightsError(null);
+    try {
+      const analysisData = await api.get<AnalysisData>(`/deals/${dealId}/financials/analysis?generate=1`);
+      if (analysisData?.hasData) setAnalysis(analysisData);
+      const res = await api.get<InsightsResponse>(`/deals/${dealId}/financials/insights?generate=1`);
+      setInsights(res.insights);
+    } catch (err) {
+      setInsightsError(describeLoadError(err, "AI insights could not be generated."));
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   useEffect(() => {
     if (inFlightRef.current) return;
@@ -390,7 +410,7 @@ function AnalysisFullView({ dealId }: { dealId: string }) {
             {activeTab === "diligence" && (
               <DiligencePanel analysis={analysis} crossDoc={crossDoc} />
             )}
-            {activeTab === "aiinsights" && <AIInsightsPanel insights={insights} />}
+            {activeTab === "aiinsights" && <AIInsightsPanel insights={insights} error={insightsError} onGenerate={generateInsights} generating={generating} />}
             {activeTab === "memo" && <MemoPanel analysis={analysis} dealId={dealId} />}
           </>
         )}

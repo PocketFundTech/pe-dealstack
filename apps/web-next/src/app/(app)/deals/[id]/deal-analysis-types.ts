@@ -214,6 +214,8 @@ export interface InsightsResponse {
   hasData: boolean;
   insights: NarrativeInsights | null;
   fromCache?: boolean;
+  /** No cached insights yet — the user generates them with a button (AI runs on click only). */
+  needsGeneration?: boolean;
 }
 
 // ── Cross-Doc — response from GET /deals/:id/financials/cross-doc ─────────

@@ -26,22 +26,35 @@ import {
 // ---------------------------------------------------------------------------
 
 export function AIInsightsPanel({
-  insights, error = null, onRetry,
+  insights, error = null, onRetry, onGenerate, generating = false,
 }: {
   insights: NarrativeInsights | null;
   /** Why generation failed (out of credit, bad AI answer…). Set → no "Loading…". */
   error?: string | null;
   onRetry?: () => void;
+  /** Runs the AI. Insights are generated on click only, never on page load. */
+  onGenerate?: () => void;
+  generating?: boolean;
 }) {
+  if (generating) {
+    return (
+      <AnalysisCard className="text-center">
+        <span className="material-symbols-outlined text-[40px] text-gray-400 animate-spin block mb-3">progress_activity</span>
+        <h3 className="text-sm font-semibold text-gray-500 mb-1.5">Generating AI insights…</h3>
+        <p className="text-xs text-gray-400 leading-relaxed">This can take up to a minute.</p>
+      </AnalysisCard>
+    );
+  }
+
   if (!insights && error) {
     return (
       <AnalysisCard className="text-center">
         <span className="material-symbols-outlined text-[40px] text-red-300 block mb-3">error_outline</span>
         <h3 className="text-sm font-semibold text-gray-600 mb-1.5">AI insights unavailable</h3>
         <p className="text-xs text-gray-500 leading-relaxed max-w-sm mx-auto" role="alert">{error}</p>
-        {onRetry && (
+        {(onGenerate ?? onRetry) && (
           <button
-            onClick={onRetry}
+            onClick={onGenerate ?? onRetry}
             className="mt-4 text-xs font-semibold text-white px-4 py-2 rounded-lg"
             style={{ backgroundColor: BANKER_BLUE }}
           >
@@ -56,11 +69,21 @@ export function AIInsightsPanel({
     return (
       <AnalysisCard className="text-center" >
         <span className="material-symbols-outlined text-[40px] text-gray-400 block mb-3">auto_awesome</span>
-        <h3 className="text-sm font-semibold text-gray-500 mb-1.5">AI Insights Loading...</h3>
-        <p className="text-xs text-gray-400 leading-relaxed">
-          Narrative insights are generated asynchronously.<br />
-          Refresh in a few seconds to see AI-powered analysis.
+        <h3 className="text-sm font-semibold text-gray-500 mb-1.5">No AI insights yet</h3>
+        <p className="text-xs text-gray-400 leading-relaxed max-w-sm mx-auto">
+          Generate a narrative read of this deal&apos;s financials, including customer concentration and
+          related parties from its documents. Uses AI credits.
         </p>
+        {onGenerate && (
+          <button
+            onClick={onGenerate}
+            className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-white px-4 py-2 rounded-lg"
+            style={{ backgroundColor: BANKER_BLUE }}
+          >
+            <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+            Generate AI insights
+          </button>
+        )}
       </AnalysisCard>
     );
   }

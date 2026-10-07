@@ -15,6 +15,7 @@ import { createRequire } from 'module';
 import type * as XLSX from 'xlsx';
 import { log } from '../utils/logger.js';
 import { isImportCleanerEnabled, cleanImportRows, type RawImportNameFields } from './outreachImportCleaner.js';
+import { canRunAiNow } from './usage/aiOnDemand.js';
 import { processContactImportBatch, type ContactImportResult, type ContactImportRow } from './outreachContactImport.js';
 
 // Lazy-required the same way dealImportMapper.ts does (xlsx is ~5MB, only
@@ -205,9 +206,10 @@ export async function importContactsCsv(
 
   // Claude cleaning pass — same as before generalization: company-name
   // canonicalization + contact-name split, soft-fails to deterministic-only
-  // normalization if Claude isn't configured.
+  // normalization if Claude isn't configured. A Clay webhook delivery (no
+  // user behind it) skips it unless AI_BACKGROUND_JOBS=on.
   let cleaned = new Map<number, { company: string | null; firstName: string | null; lastName: string | null }>();
-  if (isImportCleanerEnabled()) {
+  if (isImportCleanerEnabled() && canRunAiNow()) {
     const cleanerInput: RawImportNameFields[] = mappedRows.map((row, index) => ({
       index,
       companyName: row.companyName,
@@ -215,7 +217,7 @@ export async function importContactsCsv(
     }));
     cleaned = await cleanImportRows(cleanerInput);
   } else {
-    log.info(`outreachCsvImport (${options.sourceLabel}): Claude cleaning skipped — ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN not set`);
+    log.info(`outreachCsvImport (${options.sourceLabel}): Claude cleaning skipped — no Anthropic key, or a webhook delivery with AI_BACKGROUND_JOBS off`);
   }
 
   const engineRows: ContactImportRow[] = mappedRows.map((row, index) => {

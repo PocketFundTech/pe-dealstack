@@ -8,6 +8,7 @@ import { log } from '../utils/logger.js';
 import contactsInsightsRouter from './contacts-insights.js';
 import contactsConnectionsRouter from './contacts-connections.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
+import { isBackgroundAiEnabled } from '../services/usage/aiOnDemand.js';
 
 const router = Router();
 
@@ -326,9 +327,11 @@ router.post('/', async (req: Request, res) => {
 
     log.info('Contact created', { contactId: contact.id, name: `${data.firstName} ${data.lastName}` });
 
-    // Auto-enrich in background (fire-and-forget) — don't block the response
+    // Auto-enrich in background (fire-and-forget) — don't block the response.
+    // It's an AI call nobody clicked for, so it runs only with
+    // AI_BACKGROUND_JOBS=on; otherwise the contact's "Enrich" button does it.
     const { isLLMAvailable } = await import('../services/llm.js');
-    if (isLLMAvailable()) {
+    if (isLLMAvailable() && isBackgroundAiEnabled()) {
       const { runContactEnrichment } = await import('../services/agents/contactEnrichment/index.js');
       runContactEnrichment({
         contactId: contact.id,

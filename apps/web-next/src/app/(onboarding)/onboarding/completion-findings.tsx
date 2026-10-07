@@ -47,6 +47,46 @@ export function CompletionFindings({
   const [findings, setFindings] = useState<RedFlag[]>([]);
   const [noFindings, setNoFindings] = useState(false);
   const [statementCount, setStatementCount] = useState(0);
+  const [dealId, setDealId] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  // POST /deals/:id/analyze-risks (apps/api/src/routes/ai.ts) returns
+  // { risks: Array<{ title, description, severity, mitigation }>, dealId, cached }.
+  // The backend caches the result via AICache, so a repeat click is cheap.
+  const runRiskScan = useCallback(async () => {
+    if (!dealId || scanning) return;
+    setScanning(true);
+    setScanError(null);
+    try {
+      const analysis = await api.post<{
+        risks?: RedFlag[] | { flags?: RedFlag[] };
+        redFlags?: { flags?: RedFlag[] } | RedFlag[];
+      }>(`/deals/${dealId}/analyze-risks`, {});
+      // Backend returns `risks`, but accept `redFlags` shapes too in case
+      // the response shape changes — the renderer handles both keys via
+      // the same RedFlag interface above.
+      const risksValue = analysis?.risks ?? analysis?.redFlags;
+      const flags = Array.isArray(risksValue)
+        ? risksValue
+        : (risksValue as { flags?: RedFlag[] } | undefined)?.flags ?? [];
+      if (flags.length > 0) {
+        const top5 = flags.slice(0, 5);
+        setTitle(
+          `Your AI analyst found ${top5.length} thing${top5.length > 1 ? "s" : ""} on your deal.`,
+        );
+        setSubtitle("Here's a preview. Click any finding to see the exact page it came from.");
+        setFindings(top5);
+      } else {
+        setScanError("No red flags found on this deal.");
+      }
+    } catch (err) {
+      console.warn("[onboarding/completion] risk scan failed:", err);
+      setScanError(err instanceof Error ? err.message : "The AI risk scan could not run.");
+    } finally {
+      setScanning(false);
+    }
+  }, [dealId, scanning]);
 
   // Deep research polling
   const [deepNotification, setDeepNotification] = useState<number | null>(null);
@@ -109,45 +149,12 @@ export function CompletionFindings({
         const dealId = deals[0].id;
         onDealId?.(dealId);
 
-        // Try fetching AI risk analysis. The legacy onboarding-flow.js called
-        // GET /deals/:id/analysis (onboarding-flow.js),
-        // which never existed on the backend — it was always a 404 fall-through.
-        // The actual endpoint is POST /deals/:id/analyze-risks
-        // (apps/api/src/routes/ai.ts:263) which returns
-        // { risks: Array<{ title, description, severity, mitigation }>, dealId, cached }.
-        // POST is fine here — the backend caches the result via AICache, so a
-        // repeat call from the completion screen is cheap.
-        try {
-          const analysis = await api.post<{
-            risks?: RedFlag[] | { flags?: RedFlag[] };
-            redFlags?: { flags?: RedFlag[] } | RedFlag[];
-          }>(`/deals/${dealId}/analyze-risks`, {});
-          if (cancelled) return;
+        setDealId(dealId);
+        // The AI risk scan (POST /deals/:id/analyze-risks) runs only when the
+        // user clicks "Find red flags with AI" — opening this screen never
+        // spends AI credit.
 
-          // Backend returns `risks`, but accept `redFlags` shapes too in case
-          // the response shape changes — the renderer handles both keys via
-          // the same RedFlag interface above.
-          const risksValue = analysis?.risks ?? analysis?.redFlags;
-          const flags = Array.isArray(risksValue)
-            ? risksValue
-            : (risksValue as { flags?: RedFlag[] } | undefined)?.flags ?? [];
-
-          if (flags.length > 0) {
-            const top5 = flags.slice(0, 5);
-            setTitle(
-              `Your AI analyst found ${top5.length} thing${top5.length > 1 ? "s" : ""} on your deal.`,
-            );
-            setSubtitle("Here's a preview. Click any finding to see the exact page it came from.");
-            setFindings(top5);
-            setLoading(false);
-            return;
-          }
-        } catch (err) {
-          // fall through to financials check.
-          console.warn("[onboarding/completion] failed to load deal analysis:", err);
-        }
-
-        // Fallback: check financial statements
+        // Check financial statements
         try {
           const finData = await api.get<
             { id: string }[] | { statements?: { id: string }[] }
@@ -279,6 +286,24 @@ export function CompletionFindings({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* AI risk scan — on click only */}
+      {!loading && dealId && findings.length === 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={runRiskScan}
+            disabled={scanning}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-[12.5px] font-semibold text-white disabled:opacity-60"
+          >
+            <span className={`material-symbols-outlined text-[16px] ${scanning ? "animate-spin" : ""}`}>
+              {scanning ? "progress_activity" : "auto_awesome"}
+            </span>
+            {scanning ? "Scanning…" : "Find red flags with AI"}
+          </button>
+          {scanError && <span className="text-[12px] text-text-muted" role="status">{scanError}</span>}
         </div>
       )}
 

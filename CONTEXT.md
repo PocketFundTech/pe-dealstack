@@ -17,6 +17,13 @@ One Vercel project `pocket-funds-projects/pe-dealstack` serves `deals.avise.io` 
 3. **GitHub Actions runners.** PR checks (#203, #206, #208) were cancelled after 15 min with "job was not acquired by
    Runner" — not a code failure. Re-run; if it repeats, check the org's Actions minutes / billing.
 
+**AI on click only (branch `feat/ai-on-click-only`, 8 Oct).** To stretch the remaining credit, AI runs only when someone
+clicks for it. Crons, webhooks, the scheduled Gmail/Granola/Outlook sync, post-upload extraction, scoring after financial
+extract, contact auto-enrich, the criteria-save re-score and onboarding deep research all skip their AI step unless the Vercel env
+var `AI_BACKGROUND_JOBS=on`. The page-load triggers are now buttons, and they ignore `AI_BACKGROUND_JOBS`: deal Analysis → AI
+Insights, onboarding red flags, ingest follow-up questions, memo Generate All, and onboarding firm auto-fill. Helpers live in
+`apps/api/src/services/usage/aiOnDemand.ts`.
+
 Everything that needs an outside account (AI, Google, Microsoft, Resend, Supabase SMTP, Dropbox Sign, Kondo) is mapped in
 [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 

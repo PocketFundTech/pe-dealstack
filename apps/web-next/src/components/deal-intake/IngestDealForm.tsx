@@ -246,11 +246,9 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
     setProcessing(false); setProgressMessage("");
   };
 
-  const fireFollowUp = (data: IngestResponse) => {
-    if (data.deal?.id && data.extraction) {
-      setTimeout(() => fetchFollowUpQuestions(data.deal!.id, data.extraction), 800);
-    }
-  };
+  // Follow-up questions are AI — they run when the user clicks "Suggest
+  // follow-up questions" on the result, not automatically after ingest.
+  const fireFollowUp = () => {};
 
   // After a NEW deal is created, poll for its firm-criteria teaser and show
   // it as a popup once ready. Teaser generation now runs in the background
@@ -467,6 +465,11 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
           followUpQuestions={followUpQuestions}
           followUpAnswers={followUpAnswers}
           followUpLoading={followUpLoading}
+          onGenerateFollowUp={
+            result.deal?.id && result.extraction
+              ? () => fetchFollowUpQuestions(result.deal!.id, result.extraction)
+              : undefined
+          }
           onAnswer={handleFollowUpAnswer}
           onSaveAndGoToDeal={handleSaveFollowUpAndGoToDeal}
           onSkip={() => {
