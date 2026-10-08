@@ -45,12 +45,25 @@ beforeEach(() => {
     scanned: 10, eligible: 2, rescored: 2, reactivated: 1, failed: 0, truncated: false,
   });
   process.env.CRON_SECRET = 'test-secret';
+  process.env.AI_BACKGROUND_JOBS = 'on';
 });
 
 describe('POST /api/cron/reactivation', () => {
   it('401s without the cron secret', async () => {
     const app = await buildApp();
     expect((await request(app).post('/api/cron/reactivation')).status).toBe(401);
+    expect(sweepPassedDeals).not.toHaveBeenCalled();
+  });
+
+  it('skips the sweep without an AI call when AI_BACKGROUND_JOBS is off', async () => {
+    delete process.env.AI_BACKGROUND_JOBS;
+    const app = await buildApp();
+    const res = await request(app)
+      .post('/api/cron/reactivation')
+      .set('Authorization', 'Bearer test-secret');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ rescored: 0, aiBackgroundJobs: 'off' });
     expect(sweepPassedDeals).not.toHaveBeenCalled();
   });
 

@@ -140,9 +140,6 @@ export function FirmTaskModal({
           type="url"
           value={value.url}
           onChange={(e) => onChange({ ...value, url: e.target.value })}
-          onBlur={() => {
-            if (value.url.trim().length > 3) triggerEnrichment();
-          }}
           placeholder="yourfirm.com"
           className="w-full pl-10 pr-3 py-2.5 text-[14px] rounded-lg border border-border-subtle focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
         />
@@ -157,15 +154,21 @@ export function FirmTaskModal({
           type="url"
           value={value.linkedin}
           onChange={(e) => onChange({ ...value, linkedin: e.target.value })}
-          onBlur={() => {
-            // Lowercase check so pasted "LinkedIn.com" / "Linkedin.com"
-            // still fire the enrichment.
-            if (value.linkedin.toLowerCase().includes("linkedin.com")) triggerEnrichment();
-          }}
           placeholder="https://linkedin.com/in/yourprofile"
           className="w-full pl-10 pr-3 py-2.5 text-[14px] rounded-lg border border-border-subtle focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
         />
       </div>
+
+      {/* AI on click only — leaving a field no longer starts the research. */}
+      <button
+        type="button"
+        onClick={triggerEnrichment}
+        disabled={enrichState === "loading" || (value.url.trim().length <= 3 && !value.linkedin.toLowerCase().includes("linkedin.com"))}
+        className="mb-4 inline-flex items-center gap-1.5 rounded-lg border border-border-subtle px-3.5 py-2 text-[12.5px] font-semibold text-primary hover:bg-primary-light/40 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+        Auto-fill from website with AI
+      </button>
 
       {enrichState !== "idle" && (
         <EnrichmentPanel

@@ -456,33 +456,41 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       let finalStatus = extractionStatus;
 
       if (needsAiWork) {
-        try {
-          log.info('Starting AI data extraction', { documentName });
-          // INGEST_ENGINE=claude: Haiku on the first ~16 pages of text
-          // (~$0.01) instead of GPT-4o; GPT-4o only if that read fails.
-          let aiData: ExtractedDealData | null = null;
-          if ((process.env.INGEST_ENGINE || 'legacy') === 'claude') {
-            const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
-            aiData = await readDealDocument({
-              fileName: documentName,
-              fullText: extractedText as string,
-              sourceLength: (extractedText as string).length,
-              maxTextChars: DATA_ROOM_TEXT_CHARS,
-            });
-          }
-          if (!aiData) aiData = await extractDealDataFromText(extractedText as string);
-          if (aiData) {
-            aiExtractedData = aiData;
-            finalStatus = 'analyzed';
-            log.info('AI extraction completed', { documentName, companyName: aiData.companyName, industry: aiData.industry });
-          } else {
-            finalStatus = 'completed';
-            log.info('AI extraction returned no data', { documentName });
-          }
-        } catch (aiError) {
-          // Log AI error but don't fail the upload - text extraction still worked
-          log.error('AI extraction failed', aiError, { documentName });
+        // AI on click only: the deal-data read runs when the uploader ticked
+        // "Auto-update deal with extracted data" — that's the only consumer
+        // of its result in the upload flow. Otherwise the text is stored
+        // (and embedded below) with no model call.
+        if (!autoUpdateDeal) {
           finalStatus = 'completed';
+        } else {
+          try {
+            log.info('Starting AI data extraction', { documentName });
+            // INGEST_ENGINE=claude: Haiku on the first ~16 pages of text
+            // (~$0.01) instead of GPT-4o; GPT-4o only if that read fails.
+            let aiData: ExtractedDealData | null = null;
+            if ((process.env.INGEST_ENGINE || 'legacy') === 'claude') {
+              const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
+              aiData = await readDealDocument({
+                fileName: documentName,
+                fullText: extractedText as string,
+                sourceLength: (extractedText as string).length,
+                maxTextChars: DATA_ROOM_TEXT_CHARS,
+              });
+            }
+            if (!aiData) aiData = await extractDealDataFromText(extractedText as string);
+            if (aiData) {
+              aiExtractedData = aiData;
+              finalStatus = 'analyzed';
+              log.info('AI extraction completed', { documentName, companyName: aiData.companyName, industry: aiData.industry });
+            } else {
+              finalStatus = 'completed';
+              log.info('AI extraction returned no data', { documentName });
+            }
+          } catch (aiError) {
+            // Log AI error but don't fail the upload - text extraction still worked
+            log.error('AI extraction failed', aiError, { documentName });
+            finalStatus = 'completed';
+          }
         }
 
         // Persist the AI results onto the Document row now that they exist

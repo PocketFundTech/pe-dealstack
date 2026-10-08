@@ -4,7 +4,11 @@ import type { GranolaNoteWithTranscript } from '../../../src/integrations/granol
 beforeEach(() => {
   process.env.SUPABASE_URL = 'https://test.supabase.co';
   process.env.SUPABASE_ANON_KEY = 'test-anon-key';
+  process.env.AI_BACKGROUND_JOBS = 'on';
   vi.resetModules();
+  // The mapper's AI gate reads the usage context, whose module imports the
+  // Supabase client — keep the real client out of a unit test.
+  vi.doMock('../../../src/supabase.js', () => ({ supabase: {} }));
 });
 
 const fixture: GranolaNoteWithTranscript = {
@@ -114,5 +118,31 @@ describe('granolaNoteToIntegrationActivity', () => {
     });
     expect(row.aiExtraction).toBeNull();
     expect(row.title).toBe('Acme founder check-in');  // row still written
+  });
+});
+
+describe('granolaNoteToIntegrationActivity with AI_BACKGROUND_JOBS off', () => {
+  it('stores the note without calling the transcript agent from a scheduled sync', async () => {
+    delete process.env.AI_BACKGROUND_JOBS;
+    const runTranscriptAnalysis = vi.fn();
+    vi.doMock('../../../src/services/agents/meetingTranscriptAgent/index.js', () => ({
+      runTranscriptAnalysis,
+    }));
+
+    const { granolaNoteToIntegrationActivity } = await import(
+      '../../../src/integrations/granola/mapper.js'
+    );
+    const row = await granolaNoteToIntegrationActivity({
+      note: fixture,
+      integrationId: 'i-1',
+      organizationId: 'org-1',
+      userId: 'u-1',
+      dealIds: [],
+      contactIds: [],
+    });
+
+    expect(runTranscriptAnalysis).not.toHaveBeenCalled();
+    expect(row.aiExtraction).toBeNull();
+    expect(row.externalId).toBe('note-1');
   });
 });

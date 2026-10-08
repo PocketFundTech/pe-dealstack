@@ -45,6 +45,7 @@ describe('cron-signal-scan binds an org-system usage context per org', () => {
     runSignalMonitorViaManagedAgents.mockClear();
     capturedContexts.length = 0;
     process.env.CRON_SECRET = 'test-secret';
+    process.env.AI_BACKGROUND_JOBS = 'on';
   });
 
   it('runs each org under a bound usage context attributed to that org', async () => {

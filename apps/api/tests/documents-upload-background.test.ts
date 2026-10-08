@@ -212,6 +212,7 @@ describe('POST /api/deals/:dealId/documents — background AI extraction', () =>
 
     const res = await request(app)
       .post('/api/deals/deal-1/documents')
+      .field('autoUpdateDeal', 'true')
       .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
 
     expect(res.status).toBe(201);
@@ -239,6 +240,7 @@ describe('POST /api/deals/:dealId/documents — background AI extraction', () =>
 
     const res = await request(app)
       .post('/api/deals/deal-1/documents')
+      .field('autoUpdateDeal', 'true')
       .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
 
     expect(res.status).toBe(201);
@@ -246,6 +248,22 @@ describe('POST /api/deals/:dealId/documents — background AI extraction', () =>
     expect(scheduled.length).toBe(0);
     expect(extractDealDataFromText).toHaveBeenCalledTimes(1);
     expect(aiExtractionResolved).toBe(true);
+    expect(embedDocument).toHaveBeenCalledTimes(1);
+    expect(auditLogDocumentUploaded).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs no AI read unless "Auto-update deal" was ticked — stores and embeds the text only', async () => {
+    const { appPromise, scheduled } = buildApp({ withAfterResponseHook: false });
+    const app = await appPromise;
+
+    const res = await request(app)
+      .post('/api/deals/deal-1/documents')
+      .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(201);
+    expect(scheduled.length).toBe(0);
+    expect(extractDealDataFromText).not.toHaveBeenCalled();
+    expect(readDealDocument).not.toHaveBeenCalled();
     expect(embedDocument).toHaveBeenCalledTimes(1);
     expect(auditLogDocumentUploaded).toHaveBeenCalledTimes(1);
   });
@@ -274,6 +292,7 @@ describe('POST /api/deals/:dealId/documents — deal-field read model (INGEST_EN
     const app = await appPromise;
     const res = await request(app)
       .post('/api/deals/deal-1/documents')
+      .field('autoUpdateDeal', 'true')
       .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
     expect(res.status).toBe(201);
     expect(readDealDocument).toHaveBeenCalledTimes(1);
@@ -289,6 +308,7 @@ describe('POST /api/deals/:dealId/documents — deal-field read model (INGEST_EN
     const app = await appPromise;
     const res = await request(app)
       .post('/api/deals/deal-1/documents')
+      .field('autoUpdateDeal', 'true')
       .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
     expect(res.status).toBe(201);
     expect(readDealDocument).toHaveBeenCalledTimes(1);

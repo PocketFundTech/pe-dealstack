@@ -20,6 +20,7 @@ import { mapWithConcurrencyLimit } from '../utils/limitConcurrency.js';
 import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
 import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { maybeReactivateAfterExtraction } from '../services/agents/dealReactivation/index.js';
+import { isBackgroundAiEnabled } from '../services/usage/aiOnDemand.js';
 import { isFinancialDoc, buildResultWarnings } from './financials-extraction-utils.js';
 import { publicErrorMessage } from '../utils/aiErrors.js';
 import { setDocExtraction, getRunProgress } from '../services/extractionProgress.js';
@@ -481,7 +482,9 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
 
     // Fire-and-forget: re-score the deal against firm criteria now that
     // fresh financials exist. Never awaited, never affects this response.
-    if (aggregateSuccess) {
+    // It's a second AI call the user didn't click for, so it runs only with
+    // AI_BACKGROUND_JOBS=on; otherwise the deal's Score button does it.
+    if (aggregateSuccess && isBackgroundAiEnabled()) {
       void maybeScoreAfterExtraction(dealId, orgId);
       // Dormant deals take the reactivation path instead — fresh financials
       // on a passed deal are the strongest "look again" signal there is.
@@ -648,7 +651,8 @@ router.post('/documents/:documentId/extract-financials', async (req, res) => {
 
     // Fire-and-forget: re-score the deal against firm criteria now that
     // fresh financials exist. Never awaited, never affects this response.
-    if (agentResult.status === 'completed') {
+    // Runs only with AI_BACKGROUND_JOBS=on (see above).
+    if (agentResult.status === 'completed' && isBackgroundAiEnabled()) {
       void maybeScoreAfterExtraction(doc.dealId, orgId);
       void maybeReactivateAfterExtraction(doc.dealId, orgId);
     }

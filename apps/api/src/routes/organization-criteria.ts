@@ -9,6 +9,7 @@ import { supabase } from '../supabase.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import { sweepPassedDeals } from '../services/agents/dealReactivation/index.js';
+import { isBackgroundAiEnabled } from '../services/usage/aiOnDemand.js';
 
 const router = Router();
 
@@ -86,12 +87,16 @@ router.patch('/criteria', async (req: Request, res: Response) => {
     // Changing the thesis is exactly when a passed deal can become live
     // again. Fire-and-forget: a firm with hundreds of dormant deals must
     // still get an instant save, and a scoring outage must not fail it.
-    void sweepPassedDeals(orgId, 'CRITERIA_CHANGED').catch((err) =>
-      log.warn('criteria-change reactivation sweep failed', {
-        orgId,
-        err: err instanceof Error ? err.message : String(err),
-      }),
-    );
+    // Re-scoring is an AI call per deal, so saving criteria runs it only
+    // with AI_BACKGROUND_JOBS=on; otherwise each deal's Score button does.
+    if (isBackgroundAiEnabled()) {
+      void sweepPassedDeals(orgId, 'CRITERIA_CHANGED').catch((err) =>
+        log.warn('criteria-change reactivation sweep failed', {
+          orgId,
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
 
     res.json({ success: true, criteria: dealCriteria });
   } catch (error: any) {

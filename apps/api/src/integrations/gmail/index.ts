@@ -33,6 +33,7 @@ import {
 } from './mapper.js';
 import { shouldSkipForAI } from './preFilter.js';
 import { appBaseUrl } from '../_platform/errors.js';
+import { canRunAiNow } from '../../services/usage/aiOnDemand.js';
 
 const DEFAULT_BACKFILL_DAYS = 90;
 const TOKEN_REFRESH_SAFETY_MS = 60 * 1000;
@@ -212,6 +213,10 @@ export const gmailProvider: IntegrationProvider = {
     let itemsMatched = 0;
     let classifierBudget = autoDeal.classifierCapPerRun;
     const errors: string[] = [];
+    // The scheduled sync stores every message but skips the AI steps
+    // (classify, auto-create/update deals) unless AI_BACKGROUND_JOBS=on.
+    // A user's "Sync now" click still runs them.
+    const aiAllowed = canRunAiNow();
 
     for (const m of headers) {
       try {
@@ -253,6 +258,7 @@ export const gmailProvider: IntegrationProvider = {
         const integrationActivityId = (activityInserted?.id ?? null) as string | null;
 
         // From here on: AI work. Cheap pre-filter first, then per-tick budget.
+        if (!aiAllowed) continue;
         const headerMap = getHeaderMap(meta);
         const fromHeader = headerMap.From ?? headerMap.from ?? '';
         const parsedFrom = parseEmailAddress(fromHeader);

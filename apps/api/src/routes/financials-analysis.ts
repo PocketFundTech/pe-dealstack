@@ -9,6 +9,7 @@ import {
   generateNarrativeInsights,
   computeAnalysisHash,
   getOrGenerateInsights,
+  getCachedInsights,
   cacheInsights,
   invalidateCache,
 } from '../services/narrativeInsights.js';
@@ -45,7 +46,9 @@ router.get('/deals/:dealId/financials/analysis', async (req, res) => {
     if (!dealAccess) return res.status(404).json({ error: 'Deal not found' });
 
     // Customer concentration / related parties from the documents (fix plan
-    // F1 part 2): cached per deal; a first view reads them (bounded wait).
+    // F1 part 2): cached per deal. Viewing reads the cache only; the model
+    // runs only when the user clicks "Generate AI insights" (?generate=1).
+    const generate = req.query.generate === '1';
     const [{ data: rows, error }, concentration] = await Promise.all([
       supabase
         .from('FinancialStatement')
@@ -54,7 +57,7 @@ router.get('/deals/:dealId/financials/analysis', async (req, res) => {
         .eq('isActive', true)
         .order('period', { ascending: true })
         .range(0, AGGREGATE_CAP - 1),
-      getConcentrationFacts(dealId, { generate: true }),
+      getConcentrationFacts(dealId, { generate }),
     ]);
 
     if (error) throw error;
@@ -107,6 +110,14 @@ router.get('/deals/:dealId/financials/insights', async (req, res) => {
     const concentration = await getConcentrationFacts(dealId); // cache only — the analysis view fills it
     const analysis = await analyzeFinancials(dealId, rows, { concentration });
     const analysisHash = computeAnalysisHash(analysis);
+
+    // Viewing the deal reads cached insights only. The model runs when the
+    // user clicks "Generate AI insights" (?generate=1), so opening a deal
+    // never spends AI credit on its own.
+    if (req.query.generate !== '1') {
+      const cached = await getCachedInsights(dealId, analysisHash);
+      return res.json({ hasData: true, insights: cached, fromCache: true, needsGeneration: !cached });
+    }
 
     // Fetch deal context (cheap; needed even on cache hit for downstream
     // memory snapshotting). We still call getOrGenerateInsights below which

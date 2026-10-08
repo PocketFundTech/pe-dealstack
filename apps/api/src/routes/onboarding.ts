@@ -10,6 +10,7 @@ import { runWithUsageContext, resolveInternalUserId } from '../middleware/usageC
 import { runFirmResearchViaManagedAgents } from '../services/managedAgents/firmResearchOrchestrator.js';
 import firmProfileRouter from './onboarding-firm.js';
 import { getFirmProfileAccess, FIRM_PROFILE_LOCKED } from '../services/firmProfileAccess.js';
+import { isBackgroundAiEnabled } from '../services/usage/aiOnDemand.js';
 
 const router = Router();
 
@@ -428,8 +429,9 @@ router.post('/enrich-firm', async (req: Request, res: Response) => {
 
     // Fire deep research in background (not awaited). RESEARCH_ENGINE picks
     // the legacy LangGraph deep pass or the Managed Agents flow; either way
-    // this never blocks the HTTP response.
-    if (result.success && result.firmProfile && (websiteUrl || linkedinUrl)) {
+    // this never blocks the HTTP response. It's a second, heavy AI run the
+    // user didn't click for, so it needs AI_BACKGROUND_JOBS=on.
+    if (result.success && result.firmProfile && (websiteUrl || linkedinUrl) && isBackgroundAiEnabled()) {
       if (process.env.RESEARCH_ENGINE === 'managed-agents') {
         void runFirmResearchViaManagedAgents({
           organizationId: orgId,

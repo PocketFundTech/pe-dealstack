@@ -46,6 +46,7 @@ function mockTables(orgIds: string[], activeDeals: Record<string, number | Error
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.CRON_SECRET = 'test-secret';
+  process.env.AI_BACKGROUND_JOBS = 'on';
 });
 
 describe('POST /api/cron/signal-scan', () => {
@@ -54,6 +55,17 @@ describe('POST /api/cron/signal-scan', () => {
     const res = await request(app).post('/api/cron/signal-scan').set('Authorization', 'Bearer wrong');
     expect(res.status).toBe(401);
     expect(mockSupabase.from).not.toHaveBeenCalled();
+  });
+
+  it('starts no agent session when AI_BACKGROUND_JOBS is off', async () => {
+    delete process.env.AI_BACKGROUND_JOBS;
+    mockTables(['org-1', 'org-2']);
+    const app = await buildApp();
+    const res = await request(app).post('/api/cron/signal-scan').set('Authorization', 'Bearer test-secret');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ scanned: 0, aiBackgroundJobs: 'off' });
+    expect(runSignalMonitorViaManagedAgents).not.toHaveBeenCalled();
   });
 
   it('fans out to every active org and returns a summary', async () => {

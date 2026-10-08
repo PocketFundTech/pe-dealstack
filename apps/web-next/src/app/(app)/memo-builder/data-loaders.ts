@@ -159,11 +159,10 @@ export function useOpenCreateModal({ setShowCreate, setCreateForm, setDeals, set
 //
 // When ?fromChat=1 is present (deal-chat suggested-action redirect), skip
 // the Create modal entirely: ask the API for an AI-suggested title +
-// description, POST a new memo with autoGenerate=false (fast), then trigger
-// /generate-all separately via onTriggerGenerateAll so the slow LLM work
-// runs under its own function budget and overlay slot. Without the split,
-// generation runs inside the create response and routinely blows Vercel's
-// 300s function budget, stranding the client on a never-resolving fetch.
+// description and POST a new memo with autoGenerate=false (fast). Sections
+// are written when the user clicks "Generate All" (AI on click only), as
+// its own request — generating inside the create response routinely blew
+// Vercel's 300s function budget.
 export function useDealIdEffect(
   urlDealId: string | null,
   urlFromChat: string | null,
@@ -172,7 +171,6 @@ export function useDealIdEffect(
   onAutoCreateStart?: () => void,
   onAutoCreateEnd?: () => void,
   onError?: (msg: string) => void,
-  onTriggerGenerateAll?: (memoId: string) => void,
 ) {
   const consumedDealIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -189,7 +187,6 @@ export function useDealIdEffect(
       // saves a DB round-trip on this hot path.
       if (urlFromChat === "1") {
         onAutoCreateStart?.();
-        let createdId: string | null = null;
         try {
           let title = "Investment Committee Memo";
           let description = "";
@@ -215,7 +212,6 @@ export function useDealIdEffect(
           });
           if (cancelled) return;
           await loadMemo(created.id);
-          createdId = created.id;
         } catch (err) {
           console.warn("[memo-builder] auto-create from chat failed:", err);
           onError?.(err instanceof Error ? err.message : "Failed to create memo from chat");
@@ -223,9 +219,6 @@ export function useDealIdEffect(
           if (!cancelled) openCreateModal(urlDealId);
         } finally {
           if (!cancelled) onAutoCreateEnd?.();
-        }
-        if (createdId && !cancelled) {
-          onTriggerGenerateAll?.(createdId);
         }
         return;
       }
@@ -258,7 +251,7 @@ export function useDealIdEffect(
       }
     })();
     return () => { cancelled = true; };
-  }, [urlDealId, urlFromChat, loadMemo, openCreateModal, onAutoCreateStart, onAutoCreateEnd, onError, onTriggerGenerateAll]);
+  }, [urlDealId, urlFromChat, loadMemo, openCreateModal, onAutoCreateStart, onAutoCreateEnd, onError]);
 }
 
 // ?memoId=X — deep-link straight to a specific memo (used by Share button).

@@ -39,8 +39,17 @@ describe("AIInsightsPanel", () => {
     expect(onRetry).toHaveBeenCalled();
   });
 
-  it("still shows the pending state when nothing has failed", () => {
-    render(<AIInsightsPanel insights={null} />);
-    expect(screen.getByText("AI Insights Loading...")).toBeInTheDocument();
+  it("offers a Generate button instead of generating on load (AI on click only)", () => {
+    const onGenerate = vi.fn();
+    render(<AIInsightsPanel insights={null} onGenerate={onGenerate} />);
+    expect(screen.getByText("No AI insights yet")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Generate AI insights/ }));
+    expect(onGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows progress while the insights are generating", () => {
+    render(<AIInsightsPanel insights={null} onGenerate={vi.fn()} generating />);
+    expect(screen.getByText("Generating AI insights…")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

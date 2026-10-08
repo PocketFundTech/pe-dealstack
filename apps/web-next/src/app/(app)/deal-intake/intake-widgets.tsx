@@ -90,6 +90,8 @@ interface ResultWithFollowUpProps {
   followUpQuestions: FollowUpQuestion[];
   followUpAnswers: Record<string, string>;
   followUpLoading: boolean;
+  /** Generates the follow-up questions (AI, on click only). */
+  onGenerateFollowUp?: () => void;
   onAnswer: (questionId: string, answer: string) => void;
   onSaveAndGoToDeal: () => void;
   onSkip: () => void;
@@ -97,11 +99,21 @@ interface ResultWithFollowUpProps {
 }
 
 export function ResultWithFollowUp({
-  result, onReset, followUpQuestions, followUpAnswers, followUpLoading, onAnswer, onSaveAndGoToDeal, onSkip, onNavigate,
+  result, onReset, followUpQuestions, followUpAnswers, followUpLoading, onGenerateFollowUp, onAnswer, onSaveAndGoToDeal, onSkip, onNavigate,
 }: ResultWithFollowUpProps) {
   return (
     <div>
       <ResultDisplay result={result} onReset={onReset} onNavigate={onNavigate} />
+      {result.deal && onGenerateFollowUp && !followUpLoading && followUpQuestions.length === 0 && (
+        <button
+          type="button"
+          onClick={onGenerateFollowUp}
+          className="mt-4 w-full py-2.5 px-4 rounded-lg border border-border-subtle bg-surface-card text-sm font-medium text-[#003366] hover:bg-gray-50 transition-all flex items-center justify-center gap-2"
+        >
+          <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+          Suggest follow-up questions (AI)
+        </button>
+      )}
       {result.deal && (followUpLoading || followUpQuestions.length > 0) && (
         <div className="bg-surface-card rounded-lg border border-border-subtle shadow-card p-5 mt-4">
           <FollowUpQuestions

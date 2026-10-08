@@ -80,19 +80,18 @@ interface CreateMemoDeps {
   setCreatingMemo: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
   loadMemo: (id: string) => Promise<void>;
-  triggerGenerateAll?: (memoId: string) => void;
 }
 
 export function createMemoHandler(deps: CreateMemoDeps) {
-  const { createForm, setMemos, setShowCreate, setCreateForm, setCreatingMemo, setError, loadMemo, triggerGenerateAll } = deps;
+  const { createForm, setMemos, setShowCreate, setCreateForm, setCreatingMemo, setError, loadMemo } = deps;
   return async () => {
     setCreatingMemo(true);
     try {
       // autoGenerate: false — server-side generation inside POST /memos blocks
       // the response for ~60-150s and risks blowing Vercel's 300s function
       // budget when combined with cold-start, embeddings, and document fetch.
-      // We create the memo fast, then trigger /generate-all separately so the
-      // long-running call has its own budget and its own loading overlay.
+      // We create the memo fast; the user's "Generate All" click runs
+      // /generate-all with its own budget and its own loading overlay.
       const body: Record<string, unknown> = {
         title: createForm.title,
         status: "DRAFT",
@@ -106,9 +105,6 @@ export function createMemoHandler(deps: CreateMemoDeps) {
       setShowCreate(false);
       setCreateForm({ dealId: "", templateId: "", title: "Investment Committee Memo" });
       await loadMemo(created.id);
-      if (created.dealId) {
-        triggerGenerateAll?.(created.id);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create memo");
     } finally {
