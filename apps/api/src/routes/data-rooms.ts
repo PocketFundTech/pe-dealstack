@@ -5,6 +5,23 @@ import { getOrgId } from '../middleware/orgScope.js';
 
 const router = Router();
 
+// PostgREST puts `.in()` values in the request URL, so an org with a few
+// hundred deals overflows the URL length limit and Supabase answers
+// "Bad Request". Query in chunks and concatenate.
+const IN_CHUNK_SIZE = 100;
+
+async function selectInChunks<T>(
+  ids: string[],
+  run: (chunk: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>,
+): Promise<{ data: T[]; error: unknown }> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK_SIZE) chunks.push(ids.slice(i, i + IN_CHUNK_SIZE));
+  const results = await Promise.all(chunks.map((c) => run(c)));
+  const failed = results.find((r) => r.error);
+  if (failed) return { data: [], error: failed.error };
+  return { data: results.flatMap((r) => r.data ?? []), error: null };
+}
+
 // ─── GET /api/data-rooms/summary ──────────────────────────────────────
 //
 // One-request replacement for the Data Room index page's per-room fan-out
@@ -36,15 +53,16 @@ router.get('/data-rooms/summary', async (req: Request, res: Response) => {
     }
 
     const [foldersRes, requestsRes, sharesRes] = await Promise.all([
-      supabase.from('Folder').select('id, name, dealId').in('dealId', dealIds),
-      supabase
-        .from('DocRequest')
-        .select('id, dealId, status, createdAt, expiresAt, revokedAt, completedAt')
-        .in('dealId', dealIds),
-      supabase
-        .from('DealShare')
-        .select('id, dealId, createdAt, expiresAt, revokedAt')
-        .in('dealId', dealIds),
+      selectInChunks<any>(dealIds, (c) => supabase.from('Folder').select('id, name, dealId').in('dealId', c)),
+      selectInChunks<any>(dealIds, (c) =>
+        supabase
+          .from('DocRequest')
+          .select('id, dealId, status, createdAt, expiresAt, revokedAt, completedAt')
+          .in('dealId', c),
+      ),
+      selectInChunks<any>(dealIds, (c) =>
+        supabase.from('DealShare').select('id, dealId, createdAt, expiresAt, revokedAt').in('dealId', c),
+      ),
     ]);
     if (foldersRes.error) throw foldersRes.error;
     if (requestsRes.error) throw requestsRes.error;
@@ -60,13 +78,15 @@ router.get('/data-rooms/summary', async (req: Request, res: Response) => {
 
     const [docCountsRes, itemsRes, viewsRes] = await Promise.all([
       folderIds.length > 0
-        ? supabase.from('Document').select('folderId').in('folderId', folderIds)
+        ? selectInChunks<any>(folderIds, (c) => supabase.from('Document').select('folderId').in('folderId', c))
         : Promise.resolve({ data: [], error: null }),
       requestIds.length > 0
-        ? supabase.from('DocRequestItem').select('requestId, fulfilledAt').in('requestId', requestIds)
+        ? selectInChunks<any>(requestIds, (c) =>
+            supabase.from('DocRequestItem').select('requestId, fulfilledAt').in('requestId', c),
+          )
         : Promise.resolve({ data: [], error: null }),
       shareIds.length > 0
-        ? supabase.from('DealShareView').select('shareId').in('shareId', shareIds)
+        ? selectInChunks<any>(shareIds, (c) => supabase.from('DealShareView').select('shareId').in('shareId', c))
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (docCountsRes.error) throw docCountsRes.error;

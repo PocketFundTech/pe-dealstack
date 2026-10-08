@@ -109,13 +109,19 @@ function show(el, r, ok) {
 function tally(ok) { state.total++; ok ? state.pass++ : state.fail++; $('summary').textContent = `${state.pass}/${state.total} passed${state.fail ? ', ' + state.fail + ' failed' : ''}`; }
 function resetTally() { state.total = state.pass = state.fail = 0; $('summary').textContent = ''; }
 
+// /api/notifications requires ?userId=<caller id>; look it up from /api/users/me.
+async function withRequiredQuery(path) {
+  if (path !== '/api/notifications') return path;
+  const me = await call('GET', '/api/users/me');
+  return me.json?.id ? `${path}?userId=${encodeURIComponent(me.json.id)}` : path;
+}
 const rows = [];
 for (const [name, paths] of Object.entries(READS)) {
   const card = document.createElement('div'); card.className = 'card'; card.innerHTML = `<h2>${name}</h2>`; $('groups').append(card);
   for (const p of paths) {
     const known = name === 'Known failing';
     const el = row(card, 'GET', p, NOTES[p] || (name.startsWith('AI') ? 'AI credits' : ''));
-    const run = async () => { const r = await call('GET', p); const ok = r.status === 200; show(el, r, ok); tally(ok); return ok; };
+    const run = async () => { const r = await call('GET', await withRequiredQuery(p)); const ok = r.status === 200; show(el, r, ok); tally(ok); return ok; };
     el.querySelector('button').onclick = () => { resetTally(); run(); };
     rows.push({ run, known });
   }
