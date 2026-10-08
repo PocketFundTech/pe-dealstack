@@ -9,7 +9,7 @@ export interface EndpointIndexGroup {
   endpoints: [HttpMethod, string][];
 }
 
-export const ENDPOINT_TOTAL = 315;
+export const ENDPOINT_TOTAL = 317;
 
 export const ENDPOINT_INDEX: EndpointIndexGroup[] = [
   {
@@ -127,7 +127,9 @@ export const ENDPOINT_INDEX: EndpointIndexGroup[] = [
     endpoints: [
       ["GET", "/api/companies"],
       ["POST", "/api/companies"],
+      ["GET", "/api/companies/list"],
       ["GET", "/api/companies/:id"],
+      ["GET", "/api/companies/:id/overview"],
       ["PATCH", "/api/companies/:id"],
       ["DELETE", "/api/companies/:id"],
     ],

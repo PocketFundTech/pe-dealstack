@@ -33,6 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "data-room", label: "Data Room", icon: "folder_open", href: "/data-room" },
   { id: "nda", label: "NDAs", icon: "gavel", href: "/nda" },
   { id: "crm", label: "CRM", icon: "groups", href: "/contacts", memberOnly: true },
+  { id: "companies", label: "Companies", icon: "corporate_fare", href: "/companies", memberOnly: true },
   { id: "admin", label: "Admin", icon: "admin_panel_settings", href: "/admin", adminOnly: true },
   { id: "divider", label: "", icon: "", href: "", divider: true },
   { id: "ai-reports", label: "AI Reports", icon: "auto_awesome", href: "/memo-builder", isAI: true, memberOnly: true },

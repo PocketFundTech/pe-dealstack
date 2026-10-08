@@ -3,7 +3,7 @@
   "info": {
     "title": "Avise API",
     "version": "1.0.0",
-    "description": "Connect n8n, Zapier, Make or your own scripts to Avise. Create an API key in **Settings → API Keys** (full access or read-only) and send it as a Bearer token. Full guide: https://app.avise.io/api-reference. 315 endpoints below, generated from the live route code."
+    "description": "Connect n8n, Zapier, Make or your own scripts to Avise. Create an API key in **Settings → API Keys** (full access or read-only) and send it as a Bearer token. Full guide: https://app.avise.io/api-reference. 317 endpoints below, generated from the live route code."
   },
   "servers": [
     {
@@ -5095,6 +5095,43 @@
         }
       }
     },
+    "/api/companies/list": {
+      "get": {
+        "summary": "Companies page list",
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "get_api_companies_list",
+        "description": "Paged `{ companies, total, limit, offset }` with `dealCount` (soft-deleted deals excluded), `contactCount` (contacts whose free-text company matches the name, case-insensitively) and `source` (`hubspot` | `avise`). Query: `search`, `hasDeals` (all|yes|no), `source` (all|hubspot|avise), `sortBy` (name|updatedAt), `sortOrder`, `limit` (≤100), `offset`.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
     "/api/companies/{id}": {
       "get": {
         "summary": "Get companies",
@@ -5215,6 +5252,54 @@
         "responses": {
           "204": {
             "description": "No content"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/companies/{id}/overview": {
+      "get": {
+        "summary": "Company overview",
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "get_api_companies_id_overview",
+        "description": "One company with its live deals and up to 100 name-matched contacts (`contactTotal` has the full count).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record’s id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
