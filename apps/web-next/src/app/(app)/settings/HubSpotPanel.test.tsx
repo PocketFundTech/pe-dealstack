@@ -159,6 +159,32 @@ describe("HubSpotPanel", () => {
     expect(screen.getByTestId("hubspot-overall")).toHaveTextContent("4,471 of 6,000 records (74%)");
   });
 
+  it("says how many HubSpot deals were linked to deals already in Avise", async () => {
+    const job = {
+      ...RUNNING_JOB,
+      currentObject: "deals",
+      objectCounts: {
+        companies: { processed: 10, created: 10, updated: 0, failed: 0, total: 10 },
+        // contacts stored before `matched` existed — must still render.
+        contacts: { processed: 5, created: 5, updated: 0, failed: 0, total: 5 },
+        deals: { processed: 8, created: 5, updated: 3, failed: 0, matched: 3, total: 8 },
+      },
+    };
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job });
+      if (path === "/integrations/hubspot/import/job-resume-1") return Promise.resolve(job);
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
+      throw new Error(`unexpected GET ${path}`);
+    });
+    post.mockResolvedValue({ more: true });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    expect(await screen.findByTestId("hubspot-deals-matched")).toHaveTextContent("3 linked to deals already in Avise");
+    expect(screen.getAllByTestId("hubspot-deals-matched")).toHaveLength(1);
+  });
+
   it("lists past imports with who ran them", async () => {
     get.mockImplementation((path: string) => {
       if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });

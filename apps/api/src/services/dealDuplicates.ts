@@ -65,17 +65,25 @@ const INDEX_MAX_PAGES = 10;
  * for batch paths (bulk import) that would otherwise look up row by row.
  * The most recently updated deal wins a key. Empty on lookup failure, so a
  * failed lookup never blocks an import — it just skips the duplicate check.
+ * `unlinkedOnly` keeps only deals no HubSpot record owns yet (hubspotId null),
+ * for the HubSpot import, which must never re-link a deal another HubSpot
+ * deal already claimed.
  */
-export async function loadLiveDealIndex(orgId: string): Promise<Map<string, DealMatch>> {
+export async function loadLiveDealIndex(
+  orgId: string,
+  opts: { unlinkedOnly?: boolean } = {},
+): Promise<Map<string, DealMatch>> {
   const index = new Map<string, DealMatch>();
   try {
     for (let page = 0; page < INDEX_MAX_PAGES; page++) {
       const from = page * INDEX_PAGE;
-      const { data, error } = await supabase
+      let query = supabase
         .from('Deal')
         .select('id, name, updatedAt, company:Company(name)')
         .eq('organizationId', orgId)
-        .is('deletedAt', null)
+        .is('deletedAt', null);
+      if (opts.unlinkedOnly) query = query.is('hubspotId', null);
+      const { data, error } = await query
         .order('updatedAt', { ascending: false })
         .range(from, from + INDEX_PAGE - 1);
       if (error) {
