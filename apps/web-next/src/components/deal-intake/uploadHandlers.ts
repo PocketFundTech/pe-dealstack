@@ -10,6 +10,7 @@ import { emitDealsChanged } from "@/lib/appEvents";
 import { uploadViaSignedUrl, FileTooLargeError, runWithConcurrency } from "@/lib/storageUpload";
 import { planFileUpload, resolveDealFromResponse } from "@/components/deal-intake/batchPlan";
 import { pickGoogleFile } from "@/lib/googlePicker";
+import { sendWithDuplicateCheck, type AskDuplicate, type DuplicateExtra } from "@/components/deal-intake/duplicateCheck";
 import type { DealOption, IngestResponse } from "@/app/(app)/deal-intake/components";
 import type { FileUploadItem } from "@/app/(app)/deal-intake/tab-panels";
 
@@ -38,6 +39,8 @@ export interface UploadFilesDeps {
   endProcessing: () => void;
   fireFollowUp: (data: IngestResponse) => void;
   maybeShowTeaserPopup: (deal: { id: string; name: string }) => void;
+  /** Ask the user when the server finds a likely existing deal. Absent = no check (old behaviour). */
+  askDuplicate?: AskDuplicate;
 }
 
 /**
@@ -59,7 +62,7 @@ export interface UploadFilesDeps {
 export function createHandleUploadFiles(deps: UploadFilesDeps) {
   const {
     files, mode, selectedDeal, setError, setWarning, setResult, setFiles,
-    setProgressMessage, beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup,
+    setProgressMessage, beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup, askDuplicate,
   } = deps;
 
   return async () => {
@@ -80,6 +83,7 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     // A single failed file shows its real reason (e.g. "AI credits are
     // exhausted"), not a bare "Upload failed" (6 Oct testing).
     let lastError = "Upload failed";
+    let cancelled = false;
 
     for (let i = 0; i < files.length; i++) {
       if (stopReason) {
@@ -100,24 +104,49 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
         createdDealId,
       });
 
-      try {
+      // Bytes go up fresh on every request: the server deletes the staging
+      // object after each response, including a duplicate-check one.
+      const uploadAndPost = async (endpoint: string, dealId: string | undefined, extra: DuplicateExtra | Record<string, never>) => {
         const meta = await uploadViaSignedUrl(current.file, {
           purpose: "ingest",
-          dealId: plan.dealId,
+          dealId,
           onStep: (step) => {
             setFiles((prev) => prev.map((f, idx) => (idx === i
               ? { ...f, message: step === "signing" ? "Uploading…" : "Reading with AI…" }
               : f)));
           },
         });
-
-        const data = await api.post<IngestResponse>(plan.endpoint, {
+        return api.post<IngestResponse>(endpoint, {
           storagePath: meta.storagePath,
           fileName: meta.fileName,
           mimeType: meta.mimeType,
           size: meta.size,
-          ...(plan.dealId ? { dealId: plan.dealId } : {}),
+          ...(dealId ? { dealId } : {}),
+          ...extra,
         });
+      };
+
+      try {
+        // Only a file that could CREATE a deal is checked for duplicates; the
+        // user's answer then covers the whole batch (later files follow the
+        // chosen / created deal via planFileUpload).
+        const outcome = plan.dealId
+          ? { cancelled: false as const, data: await uploadAndPost(plan.endpoint, plan.dealId, {}), decision: null }
+          : await sendWithDuplicateCheck<IngestResponse>(
+            (extra) => {
+              // "Add to <deal>" goes to /ingest even for a spreadsheet — only a
+              // single-document workbook ever gets a duplicate check.
+              const chosen = "dealId" in extra ? extra.dealId : undefined;
+              return uploadAndPost(chosen ? "/ingest" : plan.endpoint, chosen, extra);
+            },
+            askDuplicate && ((check) => {
+              setProgressMessage("Possible duplicate — waiting for your choice…");
+              setFiles((prev) => prev.map((f, idx) => (idx === i ? { ...f, message: "Possible duplicate — waiting for you" } : f)));
+              return askDuplicate(check);
+            }),
+          );
+        if (outcome.cancelled) { cancelled = true; break; }
+        const data = outcome.data;
 
         anySucceeded = true;
         lastSuccessResult = data;
@@ -134,9 +163,10 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
           } else if (resolved.dealId) {
             createdDealId = resolved.dealId;
             createdDealName = resolved.dealName;
-            // Went into an existing deal for the same company (5 Oct, item 8):
-            // later files follow it there, but it isn't a NEW deal.
-            if (data.matchedExistingDeal) matchedExisting = true;
+            // Went into an existing deal for the same company (5 Oct, item 8),
+            // or the user chose "Add to <deal>": later files follow it there,
+            // but it isn't a NEW deal.
+            if (data.matchedExistingDeal || outcome.decision?.action === "add") matchedExisting = true;
           }
         }
       } catch (err) {
@@ -147,6 +177,15 @@ export function createHandleUploadFiles(deps: UploadFilesDeps) {
     }
 
     endProcessing();
+
+    // "Cancel" on the duplicate prompt: nothing was created in this batch (a
+    // deal only exists once a file succeeds, and the prompt comes first), so
+    // put every file back to pending for the user to try again or switch to
+    // "Update Existing Deal".
+    if (cancelled) {
+      setFiles((prev) => prev.map((f) => ({ ...f, status: "pending" as const, message: undefined })));
+      return;
+    }
 
     // Some files failed but the deal exists: say how to add them, instead of
     // the user re-uploading the whole batch (which used to duplicate the deal).
@@ -262,6 +301,29 @@ export interface NonFileIngestDeps {
   endProcessing: () => void;
   fireFollowUp: (data: IngestResponse) => void;
   maybeShowTeaserPopup: (deal: { id: string; name: string }) => void;
+  /** Ask the user when the server finds a likely existing deal ("new" mode only). Absent = no check. */
+  askDuplicate?: AskDuplicate;
+}
+
+/**
+ * One create-or-update request for the Drive / text paths: in "new" mode it
+ * goes through the duplicate check; in "existing" mode it targets the
+ * selected deal. Null = the user cancelled at the duplicate prompt.
+ */
+async function postIngest(
+  path: string,
+  body: Record<string, unknown>,
+  deps: Pick<NonFileIngestDeps, "mode" | "selectedDeal" | "askDuplicate">,
+): Promise<{ data: IngestResponse; addedToChosen: boolean } | null> {
+  if (deps.mode === "existing" && deps.selectedDeal) {
+    return { data: await api.post<IngestResponse>(path, { ...body, dealId: deps.selectedDeal.id }), addedToChosen: false };
+  }
+  const outcome = await sendWithDuplicateCheck<IngestResponse>(
+    (extra) => api.post<IngestResponse>(path, { ...body, ...extra }),
+    deps.askDuplicate,
+  );
+  if (outcome.cancelled) return null;
+  return { data: outcome.data, addedToChosen: outcome.decision?.action === "add" };
 }
 
 const DRIVE_INGEST_MIME_TYPES = [
@@ -299,13 +361,13 @@ export function createHandlePickGoogleDrive(deps: NonFileIngestDeps) {
     if (!picked) return; // user cancelled the picker
     beginProcessing("Importing from Google Drive...");
     try {
-      const body: Record<string, string> = { fileId: picked.fileId };
-      if (mode === "existing" && selectedDeal) body.dealId = selectedDeal.id;
-      const data = await api.post<IngestResponse>("/ingest/drive", body);
+      const sent = await postIngest("/ingest/drive", { fileId: picked.fileId }, deps);
+      if (!sent) return; // cancelled at the duplicate prompt — nothing created
+      const { data, addedToChosen } = sent;
       setResult(data);
       emitDealsChanged({ dealId: data.deal?.id, source: "ingest-drive" });
       fireFollowUp(data);
-      if (mode === "new" && data.deal?.id && !data.matchedExistingDeal) {
+      if (mode === "new" && data.deal?.id && !data.matchedExistingDeal && !addedToChosen) {
         maybeShowTeaserPopup({ id: data.deal.id, name: data.deal.name });
       }
     } catch (err) { setError(err instanceof Error ? err.message : "Drive import failed"); }
@@ -325,13 +387,13 @@ export function createHandleExtractText(deps: ExtractTextDeps) {
     if (mode === "existing" && !selectedDeal) { setError("Please select a deal first."); return; }
     beginProcessing("Extracting deal data...");
     try {
-      const body: Record<string, string> = { text: textInput, sourceType: textSourceType };
-      if (mode === "existing" && selectedDeal) body.dealId = selectedDeal.id;
-      const data = await api.post<IngestResponse>("/ingest/text", body);
+      const sent = await postIngest("/ingest/text", { text: textInput, sourceType: textSourceType }, deps);
+      if (!sent) return; // cancelled at the duplicate prompt — nothing created
+      const { data, addedToChosen } = sent;
       setResult(data);
       emitDealsChanged({ dealId: data.deal?.id, source: "ingest-text" });
       fireFollowUp(data);
-      if (mode === "new" && data.deal?.id && !data.matchedExistingDeal) {
+      if (mode === "new" && data.deal?.id && !data.matchedExistingDeal && !addedToChosen) {
         maybeShowTeaserPopup({ id: data.deal.id, name: data.deal.name });
       }
     } catch (err) { setError(err instanceof Error ? err.message : "Text extraction failed"); }

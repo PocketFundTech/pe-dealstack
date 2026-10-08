@@ -17,7 +17,8 @@ import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
-import { findLiveDealForCompany } from '../services/dealDuplicates.js';
+import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
+import { hashContent, signExtractionToken, verifyExtractionToken, wantsDuplicateCheck } from '../services/extractionToken.js';
 
 const router = Router();
 
@@ -267,12 +268,26 @@ export async function runIngestFromBuffer(
     // Step 2: Run AI extraction with confidence scores
     let aiData: ExtractedDealData | null = null;
 
+    // Second step of the duplicate check: the client resends with the user's
+    // choice plus the token from step 1 — reuse that extraction instead of
+    // paying for the AI read again. Any token that doesn't verify (tampered,
+    // expired, other org, different file) is ignored and the read runs.
+    const forceCreate = req.body.forceCreate === true || req.body.forceCreate === 'true';
+    const checkDuplicates = !targetDealId && !forceCreate && wantsDuplicateCheck(req.body);
+    const contentHash = req.body.extractionToken || checkDuplicates ? hashContent(buffer) : '';
+    if (req.body.extractionToken) {
+      aiData = verifyExtractionToken<ExtractedDealData>(req.body.extractionToken, { orgId, kind: 'upload', contentHash });
+      if (aiData) log.info('Ingest reusing extraction from the duplicate-check step', { documentName });
+      else log.warn('Ingest: extraction token rejected — reading the document again', { documentName });
+    }
+    const reusedExtraction = !!aiData;
+
     // INGEST_ENGINE=claude — native full-document read (whole PDF via the
     // Files API; full text for other formats). Returns the exact
     // ExtractedDealData shape, so everything downstream is unchanged. Any
     // failure falls through to the legacy chain below — deal creation is
     // never blocked by the new engine.
-    if (isClaudeIngestEnabled()) {
+    if (!reusedExtraction && isClaudeIngestEnabled()) {
       const { readDealDocument, hasUsablePdfText } = await import('../services/extraction/claudeDealReader.js');
       aiData = await readDealDocument({
         fileBuffer: mimeType === 'application/pdf' ? buffer : undefined,
@@ -344,6 +359,10 @@ export async function runIngestFromBuffer(
       };
     }
 
+    // As extracted, before validation adds review reasons (validation runs
+    // again on the resend) — this is what the duplicate-check token carries.
+    const extractionForToken: ExtractedDealData = JSON.parse(JSON.stringify(aiData));
+
     log.debug('AI extraction completed', {
       companyName: aiData.companyName.value,
       companyConfidence: aiData.companyName.confidence,
@@ -373,11 +392,30 @@ export async function runIngestFromBuffer(
     let company: any;
     let isUpdate = false;
 
-    // No target deal: if a live deal already exists for this company, add the
-    // document to it instead of creating a duplicate (5 Oct testing, item 8).
-    // `forceCreate` keeps the old always-create behaviour on purpose.
-    const forceCreate = req.body.forceCreate === true || req.body.forceCreate === 'true';
-    const matchedDeal = !targetDealId && !forceCreate
+    // Interactive intake (`checkDuplicates: true`): if this looks like a deal
+    // the org already has — same OR similar name — ask first. Nothing is
+    // created, merged or stored; the client resends with `dealId` (add to
+    // that deal) or `forceCreate` (new deal) plus the token.
+    if (checkDuplicates) {
+      const candidates = await findDuplicateCandidates(orgId, aiData.companyName.value);
+      if (candidates.length > 0) {
+        log.info('Ingest found possible duplicate deals — asking the user', { documentName, count: candidates.length });
+        return {
+          status: 200,
+          body: {
+            success: true,
+            duplicateCheck: { candidates, extractedCompanyName: aiData.companyName.value ?? null },
+            extractionToken: signExtractionToken({ orgId, kind: 'upload', contentHash, data: extractionForToken }),
+          },
+        };
+      }
+    }
+
+    // No target deal (legacy / non-interactive callers): if a live deal
+    // already exists for this company, add the document to it instead of
+    // creating a duplicate (5 Oct testing, item 8). `forceCreate` keeps the
+    // old always-create behaviour on purpose.
+    const matchedDeal = !targetDealId && !forceCreate && !checkDuplicates
       ? await findLiveDealForCompany(orgId, aiData.companyName.value)
       : null;
     const mergeTargetId: string | undefined = targetDealId || matchedDeal?.id;

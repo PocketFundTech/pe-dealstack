@@ -37,6 +37,7 @@ import {
   createHandlePickGoogleDrive,
   createHandleExtractText,
 } from "@/components/deal-intake/uploadHandlers";
+import { useDuplicatePrompt } from "@/components/deal-intake/DuplicateDealModal";
 
 interface IngestDealFormProps {
   /** "page" renders the standalone /deal-intake page chrome (heading + outer scroll
@@ -98,6 +99,9 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
     deal: { id: string; name: string };
     teasers: DealTeaser[];
   } | null>(null);
+
+  /* ---- "This looks like a deal you already have" (asked before creating) ---- */
+  const { askDuplicate, modal: duplicateModal } = useDuplicatePrompt();
 
   /* ---- Follow-up questions ---- */
   const [followUpQuestions, setFollowUpQuestions] = useState<FollowUpQuestion[]>([]);
@@ -281,7 +285,7 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
   const handleUploadFiles = () => createHandleUploadFiles({
     files, mode, selectedDeal,
     setError, setWarning, setResult, setFiles, setProgressMessage,
-    beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup,
+    beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup, askDuplicate,
   })();
 
   const handleUploadDirect = () => createHandleUploadDirect({
@@ -295,12 +299,12 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
   // upload handlers (same DI pattern, keeps this component under the
   // file-size cap). Neither is affected by the signed-URL upload change.
   const handlePickGoogleDrive = () => createHandlePickGoogleDrive({
-    mode, selectedDeal, setError, setResult, beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup,
+    mode, selectedDeal, setError, setResult, beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup, askDuplicate,
   })();
 
   const handleExtractText = () => createHandleExtractText({
     textInput, textSourceType, mode, selectedDeal,
-    setError, setResult, beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup,
+    setError, setResult, beginProcessing, endProcessing, fireFollowUp, maybeShowTeaserPopup, askDuplicate,
   })();
 
   const handleSaveFollowUpAndGoToDeal = async () => {
@@ -480,6 +484,8 @@ export function IngestDealForm({ variant = "page", onClose, preselectedDeal = nu
           }}
         />
       )}
+
+      {duplicateModal}
 
       {teaserPopup && (
         <DealTeaserPopup

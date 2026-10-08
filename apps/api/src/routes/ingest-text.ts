@@ -10,7 +10,9 @@ import { validateFinancials } from '../services/financialValidator.js';
 import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
-import { findLiveDealForCompany } from '../services/dealDuplicates.js';
+import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
+import { hashContent, signExtractionToken, verifyExtractionToken } from '../services/extractionToken.js';
+import type { ExtractedDealData } from '../services/aiExtractor.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
@@ -29,6 +31,11 @@ const textIngestSchema = z.object({
   dealId: z.string().uuid().optional(),
   // Skip the same-company match and always create a new deal.
   forceCreate: z.boolean().optional(),
+  // Interactive intake: ask before adding to / creating next to a deal that
+  // looks like the same company (returns `duplicateCheck` + `extractionToken`).
+  checkDuplicates: z.boolean().optional(),
+  // From a previous `duplicateCheck` response — reuses that AI extraction.
+  extractionToken: z.string().max(8 * 1024 * 1024).optional(),
 });
 
 // POST /api/ingest/text — Create deal from raw pasted text
@@ -40,15 +47,22 @@ subRouter.post('/text', async (req, res) => {
       return res.status(400).json({ error: 'Invalid input', details: validation.error.errors });
     }
 
-    const { text, sourceName, sourceType, dealId: targetDealId, forceCreate } = validation.data;
+    const { text, sourceName, sourceType, dealId: targetDealId, forceCreate, checkDuplicates: wantsCheck, extractionToken } = validation.data;
     log.info('Text ingest starting', { textLength: text.length, sourceType, targetDealId });
+    const checkDuplicates = !targetDealId && !forceCreate && wantsCheck === true;
+    const contentHash = extractionToken || checkDuplicates ? hashContent(text) : '';
 
     // Step 1: Extract deal data. INGEST_ENGINE=claude uses the native reader
     // with the FULL text (200k-char window vs the legacy 20k truncation);
     // any failure falls back to the legacy extractor — same ladder as
     // ingest-upload.ts.
     let aiData = null as Awaited<ReturnType<typeof extractDealDataFromText>>;
-    if ((process.env.INGEST_ENGINE || 'legacy') === 'claude') {
+    // Second step of the duplicate check — reuse the extraction (see ingest-upload.ts).
+    if (extractionToken) {
+      aiData = verifyExtractionToken<ExtractedDealData>(extractionToken, { orgId, kind: 'text', contentHash });
+      if (!aiData) log.warn('Text ingest: extraction token rejected — extracting again');
+    }
+    if (!aiData && (process.env.INGEST_ENGINE || 'legacy') === 'claude') {
       const { readDealDocument } = await import('../services/extraction/claudeDealReader.js');
       aiData = await readDealDocument({
         fileName: sourceName || 'pasted-text',
@@ -63,6 +77,8 @@ subRouter.post('/text', async (req, res) => {
     if (!aiData) {
       return res.status(400).json({ error: 'Could not extract deal data from text. Try providing more detail.' });
     }
+
+    const extractionForToken: ExtractedDealData = JSON.parse(JSON.stringify(aiData));
 
     // Financial validation — sourceLength allows tighter bounds on short docs
     const financialCheck = validateFinancials({
@@ -84,9 +100,22 @@ subRouter.post('/text', async (req, res) => {
     let company: any;
     let isUpdate = false;
 
-    // No target deal: add to the live deal for the same company instead of
-    // creating a duplicate (5 Oct testing, item 8) — same rule as upload.
-    const matchedDeal = !targetDealId && !forceCreate
+    // Interactive intake: ask before creating or merging when a live deal
+    // looks like the same company (same two-step as ingest-upload.ts).
+    if (checkDuplicates) {
+      const candidates = await findDuplicateCandidates(orgId, aiData.companyName.value);
+      if (candidates.length > 0) {
+        return res.status(200).json({
+          success: true,
+          duplicateCheck: { candidates, extractedCompanyName: aiData.companyName.value ?? null },
+          extractionToken: signExtractionToken({ orgId, kind: 'text', contentHash, data: extractionForToken }),
+        });
+      }
+    }
+
+    // No target deal (legacy callers): add to the live deal for the same
+    // company instead of creating a duplicate (5 Oct testing, item 8).
+    const matchedDeal = !targetDealId && !forceCreate && !checkDuplicates
       ? await findLiveDealForCompany(orgId, aiData.companyName.value)
       : null;
 
