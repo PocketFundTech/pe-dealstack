@@ -24,12 +24,17 @@ import type { ToolEmit, ToolEmitEvent } from './types.js';
 //
 // Refs: .planning/REMEDIATION_ROADMAP.md Phase 4 Task 4.2
 // Refs: .planning/codebase/CONCERNS.md §3.5, §7.2
-const DEFAULT_AGENT_RECURSION_LIMIT = 10;
-const DEFAULT_AGENT_TIMEOUT_MS = 30_000;
-// Both bounds are env-overridable: tests shorten the timeout, and production
-// can widen either without a deploy (2026-08-14 verification found the
-// legacy path hitting both limits on real workloads after the chat provider
-// cascade flipped to Anthropic — see llm.ts chatProvider).
+// Raised from 10/30s (2026-08-14 verification, D5): those bounds were tuned
+// for OpenAI and the legacy ReAct path now hits them on real workloads since
+// the chat provider cascade flipped to Anthropic (see llm.ts chatProvider).
+// Matched to financialAgent's bounds (agentBounds.ts) — a comparably-complex
+// multi-tool Anthropic agent — rather than relying on the env override alone,
+// since nothing sets DEAL_CHAT_AGENT_TIMEOUT_MS/_RECURSION_LIMIT in Vercel.
+// vercel.json gives the function 300s of headroom.
+const DEFAULT_AGENT_RECURSION_LIMIT = 25;
+const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
+// Both bounds stay env-overridable for tests (shorten) and prod (widen
+// further without a deploy).
 function getAgentTimeoutMs(): number {
   const override = Number(process.env.DEAL_CHAT_AGENT_TIMEOUT_MS);
   return Number.isFinite(override) && override > 0 ? override : DEFAULT_AGENT_TIMEOUT_MS;
