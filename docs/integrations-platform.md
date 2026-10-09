@@ -323,6 +323,19 @@ At https://console.cloud.google.com:
    - `https://${VERCEL_DOMAIN}/api/integrations/oauth/google_calendar/callback`
 5. Copy Client ID + Secret into Vercel env vars.
 
+**Avise domains (reuse the existing client; don't create a new one).** The redirect base is
+`APP_URL` (`appBaseUrl()` in `apps/api/src/integrations/_platform/errors.ts`), so Google only
+sees the host `APP_URL` points at, but register both app hosts so either works:
+
+- Authorized JavaScript origins: `https://app.avise.io`, `https://deals.avise.io`
+- Authorized redirect URIs, for each of those two hosts:
+  `/api/integrations/oauth/gmail/callback` and `/api/integrations/oauth/google_calendar/callback`
+- OAuth consent screen, Authorized domains: `avise.io` (covers all subdomains)
+- Audience: if the project is under an organization and the user type is **Internal**, only that
+  organization's accounts can sign in. If it is **External** in Testing mode, add each user
+  under Test users.
+- Remove the old `lmmos.ai` entries only after Avise sign-in works.
+
 ### 9.4 Smoke test on staging / first deploy
 Once the env vars are live, deploy the branch and:
 
