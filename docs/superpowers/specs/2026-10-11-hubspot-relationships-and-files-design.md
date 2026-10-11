@@ -52,8 +52,8 @@ connect form unless the server actually said `connected: false`.
   in Avise, insert `ContactDeal(contactId, dealId, role='OTHER')`. Use `UNIQUE(contactId, dealId)` to
   ignore existing links — never change a role a user set.
 - Count new links in `objectCounts.deals.contactLinks`.
-- **Deal page:** add a **Contacts** section listing linked contacts (name, title, company, role, link
-  to the contact). There is no deal→contacts API today, so add `GET /api/deals/:dealId/contacts`
+- **Deal page:** add a **Contacts** section listing linked contacts (name, title, company, role, email
+  as a `mailto:` link — the contacts page has no per-contact URL to link to). There is no deal→contacts API today, so add `GET /api/deals/:dealId/contacts`
   (org-scoped). **Bundle parity:** mount the route in `app.ts` and `app-lite.ts`, and check
   `pickBundle` routes it to `lite`.
 - Empty state says why: "No contacts linked to this deal yet. Link one from a contact's page, or import
