@@ -204,6 +204,28 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       return res.status(403).json({ error: 'Cannot create notifications for users outside your organization' });
     }
 
+    // SECURITY: referenced deal / document must also be in this org — the
+    // notification list embeds Deal(id, name, stage), so a foreign dealId
+    // would leak another org's deal name and stage.
+    const { dealId, documentId } = validation.data;
+    if (dealId) {
+      const { data: deal } = await supabase
+        .from('Deal').select('id').eq('id', dealId).eq('organizationId', orgId).single();
+      if (!deal) {
+        return res.status(403).json({ error: 'Cannot reference a deal outside your organization' });
+      }
+    }
+    if (documentId) {
+      const { data: doc } = await supabase
+        .from('Document').select('id, dealId').eq('id', documentId).single();
+      const { data: docDeal } = doc?.dealId
+        ? await supabase.from('Deal').select('id').eq('id', doc.dealId).eq('organizationId', orgId).single()
+        : { data: null };
+      if (!docDeal) {
+        return res.status(403).json({ error: 'Cannot reference a document outside your organization' });
+      }
+    }
+
     const notification = await createNotification(validation.data);
     if (!notification) {
       // createNotification swallows DB errors and pref opt-outs alike — return

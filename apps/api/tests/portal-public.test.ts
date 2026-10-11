@@ -22,6 +22,7 @@ let dealRow: any;
 let statements: any[] = [];
 let documents: any[] = [];
 let memos: any[] = [];
+const memoFilters: Array<[string, string]> = [];
 let orgRow: any = { name: 'Acme Capital' };
 let recordedViews: any[] = [];
 let dealSelects: string[] = [];
@@ -101,7 +102,18 @@ function tableMock() {
       };
     }
     if (table === 'Memo') {
-      return { select: () => ({ eq: () => ({ order: async () => ({ data: memos, error: null }) }) }) };
+      // Memos are bound to BOTH the share's deal and its organization.
+      memoFilters.length = 0;
+      return {
+        select: () => ({
+          eq: (c1: string, v1: string) => ({
+            eq: (c2: string, v2: string) => {
+              memoFilters.push([c1, v1], [c2, v2]);
+              return { order: async () => ({ data: memos, error: null }) };
+            },
+          }),
+        }),
+      };
     }
     if (table === 'MemoSection') {
       return { select: () => ({ in: () => ({ order: async () => ({ data: [], error: null }) }) }) };
@@ -147,6 +159,9 @@ describe('GET /api/public/portal/:token', () => {
     const res = await request(app).get('/api/public/portal/tok');
     expect(res.status).toBe(200);
     expect(res.body.deal.name).toBe('Project Neptune');
+    // Memos are scoped to the share's deal AND org, so a memo another org
+    // re-pointed at this deal can never surface on this portal.
+    expect(memoFilters).toEqual([['dealId', 'deal-1'], ['organizationId', 'org-1']]);
     // companyName is derived from the embedded Company relation, never a Deal
     // column — the select must ask for the relation (regression 2026-08-18).
     expect(res.body.deal.companyName).toBe('NeptuneCo');

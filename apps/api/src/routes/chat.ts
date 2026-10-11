@@ -9,6 +9,32 @@ import { getOrgId, verifyDealAccess, verifyConversationAccess } from '../middlew
 
 const router = Router();
 
+/**
+ * F-17: decide whether a conversation belongs to the caller's org.
+ * Deal-scoped conversations are owned through Deal.organizationId; deal-less
+ * conversations are owned through Conversation.userId -> User.organizationId.
+ * Previously a deal-less conversation skipped the check entirely, so any
+ * signed-in user could read / post into / delete another org's conversation.
+ */
+async function conversationInOrg(
+  conv: { dealId?: string | null; userId?: string | null },
+  orgId: string,
+): Promise<boolean> {
+  if (conv.dealId) return !!(await verifyDealAccess(conv.dealId, orgId));
+  if (!conv.userId) return false;
+  return userInOrg(conv.userId, orgId);
+}
+
+async function userInOrg(userId: string, orgId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('User')
+    .select('id')
+    .eq('id', userId)
+    .eq('organizationId', orgId)
+    .single();
+  return !!data;
+}
+
 // Validation schemas
 const createConversationSchema = z.object({
   dealId: z.string().uuid().optional(),
@@ -126,8 +152,8 @@ router.get('/conversations/:id', async (req: Request, res: Response, next: NextF
       throw error;
     }
 
-    // Verify the conversation's deal belongs to user's org
-    if (conversation.Deal && conversation.Deal.organizationId !== orgId) {
+    // Verify the conversation belongs to the caller's org (deal-less too — F-17)
+    if (!(await conversationInOrg(conversation, orgId))) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
@@ -156,9 +182,16 @@ router.post('/conversations', async (req: Request, res: Response, next: NextFunc
       });
     }
 
+    const orgId = getOrgId(req);
+
+    // F-17: the conversation's owner must be a user in the caller's org —
+    // deal-less conversations are scoped through this userId.
+    if (!(await userInOrg(validation.data.userId, orgId))) {
+      return res.status(400).json({ error: 'Invalid userId' });
+    }
+
     // If deal-scoped conversation, verify deal belongs to user's org
     if (validation.data.dealId) {
-      const orgId = getOrgId(req);
       const dealAccess = await verifyDealAccess(validation.data.dealId, orgId);
       if (!dealAccess) {
         return res.status(404).json({ error: 'Deal not found' });
@@ -185,17 +218,14 @@ router.delete('/conversations/:id', async (req: Request, res: Response, next: Ne
     const { id } = req.params;
     const orgId = getOrgId(req);
 
-    // Verify the conversation's deal (if any) belongs to user's org
+    // Verify the conversation belongs to the caller's org (deal-less too — F-17)
     const { data: conv } = await supabase
       .from('Conversation')
-      .select('dealId')
+      .select('dealId, userId')
       .eq('id', id)
       .single();
-    if (conv?.dealId) {
-      const dealAccess = await verifyDealAccess(conv.dealId, orgId);
-      if (!dealAccess) {
-        return res.status(404).json({ error: 'Conversation not found' });
-      }
+    if (!conv || !(await conversationInOrg(conv, orgId))) {
+      return res.status(404).json({ error: 'Conversation not found' });
     }
 
     // Delete messages first (cascade should handle this, but being explicit)
@@ -275,8 +305,8 @@ router.post('/conversations/:id/messages', async (req: Request, res: Response, n
       throw convError;
     }
 
-    // Verify the conversation's deal belongs to user's org
-    if (conversation.Deal && conversation.Deal.organizationId !== orgId) {
+    // Verify the conversation belongs to the caller's org (deal-less too — F-17)
+    if (!(await conversationInOrg(conversation, orgId))) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
