@@ -9,7 +9,7 @@ import { AICache } from '../services/aiCache.js';
 import { log } from '../utils/logger.js';
 import { notifyDealTeam, resolveUserId } from './notifications.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
-import { extractTextFromPDF } from '../services/pdfExtractor.js';
+import { inferDocumentType, resolveDefaultFolderId, extractLocalText } from '../services/documentStore.js';
 
 /** Text the deal-field top-up read sees on a data-room upload (~16 pages). */
 const DATA_ROOM_TEXT_CHARS = 40_000;
@@ -70,8 +70,6 @@ export async function handleDocumentUpload(req: Request, res: Response) {
     const { extractDealDataFromText } = await import('../services/aiExtractor.js');
     const { embedDocument } = await import('../rag.js');
     const { tryCompleteOnboardingStep } = await import('./onboarding.js');
-    const { excelToMarkdown } = await import('../services/excelToMarkdown.js');
-    const { isExcelFile } = await import('../services/excelFinancialExtractor.js');
     const { dealId } = req.params;
     const orgId = getOrgId(req);
     const dealAccess = await verifyDealAccess(dealId, orgId);
@@ -232,38 +230,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
     // the deep extraction path and ends up as OTHER, never producing
     // FinancialStatement rows even though the data is sitting in the DB.
     let docType = req.body.type || 'OTHER';
-    if (docType === 'OTHER' && documentName) {
-      const lowerName = documentName.toLowerCase();
-      const lowerMime = (mimeType ?? '').toLowerCase();
-      const looksLikeSpreadsheet =
-        lowerName.endsWith('.xlsx') ||
-        lowerName.endsWith('.xls') ||
-        lowerName.endsWith('.csv') ||
-        lowerMime.includes('spreadsheet') ||
-        lowerMime.includes('excel') ||
-        lowerMime === 'text/csv' ||
-        lowerMime === 'application/csv';
-
-      if (lowerName.includes('cim') || lowerName.includes('confidential')) docType = 'CIM';
-      else if (lowerName.includes('teaser')) docType = 'TEASER';
-      else if (
-        lowerName.includes('financial') ||
-        lowerName.includes('model') ||
-        lowerName.includes('p&l') ||
-        lowerName.includes('p_l') ||
-        lowerName.includes('income') ||
-        lowerName.includes('balance') ||
-        lowerName.includes('cashflow') ||
-        lowerName.includes('cash flow') ||
-        lowerName.includes('master sheet') ||
-        lowerName.includes('mastersheet') ||
-        looksLikeSpreadsheet
-      ) docType = 'FINANCIALS';
-      else if (lowerName.includes('legal') || lowerName.includes('dd')) docType = 'LEGAL';
-      else if (lowerName.includes('nda')) docType = 'NDA';
-      else if (lowerName.includes('loi') || lowerName.includes('letter')) docType = 'LOI';
-      else if (lowerName.includes('email') || lowerName.endsWith('.msg')) docType = 'EMAIL';
-    }
+    if (docType === 'OTHER' && documentName) docType = inferDocumentType(documentName, mimeType);
 
     // Parse optional fields
     let aiAnalysis = null;
@@ -292,45 +259,13 @@ export async function handleDocumentUpload(req: Request, res: Response) {
     let extractionStatus = 'pending';
     let numPages: number | null = null;
 
-    if (file && mimeType === 'application/pdf') {
-      extractionStatus = 'processing';
-      log.info('Starting PDF extraction', { documentName });
-
-      const extraction = await extractTextFromPDF(file.buffer);
-      if (extraction) {
-        // Remove null characters that PostgreSQL can't store
-        extractedText = extraction.text.replace(/\u0000/g, '');
-        numPages = extraction.numPages;
-        extractionStatus = 'completed';
-        log.info('PDF extraction completed', { numPages, textLength: extractedText.length });
-      } else {
-        extractionStatus = 'failed';
-        log.warn('PDF extraction failed', { documentName });
-      }
-    } else if (file && isExcelFile(mimeType, documentName)) {
-      // Excel extraction — convert sheets to Markdown tables for RAG / chat
-      // context. The AI deal-level extraction (company name / industry /
-      // revenue / EBITDA) and the deep per-period FinancialStatement pass
-      // both run afterwards, once the Document row exists — see
-      // runPostProcessing below.
-      extractionStatus = 'processing';
-      log.info('Starting Excel-to-Markdown extraction', { documentName });
-      try {
-        const markdownText = excelToMarkdown(file.buffer);
-        if (markdownText) {
-          extractedText = markdownText.replace(/\u0000/g, '');
-          log.info('Excel extraction completed', { documentName, textLength: extractedText.length });
-        } else {
-          log.info('Excel extraction: no meaningful content', { documentName });
-          extractionStatus = 'completed';
-        }
-      } catch (excelError) {
-        log.error('Excel extraction failed', excelError, { documentName });
-        extractionStatus = 'completed'; // don't block upload
-      }
-    } else if (file) {
-      // Other non-PDF files (Word, etc.) — no extraction yet
-      extractionStatus = 'completed';
+    if (file) {
+      // Local parsing only (no LLM call); see services/documentStore.ts.
+      const local = await extractLocalText(file.buffer, mimeType, documentName);
+      extractedText = local.text;
+      numPages = local.numPages;
+      extractionStatus = local.status;
+      log.info('Local text extraction finished', { documentName, status: local.status, textLength: extractedText?.length ?? 0 });
     }
 
     // Whether there's LLM-dependent work left to do once the Document row
@@ -346,54 +281,8 @@ export async function handleDocumentUpload(req: Request, res: Response) {
     // Auto-assign to a VDR folder if none was provided
     let resolvedFolderId = req.body.folderId || null;
     if (!resolvedFolderId) {
-      // Try to find a matching folder in this deal's VDR based on document type
-      const folderPatterns: Record<string, RegExp> = {
-        CIM: /financ|cim/i,
-        FINANCIALS: /financ/i,
-        LEGAL: /legal/i,
-        NDA: /legal|nda/i,
-        LOI: /legal|commercial/i,
-        DD_REPORT: /due\s*diligence|dd/i,
-      };
-
-      // Get existing folders for this deal
-      let { data: folders } = await supabase
-        .from('Folder')
-        .select('id, name')
-        .eq('dealId', dealId)
-        .order('name', { ascending: true });
-
-      // If deal has no folders at all, auto-create default VDR structure
-      if (!folders || folders.length === 0) {
-        const defaultFolders = [
-          { name: '100 Financials', sortOrder: 100, description: 'Financial statements, projections, and analysis' },
-          { name: '200 Legal', sortOrder: 200, description: 'Legal documents, contracts, and agreements' },
-          { name: '300 Commercial', sortOrder: 300, description: 'Commercial due diligence materials' },
-          { name: '400 HR & Data', sortOrder: 400, description: 'HR documents and data room materials' },
-          { name: '500 Intellectual Property', sortOrder: 500, description: 'IP documentation and patents' },
-        ];
-        const { data: createdFolders } = await supabase
-          .from('Folder')
-          .insert(defaultFolders.map(f => ({ ...f, dealId, parentId: null, isRestricted: false })))
-          .select('id, name');
-        if (createdFolders && createdFolders.length > 0) {
-          folders = createdFolders;
-          log.info('Auto-created default VDR folders for deal', { dealId, count: createdFolders.length });
-        }
-      }
-
-      // Match document type to folder
-      const pattern = folderPatterns[docType];
-      if (pattern && folders && folders.length > 0) {
-        const match = folders.find((f: any) => pattern.test(f.name));
-        resolvedFolderId = match?.id || folders[0]?.id || null;
-      } else if (folders && folders.length > 0) {
-        // For any doc type without a specific pattern, assign to the first folder
-        resolvedFolderId = folders[0]?.id || null;
-      }
-      if (resolvedFolderId) {
-        log.info('Auto-assigned document to folder', { docType, folderId: resolvedFolderId });
-      }
+      resolvedFolderId = await resolveDefaultFolderId(dealId, docType);
+      if (resolvedFolderId) log.info('Auto-assigned document to folder', { docType, folderId: resolvedFolderId });
     }
 
     // Resolve the uploader's internal User.id from the authenticated
