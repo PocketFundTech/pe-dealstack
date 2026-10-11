@@ -170,6 +170,18 @@ describe('GET /api/deals/:dealId/model', () => {
     }
   });
 
+  it('warns when a unit-scale break in the history produces unrealistic returns (Luktara: 942% IRR)', async () => {
+    // As on Luktara: the base year has no EBITDA, so entry uses the deal
+    // record's small figure while projections run off revenue read 1,000x too big.
+    statements = [stmt('2023', 9, 1.5), stmt('2024', 10_000, null as unknown as number)];
+    const app = await buildApp();
+    for (const path of ['/api/deals/deal-1/model', '/api/deals/deal-1/model/cases']) {
+      const res = await request(app).get(path);
+      expect(res.status).toBe(200);
+      expect(res.body.warnings.join(' ')).toMatch(/not realistic for a buyout/);
+    }
+  });
+
   it('keeps the deal-record multiple and warns nothing when the two EBITDAs agree', async () => {
     const app = await buildApp();
     const res = await request(app).get('/api/deals/deal-1/model');
@@ -342,6 +354,17 @@ describe('POST /api/deals/:dealId/model/export', () => {
     const notes = JSON.stringify(wb.getWorksheet('Notes')!.getSheetValues());
     expect(notes).toContain('not the deal record');
     expect(notes).toContain('the deal record says 6.10');
+  });
+
+  it('puts the unrealistic-returns warning on the Notes sheet', async () => {
+    statements = [stmt('2023', 9, 1.5), stmt('2024', 10_000, null as unknown as number)];
+    const app = await buildApp();
+    const res = await request(app).post('/api/deals/deal-1/model/export').send({}).buffer(true).parse(binaryParser);
+    expect(res.status).toBe(200);
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.body as never);
+    expect(JSON.stringify(wb.getWorksheet('Notes')!.getSheetValues())).toContain('not realistic for a buyout');
   });
 
   it('names the file after the deal', async () => {

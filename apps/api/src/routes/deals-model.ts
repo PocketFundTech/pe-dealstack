@@ -32,12 +32,13 @@ import {
   UnitMismatchError,
   type ModelAssumptions,
   type HistoricalRow,
+  type ResolvedAssumptions,
 } from '../services/dealModel/assumptions.js';
 import { buildModelWorkbook } from '../services/dealModel/workbook.js';
 import { selectBasePeriod } from '../services/dealModel/basePeriod.js';
 import { buildLineCatalogue, baseColumnValues, evaluateLine } from '../services/dealModel/lineCatalogue.js';
 import {
-  CASE_ROW_NAMES, MODEL_CASES, SCENARIO_DELTAS, parseCase, resolveCases, scenarioSeedNotes, type CaseSet, type ModelCase,
+  CASE_ROW_NAMES, MODEL_CASES, SCENARIO_DELTAS, parseCase, resolveCases, scenarioSeedNotes, implausibleReturnsNote, type CaseSet, type ModelCase,
 } from '../services/dealModel/scenarios.js';
 import { activeBalanceKeys, summariseCase } from '@ai-crm/shared';
 import { openingBalances } from '../services/dealModel/balanceItems.js';
@@ -246,6 +247,16 @@ function modelStructure(inputs: LoadedDeal, catalogue: Catalogue, entry: ReturnT
   };
 }
 
+/** A warning when the Base case's returns are too high to be real (usually a unit mismatch upstream). */
+function returnsSanityNotes(
+  inputs: LoadedDeal, catalogue: Catalogue, entry: ReturnType<typeof entryContext>, base: ResolvedAssumptions,
+): string[] {
+  const structure = modelStructure(inputs, catalogue, entry);
+  if (!structure.base) return [];
+  const note = implausibleReturnsNote(summariseCase(catalogue.lines, structure.baseValues, base, structure.opening));
+  return note ? [note] : [];
+}
+
 type SavedCases = Partial<Record<ModelCase, Partial<ModelAssumptions>>>;
 
 /** Every saved case for the deal, keyed Low / Base / High. */
@@ -348,7 +359,11 @@ router.get('/:dealId/model', async (req, res) => {
       seededFromBase: which !== 'Base' && !saved[which],
       history: inputs.history,
       ...modelStructure(inputs, catalogue, entry),
-      warnings: [...seedWarnings(entry.seed, saved), ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values)],
+      warnings: [
+        ...seedWarnings(entry.seed, saved),
+        ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values),
+        ...returnsSanityNotes(inputs, catalogue, entry, cases.Base),
+      ],
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -387,7 +402,11 @@ router.get('/:dealId/model/cases', async (req, res) => {
       deltas: SCENARIO_DELTAS,
       history: inputs.history,
       ...structure,
-      warnings: [...seedWarnings(entry.seed, saved), ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values)],
+      warnings: [
+        ...seedWarnings(entry.seed, saved),
+        ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values),
+        ...returnsSanityNotes(inputs, catalogue, entry, cases.Base),
+      ],
       currency: inputs.currency,
       unitScale: 'MILLIONS',
       sourceDocuments: inputs.documentNames,
@@ -493,6 +512,7 @@ router.post('/:dealId/model/export', async (req, res) => {
           // why the default multiple isn't the deal record's.
           ...seedWarnings(entry.seed, saved).slice(1),
           ...scenarioSeedNotes(saved, resolved.Base, catalogue.lines, entry.baseCol.values),
+          ...returnsSanityNotes(inputs, catalogue, entry, cases.Base),
         ],
       },
     });
