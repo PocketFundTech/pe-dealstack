@@ -6,7 +6,7 @@
  * jsPDF's text API (never an image-embedding API) with real section text.
  */
 import { describe, it, expect, vi } from "vitest";
-import { htmlToPlainTextWithLayout, exportMemoPDF, exportMemoClipboard, exportMemoMarkdown } from "./export";
+import { htmlToPlainTextWithLayout, exportMemoClipboard, exportMemoMarkdown } from "./export";
 import type { Memo, MemoSection } from "./components";
 
 describe("htmlToPlainTextWithLayout", () => {
@@ -95,8 +95,8 @@ describe("exports never include a failed-generation placeholder", () => {
   it("markdown", async () => {
     let blobParts: BlobPart[] = [];
     vi.stubGlobal("Blob", class { constructor(p: BlobPart[]) { blobParts = p; } });
-    (URL as any).createObjectURL = vi.fn(() => "blob:x");
-    (URL as any).revokeObjectURL = vi.fn();
+    (URL as unknown as { createObjectURL: () => string }).createObjectURL = vi.fn(() => "blob:x");
+    (URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = vi.fn();
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     exportMemoMarkdown({ id: "m", title: "T", projectName: "P" } as Memo, sections, {});
     const out = String(blobParts[0]);
