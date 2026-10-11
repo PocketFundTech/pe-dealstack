@@ -103,6 +103,16 @@ function tableMock() {
     if (table === 'Organization') {
       return { select: () => ({ eq: () => ({ single: async () => ({ data: orgRow, error: null }) }) }) };
     }
+    if (table === 'User') {
+      // runAsOrgSystem picks the org's earliest admin to attribute usage to.
+      const chain: any = {
+        eq: () => chain,
+        in: () => chain,
+        order: () => chain,
+        limit: async () => ({ data: [{ id: 'user-admin' }], error: null }),
+      };
+      return { select: () => chain };
+    }
     throw new Error(`Unexpected table: ${table}`);
   };
 }
@@ -234,6 +244,29 @@ describe('POST /api/public/doc-requests/:token/items/:itemId/upload', () => {
     expect(passedReq.user.organizationId).toBe('org-1');
     expect(passedReq.params.dealId).toBe('deal-1');
     expect(passedReq.file.originalname).toBe('pl.pdf');
+  });
+
+  it('records the upload’s AI usage against the request’s org and deal', async () => {
+    // A broker has no session, so without a bound context every AI call in
+    // the pipeline was dropped from the ledger ("no usage context bound").
+    const { getUsageContext } = await import('../src/middleware/usageContext.js');
+    let ctx: any;
+    handleDocumentUpload.mockImplementation(async (_req: any, res: any) => {
+      ctx = getUsageContext();
+      res.status(201).json({ id: 'doc-new', name: 'pl.pdf' });
+    });
+    const app = await buildApp();
+    await request(app)
+      .post('/api/public/doc-requests/tok/items/item-1/upload')
+      .attach('file', Buffer.from('%PDF-1.4 fake'), 'pl.pdf');
+
+    expect(ctx).toMatchObject({
+      organizationId: 'org-1',
+      dealId: 'deal-1',
+      userId: 'user-admin',
+      source: 'background',
+      systemSource: 'doc-request-portal',
+    });
   });
 
   it('links the created document onto the checklist item', async () => {
