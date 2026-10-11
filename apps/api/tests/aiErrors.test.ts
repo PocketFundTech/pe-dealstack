@@ -15,7 +15,7 @@
  * first, and does recognize it.
  */
 import { describe, it, expect } from 'vitest';
-import { classifyAIError, classifyAIErrorObject } from '../src/utils/aiErrors.js';
+import { classifyAIError, classifyAIErrorObject, classifyProviderRejection } from '../src/utils/aiErrors.js';
 
 const ANTHROPIC_CREDIT_MESSAGE =
   'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.';
@@ -39,5 +39,31 @@ describe('classifyAIErrorObject — correctly classifies Anthropic credit exhaus
     expect(userMessage).toMatch(/credit/i);
     expect(userMessage).not.toMatch(/api key/i);
     expect(statusCode).toBe(503);
+  });
+});
+
+describe('Anthropic key not scoped to a workspace (2026-10 prod incident)', () => {
+  const WORKSPACE_MSG =
+    'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header';
+  const err = {
+    status: 400,
+    error: { type: 'invalid_request_error', message: WORKSPACE_MSG },
+    message: `400 ${WORKSPACE_MSG}`,
+  };
+
+  it('classifyProviderRejection treats it as an auth/config rejection', () => {
+    expect(classifyProviderRejection(err)?.reason).toBe('auth');
+  });
+
+  it('does not misclassify ordinary 400 invalid_request_errors', () => {
+    expect(
+      classifyProviderRejection({ status: 400, message: '400 messages.0.content: invalid', error: { type: 'invalid_request_error' } }),
+    ).toBeNull();
+  });
+
+  it('tells the user it is a configuration issue on our side', () => {
+    const { userMessage, statusCode } = classifyAIErrorObject(err);
+    expect(statusCode).toBe(503);
+    expect(userMessage).toMatch(/configuration issue on our side/i);
   });
 });
