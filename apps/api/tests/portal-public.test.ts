@@ -13,9 +13,25 @@ vi.mock('../src/utils/logger.js', () => ({
 }));
 
 const getSignedDownloadUrl = vi.fn();
+const downloadFileBuffer = vi.fn();
+const fetchStorageObject = vi.fn();
 vi.mock('../src/utils/storage.js', () => ({
   getSignedDownloadUrl: (...args: any[]) => getSignedDownloadUrl(...args),
+  downloadFileBuffer: (...args: any[]) => downloadFileBuffer(...args),
+  fetchStorageObject: (...args: any[]) => fetchStorageObject(...args),
+  extractStoragePath: (p: string) => p,
 }));
+
+const watermarkPdf = vi.fn();
+vi.mock('../src/services/pdfWatermark.js', () => ({
+  watermarkPdf: (...args: any[]) => watermarkPdf(...args),
+}));
+
+function binaryParser(res: any, cb: (err: Error | null, body: Buffer) => void) {
+  const chunks: Buffer[] = [];
+  res.on('data', (c: Buffer) => chunks.push(Buffer.from(c)));
+  res.on('end', () => cb(null, Buffer.concat(chunks)));
+}
 
 let shareRow: any;
 let dealRow: any;
@@ -136,9 +152,14 @@ beforeEach(() => {
   documents = [{ id: 'doc-1', name: 'CIM.pdf', type: 'CIM', fileSize: 1000 }];
   memos = [];
   recordedViews = [];
-  docRow = { id: 'doc-1', dealId: 'deal-1', fileUrl: 'path/CIM.pdf' };
+  docRow = { id: 'doc-1', dealId: 'deal-1', fileUrl: 'path/CIM.pdf', name: 'CIM.pdf', mimeType: 'application/pdf', fileSize: 1000 };
   mockSupabase.from.mockImplementation(tableMock());
   getSignedDownloadUrl.mockResolvedValue('https://signed.example/CIM.pdf');
+  downloadFileBuffer.mockResolvedValue(Buffer.from('%PDF-original'));
+  watermarkPdf.mockResolvedValue(Buffer.from('%PDF-watermarked'));
+  fetchStorageObject.mockImplementation(async () => new Response('raw-xlsx-bytes', {
+    status: 200, headers: { 'content-type': 'application/vnd.ms-excel', 'content-length': '14' },
+  }));
 });
 
 describe('GET /api/public/portal/:token', () => {
@@ -211,33 +232,97 @@ describe('GET /api/public/portal/:token', () => {
 });
 
 describe('GET /api/public/portal/:token/documents/:documentId/download', () => {
-  it('302s to a signed URL for an in-deal document', async () => {
+  const url = '/api/public/portal/tok/documents/doc-1/download';
+
+  it('streams a WATERMARKED PDF through the API — never a redirect to a storage signed URL', async () => {
     const app = await buildApp();
-    const res = await request(app).get('/api/public/portal/tok/documents/doc-1/download');
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('https://signed.example/CIM.pdf');
+    const res = await request(app).get(url).buffer(true).parse(binaryParser);
+    expect(res.status).toBe(200);
+    expect(res.headers.location).toBeUndefined();
+    expect(res.body.toString()).toBe('%PDF-watermarked');
+    expect(res.headers['content-type']).toContain('application/pdf');
+    expect(res.headers['x-watermarked']).toBe('1');
+    expect(res.headers['cache-control']).toContain('no-store');
+    expect(getSignedDownloadUrl).not.toHaveBeenCalled();
+    // Viewer identity on the stamp: the share link (label + id) and when.
+    expect(watermarkPdf).toHaveBeenCalledTimes(1);
+    const [bytes, viewer] = watermarkPdf.mock.calls[0];
+    expect(Buffer.from(bytes).toString()).toBe('%PDF-original');
+    expect(viewer.email).toContain('Shared via portal link');
+    expect(viewer.email).toContain('Partner');
+    expect(viewer.timestamp).toBeInstanceOf(Date);
+  });
+
+  it('includes the invited email in the watermark when the share was sent to one', async () => {
+    shareRow = validShare({ invitedEmail: 'lp@fund.com' });
+    const app = await buildApp();
+    await request(app).get(url).buffer(true).parse(binaryParser);
+    expect(watermarkPdf.mock.calls[0][1].email).toContain('lp@fund.com');
+  });
+
+  it('strips characters the PDF font cannot draw from the label (would otherwise skip the watermark)', async () => {
+    shareRow = validShare({ label: 'Partner 🚀 東京' });
+    const app = await buildApp();
+    await request(app).get(url).buffer(true).parse(binaryParser);
+    // eslint-disable-next-line no-control-regex
+    expect(watermarkPdf.mock.calls[0][1].email).toMatch(/^[\x20-\x7E]+$/);
+  });
+
+  it('streams non-PDF files through the API unwatermarked (same rule as internal downloads)', async () => {
+    docRow = { ...docRow, name: 'Model.xlsx', mimeType: 'application/vnd.ms-excel', fileUrl: 'path/Model.xlsx' };
+    const app = await buildApp();
+    const res = await request(app).get(url).buffer(true).parse(binaryParser);
+    expect(res.status).toBe(200);
+    expect(res.headers.location).toBeUndefined();
+    expect(res.body.toString()).toBe('raw-xlsx-bytes');
+    expect(res.headers['content-disposition']).toContain('Model.xlsx');
+    expect(res.headers['cache-control']).toContain('no-store');
+    expect(watermarkPdf).not.toHaveBeenCalled();
+    expect(getSignedDownloadUrl).not.toHaveBeenCalled();
   });
 
   it('404s for a document that belongs to a different deal', async () => {
     docRow = { id: 'doc-1', dealId: 'other-deal', fileUrl: 'x' };
     const app = await buildApp();
-    const res = await request(app).get('/api/public/portal/tok/documents/doc-1/download');
+    const res = await request(app).get(url);
     expect(res.status).toBe(404);
-    expect(getSignedDownloadUrl).not.toHaveBeenCalled();
+    expect(downloadFileBuffer).not.toHaveBeenCalled();
+    expect(fetchStorageObject).not.toHaveBeenCalled();
   });
 
   it('404s when documents are disabled on the share', async () => {
     shareRow = validShare({ includeDocuments: false });
     const app = await buildApp();
-    const res = await request(app).get('/api/public/portal/tok/documents/doc-1/download');
+    const res = await request(app).get(url);
     expect(res.status).toBe(404);
-    expect(getSignedDownloadUrl).not.toHaveBeenCalled();
+    expect(downloadFileBuffer).not.toHaveBeenCalled();
   });
 
-  it('410s on a revoked share', async () => {
+  it('410s on a revoked share and serves no bytes', async () => {
     shareRow = validShare({ revokedAt: '2026-08-01T00:00:00Z' });
     const app = await buildApp();
-    const res = await request(app).get('/api/public/portal/tok/documents/doc-1/download');
+    const res = await request(app).get(url);
     expect(res.status).toBe(410);
+    expect(downloadFileBuffer).not.toHaveBeenCalled();
+    expect(fetchStorageObject).not.toHaveBeenCalled();
+  });
+
+  it('410s on an expired share and serves no bytes', async () => {
+    shareRow = validShare({ expiresAt: '2020-01-01T00:00:00Z' });
+    const app = await buildApp();
+    const res = await request(app).get(url);
+    expect(res.status).toBe(410);
+    expect(downloadFileBuffer).not.toHaveBeenCalled();
+    expect(fetchStorageObject).not.toHaveBeenCalled();
+  });
+
+  it('revoking takes effect on the very next request for the same download link', async () => {
+    const app = await buildApp();
+    const first = await request(app).get(url).buffer(true).parse(binaryParser);
+    expect(first.status).toBe(200);
+    shareRow = validShare({ revokedAt: new Date().toISOString() }); // owner clicks Revoke
+    const second = await request(app).get(url);
+    expect(second.status).toBe(410);
+    expect(watermarkPdf).toHaveBeenCalledTimes(1);
   });
 });

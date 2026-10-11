@@ -54,6 +54,27 @@ export async function downloadFileBuffer(storagePath: string): Promise<Buffer | 
 }
 
 /**
+ * Open a document from the private bucket as a streaming HTTP response,
+ * server-side. The short-lived signed URL used to fetch it never leaves the
+ * server — callers pipe `response.body` to the client, so access can be
+ * re-checked on every request (portal downloads after a share is revoked).
+ * Returns null if the object can't be fetched.
+ */
+export async function fetchStorageObject(storagePath: string): Promise<Response | null> {
+  const signedUrl = await getSignedDownloadUrl(storagePath, 60);
+  if (!signedUrl) return null;
+  const response = await fetch(signedUrl);
+  if (!response.ok || !response.body) {
+    log.error('Failed to fetch file from storage', undefined, {
+      storagePath: extractStoragePath(storagePath),
+      status: response.status,
+    });
+    return null;
+  }
+  return response;
+}
+
+/**
  * Get a public URL for assets in public buckets (avatars, org-logos).
  */
 export function getPublicAssetUrl(storagePath: string, bucket: string): string | null {

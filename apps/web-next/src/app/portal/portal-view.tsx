@@ -102,6 +102,8 @@ export function PortalView({ state, token }: { state: PortalState; token: string
   if (financials && financials.length > 0) tabs.push({ id: "financials", label: "Financials" });
   if (documents && documents.length > 0) tabs.push({ id: "documents", label: "Documents", count: documents.length });
   if (memos && memos.length > 0) tabs.push({ id: "memos", label: "Memos", count: memos.length });
+  // Treat whitespace-only or empty rich-text ("<p></p>") as no overview.
+  const hasDescription = !!deal.description && deal.description.replace(/<[^>]*>/g, "").trim().length > 0;
   const active = tabs.find((t) => t.id === tab)?.id ?? tabs[0]?.id ?? null;
 
   return (
@@ -140,12 +142,18 @@ export function PortalView({ state, token }: { state: PortalState; token: string
           <MetricCard label="Deal size" value={deal.dealSize != null ? formatCurrency(deal.dealSize, cur) : "—"} />
         </section>
 
-        {deal.description && (
-          <section className="bg-white rounded-lg border border-gray-200 p-4 sm:p-5">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">About</h2>
-            <p className="text-sm text-gray-700 whitespace-pre-line">{deal.description}</p>
-          </section>
-        )}
+        {/* Overview — always explains itself: a blank card read as broken. */}
+        <section aria-labelledby="portal-overview-heading" className="bg-white rounded-lg border border-gray-200 p-4 sm:p-5">
+          <h2 id="portal-overview-heading" className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Overview</h2>
+          {hasDescription ? (
+            <p className="text-sm text-gray-700 whitespace-pre-line">{deal.description!.trim()}</p>
+          ) : (
+            <p className="text-sm text-gray-500">
+              {share.sharedBy} hasn&apos;t added a written overview for this deal yet. The key figures above
+              {tabs.length > 0 ? " and the sections below are" : " are"} what&apos;s been shared with you — ask the sender if you need more context.
+            </p>
+          )}
+        </section>
 
         {tabs.length > 0 && (
           <section className="bg-white rounded-lg border border-gray-200">

@@ -17,12 +17,15 @@ interface ShareRow {
   revokedAt: string | null;
 }
 
+// 0 = "Never expires" — sent as an explicit `expiresInDays: null`. New links
+// default to 30 days so a forgotten link doesn't stay open forever.
 const EXPIRY_OPTIONS = [
+  { label: "Expires in 7 days", value: 7 },
+  { label: "Expires in 30 days", value: 30 },
+  { label: "Expires in 90 days", value: 90 },
   { label: "Never expires", value: 0 },
-  { label: "7 days", value: 7 },
-  { label: "30 days", value: 30 },
-  { label: "90 days", value: 90 },
 ];
+const DEFAULT_EXPIRY_DAYS = 30;
 
 export function ShareDealModal({
   dealId,
@@ -39,7 +42,7 @@ export function ShareDealModal({
   const [includeFinancials, setIncludeFinancials] = useState(true);
   const [includeDocuments, setIncludeDocuments] = useState(true);
   const [includeMemos, setIncludeMemos] = useState(true);
-  const [expiresInDays, setExpiresInDays] = useState(0);
+  const [expiresInDays, setExpiresInDays] = useState(DEFAULT_EXPIRY_DAYS);
   const [creating, setCreating] = useState(false);
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -66,7 +69,7 @@ export function ShareDealModal({
       const body: Record<string, unknown> = { includeFinancials, includeDocuments, includeMemos };
       if (label.trim()) body.label = label.trim();
       if (invitedEmail.trim()) body.invitedEmail = invitedEmail.trim();
-      if (expiresInDays > 0) body.expiresInDays = expiresInDays;
+      body.expiresInDays = expiresInDays > 0 ? expiresInDays : null;
       const result = await api.post<{ share: { id: string }; url: string }>(`/deals/${dealId}/shares`, body);
       setCreatedUrl(result.url);
       setLabel("");
@@ -144,6 +147,7 @@ export function ShareDealModal({
             </label>
             <select
               className="ml-auto rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-700"
+              aria-label="Link expiry"
               value={expiresInDays}
               onChange={(e) => setExpiresInDays(Number(e.target.value))}
             >
