@@ -341,6 +341,49 @@ describe('trackedClaudeMessage', () => {
     expect(recorded[0]).toMatchObject({ status: 'error', promptTokens: 0, completionTokens: 0 });
   });
 
+  // AI cost plan H2: 295 failed Anthropic rows (Aug–Oct, mostly Fable
+  // extraction) had no error text, so credit / auth / timeout failures
+  // couldn't be told apart in the ledger.
+  it('records the error message on a failed call', async () => {
+    nextFinalMessageError = new Error('400 Your credit balance is too low to access the Anthropic API.');
+    const { trackedClaudeMessage } = await getClient();
+    await expect(
+      trackedClaudeMessage({
+        operation: 'financial_extraction',
+        role: 'extraction',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      }),
+    ).rejects.toThrow('credit balance');
+    expect(recorded[0].metadata).toEqual({
+      errorMessage: '400 Your credit balance is too low to access the Anthropic API.',
+    });
+  });
+
+  it('caps a very long error message', async () => {
+    nextFinalMessageError = new Error(`502 <html>${'x'.repeat(5000)}</html>`);
+    const { trackedClaudeMessage } = await getClient();
+    await expect(
+      trackedClaudeMessage({
+        operation: 'financial_extraction',
+        role: 'extraction',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      }),
+    ).rejects.toThrow();
+    expect(recorded[0].metadata.errorMessage).toHaveLength(1001);
+    expect(recorded[0].metadata.errorMessage.endsWith('…')).toBe(true);
+  });
+
+  it('adds no error metadata to a successful call', async () => {
+    nextFinalMessage = okMessage('ok');
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    });
+    expect(recorded[0].metadata).toBeUndefined();
+  });
+
   it('does not let a ledger failure propagate to the caller', async () => {
     nextFinalMessage = okMessage('ok');
     const { recordUsageEvent } = await import('../src/services/usage/trackedLLM.js');
@@ -483,6 +526,20 @@ describe('trackedClaudeStream', () => {
     });
     await recordUsage({ inputTokens: 10, outputTokens: 5 }, 'success');
     expect(recorded[0].model).toBe(toolRunnerCalls[0].model);
+  });
+
+  it('recordUsage saves the error text on a failed run', async () => {
+    const { trackedClaudeStream } = await getClient();
+    const { recordUsage } = trackedClaudeStream({
+      operation: 'deal_chat',
+      role: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+    });
+    await recordUsage({ inputTokens: 10, outputTokens: 0 }, 'error', undefined, new Error('401 invalid x-api-key'));
+    await recordUsage({ inputTokens: 10, outputTokens: 0 }, 'error', undefined, 'timed out after 90s');
+    expect(recorded[0]).toMatchObject({ status: 'error', metadata: { errorMessage: '401 invalid x-api-key' } });
+    expect(recorded[1].metadata).toEqual({ errorMessage: 'timed out after 90s' });
   });
 });
 

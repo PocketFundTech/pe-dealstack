@@ -39,6 +39,14 @@ export function isAnthropicAvailable(): boolean {
   return hasAnthropicCredentials();
 }
 
+/** Error text for a failed call's UsageEvent row, so failures can be told
+ *  apart in the ledger (credit, auth, timeout, bad request…). Capped: a
+ *  gateway can return a whole HTML page as the message. */
+function usageErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.length > 1000 ? `${msg.slice(0, 1000)}…` : msg;
+}
+
 export class AIRefusalError extends Error {
   readonly category: string | null;
   constructor(category: string | null) {
@@ -170,6 +178,7 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     inTok: number,
     outTok: number,
     cache: { cacheReadTokens: number; cacheWrite5mTokens: number; cacheWrite1hTokens: number },
+    err?: unknown,
   ): Promise<void> => {
     try {
       await recordUsageEvent({
@@ -181,6 +190,7 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
         completionTokens: outTok,
         ...cache,
         durationMs: Date.now() - startedAt,
+        ...(err !== undefined ? { metadata: { errorMessage: usageErrorMessage(err) } } : {}),
       });
     } catch {
       /* ledger is best-effort */
@@ -236,7 +246,7 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
     const outTok = snapshot?.usage?.output_tokens ?? 0;
     const cache = extractCacheTokens(snapshot?.usage);
     const model = snapshot?.model ?? cfg.model;
-    await record('error', model, inTok, outTok, cache);
+    await record('error', model, inTok, outTok, cache, err);
     log.error('trackedClaudeMessage failed', { operation: opts.operation, model: cfg.model, err });
     throw err;
   }
@@ -278,7 +288,16 @@ export interface ClaudeStreamHandle {
    *   the caller off `message_start.message.model`. Falls back to the
    *   requested alias (`cfg.model`) when the caller hasn't tracked it.
    */
-  recordUsage: (usage: ClaudeStreamUsage, status: 'success' | 'error', servedModel?: string) => Promise<void>;
+  /**
+   * @param err On status 'error': the error, or a short reason string,
+   *   saved as `metadata.errorMessage`.
+   */
+  recordUsage: (
+    usage: ClaudeStreamUsage,
+    status: 'success' | 'error',
+    servedModel?: string,
+    err?: unknown,
+  ) => Promise<void>;
 }
 
 export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHandle {
@@ -318,6 +337,7 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
     usage: ClaudeStreamUsage,
     status: 'success' | 'error',
     servedModel?: string,
+    err?: unknown,
   ): Promise<void> => {
     await recordUsageEvent({
       operation: opts.operation,
@@ -330,6 +350,7 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
       cacheWrite1hTokens: usage.cacheWrite1hTokens,
       status,
       durationMs: Date.now() - start,
+      ...(err !== undefined ? { metadata: { errorMessage: usageErrorMessage(err) } } : {}),
     });
   };
 
