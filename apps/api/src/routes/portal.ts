@@ -218,6 +218,7 @@ router.get('/:token', async (req, res) => {
         .from('Memo')
         .select('id, title')
         .eq('dealId', share.dealId)
+        .eq('organizationId', share.organizationId)
         .order('createdAt', { ascending: false });
       const memoIds = (memoRows ?? []).map((m) => m.id);
       let sections: Array<{ memoId: string; title: string; content: string; sortOrder: number }> = [];

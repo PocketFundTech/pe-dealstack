@@ -260,6 +260,21 @@ router.patch('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: validation.error.errors });
     }
 
+    // Re-pointing a memo at a deal must stay inside the caller's org — the
+    // memo's dealId drives GET /memos/:id's deal embed, section generation,
+    // the memo agent's financial/document reads and the deal's share portal.
+    if (validation.data.dealId) {
+      const { data: deal } = await supabase
+        .from('Deal')
+        .select('id')
+        .eq('id', validation.data.dealId)
+        .eq('organizationId', orgId)
+        .single();
+      if (!deal) {
+        return res.status(400).json({ error: 'Invalid dealId' });
+      }
+    }
+
     const updateData = {
       ...validation.data,
       lastEditedBy: user?.id,

@@ -78,3 +78,16 @@ describe.each(ROUTES)('cron %s — missing CRON_SECRET', (name, modulePath) => {
     expect(logged).not.toMatch(/CRON_SECRET is not set/);
   });
 });
+
+// cron-signal-scan compared against `Bearer ${process.env.CRON_SECRET}` with
+// no unset-guard, so with the env var missing `Bearer undefined` was accepted.
+describe('cron signal-scan — unset CRON_SECRET fails closed', () => {
+  it('rejects the literal "Bearer undefined" when CRON_SECRET is unset', async () => {
+    delete process.env.CRON_SECRET;
+    const app = await buildApp('../src/routes/cron-signal-scan.js');
+    const res = await request(app).post('/cron').set('Authorization', 'Bearer undefined');
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'Unauthorized' });
+    expect(JSON.stringify(logError.mock.calls)).toMatch(/CRON_SECRET/);
+  });
+});

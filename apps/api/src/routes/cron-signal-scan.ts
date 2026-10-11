@@ -31,6 +31,12 @@ async function hasActiveDeals(orgId: string): Promise<boolean> {
 
 router.post('/', async (req: Request, res: Response) => {
   const auth = req.headers.authorization || '';
+  // Fail closed when the secret is unset — otherwise `Bearer undefined`
+  // would match and anyone could start the all-org scan.
+  if (!process.env.CRON_SECRET) {
+    log.error('CRON_SECRET is not set — the signal-scan cron can never run. Set it in the Vercel project environment.');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }

@@ -115,6 +115,22 @@ describe('POST /api/invitations/bulk with deals', () => {
   });
 });
 
+describe('POST /api/invitations/bulk — role escalation', () => {
+  it('refuses an ADMIN invite from a non-admin (same guard as the single-invite route)', async () => {
+    db.User[0].role = 'MEMBER';
+    const res = await request(app()).post('/api/invitations/bulk').send({ emails: ['me2@attacker.com'], role: 'ADMIN' });
+    expect(res.status).toBe(403);
+    expect(sent).toHaveLength(0);
+    expect(db.Invitation).toHaveLength(0);
+  });
+
+  it('lets an admin bulk-invite admins', async () => {
+    const res = await request(app()).post('/api/invitations/bulk').send({ emails: ['partner@firm.com'], role: 'ADMIN' });
+    expect(res.status).toBe(200);
+    expect(sent).toEqual(['partner@firm.com']);
+  });
+});
+
 describe('applyInvitationDeal (on accept)', () => {
   it('adds the new member to the invited deal once', async () => {
     const inv = { id: 'i1', email: 'n@f.com', firmName: 'Acme', organizationId: 'org-A', role: 'MEMBER', status: 'PENDING', expiresAt: '', dealId: DEAL };

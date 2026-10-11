@@ -377,6 +377,13 @@ router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => 
       return res.status(400).json({ error: 'You must belong to an organization to invite members' });
     }
 
+    // Only ADMIN can invite ADMINs — same guard as POST /api/invitations.
+    // Without it any member could bulk-invite a second address of their own
+    // as ADMIN and escalate.
+    if (role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Only admins can invite admin users' });
+    }
+
     // Get org name for email
     const { data: org } = await supabase
       .from('Organization')
