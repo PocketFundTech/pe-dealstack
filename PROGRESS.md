@@ -5,6 +5,84 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 106 — October 2–11, 2026 (browser QA of the live app + 4 fixes)
+
+#### Timestamp: October 11, 2026 — 21:18 IST
+
+#### Goal: Test app.avise.io like a real user (real Chromium via `playwright-cli`), click every button, report bugs with red-boxed screenshots, and fix what can be fixed test-first.
+
+#### What was tested
+
+| Round | Dates | Scope | Report |
+|---|---|---|---|
+| 1 | 2–3 Oct | All main pages, modals, filters, search, notifications, settings, mobile | `docs/QA-REPORT-2026-10-06.md` (#1–#10) |
+| 2 | 3 Oct | Every remaining button: ingest, import, data room, NDAs, CRM, password/2FA, invites, deal edit/stage | same file |
+| 3 | 3–6 Oct | Model builder, Excel export, client portal, NDA send, memo builder, tablet, bulk CSV, sample-deal onboarding, Admin nudges | same file (#11–#20) |
+| 4 | 11 Oct | Re-verify all findings + new Companies page | `docs/QA-REPORT-2026-10-11.md` |
+| 5 | 11 Oct | AI Reports (memo builder) every control; Settings sub-pages | `docs/QA-REPORT-2026-10-11-ai-reports.md` |
+
+Also written: `docs/QA-TESTING-MASTER-PROMPT.md` (paste into any Claude Code terminal to repeat this testing) and `docs/FIX-REPORT-integrations-truncation-and-folder-404.md`. A shared report with screenshots is at https://claude.ai/artifact/YaiSH7FvyS71x1aCjVeMXq. **The docs files are not committed yet** (untracked in the main checkout).
+
+#### Fixes shipped (all merged 11 Oct)
+
+**PR #196 — financials unit-scale checks**
+- **Problem:** Luktara's model showed 942% IRR, 122,597x MoM, a $1.6T exit. 2014–2021 revenue was stored ~1,000x too big ($321.1M in 2013 → $362.5B in 2014) at 95% confidence.
+- **Fix:** `mergeStatementsBySameType` converts every sibling statement to the first one's unit scale before merging (was first-wins); new `unit_scale_break` validation error when adjacent-year revenue jumps ~1,000x / ~1,000,000x; `implausibleReturnsNote` warns in the model panel, cases view and Excel Notes sheet when IRR > 100% or MoM > 20x.
+- **Verified live:** both warnings now show on Luktara.
+
+**PR #216 — Integrations names truncated to 1–3 characters**
+- **Problem:** "Gr…", "G…", "Mi…" at 1280px. Measured live: the name had 34px because it shared a row with the icon and the status badge.
+- **Fix:** status badge moved to its own row in `IntegrationsSection.providerCard.tsx`.
+
+**PR #217 — "AI API key is invalid" shown for credit exhaustion**
+- **Problem:** memo chat, deal chat, global chat and Generate-All regenerate used the legacy `classifyAIError(message)`, which has no Anthropic "credit balance" wording.
+- **Fix:** all 5 call sites now use `classifyAIErrorObject(err)` (same as `ai-agents.ts` and `memoAgent/pipeline.ts`).
+
+**PR #218 — fake "Standard IC Memo" template**
+- **Problem:** every memo said "Using: Standard IC Memo" (a hardcoded fallback; the page never passes `templateName`), and "Change Template" went to an empty templates page.
+- **Fix:** shows "No custom template — using the default section outline." and "Browse Templates" when no real template is set.
+
+All four: test-first, red→green verified by reverting the fix, full suites + `tsc` clean (web-next has 2 pre-existing unrelated failures in the AI-assistant-history test).
+
+#### Fixed by other sessions, confirmed live on 11 Oct
+"Pocket Fund" branding, React hydration error #418, "Change Stage" opening Close Deal, dead Dashboard "New deal" button, Gmail/Google OAuth connect (now reaches Google's consent screen).
+
+#### 🔴 Production incident found 11 Oct (not fixed — needs founder)
+- **Every AI call in prod fails**: *"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header."* The Vercel `ANTHROPIC_API_KEY` was swapped for a key not tied to an Anthropic workspace. Fix: create a key inside a workspace in the Anthropic Console, set it in Vercel (Production), redeploy.
+- This also blocks the Luktara repair: Re-extract ran on 11 Oct and all 3 docs failed in ~1.5s, so nothing was rewritten.
+
+#### Luktara diagnosis (11 Oct)
+- All Luktara income-statement rows have `extractionSource: "gpt4o"` — written by the old GPT-4o extractor before the Claude engine went live (18 Aug), never re-extracted.
+- One document (`1_income_statement_model_1_0.xlsx`), one scale tag (MILLIONS) on every period. Both source files say `USDm` and 2014 = 362.511; the old extractor wrote 362500. 2014–2021 are forecasts in the source but stored as HISTORICAL; 2012–2013 values (299.4, 321.1) don't match the source (308.6, 331.0) either.
+- Plan: fix the key → Re-extract → check 2014 ≈ $362.5M. Build an extraction-level fix only if the Claude engine still gets it wrong.
+
+#### Still open (not fixed)
+- Production AI out of service (workspace key, above); credit exhaustion has recurred before.
+- Raw Anthropic error JSON stored in older memo sections and in per-doc extraction errors; memo builder has 5 duplicate sections, image-only PDF export, unreadable at 1280px.
+- DMpro: Revenue $3.5B and a headline EBITDA margin of 111% shown without a warning.
+- Client portal serves un-watermarked files; the signed download URL still works after Revoke.
+- NDA download / send / e-sign all depend on Google Workspace; downloads fail silently.
+- Team invite shows no success toast and the list doesn't refresh; workspace creator gets MEMBER, not ADMIN.
+- Settings scroll-spy highlights the wrong section; tablet header overflows (Edit Deal unreachable at 768px).
+- The new "not scoped to a workspace" error isn't recognised by `classifyProviderRejection` (users see a generic message).
+- Deprioritised by founder: mobile navigation, Feedback link to the old "PE OS Beta" form. The folder-insights 404 is expected (no insight yet), not a bug.
+
+#### Test data left in production
+- Disposable QA orgs: "QA Smoke Test Capital" (`qa-browsertest2-1790978272@avise.io`) and "QA Sample Deal Capital" (`qa-sample-…@avise.io`) with test deals, a data room, NDA template + drafts, a memo, a revoked share link, pending invites.
+- Real org "GAsjab": two Nudge notifications sent (founder-approved); memo "Apex Precision — Test Memo"; Apex model edit reverted; test Firm Teaser profile deleted.
+
+#### Summary
+
+| Metric | Value |
+|---|---|
+| PRs merged | 4 (#196, #216, #217, #218) |
+| Findings logged | 22 across 5 rounds |
+| Confirmed fixed (incl. other sessions) | 9 (4 by these PRs, 5 by other sessions) |
+| Test files added / extended | 6 (financialUnitScale, deals-model-route, providerCard, aiErrors, memoAgent-error-classification, outline-sidebar) |
+| Blocking prod issue | Anthropic key not workspace-scoped |
+
+---
+
 ### Session 105 — October 6, 2026
 
 #### Goal: Finish the code-only follow-ups from the 1 Oct QA report and the 5 Oct testing doc (PR #203), and set up Google sign-in locally.

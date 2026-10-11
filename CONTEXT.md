@@ -1,4 +1,4 @@
-# CONTEXT — where things stand (updated 6 Oct 2026)
+# CONTEXT — where things stand (updated 11 Oct 2026)
 
 The one-page handoff for whoever picks up next (person or agent). The detailed day-by-day log is
 [`PROGRESS.md`](PROGRESS.md); working rules are in [`CLAUDE.md`](CLAUDE.md).
@@ -9,11 +9,15 @@ The one-page handoff for whoever picks up next (person or agent). The detailed d
 One Vercel project `pocket-funds-projects/pe-dealstack` serves `deals.avise.io` and `app.avise.io`.
 
 ## 🔴 Blocking right now
+0. **Every AI call in production fails (found 11 Oct).** Anthropic returns *"This API key is not scoped to a workspace, so this
+   request must include the anthropic-workspace-id header."* The Vercel `ANTHROPIC_API_KEY` is a key not tied to an Anthropic
+   workspace. Fix: create a key inside a workspace in the Anthropic Console → set it in Vercel (Production) → redeploy. Until then
+   extraction, memos, chat and scoring all fail. `classifyProviderRejection` doesn't recognise this error yet (users see a
+   generic "AI request failed").
 1. **AI credit.** Anthropic and OpenAI have both run out more than once (28 Sep, 1 Oct, 5 Oct). Every AI feature fails while
    either is out. Check first: `vercel logs --environment production --since 1h --query "ai_quota_exhausted"`.
-2. **Google sign-in on production.** Gmail / Google connect needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-   `APP_URL=https://app.avise.io`, `OAUTH_STATE_SECRET` and `CRON_SECRET` in Vercel (someone with Vercel access), then a
-   redeploy. Works locally already. The Google app is in Testing mode (≤100 named users, reconnect every 7 days).
+2. ~~Google sign-in on production~~ — **done**: Gmail and Google connect reach Google's consent screen (verified live 11 Oct).
+   The Google app is still in Testing mode (≤100 named users, reconnect every 7 days).
 3. **GitHub Actions runners.** PR checks (#203, #206, #208) were cancelled after 15 min with "job was not acquired by
    Runner" — not a code failure. Re-run; if it repeats, check the org's Actions minutes / billing.
 
@@ -28,18 +32,17 @@ Everything that needs an outside account (AI, Google, Microsoft, Resend, Supabas
 [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 
 ## Open PRs (newest first)
-- **#208** QA report 6 Oct — memo, UI, branding fixes.
-- **#207** "Generate teasers" button in the deal's empty state (goes with #206).
-- **#204** Granola could never connect (`validateKey` hit a nonexistent endpoint) — merge soon.
-- **#203** QA follow-ups:
-  - no duplicate deals from text / URL / AI ingest / bulk / email / Gmail;
-  - no raw DB errors from contacts / outreach;
-  - Settings toggle for Gmail auto-create;
-  - self-deactivation + Reactivate in Settings → Team;
-  - teasers on demand on every intake path (finishes #206).
-- **#196** financials unit-scale mismatch checks.
+- **#220** AI cost optimization plan (docs, no code). **#219** codebase audit 2026-10-11 (docs).
+- **#215** API-key lifecycle test + local API console. Older open PRs (#175 and below) are stale — check before merging.
 
 ## Recently shipped (on `main`)
+- **11 Oct (browser QA fixes):** **#196** financials unit-scale checks — siblings converted to one scale on merge,
+  `unit_scale_break` validation error, implausible-returns warning (IRR > 100% / MoM > 20x) in the model panel and Excel Notes;
+  **#216** Integrations names no longer truncated to 1–3 chars; **#217** chat / regenerate paths use `classifyAIErrorObject`
+  (no more "invalid API key" for credit exhaustion); **#218** no fake "Standard IC Memo" template label.
+- **7–8 Oct:** #214 AI only on click; #213 Companies page; #212 ask before creating a likely duplicate deal; #211 / #210 HubSpot
+  import fixes + progress; #209 duplicate deals after failed upload; #208 QA 6 Oct fixes; #207 Generate teasers button;
+  #204 Granola connect; #203 QA follow-ups (no duplicate deals, Gmail auto-create toggle, self-deactivation).
 - **#206** upload runs only the deal summary; scoring, teasers, financials and discrepancy checks are buttons.
 - **#205** ingest AI spend tagged with `dealId` (per-deal cost). **#202** cheapest model that holds quality on every non-Fable path.
 - **#201** "Unknown Company" placeholder no longer masks a deal's real name.
@@ -55,6 +58,7 @@ All migrations from #174 / #178 / #200 have been run. Still check [`docs/PENDING
 for the #183 period-key backfill + unique index (founder runs; the app works before and after).
 
 ## Waiting on the founder / ops
+- **Replace the production `ANTHROPIC_API_KEY` with a workspace-scoped key and redeploy** (blocker 0 above).
 - Top up Anthropic **and** OpenAI; delete the misspelled `Antropic_api_avise` Vercel var.
 - Vercel env for Google (above); Microsoft (`MS_*`), Dropbox Sign key, Kondo API docs.
 - Email: Resend domain (SPF/DKIM/DMARC) for app email; **Supabase custom SMTP before real sign-ups** — the built-in sender
@@ -63,8 +67,22 @@ for the #183 period-key backfill + unique index (founder runs; the app works bef
   `gmail.readonly` needs.
 - After credit is back: re-extract SRM; Pushkar and Dev re-test.
 
+## Browser QA status (11 Oct)
+Reports: `docs/QA-REPORT-2026-10-06.md` (20 findings), `docs/QA-REPORT-2026-10-11.md` (re-verification),
+`docs/QA-REPORT-2026-10-11-ai-reports.md` (memo builder + Settings). Method to repeat it: `docs/QA-TESTING-MASTER-PROMPT.md`.
+These docs are **not committed yet** (untracked in the main checkout).
+
+**Luktara (942% IRR):** its rows are old GPT-4o extractions (`extractionSource: "gpt4o"`, before 18 Aug) with 2014–2021 revenue
+stored ×1000 (362500 vs 362.511 in the source). The 11 Oct Re-extract failed on the workspace-key error, so nothing changed.
+Next: fix the key → Re-extract → expect 2014 ≈ $362.5M. Only if still wrong, fix extraction itself.
+
+**Still open from QA:** raw AI error JSON in older memo sections + per-doc extraction errors; memo builder duplicate sections,
+image-only PDF, unreadable at 1280px; DMpro shows a 111% EBITDA margin with no warning; client-portal downloads not watermarked
+and the signed URL survives Revoke; NDA download/send/e-sign need Google; invite has no success toast; workspace creator gets
+MEMBER; Settings scroll-spy; tablet header overflow. Founder deprioritised: mobile nav, old "PE OS Beta" feedback form.
+
 ## What's next (engineering)
-1. Merge #203 / #204 / #207 / #208 once CI runs and they're tested.
+1. After the key is fixed: Re-extract Luktara and verify; then work the "Still open from QA" list above.
 2. Kondo / LinkedIn Deal Finder (1 Oct #23) — blocked on API docs.
 3. Optional: split Google scopes so Calendar / Drive / Docs can be published without the Gmail assessment.
 4. Re-enable NDA signature push detection on the verified domain (`docs/nda-signature-detection-setup.md`).
@@ -74,6 +92,9 @@ for the #183 period-key backfill + unique index (founder runs; the app works bef
 QA login `qa.tester@example.com` (ADMIN) in its own org **"Avise QA Test Org"**; password in the session scratchpad
 (`qa-creds.txt`) or reset via Supabase admin API. `@example.com` never receives mail. Test data: deals "Northwind Cold Chain",
 "QA-Room", "QA-Dash-Check"; contact; NDA template; memo; invitee `qa.invitee1@example.com`. Drive it with `playwright-cli`.
+More disposable orgs from the 2–11 Oct QA: "QA Smoke Test Capital" (`qa-browsertest2-1790978272@avise.io`, MEMBER) and
+"QA Sample Deal Capital" (`qa-sample-…@avise.io`). A user created only via the Supabase admin API **without**
+`user_metadata.firm_name` gets no org ("Organization not set up yet") — sign up through `/signup` instead.
 
 ## Gotchas learned this week
 - **`apps/api/scripts/` is gitignored** (`.gitignore` rule `scripts/`) — new scripts need `git add -f`.
@@ -100,7 +121,8 @@ QA login `qa.tester@example.com` (ADMIN) in its own org **"Avise QA Test Org"**;
   `CHOOSE`/`MATCH`, resolving the range through the sheet-aware lookup. Any new cross-sheet `INDEX`/lookup formula should be
   covered by `tests/deal-model-parity.test.ts` (workbook vs. live-preview numbers), not just a formula-shape test — that's
   exactly what caught this one.
-- **Merging own PRs when green is authorized** (founder, 3 Oct 2026, while away) — full CI + local `apps/api` + `apps/web-next`
+- **Merging:** on 11 Oct the founder chose to merge PRs #196 / #216–#218 personally — ask before merging rather than assume the
+  3 Oct authorization still holds. Earlier rule: **merging own PRs when green was authorized** (founder, 3 Oct 2026, while away) — full CI + local `apps/api` + `apps/web-next`
   suites green first, `gh pr merge --merge --admin` (branch protection needs an approving review; admin bypasses it on purpose).
   Start the next PR from fresh `origin/main` each time.
 - **A PR can go from green to `CONFLICTING`/`DIRTY` between opening and merging** if another PR merges into `main` first
