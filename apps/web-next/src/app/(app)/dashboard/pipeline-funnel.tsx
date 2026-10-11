@@ -59,9 +59,9 @@ export function PipelineFunnel({ deals, loading, error, now, onRetry, onOpenStag
                   onClick={() => onOpenStage(c.bucket, c.deals)}
                   disabled={loading}
                   aria-label={`${c.bucket.label}: ${c.deals.length} deals${c.stale ? `, ${c.stale} stale` : ""}. Show deals`}
-                  className="group flex w-full items-center gap-4 px-6 py-4 text-left transition-colors hover:bg-(--dash-paper) sm:flex-col sm:items-start sm:gap-2.5 sm:pt-4 sm:pb-5"
+                  className="group flex w-full items-center gap-4 px-6 sm:px-3 lg:px-6 py-4 text-left transition-colors hover:bg-(--dash-paper) sm:flex-col sm:items-start sm:gap-2.5 sm:pt-4 sm:pb-5"
                 >
-                  <span className="dash-label w-24 shrink-0 transition-colors group-hover:text-(--dash-blue) sm:w-auto">{c.bucket.label}</span>
+                  <span title={c.bucket.label} className="dash-label w-24 shrink-0 transition-colors group-hover:text-(--dash-blue) sm:w-auto">{c.bucket.label}</span>
                   {loading ? (
                     <Skeleton width={40} height={34} />
                   ) : (
