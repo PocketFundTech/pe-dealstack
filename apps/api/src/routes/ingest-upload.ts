@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { supabase } from '../supabase.js';
 import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtractor.js';
+import { runWithPendingDeal, bindDealToUsage } from '../middleware/usageContext.js';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
@@ -135,7 +136,15 @@ async function uploadDocumentToStorage(
   return { filePath };
 }
 
-export async function runIngestFromBuffer(
+export function runIngestFromBuffer(
+  input: IngestBufferInput,
+): Promise<{ status: number; body: unknown }> {
+  // The AI read that decides which deal this document creates or joins runs
+  // before the deal exists; its usage is tagged once the deal is known.
+  return runWithPendingDeal(() => ingestFromBuffer(input));
+}
+
+async function ingestFromBuffer(
   input: IngestBufferInput,
 ): Promise<{ status: number; body: unknown }> {
   const { buffer, mimeType, documentName, fileSize, req } = input;
@@ -156,6 +165,7 @@ export async function runIngestFromBuffer(
       if (!dealAccess) {
         return { status: 404, body: { error: 'Deal not found' } };
       }
+      await bindDealToUsage(targetDealId);
       concurrentUploadPromise = uploadDocumentToStorage(targetDealId, documentName, buffer, mimeType);
     }
 
@@ -559,6 +569,10 @@ export async function runIngestFromBuffer(
       const uploadResult = await uploadDocumentToStorage(deal.id, documentName, buffer, mimeType);
       fileUrl = uploadResult.filePath;
     }
+
+    // Per-deal AI cost: tag the read above (and everything from here on,
+    // including the after-response work) with the deal it landed in.
+    await bindDealToUsage(deal.id);
 
     // Step 6: Create document record with confidence data
     log.debug('Step 6: Creating document record');

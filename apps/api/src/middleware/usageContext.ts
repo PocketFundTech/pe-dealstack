@@ -13,6 +13,12 @@ export interface UsageContext {
   systemSource?: string;
   /** Deal the work belongs to, so per-deal AI cost can be read from UsageEvent.metadata.dealId. */
   dealId?: string;
+  /**
+   * Set by runWithPendingDeal: usage recorded before the deal exists (the
+   * ingest read that decides which deal a document creates) collects here,
+   * and bindDealToUsage tags it once the deal is known.
+   */
+  pendingDealUsage?: Array<{ id: string; metadata: Record<string, unknown> }>;
 }
 
 const storage = new AsyncLocalStorage<UsageContext>();
@@ -35,6 +41,80 @@ export function runWithDealUsage<T>(dealId: string, fn: () => T): T {
   const ctx = storage.getStore();
   if (!ctx) return fn();
   return storage.run({ ...ctx, dealId }, fn);
+}
+
+/**
+ * Run work whose deal isn't known yet. Usage recorded inside `fn` before
+ * bindDealToUsage is called is remembered so it can be tagged afterwards.
+ * Gets its own context copy, so several ingests in one request (bulk, email
+ * attachments) never share a deal. No-op without a bound context.
+ */
+export function runWithPendingDeal<T>(fn: () => T): T {
+  const ctx = storage.getStore();
+  if (!ctx) return fn();
+  return storage.run({ ...ctx, dealId: undefined, pendingDealUsage: [] }, fn);
+}
+
+/**
+ * Tag the current context with `dealId` — every later usage record carries
+ * it, including background work started from here — and back-fill the usage
+ * already recorded inside runWithPendingDeal. Never throws.
+ */
+export async function bindDealToUsage(dealId: string): Promise<void> {
+  const ctx = storage.getStore();
+  if (!ctx) return;
+  ctx.dealId = dealId;
+  const pending = ctx.pendingDealUsage ?? [];
+  ctx.pendingDealUsage = undefined;
+  await Promise.all(
+    pending.map(async (row) => {
+      try {
+        const { error } = await supabase
+          .from('UsageEvent')
+          .update({ metadata: { ...row.metadata, dealId } })
+          .eq('id', row.id);
+        if (error) log.warn('bindDealToUsage: tag failed', { usageEventId: row.id, error: error.message });
+      } catch (err) {
+        log.warn('bindDealToUsage: tag threw', { usageEventId: row.id, err });
+      }
+    }),
+  );
+}
+
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const DEAL_PATH = new RegExp(`/deals/(${UUID})(?:[/?]|$)`, 'i');
+const MEMO_PATH = new RegExp(`/memos/(${UUID})(?:[/?]|$)`, 'i');
+
+// memoId → dealId (null = memo has no deal). A memo never changes deal.
+const memoDealId = new Map<string, string | null>();
+
+/**
+ * The deal a request is about, read from its URL: /deals/:dealId/... directly,
+ * /memos/:memoId/... via the memo's deal (scoped to the org). Used to tag the
+ * request's AI usage with metadata.dealId.
+ */
+export async function dealIdForRequest(url: string, organizationId: string): Promise<string | undefined> {
+  const deal = DEAL_PATH.exec(url);
+  if (deal) return deal[1].toLowerCase();
+  const memo = MEMO_PATH.exec(url);
+  if (!memo) return undefined;
+  const memoId = memo[1].toLowerCase();
+  if (memoDealId.has(memoId)) return memoDealId.get(memoId) ?? undefined;
+  try {
+    const { data } = await supabase
+      .from('Memo')
+      .select('dealId')
+      .eq('id', memoId)
+      .eq('organizationId', organizationId)
+      .maybeSingle();
+    const dealId = (data as { dealId?: string | null } | null)?.dealId ?? null;
+    // Only cache a hit: a miss may be another org's memo or a lookup blip.
+    if (data) memoDealId.set(memoId, dealId);
+    return dealId ?? undefined;
+  } catch (err) {
+    log.warn('dealIdForRequest: memo lookup threw', { memoId, err });
+    return undefined;
+  }
 }
 
 // orgId → the internal User.id that system usage is attributed to.
@@ -141,8 +221,9 @@ export async function usageContextMiddleware(
   }
 
   const requestId = (req.headers['x-request-id'] as string) || undefined;
+  const dealId = await dealIdForRequest(req.originalUrl, organizationId);
   storage.run(
-    { userId: internalUserId, organizationId, requestId, source: 'http' },
+    { userId: internalUserId, organizationId, requestId, source: 'http', ...(dealId ? { dealId } : {}) },
     () => next(),
   );
 }
