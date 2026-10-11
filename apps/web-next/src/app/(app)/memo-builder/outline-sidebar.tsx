@@ -90,14 +90,22 @@ export function MemoOutlineSidebar({
             <span className="material-symbols-outlined text-[16px]">description</span>
             <span>Memo Templates</span>
           </div>
+          {/* "Standard IC Memo" used to show here even with no real template
+              record behind it — Change Template then landed on an empty
+              /templates page with nothing to switch to (QA 2026-10-11, AI
+              Reports finding A). Only claim a name when one is real. */}
           <p className="text-[11px] text-slate-500 mb-2">
-            Using:{" "}
-            <span className="font-medium text-slate-700">
-              {templateName || "Standard IC Memo"}
-            </span>
+            {templateName ? (
+              <>
+                Using:{" "}
+                <span className="font-medium text-slate-700">{templateName}</span>
+              </>
+            ) : (
+              "No custom template — using the default section outline."
+            )}
           </p>
           <div className="flex items-center gap-1 text-[10px] text-primary font-medium group-hover:underline">
-            <span>Change Template</span>
+            <span>{templateName ? "Change Template" : "Browse Templates"}</span>
             <span className="material-symbols-outlined text-[12px]">chevron_right</span>
           </div>
         </a>
