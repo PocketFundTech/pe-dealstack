@@ -15,6 +15,8 @@ const MAX_RETRIES = 5;
  */
 const MAX_BACKOFF_MS = 10_000;
 
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+
 export const MAX_PROPERTIES = 250;
 
 /**
@@ -274,7 +276,8 @@ export class HubSpotClient {
 
   /** Download a signed URL. No Authorization header: the URL itself is the credential. */
   async downloadSignedUrl(url: string): Promise<Buffer> {
-    const res = await fetch(url);
+    // A stalled CDN must not hold the serverless function until its hard limit.
+    const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`File download failed: ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   }

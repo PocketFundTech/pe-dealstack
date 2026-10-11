@@ -62,7 +62,7 @@ describe('HubSpotClient — files', () => {
     const buf = await c.downloadSignedUrl(url);
     expect(buf.toString()).toBe('hello');
     const downloadInit = fetchMock.mock.calls[1][1] as RequestInit | undefined;
-    expect(JSON.stringify(downloadInit ?? {})).not.toContain('secret');
+    expect(downloadInit?.headers).toBeUndefined();
   });
 });
 
