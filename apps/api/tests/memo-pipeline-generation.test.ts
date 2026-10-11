@@ -145,6 +145,19 @@ describe('generateSection', () => {
     expect(section.aiGenerated).toBe(false);
   });
 
+  it('never persists raw provider JSON when the provider rejects the call', async () => {
+    const raw = '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low"},"request_id":"req_123"}';
+    trackedClaudeMessage.mockRejectedValue(Object.assign(new Error(raw), {
+      status: 400,
+      error: { type: 'invalid_request_error', message: 'Your credit balance is too low' },
+    }));
+    const { generateSection } = await getPipeline();
+    const section = await generateSection('EXECUTIVE_SUMMARY', baseContext());
+    expect(section.content).toContain("AI couldn't generate this section");
+    expect(section.content).not.toMatch(/request_id|req_123|invalid_request_error|\{"type"/);
+    expect(section.aiGenerated).toBe(false);
+  });
+
   it('fails loudly on a whitespace-only response too', async () => {
     trackedClaudeMessage.mockResolvedValue({
       text: '   \n  ',
