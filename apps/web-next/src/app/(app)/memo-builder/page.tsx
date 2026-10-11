@@ -45,6 +45,7 @@ import {
   createMemoHandler,
 } from "./export-handlers";
 import { createSendMessage } from "./chat-handler";
+import { shouldStartChatCollapsed } from "./layout-breakpoints";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import {
   useLoadMemos,
@@ -94,6 +95,12 @@ function MemoBuilderPageInner() {
   const [chatInput, setChatInput] = useState("");
   const [sendingChat, setSendingChat] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
+  // Below ~1440px the sidebar + section list + a 400px chat panel squeeze the
+  // memo canvas to nothing, so the AI Analyst starts collapsed there. Users can
+  // still expand it (it then overlays the canvas instead of squeezing it).
+  useEffect(() => {
+    if (shouldStartChatCollapsed(window.innerWidth)) setChatOpen(false);
+  }, []);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Free up horizontal space for the AI Analyst panel by asking the sidebar
@@ -334,7 +341,7 @@ function MemoBuilderPageInner() {
             />
 
             {/* Workspace: outline + document canvas + chat */}
-            <div className="flex flex-1 overflow-hidden min-w-0">
+            <div className="relative flex flex-1 overflow-hidden min-w-0">
               <MemoOutlineSidebar
                 sections={sections}
                 activeSection={activeSection}

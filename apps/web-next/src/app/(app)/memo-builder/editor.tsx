@@ -160,11 +160,11 @@ export function MemoEditor({
   return (
     <main
       ref={containerRef}
-      className="flex-1 min-w-0 overflow-y-auto custom-scrollbar flex justify-center items-start p-8"
+      className="flex-1 min-w-0 overflow-auto custom-scrollbar flex justify-center items-start p-8"
       style={{ backgroundColor: "#e8eaed" }}
     >
       <div
-        className="w-full max-w-[850px] min-w-0 bg-white flex flex-col [overflow-wrap:anywhere]"
+        className="w-full max-w-[850px] min-w-[560px] shrink-0 bg-white flex flex-col [overflow-wrap:break-word] [word-break:normal]"
         style={{
           boxShadow: "0 1px 3px rgba(0,0,0,0.12), 0 4px 16px rgba(0,0,0,0.10)",
           borderRadius: "2px",

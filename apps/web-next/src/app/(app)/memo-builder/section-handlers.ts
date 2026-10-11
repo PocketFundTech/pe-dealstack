@@ -151,6 +151,23 @@ export function createDeleteSection(deps: SectionDeps) {
   };
 }
 
+/**
+ * Find the section a generated one belongs to. Title first: several generator
+ * types (Quality of Earnings, Exit Analysis, Value Creation Plan...) are
+ * stored under a DB type shared with another section, or under a type name
+ * the client never sees, so matching on type alone appended a pending
+ * duplicate (or overwrote the wrong section).
+ */
+export function findSectionIndex(
+  prev: Pick<MemoSection, "type" | "title">[],
+  generated: { type: string; title: string },
+): number {
+  const t = generated.title.trim().toLowerCase();
+  const byTitle = prev.findIndex((s) => s.title.trim().toLowerCase() === t);
+  if (byTitle !== -1) return byTitle;
+  return prev.findIndex((s) => s.type === generated.type);
+}
+
 export function createGenerateAll(deps: SectionDeps, generateAllAbortRef?: MutableRefObject<AbortController | null>) {
   const {
     selectedMemo, setSections, setEditingContent, setActiveSection,
@@ -169,7 +186,7 @@ export function createGenerateAll(deps: SectionDeps, generateAllAbortRef?: Mutab
       tableData?: MemoSection["tableData"]; chartConfig?: MemoSection["chartConfig"];
     }) => {
       setSections((prev) => {
-        const idx = prev.findIndex((s) => s.type === generated.type);
+        const idx = findSectionIndex(prev, generated);
         const patch: Partial<MemoSection> = {
           content: generated.content,
           aiGenerated: generated.aiGenerated,

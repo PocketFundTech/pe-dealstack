@@ -83,3 +83,45 @@ export const GENERATOR_TYPE_TO_DB_TYPE: Record<string, string> = {
 export function memoSectionKey(type: string, title: string): string {
   return type === 'CUSTOM' ? `CUSTOM:${title}` : type;
 }
+
+export interface ExistingSectionRow {
+  id: string;
+  type: string;
+  title: string;
+  content?: string | null;
+}
+
+const GENERATOR_TITLES = new Set([
+  'executive summary', 'company overview', 'financial performance', 'quality of earnings',
+  'market dynamics', 'competitive landscape', 'management assessment', 'operational deep dive',
+  'risk assessment', 'value creation plan', 'deal structure', 'exit analysis',
+]);
+
+const norm = (s: string | null | undefined) => (s || '').trim().toLowerCase();
+const hasContent = (r: ExistingSectionRow) => norm(r.content).length > 0;
+
+/**
+ * Find the existing MemoSection row a generated section should be written to.
+ * Several generator types normalize onto one DB type (Quality of Earnings ->
+ * FINANCIAL_PERFORMANCE, Value Creation Plan -> VALUE_CREATION, Exit Analysis
+ * -> EXIT_STRATEGY), so type alone is ambiguous: match on exact title first,
+ * then fall back to a same-type row whose title is not itself another
+ * generator section (e.g. a template's "Financial Analysis"). CUSTOM rows
+ * match on title only. Rows in `claimed` are skipped. When a memo already
+ * holds exact duplicate rows, the copy with real content wins.
+ */
+export function findExistingSection(
+  rows: ExistingSectionRow[],
+  type: string,
+  title: string,
+  claimed: Set<string> = new Set(),
+): ExistingSectionRow | undefined {
+  const pickBest = (cands: ExistingSectionRow[]) =>
+    cands.find(hasContent) || cands[0];
+  const free = rows.filter((r) => !claimed.has(r.id) && r.type === type);
+  const byTitle = free.filter((r) => norm(r.title) === norm(title));
+  if (byTitle.length) return pickBest(byTitle);
+  if (type === 'CUSTOM') return undefined;
+  const generic = free.filter((r) => !GENERATOR_TITLES.has(norm(r.title)));
+  return pickBest(generic);
+}
