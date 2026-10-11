@@ -3,7 +3,8 @@ import type { DealStage, HubSpotRecord, MappedCompany, MappedContact, MappedDeal
 // Property keys we promote to first-class columns; everything else → hubspotProperties.
 const COMPANY_STD = new Set(['name', 'industry', 'domain', 'website', 'description']);
 const CONTACT_STD = new Set(['firstname', 'lastname', 'email', 'phone', 'jobtitle']);
-const DEAL_STD = new Set(['dealname', 'amount']);
+// hubspot_owner_id is shown as a readable `hubspot_owner` instead (importEngine).
+const DEAL_STD = new Set(['dealname', 'amount', 'hubspot_owner_id']);
 
 function rest(properties: Record<string, string | null>, std: Set<string>): Record<string, string | null> {
   const out: Record<string, string | null> = {};
@@ -69,6 +70,20 @@ export function mapContact(r: HubSpotRecord, companyName: string | null): Mapped
   };
 }
 
+/** HubSpot's association type for a deal's primary company (type id 5). */
+const PRIMARY_COMPANY_TYPE = 'deal_to_company';
+
+/**
+ * HubSpot lists the primary company twice (once labelled primary, once
+ * unlabelled), so pick the primary first and de-duplicate the rest.
+ */
+function splitCompanies(r: HubSpotRecord): { primary: string | null; others: string[] } {
+  const results = r.associations?.companies?.results ?? [];
+  const primary = results.find((c) => c.type === PRIMARY_COMPANY_TYPE)?.id ?? results[0]?.id ?? null;
+  const others = [...new Set(results.map((c) => c.id))].filter((id) => id !== primary);
+  return { primary, others };
+}
+
 /**
  * @param stageLabel Human label for `properties.dealstage`, resolved via
  *   HubSpotClient.listDealStageLabels(). Without it the raw internal id
@@ -76,6 +91,7 @@ export function mapContact(r: HubSpotRecord, companyName: string | null): Mapped
  */
 export function mapDeal(r: HubSpotRecord, stageLabel?: string | null): MappedDeal {
   const p = r.properties;
+  const companies = splitCompanies(r);
   const amount = p.amount != null && p.amount !== '' ? Number(p.amount) : null;
   const customFields: Record<string, unknown> = { source: 'hubspot' };
   const readableStage = stageLabel || p.dealstage;
@@ -87,7 +103,10 @@ export function mapDeal(r: HubSpotRecord, stageLabel?: string | null): MappedDea
     dealSize: amount != null && Number.isFinite(amount) ? amount : null,
     stage: hubspotStageToDealStage(readableStage),
     description: p.description || null,
-    associatedCompanyHubspotId: r.associations?.companies?.results?.[0]?.id ?? null,
+    associatedCompanyHubspotId: companies.primary,
+    otherCompanyHubspotIds: companies.others,
+    contactHubspotIds: [...new Set((r.associations?.contacts?.results ?? []).map((c) => c.id))],
+    ownerHubspotId: p.hubspot_owner_id?.trim() || null,
     customFields,
     hubspotProperties: rest(p, DEAL_STD),
   };

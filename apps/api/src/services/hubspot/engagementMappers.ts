@@ -50,7 +50,8 @@ export function mapEngagement(type: EngagementType, r: HubSpotRecord): MappedEng
   const p = r.properties;
   const associatedContactHubspotIds = r.associations?.contacts?.results?.map((c) => c.id) ?? [];
   const associatedDealHubspotIds = r.associations?.deals?.results?.map((d) => d.id) ?? [];
-  const base = { hubspotId: r.id, interactionType: INTERACTION_TYPE[type], associatedContactHubspotIds, associatedDealHubspotIds };
+  const attachmentIds = (p.hs_attachment_ids ?? '').split(';').map((s) => s.trim()).filter(Boolean);
+  const base = { hubspotId: r.id, interactionType: INTERACTION_TYPE[type], associatedContactHubspotIds, associatedDealHubspotIds, attachmentIds };
 
   if (type === 'notes') {
     return { ...base, title: null, description: stripHtml(p.hs_note_body), date: fromEpochMs(p.hs_timestamp) };
