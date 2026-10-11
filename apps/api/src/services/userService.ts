@@ -34,6 +34,7 @@ export async function findOrCreateUser(authUser: {
   if (error?.code === 'PGRST116') {
     const title = authUser.user_metadata?.title as string | undefined;
     let organizationId: string | null = null;
+    let createdNewOrg = false;
 
     // Create the Organization from firmName.
     // SECURITY: never attach a new signup to an EXISTING organization by name.
@@ -73,6 +74,7 @@ export async function findOrCreateUser(authUser: {
         throw new Error('Failed to create organization after repeated slug collisions');
       }
       organizationId = orgRow.id;
+      createdNewOrg = true;
       log.info('Organization created on signup', { orgId: orgRow.id, name: authUser.firmName });
       // Sample deal is created during onboarding (POST /api/onboarding/create-demo-deal),
       // not auto-created on signup.
@@ -84,7 +86,11 @@ export async function findOrCreateUser(authUser: {
         authId: authUser.id,
         email: authUser.email,
         name: authUser.name || authUser.email?.split('@')[0] || 'User',
-        role: authUser.role || 'MEMBER',
+        // Whoever causes a NEW organization to be created is its founder and
+        // therefore ADMIN (otherwise they can't manage keys/webhooks/team).
+        // Users created without a new org keep the role they were given
+        // (invitees carry their invitation role).
+        role: createdNewOrg ? 'ADMIN' : authUser.role || 'MEMBER',
         title: title || null,
         firmName: authUser.firmName || null,
         organizationId,
