@@ -5,6 +5,37 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 106 — October 11, 2026 (20:30 IST)
+
+#### Goal: Full codebase checkup of `origin/main` (5371eeaa). List what to fix and what to improve, and give a roadmap to a clean, senior-architect-grade codebase.
+
+#### What was done
+
+- Six parallel area audits: security, backend architecture, AI layer, frontend, data/performance, CI/ops. Four security sweeps followed. Every serious finding was re-read in the code before it went in.
+- **Public report:** `docs/CODEBASE-AUDIT-2026-10-11.md`. It covers:
+  - broken features and cost leaks (B1–B13)
+  - the 9-step architecture roadmap
+  - frontend and repo-hygiene cleanups
+  - what's already good
+  - the PR order
+- **Security findings (S1–S17):** kept out of the public repo and filed as the private GitHub advisory GHSA-hhrx-h5xv-g4rc, with their own to-do list. The repo is public and some of the holes are unpatched.
+
+#### Headlines
+
+| Area | Result |
+|---|---|
+| Score | ~3.3 / 5, up from 2.9 in the 2026-05 review. The May P0s are fixed and API CI now exists. |
+| Broken | 7 of 8 Vercel crons never run (fix is in open PR #143). Uploads over 4.5 MB fail on 3 screens. Soft-deleted deals leak into reads. |
+| Cost | PDF extraction still runs on Fable. An out-of-credit error shows users "password-protected PDF". There is no credit alert. |
+| Structure | 99 of 118 route files call the DB directly. 3 app entrypoints are kept in sync by hand. There are 7 LLM wrappers and 83 unordered SQL files. |
+
+#### Ops (founder)
+
+- Run the RLS check SQL in the private advisory and share the result.
+- Add the colleague to the advisory as a collaborator.
+
+---
+
 ### Session 105 — October 6, 2026
 
 #### Goal: Finish the code-only follow-ups from the 1 Oct QA report and the 5 Oct testing doc (PR #203), and set up Google sign-in locally.
