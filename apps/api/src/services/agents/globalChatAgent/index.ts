@@ -15,7 +15,7 @@ import { getGlobalChatTools } from './tools.js';
 import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
-import { classifyAIError } from '../../../utils/aiErrors.js';
+import { classifyAIErrorObject } from '../../../utils/aiErrors.js';
 import { getTodayIso } from '../../../utils/dates.js';
 import { getFirmContextBlock } from '../../firmContextService.js';
 import { supabase } from '../../../supabase.js';
@@ -226,7 +226,7 @@ export async function runGlobalChatAgent(input: GlobalChatAgentInput): Promise<G
     };
   } catch (error: any) {
     log.error('Global chat agent error', { message: error?.message, stack: error?.stack?.slice(0, 500) });
-    return { response: classifyAIError(error?.message || 'Unknown error'), model: 'error' };
+    return { response: classifyAIErrorObject(error).userMessage, model: 'error' };
   }
 }
 
@@ -307,7 +307,7 @@ export async function* streamGlobalChatAgent(input: GlobalChatAgentInput): Async
     };
   } catch (error: any) {
     log.error('Global chat agent stream error', { message: error?.message, stack: error?.stack?.slice(0, 500) });
-    yield { event: 'error', data: { message: classifyAIError(error?.message || 'Unknown error') } };
+    yield { event: 'error', data: { message: classifyAIErrorObject(error).userMessage } };
   }
 }
 

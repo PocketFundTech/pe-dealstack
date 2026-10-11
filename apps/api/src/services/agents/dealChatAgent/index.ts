@@ -10,7 +10,7 @@ import { getDealChatTools, getDealChatToolsLegacy } from './tools.js';
 import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
-import { classifyAIError } from '../../../utils/aiErrors.js';
+import { classifyAIErrorObject } from '../../../utils/aiErrors.js';
 import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { trackedClaudeStream } from '../../ai/client.js';
 import { getModelConfig } from '../../ai/models.js';
@@ -401,9 +401,10 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
     log.error('Deal chat agent error', { message: error.message, stack: error.stack?.slice(0, 500) });
     captureAgentError(error, { agent: 'dealChatAgent', node: 'invoke' });
 
-    // Return specific error message so users know what's wrong
-    const errorMsg = error.message || 'Unknown error';
-    const userMessage = classifyAIError(errorMsg);
+    // Return specific error message so users know what's wrong. Use the
+    // object classifier (not the legacy message-only one) so structured
+    // fields are inspected first — QA 2026-10-11, AI Reports finding B.
+    const userMessage = classifyAIErrorObject(error).userMessage;
 
     return {
       response: userMessage,
@@ -573,7 +574,7 @@ export async function* runDealChatAgentStreaming(
     }
     await recordUsage(usage, 'error', servedModel);
     captureAgentError(error, { agent: 'dealChatAgent', node: 'stream' });
-    yield { type: 'error', message: classifyAIError(error.message || 'Unknown error') };
+    yield { type: 'error', message: classifyAIErrorObject(error).userMessage };
     return;
   }
 
