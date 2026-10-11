@@ -25,6 +25,12 @@ import type { ToolEmit, ToolEmitEvent } from './types.js';
 // Refs: .planning/REMEDIATION_ROADMAP.md Phase 4 Task 4.2
 // Refs: .planning/codebase/CONCERNS.md §3.5, §7.2
 const DEFAULT_AGENT_RECURSION_LIMIT = 10;
+// Streaming path: model calls per answer. Each one re-sends the whole
+// context, so 5 (up to 4 rounds of tools, then the answer) instead of the
+// legacy 10 — the 25 Aug message that ran 7 steps used 99K input tokens
+// (AI cost plan A3). LangGraph's recursionLimit above counts graph nodes,
+// not model calls, so the legacy path keeps its own number.
+const DEFAULT_STREAMING_TOOL_STEPS = 5;
 const DEFAULT_AGENT_TIMEOUT_MS = 30_000;
 // Both bounds are env-overridable: tests shorten the timeout, and production
 // can widen either without a deploy (2026-08-14 verification found the
@@ -38,8 +44,13 @@ function getAgentRecursionLimit(): number {
   const override = Number(process.env.DEAL_CHAT_AGENT_RECURSION_LIMIT);
   return Number.isFinite(override) && override > 0 ? override : DEFAULT_AGENT_RECURSION_LIMIT;
 }
+function getStreamingToolSteps(): number {
+  const override = Number(process.env.DEAL_CHAT_AGENT_RECURSION_LIMIT);
+  return Number.isFinite(override) && override > 0 ? override : DEFAULT_STREAMING_TOOL_STEPS;
+}
 import { getTodayIso } from '../../../utils/dates.js';
 import { getFirmContextBlock } from '../../firmContextService.js';
+import { DEAL_CHAT_HISTORY_MESSAGES } from './limits.js';
 
 // Build the deal-agent system prompt fresh per call so today's date reflects
 // the real wall clock (the agent reasons about "recent news", "last 90 days",
@@ -296,7 +307,7 @@ export async function runDealChatAgent(input: DealChatInput): Promise<DealChatRe
 
     // Add conversation history (last 10)
     if (input.history) {
-      for (const msg of input.history.slice(-10)) {
+      for (const msg of input.history.slice(-DEAL_CHAT_HISTORY_MESSAGES)) {
         if (msg.role === 'user') {
           messages.push(new HumanMessage(msg.content));
         } else {
@@ -483,19 +494,27 @@ export async function* runDealChatAgentStreaming(
   // Tools render before system, so they ride inside the first cached prefix.
   // `autoCache` adds a request-level breakpoint that moves forward with the
   // growing tool transcript. 3 breakpoints total (limit is 4).
+  //
+  // 1-hour TTL on both system blocks (AI cost plan A4): people read an
+  // answer before asking the next question, so follow-ups regularly land
+  // more than 5 minutes later and missed the 5-minute cache entirely. The
+  // automatic tail breakpoint stays 5-minute — longer-TTL entries must come
+  // first, which these do.
   const system = [
     {
       type: 'text' as const,
       text: `${firmContextBlock}${buildDealAgentSystemPrompt(today)}\n${SHARED_GUARDRAILS}`,
-      cache_control: { type: 'ephemeral' as const },
+      cache_control: { type: 'ephemeral' as const, ttl: '1h' as const },
     },
     {
       type: 'text' as const,
       text: `Current Deal Context:\n${input.dealContext}\n\nDeal ID: ${input.dealId}\nOrganization ID: ${input.orgId}`,
-      cache_control: { type: 'ephemeral' as const },
+      cache_control: { type: 'ephemeral' as const, ttl: '1h' as const },
     },
   ];
-  const history = (input.history ?? []).slice(-10).map((h) => ({ role: h.role, content: h.content }));
+  const history = (input.history ?? [])
+    .slice(-DEAL_CHAT_HISTORY_MESSAGES)
+    .map((h) => ({ role: h.role, content: h.content }));
   const messages = [...history, { role: 'user', content: input.message }];
 
   const timeoutMs = getAgentTimeoutMs();
@@ -529,7 +548,7 @@ export async function* runDealChatAgentStreaming(
   try {
     for await (const messageStream of runner) {
       iterationCount++;
-      if (iterationCount > getAgentRecursionLimit()) {
+      if (iterationCount > getStreamingToolSteps()) {
         internalController.abort();
         cleanup();
         await recordUsage(usage, 'error', servedModel);

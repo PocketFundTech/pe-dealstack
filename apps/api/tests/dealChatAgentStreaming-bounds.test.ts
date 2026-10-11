@@ -124,6 +124,19 @@ describe('runDealChatAgentStreaming bounds', () => {
     expect(errorEvent?.message).toMatch(/maximum number of tool calls/i);
   });
 
+  // AI cost plan A3: at most 5 model calls per answer (4 tool rounds + the
+  // answer) — every call re-sends the whole context.
+  it('allows 5 model calls and stops at the 6th', async () => {
+    const step = [{ type: 'content_block_delta', delta: { type: 'text_delta', text: 'x' } }];
+    const { runDealChatAgentStreaming } = await import('../src/services/agents/dealChatAgent/index.js');
+    nextRunnerIterations = Array.from({ length: 5 }, () => step);
+    const ok = await drain(runDealChatAgentStreaming({ dealId: 'd1', orgId: 'o1', message: 'hi', dealContext: '' }));
+    expect(ok.find((e) => e.type === 'error')).toBeUndefined();
+    nextRunnerIterations = Array.from({ length: 6 }, () => step);
+    const capped = await drain(runDealChatAgentStreaming({ dealId: 'd1', orgId: 'o1', message: 'hi', dealContext: '' }));
+    expect(capped.find((e) => e.type === 'error')?.message).toMatch(/maximum number of tool calls/i);
+  });
+
   // Cost-accuracy (usage-cost-accuracy): message_start usage carries cache
   // tokens and the served model — both must be accumulated across the
   // ReAct loop's iterations and passed into recordUsage(), or a cached deal

@@ -10,10 +10,12 @@ import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { isLLMAvailable } from '../services/llm.js';
 import { runDealChatAgent, runDealChatAgentStreaming } from '../services/agents/dealChatAgent/index.js';
+import { DEAL_CHAT_HISTORY_MESSAGES } from '../services/agents/dealChatAgent/limits.js';
 import { generateFallbackResponse } from '../services/chatHelpers.js';
 import { getTodayIso } from '../utils/dates.js';
 import { formatDealHeadline } from '../utils/financialFormat.js';
 import { classifyAIErrorObject } from '../utils/aiErrors.js';
+import { buildFinancialSummary } from '../services/agents/dealChatAgent/financialContext.js';
 
 const router = Router();
 
@@ -34,113 +36,6 @@ const chatRequestSchema = z.object({
     .optional()
     .default([]),
 });
-
-// ─── Financial Markdown Table Builder ────────────────────────────────
-// Transforms raw FinancialStatement rows into LLM-optimized Markdown
-// tables grouped by statement type with periods as columns.
-
-interface FinancialRow {
-  statementType: string;
-  period: string;
-  lineItems: Record<string, number | null> | null;
-  unitScale?: string | null;
-  currency?: string | null;
-}
-
-const STATEMENT_LABELS: Record<string, string> = {
-  INCOME_STATEMENT: 'Income Statement',
-  BALANCE_SHEET: 'Balance Sheet',
-  CASH_FLOW: 'Cash Flow Statement',
-};
-
-function buildFinancialMarkdown(statements: FinancialRow[]): string {
-  if (!statements.length) {
-    return '\n=== VERIFIED FINANCIAL DATA ===\nNo extracted financial data available yet. Use get_deal_financials tool or ask the user to upload financial documents.';
-  }
-
-  // Group by statement type. Track the unit scale + currency of each
-  // statement so the agent prompt tells the LLM what scale the numbers
-  // are stored in (formerly hard-coded as "$M USD" — wrong when the
-  // source was in actuals / thousands / billions).
-  //
-  // Default unitScale is ACTUALS (matches `normalizeUnitScale` in
-  // financialClassifier.ts — the safest fallback because it means "do
-  // not multiply"). Defaulting to MILLIONS would silently inflate values
-  // 1,000,000× whenever a row was inserted without a unitScale set.
-  const grouped: Record<string, { period: string; data: Record<string, number | null>; unitScale: string; currency: string }[]> = {};
-  for (const stmt of statements) {
-    if (!stmt.lineItems) continue;
-    const data = stmt.lineItems as Record<string, number | null>;
-    if (!grouped[stmt.statementType]) grouped[stmt.statementType] = [];
-    grouped[stmt.statementType].push({
-      period: stmt.period,
-      data,
-      unitScale: (stmt.unitScale ?? 'ACTUALS').toUpperCase(),
-      currency: stmt.currency ?? 'USD',
-    });
-  }
-
-  // Header reflects the actual scales present rather than assuming MILLIONS.
-  // Spell out the multiplier so the LLM can convert correctly when echoing
-  // values to the user — e.g. "ACTUALS USD (raw dollars)" makes it unambiguous
-  // that "6900" means $6,900, not $6,900M.
-  const scaleGloss = (label: string): string => {
-    switch (label.split(' ')[0]) {
-      case 'ACTUALS':  return ' (raw dollars — multiply by 1)';
-      case 'THOUSANDS': return ' (each unit = 1,000)';
-      case 'MILLIONS':  return ' (each unit = 1,000,000)';
-      case 'BILLIONS':  return ' (each unit = 1,000,000,000)';
-      default:          return '';
-    }
-  };
-  const allScales = new Set<string>();
-  for (const entries of Object.values(grouped)) {
-    for (const e of entries) allScales.add(`${e.unitScale} ${e.currency}`);
-  }
-  const scaleHeader = allScales.size === 1
-    ? [...allScales][0] + scaleGloss([...allScales][0])
-    : 'mixed scales — see per-statement labels below';
-  const sections: string[] = [`\n=== VERIFIED FINANCIAL DATA (Source of Truth — values in ${scaleHeader}) ===`];
-
-  for (const [type, entries] of Object.entries(grouped)) {
-    const label = STATEMENT_LABELS[type] || type;
-    const periods = entries.map(e => e.period);
-
-    // Per-statement scale label (covers the multi-statement case where one
-    // statement is in MILLIONS but another came from a doc in ACTUALS).
-    const stmtScales = new Set(entries.map(e => `${e.unitScale} ${e.currency}`));
-    const stmtScaleSuffix = stmtScales.size === 1
-      ? ` (values in ${[...stmtScales][0]}${scaleGloss([...stmtScales][0])})`
-      : '';
-
-    // Collect all unique metric keys across periods (preserving insertion order)
-    const metricKeys: string[] = [];
-    const seen = new Set<string>();
-    for (const entry of entries) {
-      for (const key of Object.keys(entry.data)) {
-        if (!seen.has(key)) { seen.add(key); metricKeys.push(key); }
-      }
-    }
-
-    if (!metricKeys.length) continue;
-
-    // Build Markdown table
-    const header = `| Metric | ${periods.join(' | ')} |`;
-    const divider = `|--------|${periods.map(() => '-------').join('|')}|`;
-    const rows = metricKeys.map(key => {
-      const cells = entries.map(e => {
-        const val = e.data[key];
-        if (val === null || val === undefined) return '—';
-        return val.toLocaleString('en-US', { maximumFractionDigits: 2 });
-      });
-      return `| ${key} | ${cells.join(' | ')} |`;
-    });
-
-    sections.push(`\n### ${label}${stmtScaleSuffix}\n${header}\n${divider}\n${rows.join('\n')}`);
-  }
-
-  return sections.join('\n');
-}
 
 // POST /api/deals/:dealId/chat - Send a message to AI about this deal
 router.post('/:dealId/chat', async (req, res) => {
@@ -259,8 +154,14 @@ router.post('/:dealId/chat', async (req, res) => {
         .eq('id', orgId)
         .single();
 
-      const firmProfile = (orgData?.settings as any)?.firmProfile;
-      if (firmProfile) {
+      const settings = orgData?.settings as any;
+      const firmProfile = settings?.firmProfile;
+      // The agent already sends the synthesized firm context (built from this
+      // same profile plus teasers, pipeline and NDA history — see
+      // firmContextService). Repeating the raw profile here doubled it on
+      // every message (AI cost plan A2); it's only the fallback now.
+      const hasFirmContext = typeof settings?.firmContext?.text === 'string' && settings.firmContext.text.trim() !== '';
+      if (firmProfile && !hasFirmContext) {
         // Stored firm-profile fields (see routes/onboarding-firm.ts +
         // settings/FirmProfileSection.tsx): firmName, description, headquarters,
         // founded, aum, investmentFocus, sectorFocus, dealSize, notableDeals,
@@ -312,8 +213,10 @@ router.post('/:dealId/chat', async (req, res) => {
     }
 
     // ─── Financial Context Injection ─────────────────────────────────
-    // Fetch extracted financial statements and format as LLM-optimized
-    // Markdown tables so the agent can do math without tool calls.
+    // A short summary (latest fiscal years + what's on file) rides on every
+    // message; get_deal_financials returns line items when a question needs
+    // them. The full tables used to be sent on every message and every tool
+    // step — 7–13K tokens on real deals (AI cost plan A1).
     const { data: financialStatements, error: finError } = await supabase
       .from('FinancialStatement')
       .select('statementType, period, lineItems, unitScale, currency')
@@ -325,7 +228,7 @@ router.post('/:dealId/chat', async (req, res) => {
       log.error('Failed to fetch financial statements for chat context', { dealId, error: finError });
     }
 
-    const financialContext = buildFinancialMarkdown(financialStatements || []);
+    const financialContext = buildFinancialSummary(financialStatements || []);
     contextParts.push(financialContext);
 
     const dealContext = contextParts.join('\n');
@@ -361,7 +264,7 @@ router.post('/:dealId/chat', async (req, res) => {
 
       try {
         for await (const event of runDealChatAgentStreaming(
-          { dealId, orgId: deal.organizationId, message, dealContext, history: history.slice(-10), today: getTodayIso(), userId: userId ?? undefined },
+          { dealId, orgId: deal.organizationId, message, dealContext, history: history.slice(-DEAL_CHAT_HISTORY_MESSAGES), today: getTodayIso(), userId: userId ?? undefined },
           { signal: abortController.signal },
         )) {
           if (event.type === 'text_delta') fullText += event.text;
@@ -432,7 +335,7 @@ router.post('/:dealId/chat', async (req, res) => {
       orgId: deal.organizationId,
       message,
       dealContext,
-      history: history.slice(-10),
+      history: history.slice(-DEAL_CHAT_HISTORY_MESSAGES),
       today: getTodayIso(),
       userId: userId ?? undefined,
     });
