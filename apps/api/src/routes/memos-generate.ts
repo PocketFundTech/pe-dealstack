@@ -9,7 +9,7 @@ import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { generateAllSectionsStreaming, GeneratedSection } from '../services/agents/memoAgent/index.js';
 import { isAnthropicAvailable } from '../services/ai/client.js';
-import { classifyAIError } from '../utils/aiErrors.js';
+import { classifyAIErrorObject } from '../utils/aiErrors.js';
 import { GENERATOR_TYPE_TO_DB_TYPE, memoSectionKey } from './memos-schemas.js';
 
 const router = Router();
@@ -153,14 +153,15 @@ router.post('/:id/generate-all', async (req, res) => {
     } catch (streamErr: any) {
       log.error('Generate-all streaming failed', streamErr);
       if (!abortController.signal.aborted) {
-        send({ type: 'error', message: classifyAIError(streamErr.message || 'Failed to regenerate memo') });
+        send({ type: 'error', message: classifyAIErrorObject(streamErr).userMessage });
       }
     } finally {
       res.end();
     }
   } catch (error: any) {
     log.error('Generate-all failed', error);
-    res.status(500).json({ error: classifyAIError(error.message || 'Failed to regenerate memo') });
+    const { statusCode, userMessage } = classifyAIErrorObject(error);
+    res.status(statusCode).json({ error: userMessage });
   }
 });
 

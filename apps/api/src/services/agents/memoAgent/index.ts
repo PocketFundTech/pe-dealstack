@@ -9,7 +9,7 @@ import { MEMO_CHAT_SYSTEM_PROMPT } from './prompts.js';
 import { MODEL_REASONING } from '../../../utils/aiModels.js';
 import { SHARED_GUARDRAILS } from '../guardrails.js';
 import { log } from '../../../utils/logger.js';
-import { classifyAIError } from '../../../utils/aiErrors.js';
+import { classifyAIErrorObject } from '../../../utils/aiErrors.js';
 import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { runWithAgentBounds } from '../agentBounds.js';
 
@@ -205,8 +205,13 @@ export async function runMemoChatAgent(input: MemoChatInput): Promise<MemoChatRe
     });
     captureAgentError(error, { agent: 'memoAgent', node: 'chat' });
 
+    // classifyAIErrorObject (not the legacy classifyAIError(message: string))
+    // — it inspects structured fields (status, error.type) first, so it
+    // recognizes Anthropic's "credit balance is too low" wording instead of
+    // misreporting it as an invalid API key (QA 2026-10-11, AI Reports
+    // finding B).
     return {
-      message: classifyAIError(error.message),
+      message: classifyAIErrorObject(error).userMessage,
       model: 'error',
     };
   }

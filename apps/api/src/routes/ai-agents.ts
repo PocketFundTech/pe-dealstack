@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { log } from '../utils/logger.js';
-import { classifyAIError, classifyAIErrorObject } from '../utils/aiErrors.js';
+import { classifyAIErrorObject } from '../utils/aiErrors.js';
 import { getOrgId, verifyDealAccess, verifyContactAccess } from '../middleware/orgScope.js';
 import { supabase } from '../supabase.js';
 
