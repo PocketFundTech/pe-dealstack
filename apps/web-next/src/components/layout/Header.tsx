@@ -48,7 +48,7 @@ export function Header() {
 
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-border-subtle px-4 md:px-6 bg-surface-card z-40 sticky top-0 min-w-0">
-      <div className="flex items-center gap-4 flex-1">
+      <div className="flex items-center gap-4 flex-1 min-w-0">
         {/* Breadcrumb nav — shown on pages that have a known parent context */}
         {pathname === "/deals" && (
           <nav className="hidden md:flex items-center gap-1.5 text-sm mr-4 shrink-0">
@@ -62,15 +62,15 @@ export function Header() {
         <button
           type="button"
           onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
-          className="relative w-full max-w-lg items-center rounded-md border border-border-subtle bg-background-body py-2 pl-10 pr-10 text-sm text-text-muted cursor-pointer hover:border-primary/40 transition-all shadow-sm text-left hidden md:flex"
+          className="relative w-full min-w-0 max-w-lg items-center rounded-md border border-border-subtle bg-background-body py-2 pl-10 pr-3 lg:pr-10 text-sm text-text-muted cursor-pointer hover:border-primary/40 transition-all shadow-sm text-left hidden md:flex"
         >
           <div className="absolute inset-y-0 left-0 flex items-center pl-3">
             <span className="material-symbols-outlined text-text-muted text-[20px]">
               search
             </span>
           </div>
-          <span>Search deals, pages, and actions...</span>
-          <div className="absolute inset-y-0 right-0 flex items-center pr-2 gap-1">
+          <span className="truncate whitespace-nowrap">Search deals, pages, and actions...</span>
+          <div className="absolute inset-y-0 right-0 hidden lg:flex items-center pr-2 gap-1">
             <kbd className="px-1.5 py-0.5 text-[10px] font-bold text-gray-400 bg-gray-100 rounded border border-gray-200">
               &#8984;K
             </kbd>
@@ -78,7 +78,7 @@ export function Header() {
         </button>
       </div>
 
-      <div className="flex items-center gap-2 md:gap-4 min-w-0">
+      <div className="flex items-center gap-2 md:gap-4 shrink-0">
         {showDealActions && (
           <div className="hidden sm:flex items-center gap-2 md:gap-4">
             {/* Bulk CSV import modal hasn't been ported from legacy crm.html yet —

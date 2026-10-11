@@ -64,9 +64,9 @@ export function DealPageHeader({
     user?.name?.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2) || "";
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle px-6 bg-surface-card z-40 relative">
-      <div className="flex items-center gap-4 flex-1">
-        <nav className="flex items-center gap-1.5 text-sm">
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle px-4 lg:px-6 bg-surface-card z-40 relative">
+      <div className="flex items-center gap-4 flex-1 min-w-0">
+        <nav className="flex min-w-0 items-center gap-1.5 text-sm">
           <button
             onClick={() => router.back()}
             className="flex items-center justify-center size-7 rounded-md hover:bg-primary-light text-text-muted hover:text-primary transition-colors mr-1"
@@ -78,15 +78,15 @@ export function DealPageHeader({
             Deals
           </Link>
           <span className="material-symbols-outlined text-[14px] text-text-muted">chevron_right</span>
-          <span className="text-text-main font-medium truncate max-w-[300px]">
+          <span className="text-text-main font-medium truncate max-w-[120px] lg:max-w-[300px]">
             {getDealDisplayName(deal)}
           </span>
         </nav>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex shrink-0 items-center gap-2 xl:gap-4">
         {/* Team Avatar Stack — click "+" or any avatar to open Manage Team */}
         <div
-          className="hidden md:flex items-center hover:opacity-90 transition-opacity"
+          className="hidden lg:flex items-center hover:opacity-90 transition-opacity"
           onClick={(e) => {
             // Only open from clicks on avatars; the explicit "+" button has
             // its own onClick passed via onManage.
@@ -102,10 +102,11 @@ export function DealPageHeader({
 
         <Link
           href={`/data-room/${dealId}`}
-          className="hidden md:flex items-center gap-2 px-3 py-2 text-sm font-medium text-text-secondary hover:text-primary hover:bg-primary-light rounded-lg transition-colors border border-border-subtle"
+          title="Data Room"
+          className="hidden md:flex items-center gap-2 px-2.5 xl:px-3 py-2 text-sm font-medium text-text-secondary hover:text-primary hover:bg-primary-light rounded-lg transition-colors border border-border-subtle"
         >
           <span className="material-symbols-outlined text-[18px]">folder_open</span>
-          Data Room
+          <span className="hidden xl:inline">Data Room</span>
         </Link>
         <button
           onClick={async () => {
@@ -119,14 +120,14 @@ export function DealPageHeader({
               showToast("Could not copy link — check your browser permissions", "warning");
             }
           }}
-          className="hidden md:flex items-center justify-center p-2 text-text-secondary hover:text-primary hover:bg-primary-light rounded-lg transition-colors"
+          className="hidden lg:flex items-center justify-center p-2 text-text-secondary hover:text-primary hover:bg-primary-light rounded-lg transition-colors"
           title="Copy share link"
         >
           <span className="material-symbols-outlined text-[20px]">{linkCopied ? "check" : "link"}</span>
         </button>
         <button
           onClick={() => setShowEditModal(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-sm hover:bg-primary-hover transition-colors"
+          className="flex shrink-0 items-center gap-2 whitespace-nowrap px-3 xl:px-4 py-2 text-sm font-medium text-white rounded-lg shadow-sm hover:bg-primary-hover transition-colors"
           style={{ backgroundColor: "#003366" }}
         >
           <span className="material-symbols-outlined text-[18px]">edit_document</span>
@@ -155,7 +156,7 @@ export function DealPageHeader({
             >
               {initials}
             </div>
-            <span className="hidden md:inline">{user?.name || "Loading..."}</span>
+            <span className="hidden xl:inline">{user?.name || "Loading..."}</span>
             <span
               className={`material-symbols-outlined text-[18px] text-text-muted transition-transform duration-200 ${
                 userDropdownOpen ? "rotate-180" : ""
