@@ -83,4 +83,21 @@ describe("PortalView (QA #25c redesign)", () => {
     expect(container.querySelector("script")).toBeNull();
     expect(screen.getByText("ok")).toBeTruthy();
   });
+
+  it("overview card explains itself when the deal has no description (never blank)", () => {
+    for (const description of [null, "", "   \n ", "<p></p>"]) {
+      const { unmount } = render(
+        <PortalView state={{ status: "ready", payload: payload({ deal: { ...payload().deal, description } }) }} token="tok" />,
+      );
+      const card = screen.getByRole("region", { name: "Overview" });
+      expect(card.textContent).toMatch(/hasn.t added a written overview/i);
+      unmount();
+    }
+  });
+
+  it("overview card shows the description when there is one", () => {
+    render(<PortalView state={{ status: "ready", payload: payload() }} token="tok" />);
+    const card = screen.getByRole("region", { name: "Overview" });
+    expect(card.textContent).toContain("A software deal.");
+  });
 });

@@ -95,6 +95,23 @@ describe('POST /api/deals/:dealId/shares', () => {
     expect(daysOut).toBeLessThan(7.1);
   });
 
+  it('defaults a new link to expire in 30 days when no expiry is sent', async () => {
+    const app = await buildApp();
+    const res = await request(app).post('/api/deals/deal-1/shares').send({ label: 'Partner' });
+    expect(res.status).toBe(201);
+    expect(insertedShare.expiresAt).toBeTruthy();
+    const daysOut = (new Date(insertedShare.expiresAt).getTime() - Date.now()) / 86_400_000;
+    expect(daysOut).toBeGreaterThan(29.9);
+    expect(daysOut).toBeLessThan(30.1);
+  });
+
+  it('allows "never expires" only when chosen explicitly (expiresInDays: null)', async () => {
+    const app = await buildApp();
+    const res = await request(app).post('/api/deals/deal-1/shares').send({ expiresInDays: null });
+    expect(res.status).toBe(201);
+    expect(insertedShare.expiresAt).toBeNull();
+  });
+
   it('404s for a deal outside the caller org', async () => {
     dealAccess = null;
     const app = await buildApp();

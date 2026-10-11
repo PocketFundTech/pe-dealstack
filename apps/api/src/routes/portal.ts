@@ -8,9 +8,10 @@
 // fields (team, aiThesis, scorecard, notes) here — external viewers see
 // only what the share's section toggles allow.
 
-import { Router } from 'express';
+import { Router, type Response } from 'express';
+import { Readable } from 'node:stream';
 import { supabase } from '../supabase.js';
-import { getSignedDownloadUrl } from '../utils/storage.js';
+import { downloadFileBuffer, fetchStorageObject } from '../utils/storage.js';
 import { log } from '../utils/logger.js';
 import { sendDocumentViewedEmail } from '../services/documentViewedEmail.js';
 import { recordDocumentDownload } from '../services/documentActivity.js';
@@ -23,6 +24,7 @@ interface ShareRow {
   dealId: string;
   organizationId: string;
   label: string | null;
+  invitedEmail?: string | null;
   includeFinancials: boolean;
   includeDocuments: boolean;
   includeMemos: boolean;
@@ -45,7 +47,7 @@ function extractCompanyName(company: unknown): string | null {
 async function resolveShare(token: string): Promise<{ share?: ShareRow; status?: number; error?: string }> {
   const { data: share } = await supabase
     .from('DealShare')
-    .select('id, dealId, organizationId, label, includeFinancials, includeDocuments, includeMemos, expiresAt, revokedAt, createdBy, createdAt')
+    .select('id, dealId, organizationId, label, invitedEmail, includeFinancials, includeDocuments, includeMemos, expiresAt, revokedAt, createdBy, createdAt')
     .eq('token', token)
     .single();
 
@@ -241,9 +243,50 @@ router.get('/:token', async (req, res) => {
   }
 });
 
+// ─── Portal document download ─────────────────────────────────────
+// SECURITY: the file is streamed THROUGH the API — the browser is never
+// handed a storage signed URL. A signed URL (the old 302 redirect) kept
+// working for its full hour after the owner revoked the share, and served
+// the original un-watermarked file. Now every request re-checks the share
+// (revoked/expired → 410, no bytes) and PDFs carry the same viewer
+// watermark as internal Data Room downloads (routes/documents.ts).
+
+// Same cap as internal downloads (routes/documents.ts): above this, PDFs
+// pass through unwatermarked so the function doesn't OOM.
+const WATERMARK_MAX_BYTES = 25 * 1024 * 1024;
+
+/** Keep only characters the watermark's Helvetica (WinAnsi) font can draw —
+ *  anything else makes pdf-lib throw, which would skip the watermark. */
+function toWatermarkSafe(text: string): string {
+  return text.replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** The identity stamped on a portal download: there's no viewer login, so
+ *  identify the share link (label + short id) and who it was sent to. */
+function portalViewerIdentity(share: ShareRow): string {
+  const label = toWatermarkSafe(share.label ?? '');
+  const shortId = share.id.slice(0, 8);
+  const link = label ? `"${label}" (${shortId})` : shortId;
+  const email = toWatermarkSafe(share.invitedEmail ?? '');
+  return `Shared via portal link ${link}${email ? ` sent to ${email}` : ''}`;
+}
+
+function setDownloadHeaders(res: Response, filename: string, contentType: string): void {
+  const asciiName = filename.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '') || 'document';
+  res.setHeader('Content-Type', contentType);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+  );
+  // Never let a browser/proxy cache serve the file after the link is revoked.
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
 // GET /api/public/portal/:token/documents/:documentId/download
 router.get('/:token/documents/:documentId/download', async (req, res) => {
   try {
+    // Re-validated on EVERY request — revoking a share stops downloads at once.
     const resolved = await resolveShare(req.params.token);
     if (!resolved.share) return res.status(resolved.status!).json({ error: resolved.error });
     const share = resolved.share;
@@ -252,25 +295,76 @@ router.get('/:token/documents/:documentId/download', async (req, res) => {
 
     const { data: doc } = await supabase
       .from('Document')
-      .select('id, dealId, fileUrl, name')
+      .select('id, dealId, fileUrl, name, mimeType, fileSize')
       .eq('id', req.params.documentId)
       .single();
     if (!doc || doc.dealId !== share.dealId || !doc.fileUrl) {
       return res.status(404).json({ error: 'Not found' });
     }
 
-    const signedUrl = await getSignedDownloadUrl(doc.fileUrl);
-    if (!signedUrl) return res.status(500).json({ error: 'Failed to prepare download' });
+    const filename = doc.name || 'document';
+    const shareRef = share.label || 'share link';
+    const isPdf = (doc.mimeType ?? '').toLowerCase() === 'application/pdf' ||
+      filename.toLowerCase().endsWith('.pdf');
+    const sizeOk = typeof doc.fileSize !== 'number' || doc.fileSize <= WATERMARK_MAX_BYTES;
 
-    // QA #19: share-link downloads were not logged anywhere.
+    if (isPdf && sizeOk) {
+      try {
+        const buffer = await downloadFileBuffer(doc.fileUrl);
+        if (!buffer) throw new Error('Storage download returned null');
+        const { watermarkPdf } = await import('../services/pdfWatermark.js');
+        const stamped = await watermarkPdf(buffer, {
+          email: portalViewerIdentity(share),
+          ip: req.ip ?? null,
+          timestamp: new Date(),
+        });
+
+        // QA #19: share-link downloads are logged on the deal timeline.
+        await recordDocumentDownload({
+          dealId: doc.dealId, documentId: doc.id, documentName: doc.name,
+          by: shareRef, via: 'share_link', watermarked: true,
+        });
+
+        setDownloadHeaders(res, filename, 'application/pdf');
+        res.setHeader('X-Watermarked', '1');
+        res.setHeader('Content-Length', String(stamped.length));
+        return res.end(stamped);
+      } catch (wmErr) {
+        // Same rule as internal downloads: still deliver the file (streamed
+        // through the API below, never a signed URL). Logged to investigate.
+        log.warn('Portal PDF watermark failed; streaming unwatermarked', {
+          docId: doc.id,
+          err: wmErr instanceof Error ? wmErr.message : String(wmErr),
+        });
+      }
+    }
+
+    // Passthrough: non-PDF, oversized PDF, or watermark failure — streamed.
+    const upstream = await fetchStorageObject(doc.fileUrl);
+    if (!upstream?.body) return res.status(500).json({ error: 'Failed to prepare download' });
+
     await recordDocumentDownload({
       dealId: doc.dealId, documentId: doc.id, documentName: doc.name,
-      by: share.label || 'share link', via: 'share_link',
+      by: shareRef, via: 'share_link', watermarked: false,
     });
-    res.redirect(302, signedUrl);
+
+    setDownloadHeaders(
+      res,
+      filename,
+      doc.mimeType || upstream.headers.get('content-type') || 'application/octet-stream',
+    );
+    const length = upstream.headers.get('content-length');
+    if (length) res.setHeader('Content-Length', length);
+
+    const body = Readable.fromWeb(upstream.body as unknown as import('node:stream/web').ReadableStream);
+    body.on('error', (err) => {
+      log.error('Portal download stream failed', err, { docId: doc.id });
+      res.destroy(err);
+    });
+    body.pipe(res);
   } catch (error: any) {
     log.error('Portal download failed', { error: error.message });
-    res.status(500).json({ error: 'Failed to prepare download' });
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to prepare download' });
   }
 });
 
