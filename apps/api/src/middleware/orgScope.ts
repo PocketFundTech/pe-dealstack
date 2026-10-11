@@ -83,6 +83,9 @@ export async function orgMiddleware(
         if (newUser?.organizationId) {
           req.user.organizationId = newUser.organizationId;
         }
+        // Founder of a freshly created org is ADMIN; don't serve the stale
+        // metadata role (MEMBER) for the remainder of this first request.
+        if (newUser?.role) req.user.role = String(newUser.role);
       } catch (createErr) {
         log.error('Org middleware: auto-create user failed', createErr);
       }
