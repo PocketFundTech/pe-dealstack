@@ -60,28 +60,32 @@ export function ProviderCard({ provider, integration, busy, onConnect, onDisconn
 
   return (
     <div className="bg-white border border-border-subtle rounded-lg p-4 flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-1 items-center gap-3 min-w-0">
-          <div
-            className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
-            style={{ backgroundColor: "#E6EEF5", color: "#003366" }}
-          >
-            <span className="material-symbols-outlined">{provider.icon}</span>
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-text-main truncate">{provider.name}</div>
-            <div className="text-xs text-text-muted truncate">{provider.desc}</div>
-          </div>
+      {/* The status badge used to share this row with the icon+name, which at
+          the lg:grid-cols-3 breakpoint (~215px cards) squeezed the name down
+          to ~34px — "Microsoft 365" rendered as "Mi...". The badge now gets
+          its own row below so the name only competes with the icon. */}
+      <div className="flex items-center gap-3 min-w-0" data-testid="provider-name-row">
+        <div
+          className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+          style={{ backgroundColor: "#E6EEF5", color: "#003366" }}
+        >
+          <span className="material-symbols-outlined">{provider.icon}</span>
         </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-text-main truncate">{provider.name}</div>
+          <div className="text-xs text-text-muted truncate">{provider.desc}</div>
+        </div>
+      </div>
+      <div>
         {badge ? (
           <span
-            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold shrink-0"
+            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold"
             style={{ backgroundColor: badge.bg, color: badge.fg }}
           >
             {badge.label}
           </span>
         ) : (
-          <span className="text-xs text-text-muted shrink-0">Not connected</span>
+          <span className="text-xs text-text-muted">Not connected</span>
         )}
       </div>
 
