@@ -41,3 +41,20 @@ describe('classifyAIErrorObject — correctly classifies Anthropic credit exhaus
     expect(statusCode).toBe(503);
   });
 });
+
+describe('toAccountRejection (AI cost item E2)', () => {
+  it('returns an AIProviderUnavailableError only for credit / auth rejections', async () => {
+    const { toAccountRejection, AIProviderUnavailableError } = await import('../src/utils/aiErrors.js');
+    const credit = toAccountRejection(Object.assign(new Error('400 Your credit balance is too low'), { status: 400 }), 'Anthropic');
+    expect(credit).toBeInstanceOf(AIProviderUnavailableError);
+    expect(credit!.reason).toBe('quota');
+    expect(toAccountRejection({ status: 401, message: 'invalid x-api-key' }, 'Anthropic')!.reason).toBe('auth');
+    expect(toAccountRejection({ status: 429, error: { type: 'rate_limit_error' } }, 'Anthropic')).toBeNull();
+    expect(toAccountRejection({ status: 529 }, 'Anthropic')).toBeNull();
+    expect(toAccountRejection(new Error('Request timed out.'), 'Anthropic')).toBeNull();
+    // Already wrapped: passes through for quota/auth, null for transient reasons.
+    const wrappedQuota = new AIProviderUnavailableError('Anthropic', { reason: 'quota', detail: 'x' });
+    expect(toAccountRejection(wrappedQuota, 'Anthropic')).toBe(wrappedQuota);
+    expect(toAccountRejection(new AIProviderUnavailableError('Anthropic', { reason: 'rate_limit', detail: 'x' }), 'Anthropic')).toBeNull();
+  });
+});

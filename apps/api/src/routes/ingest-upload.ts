@@ -284,9 +284,11 @@ export async function runIngestFromBuffer(
 
     // INGEST_ENGINE=claude — native full-document read (whole PDF via the
     // Files API; full text for other formats). Returns the exact
-    // ExtractedDealData shape, so everything downstream is unchanged. Any
+    // ExtractedDealData shape, so everything downstream is unchanged. A
     // failure falls through to the legacy chain below — deal creation is
-    // never blocked by the new engine.
+    // never blocked by the new engine — except an out-of-credit / bad-key
+    // rejection, which throws AIProviderUnavailableError (503 below) rather
+    // than paying the legacy chain to fail the same way.
     if (!reusedExtraction && isClaudeIngestEnabled()) {
       const { readDealDocument, hasUsablePdfText } = await import('../services/extraction/claudeDealReader.js');
       aiData = await readDealDocument({

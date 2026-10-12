@@ -184,7 +184,14 @@ export async function extractWithClaude(
       });
     }
   }
-  return runExtraction(input, 'standard', signal);
+  try {
+    return await runExtraction(input, 'standard', signal);
+  } catch (err) {
+    // Same reason the container branch wraps it: the extract node fails the
+    // run with this message ("credits are exhausted", "API key rejected")
+    // instead of "Extraction failed: 400 {…}" plus a Sentry event.
+    throw toProviderUnavailable(err, 'Anthropic') ?? err;
+  }
 }
 
 async function runExtraction(
