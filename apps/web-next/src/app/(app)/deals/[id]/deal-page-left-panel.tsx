@@ -26,6 +26,7 @@ import { DealScorecardSection } from "./deal-scorecard-section";
 import { DealTeasers } from "./DealTeasers";
 import { DocRequestsPanel } from "./doc-requests-panel";
 import { DealModelPanel } from "./deal-model-panel";
+import { IndexDocumentsForAi } from "./deal-index-docs";
 
 // ---------------------------------------------------------------------------
 // Left panel — deal content (icon, title, stage pipeline, metadata, financial
@@ -196,6 +197,7 @@ export function DealPageLeftPanel({
               {/* Asking for documents belongs next to receiving them — and
                   above the list, so it's seen first (5 Oct testing, item 13). */}
               <DocRequestsPanel dealId={deal.id} />
+              <IndexDocumentsForAi dealId={deal.id} />
               <DocumentsTab
                 documents={documents}
                 uploading={uploading}
