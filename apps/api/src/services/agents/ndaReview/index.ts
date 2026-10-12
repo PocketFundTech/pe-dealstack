@@ -31,8 +31,37 @@ const NDA_REVIEW_TIMEOUT_MS = 60_000;
 /** Longest NDA text we send. Beyond this the doc isn't an NDA. */
 const MAX_NDA_CHARS = 120_000;
 
+// ─── Output budget ────────────────────────────────────────────────
+// Real reviews were landing right at the old 8000-token cap (two prod runs
+// billed ~16K output between them) — truncation risk on a structured-output
+// call, where a cut-off answer is unparseable JSON. Two levers:
+//
+// 1. The ANSWER is bounded by the length limits below (stated in the
+//    schema descriptions and the prompt — the structured-output validator
+//    rejects maxLength/maxItems, so they can't be hard schema constraints).
+//    Worst case ~16 playbook positions + MAX_UNMAPPED_FINDINGS findings at
+//    ~300 tokens each for a deviation (~100 for an ACCEPTABLE one) keeps a
+//    full review around 3-6K output tokens instead of 8K+.
+// 2. max_tokens leaves headroom ABOVE that: output_tokens also counts
+//    adaptive thinking at effort 'high', so the cap must cover thinking +
+//    answer. It is a ceiling, not a target — only tokens actually generated
+//    are billed. A run that still hits it fails loudly (NdaReviewError
+//    'TRUNCATED') rather than as a JSON.parse 500.
+export const NDA_REVIEW_MAX_TOKENS = 16_000;
+export const NDA_OUTPUT_LIMITS = {
+  /** Findings for clauses the playbook doesn't cover (clauseKey "unmapped"). */
+  maxUnmappedFindings: 4,
+  summaryWords: 60,
+  clauseTitleWords: 8,
+  quotedTextWords: 50,
+  whyItMattersWords: 35,
+  playbookPositionWords: 25,
+  suggestedLanguageWords: 120,
+} as const;
+const L = NDA_OUTPUT_LIMITS;
+
 export class NdaReviewError extends Error {
-  code: 'EMPTY_DOCUMENT' | 'TOO_LONG';
+  code: 'EMPTY_DOCUMENT' | 'TOO_LONG' | 'TRUNCATED' | 'INVALID_OUTPUT';
   status: number;
   constructor(message: string, code: NdaReviewError['code'], status = 400) {
     super(message);
@@ -69,20 +98,33 @@ const NDA_REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     riskLevel: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
-    summary: { type: 'string' },
+    summary: { type: 'string', description: `2-3 sentences, at most ${L.summaryWords} words.` },
     findings: {
       type: 'array',
+      description: `One per playbook position, plus at most ${L.maxUnmappedFindings} "unmapped" findings.`,
       items: {
         type: 'object',
         properties: {
           clauseKey: { type: 'string' },
-          clauseTitle: { type: 'string' },
+          clauseTitle: { type: 'string', description: `At most ${L.clauseTitleWords} words.` },
           status: { type: 'string', enum: ['MISSING', 'ACCEPTABLE', 'DEVIATION', 'DEAL_BREAKER'] },
           severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
-          quotedText: { type: 'string' },
-          whyItMatters: { type: 'string' },
-          playbookPosition: { type: 'string' },
-          suggestedLanguage: { type: 'string' },
+          quotedText: {
+            type: 'string',
+            description: `Shortest verbatim span that shows the point, at most ${L.quotedTextWords} words. Empty when MISSING.`,
+          },
+          whyItMatters: {
+            type: 'string',
+            description: `At most ${L.whyItMattersWords} words. One short sentence for ACCEPTABLE.`,
+          },
+          playbookPosition: {
+            type: 'string',
+            description: `Our position in at most ${L.playbookPositionWords} words. Empty for ACCEPTABLE.`,
+          },
+          suggestedLanguage: {
+            type: 'string',
+            description: `Paste-ready clause text, at most ${L.suggestedLanguageWords} words. Empty for ACCEPTABLE.`,
+          },
         },
         required: [
           'clauseKey', 'clauseTitle', 'status', 'severity',
@@ -105,7 +147,7 @@ Grounding rules — these are absolute:
 
 Coverage:
 - Produce exactly one finding per playbook position, using that position's key as clauseKey.
-- Additionally produce findings for clauses present in the NDA that the playbook does not address, using clauseKey "unmapped" — these are often where the surprises are.
+- Additionally produce findings for clauses present in the NDA that the playbook does not address, using clauseKey "unmapped" — these are often where the surprises are. At most ${L.maxUnmappedFindings} of these: only clauses that are unusual or adverse to the buyer, most material first. Skip ordinary boilerplate (counterparts, entire agreement, severability, headings).
 
 Classification:
 - "DEAL_BREAKER" only when the playbook marks that position dealBreaker AND the NDA violates it.
@@ -114,10 +156,13 @@ Classification:
 - "MISSING" when the NDA is silent on a position we care about.
 - severity reflects commercial impact on this buyer, not legal exotica.
 
-Output:
-- "suggestedLanguage" must be drafting-ready replacement text the reader can paste into a redline. Not a description of what to change — the actual clause. Use the playbook's fallbackLanguage where one is given and it fits. Leave it empty only for ACCEPTABLE findings.
-- "whyItMatters" is one or two plain sentences on the commercial consequence.
-- "summary" is 2-3 sentences a partner can read in ten seconds.
+Output — be brief; the reader scans this in 60 seconds. Hard length limits:
+- "suggestedLanguage" must be drafting-ready replacement text the reader can paste into a redline. Not a description of what to change — the actual clause, at most ${L.suggestedLanguageWords} words; replace only the offending sentence(s), not the whole section. Use the playbook's fallbackLanguage where one is given and it fits. Leave it empty for ACCEPTABLE findings.
+- "quotedText" is the shortest verbatim span that shows the point, at most ${L.quotedTextWords} words — never the whole clause when one sentence makes the point.
+- "whyItMatters" is one or two plain sentences on the commercial consequence, at most ${L.whyItMattersWords} words. For ACCEPTABLE findings, one short sentence.
+- "playbookPosition" states our position in at most ${L.playbookPositionWords} words. Leave it empty for ACCEPTABLE findings.
+- "clauseTitle" is at most ${L.clauseTitleWords} words.
+- "summary" is 2-3 sentences a partner can read in ten seconds, at most ${L.summaryWords} words.
 
 You are assisting with commercial review, not giving legal advice.`;
 
@@ -193,7 +238,7 @@ export async function reviewNda(input: ReviewNdaInput): Promise<NdaReview> {
     );
   });
 
-  let result: { text: string; model: string };
+  let result: { text: string; model: string; stopReason?: string | null; usage?: { outputTokens: number } };
   try {
     result = await Promise.race([
       trackedClaudeMessage({
@@ -202,7 +247,7 @@ export async function reviewNda(input: ReviewNdaInput): Promise<NdaReview> {
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userPrompt }],
         outputSchema: NDA_REVIEW_SCHEMA,
-        maxTokens: 8000,
+        maxTokens: NDA_REVIEW_MAX_TOKENS,
         // Legal review — keep full reasoning even though the chat role runs at medium.
         effort: 'high',
       }),
@@ -212,11 +257,43 @@ export async function reviewNda(input: ReviewNdaInput): Promise<NdaReview> {
     if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
-  const parsed = JSON.parse(result.text) as {
+  // A structured-output answer cut off at max_tokens is truncated JSON —
+  // never parse it, and never persist a partial review. Fail with a clear,
+  // retryable error instead of a JSON.parse 500.
+  if (result.stopReason === 'max_tokens') {
+    log.error('[ndaReview] output hit max_tokens — review truncated', undefined, {
+      dealId: input.dealId,
+      fileName: input.sourceFileName,
+      maxTokens: NDA_REVIEW_MAX_TOKENS,
+      outputTokens: result.usage?.outputTokens,
+      ndaChars: plainText.length,
+    });
+    throw new NdaReviewError(
+      'The review was cut off before it finished. Please try again.',
+      'TRUNCATED',
+      502,
+    );
+  }
+
+  let parsed: {
     riskLevel: NdaReview['riskLevel'];
     summary: string;
     findings: Array<Omit<NdaFinding, 'quoteVerified'>>;
   };
+  try {
+    parsed = JSON.parse(result.text);
+  } catch {
+    log.error('[ndaReview] model output was not valid JSON', undefined, {
+      dealId: input.dealId,
+      stopReason: result.stopReason,
+      textPrefix: String(result.text).slice(0, 120),
+    });
+    throw new NdaReviewError(
+      'The review came back incomplete. Please try again.',
+      'INVALID_OUTPUT',
+      502,
+    );
+  }
 
   // Grounding gate — before persistence, before display.
   const verified = verifyQuotes(parsed.findings ?? [], input.sourceHtml);

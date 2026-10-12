@@ -186,6 +186,59 @@ describe('reviewNda', () => {
     ).rejects.toMatchObject({ name: 'AIRefusalError' });
   });
 
+  it('budgets output: maxTokens with headroom, effort high, length limits in schema + prompt', async () => {
+    const { reviewNda, NDA_REVIEW_MAX_TOKENS, NDA_OUTPUT_LIMITS } = await loadEngine();
+    await reviewNda({ orgId: 'org-1', dealId: 'deal-1', sourceHtml: SOURCE_HTML, sourceFileName: 'nda.pdf' });
+
+    const call = trackedClaudeMessage.mock.calls[0][0];
+    expect(call.maxTokens).toBe(NDA_REVIEW_MAX_TOKENS);
+    expect(NDA_REVIEW_MAX_TOKENS).toBeGreaterThan(8000); // old cap that real reviews were hitting
+    expect(call.effort).toBe('high');
+
+    const item = call.outputSchema.properties.findings.items.properties;
+    expect(item.suggestedLanguage.description).toContain(`${NDA_OUTPUT_LIMITS.suggestedLanguageWords} words`);
+    expect(item.quotedText.description).toContain(`${NDA_OUTPUT_LIMITS.quotedTextWords} words`);
+    expect(item.whyItMatters.description).toContain(`${NDA_OUTPUT_LIMITS.whyItMattersWords} words`);
+    // Structured outputs reject string/array length keywords — limits live in descriptions.
+    expect(JSON.stringify(call.outputSchema)).not.toMatch(/maxLength|maxItems/);
+    // Every field the UI renders is still required.
+    expect(call.outputSchema.properties.findings.items.required).toEqual([
+      'clauseKey', 'clauseTitle', 'status', 'severity',
+      'quotedText', 'whyItMatters', 'playbookPosition', 'suggestedLanguage',
+    ]);
+    expect(call.system).toContain(`At most ${NDA_OUTPUT_LIMITS.maxUnmappedFindings} of these`);
+    expect(call.system).toContain(`at most ${NDA_OUTPUT_LIMITS.suggestedLanguageWords} words`);
+  });
+
+  it('fails clearly (TRUNCATED, 502) when the answer hits max_tokens — never parses or persists it', async () => {
+    trackedClaudeMessage.mockResolvedValue({
+      text: '{"riskLevel":"HIGH","summary":"Standstill and","findings":[{"clauseKey":"te',
+      model: 'claude-sonnet-5',
+      stopReason: 'max_tokens',
+      usage: { inputTokens: 9000, outputTokens: 16000 },
+    });
+    const { reviewNda, NdaReviewError } = await loadEngine();
+    const err = await reviewNda({
+      orgId: 'org-1', dealId: 'deal-1', sourceHtml: SOURCE_HTML, sourceFileName: 'nda.pdf',
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NdaReviewError);
+    expect(err).toMatchObject({ code: 'TRUNCATED', status: 502 });
+    expect(insertedReview).toBeNull();
+  });
+
+  it('turns unparseable output into INVALID_OUTPUT (502) instead of a JSON.parse 500', async () => {
+    trackedClaudeMessage.mockResolvedValue({
+      text: 'not json', model: 'claude-sonnet-5', stopReason: 'end_turn',
+      usage: { inputTokens: 1000, outputTokens: 10 },
+    });
+    const { reviewNda } = await loadEngine();
+    await expect(
+      reviewNda({ orgId: 'org-1', dealId: 'deal-1', sourceHtml: SOURCE_HTML, sourceFileName: 'nda.pdf' }),
+    ).rejects.toMatchObject({ name: 'NdaReviewError', code: 'INVALID_OUTPUT', status: 502 });
+    expect(insertedReview).toBeNull();
+  });
+
   it('rejects an empty document rather than reviewing nothing', async () => {
     const { reviewNda, NdaReviewError } = await loadEngine();
     await expect(
