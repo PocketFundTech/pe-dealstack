@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useTabletRail } from "./useTabletRail";
 import { Logo } from "./Logo";
 import { useUser } from "@/providers/UserProvider";
 import { NAV_ITEMS, type NavItem } from "@/lib/constants";
@@ -75,6 +76,10 @@ export function Sidebar() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setUserCollapsed(localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === "true");
   }, []);
+
+  // iPad portrait (768-1023px): start as an icon rail. The toggle still expands it.
+  const startRail = useCallback(() => setForceCollapsed(true), []);
+  useTabletRail(startRail);
 
   useEffect(() => {
     const onForce = (e: Event) => {

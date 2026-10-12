@@ -18,6 +18,17 @@ import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 
 const router = Router();
 
+/** True when `table` row `id` belongs to `orgId` (Company / User ownership check). */
+async function ownedByOrg(table: 'Company' | 'User', id: string, orgId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from(table)
+    .select('id')
+    .eq('id', id)
+    .eq('organizationId', orgId)
+    .single();
+  return !!data;
+}
+
 // POST /api/deals - Create new deal (requires DEAL_CREATE permission)
 router.post('/', requirePermission(PERMISSIONS.DEAL_CREATE), async (req, res) => {
   try {
@@ -25,6 +36,17 @@ router.post('/', requirePermission(PERMISSIONS.DEAL_CREATE), async (req, res) =>
     const data = createDealSchema.parse(req.body);
 
     let companyId = data.companyId;
+
+    // SECURITY: a body companyId / assignedTo must belong to the caller's org.
+    // A foreign companyId linked the deal to another org's Company (whose full
+    // row is embedded in every deal response); a foreign assignedTo leaked
+    // that user's name + email and routed this deal's emails to them.
+    if (companyId && !(await ownedByOrg('Company', companyId, orgId))) {
+      return res.status(400).json({ error: 'Invalid companyId' });
+    }
+    if (data.assignedTo && !(await ownedByOrg('User', data.assignedTo, orgId))) {
+      return res.status(400).json({ error: 'Invalid assignedTo' });
+    }
 
     // Create company if it doesn't exist
     if (!companyId && data.companyName) {
@@ -171,6 +193,11 @@ router.patch('/:id', async (req, res) => {
 
     if (fetchError || !existingDeal) {
       return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    // SECURITY: the assignee must be a user in the caller's org (null = unassign).
+    if (data.assignedTo && !(await ownedByOrg('User', data.assignedTo, orgId))) {
+      return res.status(400).json({ error: 'Invalid assignedTo' });
     }
 
     // Optimistic locking

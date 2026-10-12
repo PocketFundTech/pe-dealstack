@@ -315,3 +315,57 @@ describe('POST /api/deals/:dealId/documents — deal-field read model (INGEST_EN
     expect(extractDealDataFromText).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── Tenant isolation: body folderId must be a folder of THIS deal ─────────
+// A folderId from another org's data room used to be written straight onto
+// the new Document, planting the file in that org's VDR folder views and AI
+// folder insights (and echoing the foreign folder's name back).
+describe('POST /api/deals/:dealId/documents — folderId must belong to the deal', () => {
+  function mockFolderLookup(owningDeal: Record<string, string>) {
+    const base = mockSupabase.from.getMockImplementation()!;
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table !== 'Folder') return base(table);
+      const filters: Record<string, string> = {};
+      const chain: any = {
+        select: () => chain,
+        eq: (col: string, val: string) => { filters[col] = val; return chain; },
+        maybeSingle: async () => ({
+          data: owningDeal[filters.id] && owningDeal[filters.id] === filters.dealId ? { id: filters.id } : null,
+          error: null,
+        }),
+        single: async () => ({
+          data: owningDeal[filters.id] && owningDeal[filters.id] === filters.dealId ? { id: filters.id } : null,
+          error: null,
+        }),
+      };
+      return chain;
+    });
+  }
+
+  it('rejects a folderId from another deal and inserts no Document', async () => {
+    mockFolderLookup({ 'folder-other-org': 'deal-of-org-B' });
+    const insertSpy = vi.fn();
+    const base = mockSupabase.from.getMockImplementation()!;
+    mockSupabase.from.mockImplementation((table: string) => {
+      if (table === 'Document') return { insert: (...a: any[]) => { insertSpy(...a); return { select: () => ({ single: async () => ({ data: null }) }) }; } };
+      return base(table);
+    });
+    const { appPromise } = buildApp({ withAfterResponseHook: true });
+    const res = await request(await appPromise)
+      .post('/api/deals/deal-1/documents')
+      .field('folderId', 'folder-other-org')
+      .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(400);
+    expect(insertSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts a folderId that belongs to the same deal', async () => {
+    mockFolderLookup({ 'folder-1': 'deal-1' });
+    const { appPromise } = buildApp({ withAfterResponseHook: true });
+    const res = await request(await appPromise)
+      .post('/api/deals/deal-1/documents')
+      .field('folderId', 'folder-1')
+      .attach('file', pdfBuffer, { filename: 'cim.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+  });
+});

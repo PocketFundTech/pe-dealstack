@@ -24,8 +24,12 @@ const createShareSchema = z.object({
   includeFinancials: z.boolean().default(true),
   includeDocuments: z.boolean().default(true),
   includeMemos: z.boolean().default(true),
-  expiresInDays: z.number().int().positive().max(365).optional(),
+  // Omitted → DEFAULT_SHARE_EXPIRY_DAYS. `null` → never expires, and only
+  // when the owner explicitly picks "Never" (links used to default to never).
+  expiresInDays: z.number().int().positive().max(365).nullable().optional(),
 });
+
+export const DEFAULT_SHARE_EXPIRY_DAYS = 30;
 
 function portalBaseUrl(): string {
   return process.env.APP_URL || 'http://localhost:3002';
@@ -45,9 +49,8 @@ router.post('/:dealId/shares', async (req, res) => {
 
     const { label, invitedEmail, includeFinancials, includeDocuments, includeMemos, expiresInDays } = parsed.data;
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = expiresInDays
-      ? new Date(Date.now() + expiresInDays * 86_400_000).toISOString()
-      : null;
+    const days = expiresInDays === undefined ? DEFAULT_SHARE_EXPIRY_DAYS : expiresInDays;
+    const expiresAt = days ? new Date(Date.now() + days * 86_400_000).toISOString() : null;
 
     const { data: share, error } = await supabase
       .from('DealShare')

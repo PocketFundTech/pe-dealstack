@@ -220,6 +220,20 @@ router.patch('/documents/:id', async (req, res) => {
 
     const data = updateDocumentSchema.parse(req.body);
 
+    // SECURITY: moving a document is only allowed into a folder of its own
+    // deal — a foreign folderId planted the file in another org's data room.
+    if (data.folderId) {
+      const { data: folder } = await supabase
+        .from('Folder')
+        .select('id')
+        .eq('id', data.folderId)
+        .eq('dealId', docAccess.dealId)
+        .maybeSingle();
+      if (!folder) {
+        return res.status(400).json({ error: 'Invalid folderId' });
+      }
+    }
+
     // Add updatedAt timestamp
     const updateData: any = {
       ...data,

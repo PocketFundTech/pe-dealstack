@@ -77,6 +77,20 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       return res.status(404).json({ error: 'Deal not found' });
     }
 
+    // SECURITY: a client-supplied folderId must be a folder of THIS deal —
+    // otherwise the document lands in another deal's (or org's) data room.
+    if (req.body?.folderId) {
+      const { data: folder } = await supabase
+        .from('Folder')
+        .select('id')
+        .eq('id', req.body.folderId)
+        .eq('dealId', dealId)
+        .maybeSingle();
+      if (!folder) {
+        return res.status(400).json({ error: 'Invalid folderId' });
+      }
+    }
+
     // Accepts either multipart/form-data (legacy — multer populates
     // req.file) or a JSON body `{ storagePath, fileName, mimeType, size }`
     // pointing at a file already staged in Supabase Storage via

@@ -66,4 +66,24 @@ describe("ShareDealModal", () => {
       }));
     });
   });
+
+  it("defaults new links to expire in 30 days", async () => {
+    apiPost.mockResolvedValue({ share: { id: "s1" }, url: "u" });
+    render(<ShareDealModal dealId="deal-1" dealName="Neptune" onClose={() => {}} />);
+    expect((screen.getByLabelText("Link expiry") as HTMLSelectElement).value).toBe("30");
+    fireEvent.click(screen.getByText("Create link"));
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith("/deals/deal-1/shares", expect.objectContaining({ expiresInDays: 30 }));
+    });
+  });
+
+  it("sends an explicit never-expires choice as expiresInDays: null", async () => {
+    apiPost.mockResolvedValue({ share: { id: "s1" }, url: "u" });
+    render(<ShareDealModal dealId="deal-1" dealName="Neptune" onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("Link expiry"), { target: { value: "0" } });
+    fireEvent.click(screen.getByText("Create link"));
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith("/deals/deal-1/shares", expect.objectContaining({ expiresInDays: null }));
+    });
+  });
 });

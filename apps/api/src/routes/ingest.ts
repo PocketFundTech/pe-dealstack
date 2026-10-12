@@ -112,6 +112,7 @@ router.post('/:dealId/review', async (req, res) => {
       .from('Deal')
       .update(updates)
       .eq('id', dealId)
+      .eq('organizationId', orgId)
       .select()
       .single();
 
@@ -122,7 +123,9 @@ router.post('/:dealId/review', async (req, res) => {
       await supabase
         .from('Company')
         .update({ name: companyName, industry })
-        .eq('id', deal.companyId);
+        .eq('id', deal.companyId)
+        // SECURITY: never rename a Company outside the caller's org.
+        .eq('organizationId', orgId);
     }
 
     // Log activity

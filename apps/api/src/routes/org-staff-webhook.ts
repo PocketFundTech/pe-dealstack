@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
+import { isPrivateUrl } from '../utils/urlHelpers.js';
 import {
   logAuditEvent,
   AUDIT_ACTIONS,
@@ -18,6 +19,9 @@ const patchSchema = z
     staffAccessWebhookUrl: z
       .string()
       .url()
+      // The server POSTs a test event here immediately — refuse internal /
+      // cloud-metadata addresses (same rule as webhook-subscriptions).
+      .refine((u) => !isPrivateUrl(u), 'Webhook URLs cannot point to a private or internal network')
       .nullable()
       .or(z.literal(''))
       .transform((v) => (v === '' ? null : v))

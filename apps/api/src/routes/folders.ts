@@ -10,6 +10,17 @@ const router = Router();
 // Mount insights sub-router
 router.use('/', foldersInsightsRouter);
 
+/** True when folder `folderId` belongs to deal `dealId`. */
+async function folderInDeal(folderId: string, dealId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('Folder')
+    .select('id')
+    .eq('id', folderId)
+    .eq('dealId', dealId)
+    .maybeSingle();
+  return !!data;
+}
+
 // Validation schemas
 const createFolderSchema = z.object({
   dealId: z.string().uuid(),
@@ -164,6 +175,11 @@ router.post('/deals/:dealId/folders', async (req: Request, res: Response, next: 
 
     const folderData = validation.data;
 
+    // SECURITY: a parent folder must belong to the same deal.
+    if (folderData.parentId && !(await folderInDeal(folderData.parentId, dealId))) {
+      return res.status(400).json({ error: 'Invalid parentId' });
+    }
+
     // Get the max sortOrder for this deal if not specified
     if (folderData.sortOrder === undefined) {
       const { data: existing } = await supabase
@@ -208,6 +224,11 @@ router.patch('/folders/:id', async (req: Request, res: Response, next: NextFunct
         error: 'Validation failed',
         details: validation.error.errors
       });
+    }
+
+    // SECURITY: re-parenting is only allowed within the folder's own deal.
+    if (validation.data.parentId && !(await folderInDeal(validation.data.parentId, folderAccess.dealId))) {
+      return res.status(400).json({ error: 'Invalid parentId' });
     }
 
     const { data: folder, error } = await supabase

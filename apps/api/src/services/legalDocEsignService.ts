@@ -245,7 +245,9 @@ export async function sendLegalDocForSignature(
     .eq('organizationId', doc.organizationId);
   if (updateErr) {
     // The request is already out at Dropbox Sign — log loudly but don't fail
-    // the call. The webhook still carries the metadata to reconcile later.
+    // the call. NOTE: the completion webhook only trusts a signature_request_id
+    // stored here, so if this write failed the "signed" event will be ignored
+    // and the document must be reconciled by hand (id logged below).
     log.error('legalDocEsignService: failed to persist esign metadata', updateErr, {
       documentId: doc.id,
       signatureRequestId: result.signatureRequestId,
@@ -348,6 +350,22 @@ export async function handleDropboxSignEvent(event: DropboxSignEvent): Promise<v
     .maybeSingle();
   if (!row) {
     log.warn('legalDocEsignService: completion for unknown document', {
+      documentId,
+      signatureRequestId,
+    });
+    return;
+  }
+
+  // SECURITY: Dropbox Sign's event_hash only signs (event_time + event_type);
+  // the signature_request body is unauthenticated. Only act when this event's
+  // signature_request_id is the one we stored when WE sent this document —
+  // otherwise a replayed hash with a forged body could mark any org's
+  // document SIGNED and attach an attacker-controlled PDF.
+  const storedRequestId = (
+    (row as { metadata: Record<string, any> | null }).metadata?.esign as EsignMetadata | undefined
+  )?.signatureRequestId;
+  if (!storedRequestId || storedRequestId !== signatureRequestId) {
+    log.warn('legalDocEsignService: completion does not match stored signature request — ignoring', {
       documentId,
       signatureRequestId,
     });
