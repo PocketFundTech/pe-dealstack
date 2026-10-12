@@ -245,11 +245,12 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
         .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
       return !!updated;
     }
-    // A job where nothing was created or updated (e.g. every list call 401'd)
-    // is a failure, not an empty success.
+    // Nothing imported AND errors recorded (e.g. every list call 401'd) is a
+    // failure; nothing imported with no errors is just an empty portal.
     const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
+    const status = !anySucceeded && error ? 'failed' : 'completed';
     await supabase.from('ImportJob')
-      .update({ objectCounts: counts, currentObject: null, cursor: null, status: anySucceeded ? 'completed' : 'failed', error, finishedAt: new Date().toISOString() })
+      .update({ objectCounts: counts, currentObject: null, cursor: null, status, error, finishedAt: new Date().toISOString() })
       .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
     return false;
   }

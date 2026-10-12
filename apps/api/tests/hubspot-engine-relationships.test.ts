@@ -229,6 +229,12 @@ describe('files phase', () => {
     expect(lastJobUpdate()).toMatchObject({ status: 'completed', currentObject: null, error: 'files: skipped — scopes' });
   });
 
+  it('an empty portal with no errors ends completed', async () => {
+    drainFileQueue.mockResolvedValue({ done: true, note: null });
+    expect(await runImportBatch('job-1', 'tok')).toBe(false);
+    expect(lastJobUpdate()).toMatchObject({ status: 'completed', currentObject: null });
+  });
+
   it('ends as failed when nothing in the whole job succeeded', async () => {
     resolver = (op) => {
       if (op.table === 'ImportJob' && op.action === 'select') return { data: jobRow('files', { error: 'companies: not imported (401).' }) };
