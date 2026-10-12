@@ -258,4 +258,21 @@ describe("HubSpotPanel", () => {
     expect(screen.getByText("4 of 6 imported · 0 failed")).toBeInTheDocument();
     expect(screen.getByTestId("hubspot-files-skipped")).toHaveTextContent("2 skipped: not on a deal (1), too large (1)");
   });
+
+  it("an old job without a files row says it was not part of that import", async () => {
+    const job = {
+      ...RUNNING_JOB,
+      status: "completed",
+      currentObject: null,
+      objectCounts: { deals: { processed: 2, created: 2, updated: 0, failed: 0, total: 2 } },
+    };
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job });
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<HubSpotPanel onToast={() => {}} />);
+    expect(await screen.findByText("Not part of this import")).toBeInTheDocument();
+  });
 });

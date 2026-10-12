@@ -123,7 +123,7 @@ describe('deals phase — relationships', () => {
 
   it('matches the owner by email to an Avise user and counts it', async () => {
     await runImportBatch('job-1', 'tok', 'fill');
-    expect(applyDealOwner).toHaveBeenCalledWith({ dealId: 'deal-1', ownerUserId: 'user-ann', mode: 'fill' });
+    expect(applyDealOwner).toHaveBeenCalledWith({ dealId: 'deal-1', orgId: 'org-1', ownerUserId: 'user-ann', mode: 'fill' });
     expect((lastJobUpdate().objectCounts as Record<string, { ownersMatched?: number }>).deals.ownersMatched).toBe(1);
   });
 
@@ -182,9 +182,11 @@ describe('engagement phase — attachments', () => {
       associations: { deals: { results: [{ id: 'hs-deal' }] } },
     }] });
     await runImportBatch('job-1', 'tok');
-    const c = lastJobUpdate().objectCounts as Record<string, { failed: number }>;
+    const c = lastJobUpdate().objectCounts as Record<string, { failed: number; skipped?: number; reasons?: Record<string, number> }>;
     expect(c.notes.failed).toBe(0);
-    expect(c.files.failed).toBe(1);
+    expect(c.files.failed).toBe(0);
+    expect(c.files.skipped).toBe(1);
+    expect(c.files.reasons?.migration_pending).toBe(1);
   });
 
   it('after tasks, the job moves on to files (not completed)', async () => {

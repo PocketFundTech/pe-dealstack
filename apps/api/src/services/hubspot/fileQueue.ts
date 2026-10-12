@@ -71,6 +71,12 @@ type FileOutcome = { status: 'done'; documentId: string; created: boolean } | { 
 async function importOneFile(
   client: FileClient, row: { dealId: string; hubspotFileId: string }, uploadedBy: string | null,
 ): Promise<FileOutcome> {
+  // Already imported on an earlier run: don't re-download it.
+  const { data: existing } = await supabase
+    .from('Document').select('id').eq('dealId', row.dealId).eq('hubspotFileId', row.hubspotFileId).maybeSingle();
+  const existingId = (existing as { id?: string } | null)?.id;
+  if (existingId) return { status: 'done', documentId: existingId, created: false };
+
   const meta = await client.getFileMeta(row.hubspotFileId);
   if (!meta) return { status: 'skipped', reason: 'not_found' };
   const ext = meta.extension?.toLowerCase() ?? null;
@@ -125,7 +131,7 @@ export async function drainFileQueue(opts: {
   if (counts.total === undefined || counts.total === null) {
     const { count, error } = await supabase
       .from('HubSpotFileQueue').select('id', { count: 'exact', head: true }).eq('jobId', jobId);
-    if (error) return { done: true, note: MIGRATION_PENDING_NOTE };
+    if (error) return { done: true, note: counts.processed > 0 ? MIGRATION_PENDING_NOTE : null };
     // Already processed here = attachments skipped (no deal) or failed to queue.
     counts.total = (count ?? 0) + counts.processed;
   }
@@ -134,7 +140,7 @@ export async function drainFileQueue(opts: {
     .from('HubSpotFileQueue').select('id, dealId, hubspotFileId')
     .eq('jobId', jobId).eq('status', 'pending')
     .order('createdAt', { ascending: true }).limit(maxFiles);
-  if (error) return { done: true, note: MIGRATION_PENDING_NOTE };
+  if (error) return { done: true, note: counts.processed > 0 ? MIGRATION_PENDING_NOTE : null };
   const pending = (rows ?? []) as Array<{ id: string; dealId: string; hubspotFileId: string }>;
   if (pending.length === 0) return { done: true, note: null };
 

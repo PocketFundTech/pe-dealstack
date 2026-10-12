@@ -36,25 +36,30 @@ export type OwnerResult = 'set' | 'already' | 'kept_existing' | 'no_match';
  */
 export async function applyDealOwner(params: {
   dealId: string;
+  orgId: string;
   ownerUserId: string | null;
   mode: ImportMode;
 }): Promise<OwnerResult> {
-  const { dealId, ownerUserId, mode } = params;
+  const { dealId, orgId, ownerUserId, mode } = params;
   if (!ownerUserId) return 'no_match';
 
-  const { data: deal } = await supabase.from('Deal').select('assignedTo').eq('id', dealId).maybeSingle();
+  const { data: deal } = await supabase.from('Deal').select('assignedTo').eq('id', dealId).eq('organizationId', orgId).maybeSingle();
   const current = (deal as { assignedTo?: string | null } | null)?.assignedTo ?? null;
   if (current === ownerUserId) return 'already';
   if (current && mode === 'fill') return 'kept_existing';
 
   await supabase.from('Deal')
     .update({ assignedTo: ownerUserId, updatedAt: new Date().toISOString() })
-    .eq('id', dealId);
+    .eq('id', dealId)
+    .eq('organizationId', orgId);
 
   const { data: member } = await supabase
-    .from('DealTeamMember').select('id').eq('dealId', dealId).eq('userId', ownerUserId).maybeSingle();
-  if (!member) {
+    .from('DealTeamMember').select('id, role').eq('dealId', dealId).eq('userId', ownerUserId).maybeSingle();
+  const existing = member as { id: string; role?: string | null } | null;
+  if (!existing) {
     await supabase.from('DealTeamMember').insert({ dealId, userId: ownerUserId, role: 'LEAD' });
+  } else if (existing.role !== 'LEAD') {
+    await supabase.from('DealTeamMember').update({ role: 'LEAD' }).eq('id', existing.id);
   }
   return 'set';
 }

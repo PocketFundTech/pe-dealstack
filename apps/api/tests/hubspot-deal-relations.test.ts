@@ -44,19 +44,19 @@ describe('loadOrgUsersByEmail', () => {
 
 describe('applyDealOwner', () => {
   it('no matching user → no_match, no writes', async () => {
-    expect(await applyDealOwner({ dealId: 'd1', ownerUserId: null, mode: 'fill' })).toBe('no_match');
+    expect(await applyDealOwner({ dealId: 'd1', orgId: 'org-1', ownerUserId: null, mode: 'fill' })).toBe('no_match');
     expect(chain.calls).toHaveLength(0);
   });
 
   it('fill mode keeps an existing Lead Partner', async () => {
     resolver = (op) => (op.table === 'Deal' && op.action === 'select' ? { data: { assignedTo: 'someone-else' } } : undefined);
-    expect(await applyDealOwner({ dealId: 'd1', ownerUserId: 'u1', mode: 'fill' })).toBe('kept_existing');
+    expect(await applyDealOwner({ dealId: 'd1', orgId: 'org-1', ownerUserId: 'u1', mode: 'fill' })).toBe('kept_existing');
     expect(chain.calls.some((c) => c.action === 'update' || c.action === 'insert')).toBe(false);
   });
 
   it('already the Lead Partner → already, no writes', async () => {
     resolver = (op) => (op.table === 'Deal' && op.action === 'select' ? { data: { assignedTo: 'u1' } } : undefined);
-    expect(await applyDealOwner({ dealId: 'd1', ownerUserId: 'u1', mode: 'fill' })).toBe('already');
+    expect(await applyDealOwner({ dealId: 'd1', orgId: 'org-1', ownerUserId: 'u1', mode: 'fill' })).toBe('already');
     expect(chain.calls.some((c) => c.action === 'update')).toBe(false);
   });
 
@@ -66,7 +66,7 @@ describe('applyDealOwner', () => {
       if (op.table === 'DealTeamMember' && op.action === 'select') return { data: null };
       return undefined;
     };
-    expect(await applyDealOwner({ dealId: 'd1', ownerUserId: 'u1', mode: 'fill' })).toBe('set');
+    expect(await applyDealOwner({ dealId: 'd1', orgId: 'org-1', ownerUserId: 'u1', mode: 'fill' })).toBe('set');
     expect(chain.calls.find((c) => c.table === 'Deal' && c.action === 'update')?.payload).toMatchObject({ assignedTo: 'u1' });
     expect(chain.calls.find((c) => c.table === 'DealTeamMember' && c.action === 'insert')?.payload)
       .toEqual({ dealId: 'd1', userId: 'u1', role: 'LEAD' });
@@ -78,8 +78,24 @@ describe('applyDealOwner', () => {
       if (op.table === 'DealTeamMember' && op.action === 'select') return { data: { id: 'tm1' } };
       return undefined;
     };
-    expect(await applyDealOwner({ dealId: 'd1', ownerUserId: 'u1', mode: 'refresh' })).toBe('set');
+    expect(await applyDealOwner({ dealId: 'd1', orgId: 'org-1', ownerUserId: 'u1', mode: 'refresh' })).toBe('set');
     expect(chain.calls.some((c) => c.table === 'DealTeamMember' && c.action === 'insert')).toBe(false);
+  });
+});
+
+describe('applyDealOwner team role', () => {
+  it('promotes an existing MEMBER row to LEAD', async () => {
+    resolver = (op) => {
+      if (op.table === 'Deal' && op.action === 'select') return { data: { assignedTo: null } };
+      if (op.table === 'DealTeamMember' && op.action === 'select') return { data: { id: 'tm1', role: 'MEMBER' } };
+      return undefined;
+    };
+    expect(await applyDealOwner({ dealId: 'd1', orgId: 'org-1', ownerUserId: 'u1', mode: 'fill' })).toBe('set');
+    expect(chain.calls.find((c) => c.table === 'DealTeamMember' && c.action === 'update')?.payload).toEqual({ role: 'LEAD' });
+    expect(chain.calls.some((c) => c.table === 'DealTeamMember' && c.action === 'insert')).toBe(false);
+    for (const c of chain.calls.filter((x) => x.table === 'Deal')) {
+      expect(c.filters).toEqual(expect.arrayContaining([{ method: 'eq', args: ['organizationId', 'org-1'] }]));
+    }
   });
 });
 

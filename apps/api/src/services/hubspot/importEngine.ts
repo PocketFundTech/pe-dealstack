@@ -368,7 +368,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
             if (newLinks > 0) counts.deals.contactLinks = (counts.deals.contactLinks ?? 0) + newLinks;
 
             const ownerUserId = owner?.email ? (await orgUsersFor(job.organizationId)).get(owner.email.toLowerCase()) ?? null : null;
-            const ownerResult = await applyDealOwner({ dealId, ownerUserId, mode });
+            const ownerResult = await applyDealOwner({ dealId, orgId: job.organizationId, ownerUserId, mode });
             if (ownerResult === 'set' || ownerResult === 'already') {
               counts.deals.ownersMatched = (counts.deals.ownersMatched ?? 0) + 1;
             }
@@ -437,8 +437,7 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
             } else if (!(await enqueueAttachments({
               jobId, orgId: job.organizationId, dealIds: attachmentDealIds, fileIds: m.attachmentIds, engagementId: m.hubspotId,
             }))) {
-              counts.files.failed += m.attachmentIds.length;
-              counts.files.processed += m.attachmentIds.length;
+              skipWithReason(counts.files, 'migration_pending', m.attachmentIds.length);
             }
           } catch (err) {
             log.warn(`[hubspot] attachments on ${current} ${m.hubspotId} not queued: ${(err as Error).message}`);

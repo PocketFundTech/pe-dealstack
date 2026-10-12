@@ -55,6 +55,7 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   unsupported_type: "file type Avise doesn't accept",
   invalid_file: "failed file checks",
   not_found: "deleted in HubSpot",
+  migration_pending: "database migration pending",
 };
 
 function skipSummary(c: HubSpotJobCounts): string | null {
@@ -150,7 +151,7 @@ export function HubSpotImportProgress({ job, driving }: { job: HubSpotImportJob;
               <span className="text-text-main font-medium">
                 {c
                   ? `${fmt(imported(c))}${typeof t === "number" ? ` of ${fmt(t)}` : ""} imported · ${fmt(c.failed)} failed`
-                  : "—"}
+                  : obj === "files" ? "Not part of this import" : "—"}
               </span>
             </div>
             {obj === "deals" && (c?.matched ?? 0) > 0 && (

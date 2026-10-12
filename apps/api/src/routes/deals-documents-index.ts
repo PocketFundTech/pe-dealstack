@@ -13,7 +13,7 @@ const BATCH = 25;
 async function countPending(dealId: string): Promise<number> {
   const { count, error } = await supabase
     .from('Document').select('id', { count: 'exact', head: true })
-    .eq('dealId', dealId).not('extractedText', 'is', null).is('embeddingStatus', null);
+    .eq('dealId', dealId).not('extractedText', 'is', null).or('embeddingStatus.is.null,embeddingStatus.eq.pending');
   if (error) throw error;
   return count ?? 0;
 }
@@ -41,7 +41,7 @@ router.post('/:dealId/documents/index-pending', async (req: Request, res: Respon
     const { embedDocument } = await import('../rag.js');
     const { data, error } = await supabase
       .from('Document').select('id, extractedText')
-      .eq('dealId', dealId).not('extractedText', 'is', null).is('embeddingStatus', null)
+      .eq('dealId', dealId).not('extractedText', 'is', null).or('embeddingStatus.is.null,embeddingStatus.eq.pending')
       .order('createdAt', { ascending: true }).limit(BATCH);
     if (error) throw error;
 

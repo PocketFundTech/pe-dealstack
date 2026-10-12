@@ -28,7 +28,7 @@ describe('GET /api/deals/:dealId/documents/index-pending', () => {
     const op = chain.calls[0];
     expect(op.filters).toEqual(expect.arrayContaining([
       { method: 'eq', args: ['dealId', 'd1'] },
-      { method: 'is', args: ['embeddingStatus', null] },
+      { method: 'or', args: ['embeddingStatus.is.null,embeddingStatus.eq.pending'] },
     ]));
   });
 

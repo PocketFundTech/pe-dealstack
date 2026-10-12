@@ -88,9 +88,36 @@ describe('drainFileQueue', () => {
     expect(await drainFileQueue({ ...base, client: client(), counts: counters() })).toEqual({ done: true, note: null });
   });
 
-  it('reports a pending migration instead of failing', async () => {
+  it('reports a pending migration when attachments were seen', async () => {
     resolver = () => ({ error: { message: 'relation does not exist' } });
-    expect(await drainFileQueue({ ...base, client: client(), counts: counters() })).toEqual({ done: true, note: MIGRATION_PENDING_NOTE });
+    const c = counters();
+    skipWithReason(c, 'no_deal', 1);
+    expect(await drainFileQueue({ ...base, client: client(), counts: c })).toEqual({ done: true, note: MIGRATION_PENDING_NOTE });
+  });
+
+  it('a missing queue table with no attachments seen is a clean finish, not a note', async () => {
+    resolver = () => ({ error: { message: 'relation does not exist' } });
+    expect(await drainFileQueue({ ...base, client: client(), counts: counters() })).toEqual({ done: true, note: null });
+  });
+
+  it('a file already imported for the deal makes no HubSpot calls', async () => {
+    resolver = (op) => {
+      if (op.table === 'HubSpotFileQueue' && op.selectOptions?.head) return { count: 1 };
+      if (op.table === 'HubSpotFileQueue' && op.action === 'select') return { data: [{ id: 'q1', dealId: 'd1', hubspotFileId: 'f1' }] };
+      if (op.table === 'Document' && op.action === 'select') return { data: { id: 'doc-existing' } };
+      return undefined;
+    };
+    const cl = client();
+    const c = counters();
+    await drainFileQueue({ ...base, client: cl, counts: c });
+    const k = cl as unknown as Record<string, { mock: { calls: unknown[] } }>;
+    expect(k.getFileMeta.mock.calls).toHaveLength(0);
+    expect(k.getFileSignedUrl.mock.calls).toHaveLength(0);
+    expect(k.downloadSignedUrl.mock.calls).toHaveLength(0);
+    expect(addFileToDeal).not.toHaveBeenCalled();
+    expect(c).toMatchObject({ updated: 1, created: 0, processed: 1 });
+    expect(chain.calls.find((x) => x.table === 'HubSpotFileQueue' && x.action === 'update')?.payload)
+      .toMatchObject({ status: 'done', documentId: 'doc-existing' });
   });
 
   it('skips files over the size limit before downloading', async () => {
