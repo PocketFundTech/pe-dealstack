@@ -6,6 +6,8 @@ import compression from 'compression';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import dealsRouter from './routes/deals.js';
+import dealsContactsRouter from './routes/deals-contacts.js';
+import dealsDocumentsIndexRouter from './routes/deals-documents-index.js';
 import companiesRouter from './routes/companies.js';
 import activitiesRouter from './routes/activities.js';
 import documentsRouter from './routes/documents.js';
@@ -444,6 +446,9 @@ app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforce
 // generic dealsRouter so it matches before deals-list.ts's /:id catch-all.
 app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsTeasersRouter);
 app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsScorecardRouter);
+// Deal contacts + on-demand document indexing: literal /:id/... shapes, mounted before the generic dealsRouter.
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsContactsRouter);
+app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsDocumentsIndexRouter);
 app.use('/api/deals', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, dealsRouter);
 app.use('/api/firm-teaser', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmTeaserRouter);
 app.use('/api/firm-context', authMiddleware, enforceApiKeyScope, orgMiddleware, enforceOrgMfaMiddleware, usageContextMiddleware, staffAccessLogger, firmContextRouter);
