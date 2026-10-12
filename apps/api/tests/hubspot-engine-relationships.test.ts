@@ -217,8 +217,26 @@ describe('files phase', () => {
   });
 
   it('completes the job when the queue is empty and keeps the note', async () => {
+    const counts = freshCounts() as Record<string, { created: number }>;
+    counts.companies.created = 1;
+    resolver = (op) => {
+      if (op.table === 'ImportJob' && op.action === 'select') return { data: jobRow('files', { objectCounts: counts }) };
+      if (op.table === 'ImportJob' && op.action === 'update') return { data: { id: 'job-1' } };
+      return undefined;
+    };
     drainFileQueue.mockResolvedValue({ done: true, note: 'files: skipped — scopes' });
     expect(await runImportBatch('job-1', 'tok')).toBe(false);
     expect(lastJobUpdate()).toMatchObject({ status: 'completed', currentObject: null, error: 'files: skipped — scopes' });
+  });
+
+  it('ends as failed when nothing in the whole job succeeded', async () => {
+    resolver = (op) => {
+      if (op.table === 'ImportJob' && op.action === 'select') return { data: jobRow('files', { error: 'companies: not imported (401).' }) };
+      if (op.table === 'ImportJob' && op.action === 'update') return { data: { id: 'job-1' } };
+      return undefined;
+    };
+    drainFileQueue.mockResolvedValue({ done: true, note: null });
+    expect(await runImportBatch('job-1', 'tok')).toBe(false);
+    expect(lastJobUpdate()).toMatchObject({ status: 'failed', currentObject: null, error: 'companies: not imported (401).' });
   });
 });

@@ -77,10 +77,6 @@ async function loadJob(jobId: string) {
   };
 }
 
-async function saveJob(jobId: string, patch: Record<string, unknown>) {
-  await supabase.from('ImportJob').update(patch).eq('id', jobId);
-}
-
 /**
  * Resolve a HubSpot company id → the local Company name we imported for it.
  * Contacts/Deals reference companies by HubSpot id; we store the name as free text.
@@ -249,8 +245,11 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
         .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
       return !!updated;
     }
+    // A job where nothing was created or updated (e.g. every list call 401'd)
+    // is a failure, not an empty success.
+    const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
     await supabase.from('ImportJob')
-      .update({ objectCounts: counts, currentObject: null, cursor: null, status: 'completed', error, finishedAt: new Date().toISOString() })
+      .update({ objectCounts: counts, currentObject: null, cursor: null, status: anySucceeded ? 'completed' : 'failed', error, finishedAt: new Date().toISOString() })
       .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
     return false;
   }
@@ -277,34 +276,15 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     const note = job.cursor
       ? `${current}: stopped after ${done} records (${shortError(err)}). Run the import again to pick up the rest — imported records won't be duplicated.`
       : `${current}: not imported (${shortError(err)}).`;
-    const errorSoFar = job.error ? `${job.error} | ${note}` : note;
-    // A fetch failure for ONE object type (e.g. a missing HubSpot scope for
-    // engagement objects — some portals can't even grant those scopes) must
-    // not discard records already imported for prior object types. Skip this
-    // object type and advance to the next one, mirroring the same
-    // cancel-guarded advance used below for a normally-drained page. Only
-    // fail the whole job if there's no next object type left to try.
-    const nextObject = PHASES[objectIndex + 1] ?? null;
-    if (nextObject) {
-      const { data: updated } = await supabase.from('ImportJob')
-        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: errorSoFar })
-        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
-      if (!updated) return false; // cancelled mid-batch
-      return true;
-    }
-    // No more object types to try. If anything else in this job succeeded
-    // (e.g. Companies/Contacts/Deals imported fine but every engagement
-    // type 403'd on a missing scope), don't report the whole job as
-    // failed — that hides a mostly-successful import behind one object
-    // type's error. The error message is preserved either way.
-    const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
-    await saveJob(jobId, {
-      status: anySucceeded ? 'completed' : 'failed',
-      currentObject: null, cursor: null,
-      error: errorSoFar,
-      finishedAt: new Date().toISOString(),
-    });
-    return false;
+    const errorSoFar = mergeNotes(job.error ?? null, [...notes, note]);
+    // A fetch failure for ONE object type (e.g. a missing HubSpot scope) must
+    // not discard records already imported. Skip it and advance. The job always
+    // ends in the files phase, which decides completed/failed.
+    const nextObject = PHASES[objectIndex + 1]!;
+    const { data: updated } = await supabase.from('ImportJob')
+      .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: errorSoFar })
+      .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+    return !!updated; // null = cancelled mid-batch
   }
 
   for (const rec of page.results) {
@@ -483,20 +463,12 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     if (!updated) return false; // cancelled mid-batch
     return true;
   }
-  const nextObject = PHASES[objectIndex + 1] ?? null;
-  if (nextObject) {
-    const { data: updated } = await supabase.from('ImportJob')
-      .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: mergeNotes(job.error ?? null, notes) })
-      .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
-    if (!updated) return false; // cancelled mid-batch
-    return true;
-  }
+  // The job always ends in the files phase, which decides completed/failed.
+  const nextObject = PHASES[objectIndex + 1]!;
   const { data: updated } = await supabase.from('ImportJob')
-    .update({ objectCounts: counts, currentObject: null, cursor: null, status: 'completed', error: mergeNotes(job.error ?? null, notes), finishedAt: new Date().toISOString() })
+    .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: mergeNotes(job.error ?? null, notes) })
     .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
-  // If updated is null the job was cancelled — status already 'cancelled', return false.
-  void updated;
-  return false;
+  return !!updated; // null = cancelled mid-batch
 }
 
 /** HubSpot error bodies are long JSON; keep the status line for the UI. */
