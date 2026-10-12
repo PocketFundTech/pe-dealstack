@@ -127,7 +127,7 @@ Evaluate:
 
 Target tone: ${state.tone || 'professional'}`),
     new HumanMessage(`Analyze this email's tone:\n\nSubject: ${state.subject}\n\n${state.draft}`),
-  ], { maxTokens: 800, temperature: 0.2, label: 'emailDrafter.tone' });
+  ], { maxTokens: 800, temperature: 0.2, label: 'emailDrafter.tone', tier: 'simple' });
 
   return {
     toneScore: result.score,
@@ -155,7 +155,7 @@ Check for:
 - Missing confidentiality notice when needed
 - Inappropriate commitments or promises`),
     new HumanMessage(`Check this email for compliance:\n\nPurpose: ${state.purpose}\nSubject: ${state.subject}\n\n${state.draft}`),
-  ], { maxTokens: 800, temperature: 0.1, label: 'emailDrafter.compliance' });
+  ], { maxTokens: 800, temperature: 0.1, label: 'emailDrafter.compliance', tier: 'simple' });
 
   return {
     isCompliant: result.isCompliant,

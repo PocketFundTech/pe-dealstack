@@ -17,6 +17,7 @@ import {
   isAnthropicEnabled,
 } from '../utils/aiModels.js';
 import { getChatAnthropicAuthFields } from './anthropic.js';
+import { getModelConfig } from './ai/models.js';
 import { recordUsageEvent } from './usage/trackedLLM.js';
 import { enforceUserGate, UserBlockedError } from './usage/enforcement.js';
 import { withCircuitBreaker } from './aiCircuitBreaker.js';
@@ -200,7 +201,7 @@ function shouldFallbackToOpenAI(err: any): boolean {
 interface FallbackEntry {
   /** Lazy builder for the fallback — only invoked on first need. */
   build: () => BaseChatModel;
-  /** Human-readable name used in logs (e.g. 'claude-sonnet-4-6#fallback-key'). */
+  /** Human-readable name used in logs (e.g. 'claude-sonnet-5#anthropic-fallback-key'). */
   name: string;
 }
 
@@ -319,13 +320,77 @@ const MODELS = {
     extraction: 'gemini-1.5-pro',
   },
   anthropic: {
-    // Claude Sonnet 4.6 — current tier-1 reasoning model (knowledge cutoff Jan 2026).
-    chat: process.env.LLM_CHAT_MODEL || 'claude-sonnet-4-6',
+    // Claude Sonnet 5 — tier-1 model for the legacy LangChain path ($2/$10 per
+    // MTok vs Sonnet 4.6's $3/$15). Same model the new-stack 'chat' role uses
+    // (services/ai/models.ts). Roll back with LLM_CHAT_MODEL=claude-sonnet-4-6.
+    chat: process.env.LLM_CHAT_MODEL || 'claude-sonnet-5',
     // Claude Haiku 4.5 — fast/cheap option. Use the dated alias for stability.
     fast: process.env.LLM_FAST_MODEL || 'claude-haiku-4-5-20251001',
-    extraction: 'claude-sonnet-4-6',
+    // Deal-from-email/URL extraction, list-import mapping, etc. Separate env
+    // override so extraction can be rolled back independently of chat.
+    extraction: process.env.LLM_EXTRACTION_MODEL || 'claude-sonnet-5',
   },
 } as const;
+
+/**
+ * Model for the "simple task" tier on the Anthropic path (contact email
+ * summaries, follow-up suggestions, email tone/compliance checks). Reuses the
+ * new-stack 'fast' role (AI_FAST_MODEL env, default claude-haiku-4-5) so there
+ * is one knob for "the cheap Claude model".
+ */
+function simpleTaskAnthropicModel(): string {
+  return getModelConfig('fast').model;
+}
+
+/** Tier for getChatModel / invokeStructured. 'simple' = Haiku on Anthropic. */
+export type LLMTier = 'chat' | 'simple';
+
+/**
+ * Resolve the model for a tier. The 'simple' tier only changes the model
+ * when the chat provider is Anthropic; OpenAI/Gemini primaries keep their
+ * chat model so non-Anthropic deployments behave exactly as before.
+ */
+function resolveChatTierModel(provider: LLMProvider, tier: LLMTier): string {
+  if (tier === 'simple' && provider === 'anthropic') return simpleTaskAnthropicModel();
+  return MODELS[provider].chat;
+}
+
+// Models that reject non-default sampling params (temperature/top_p/top_k →
+// 400; @langchain/anthropic also throws locally before sending). Mirrors
+// ADAPTIVE_ONLY_MODEL_PREFIXES in @langchain/anthropic's utils/params.
+const NO_SAMPLING_PARAM_PREFIXES = [
+  'claude-sonnet-5',
+  'claude-opus-4-7',
+  'claude-opus-4-8',
+  'claude-opus-5',
+  'claude-fable-5',
+  'claude-mythos-5',
+];
+// Models that run (adaptive) thinking when `thinking` is omitted but still
+// ACCEPT an explicit { type: 'disabled' }. We disable it on the legacy path:
+//   - withStructuredOutput(method: 'functionCalling') forces tool_choice,
+//     which is rejected while thinking is on;
+//   - callers pass small maxTokens budgets (220-3000) sized for a
+//     non-thinking model — thinking tokens would eat them and truncate;
+//   - keeps output parity with the Sonnet 4.6 behaviour these prompts were
+//     written for.
+// Exact ids only: Sonnet 5.5 / Opus 5.5 / Fable reject an explicit disable.
+const THINKING_DISABLE_OK = new Set(['claude-sonnet-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-opus-5']);
+
+/**
+ * Request-shaping fields for ChatAnthropic so the legacy LangChain path never
+ * sends params the target model rejects. Exported for tests.
+ */
+export function anthropicRequestShape(
+  model: string,
+  temperature: number,
+): { temperature?: number; thinking?: { type: 'disabled' } } {
+  const noSampling = NO_SAMPLING_PARAM_PREFIXES.some((p) => model.startsWith(p));
+  return {
+    ...(noSampling ? {} : { temperature }),
+    ...(THINKING_DISABLE_OK.has(model) ? { thinking: { type: 'disabled' as const } } : {}),
+  };
+}
 
 // ─── Factory Functions ─────────────────────────────────────────────
 
@@ -403,7 +468,7 @@ function createAnthropicModel(
   }
   return new ChatAnthropic({
     model,
-    temperature,
+    ...anthropicRequestShape(model, temperature),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...authFields,
     ...(callbacks && callbacks.length > 0 ? { callbacks } : {}),
@@ -474,10 +539,10 @@ function buildTier1AnthropicFallback(
   operation: string,
   temperature: number,
   maxTokens: number,
+  modelName: string = MODELS.anthropic.chat,
 ): { model: BaseChatModel; modelName: string } | null {
   const fallbackKey = process.env.ANTHROPIC_API_KEY_FALLBACK;
   if (!fallbackKey) return null;
-  const modelName = MODELS.anthropic.chat;
   const callbacks = [makeUsageHandler(operation, modelName, 'anthropic')];
   // Use the same model + temperature/maxTokens as primary; only the key differs.
   const raw = createAnthropicModel(modelName, temperature, maxTokens, callbacks, fallbackKey);
@@ -502,13 +567,16 @@ function buildTier1FallbackChain(
   temperature: number,
   maxTokens: number,
   primary: LLMProvider = 'anthropic',
+  /** Claude model for the secondary-key fallback (same model as the primary
+   *  on an Anthropic primary; MODELS.anthropic.chat otherwise). */
+  anthropicModel: string = MODELS.anthropic.chat,
 ): FallbackEntry[] {
   const chain: FallbackEntry[] = [];
   if (process.env.ANTHROPIC_API_KEY_FALLBACK) {
     chain.push({
-      name: `claude-sonnet-4-6#anthropic-fallback-key`,
+      name: `${anthropicModel}#anthropic-fallback-key`,
       build: () => {
-        const built = buildTier1AnthropicFallback(operation, temperature, maxTokens);
+        const built = buildTier1AnthropicFallback(operation, temperature, maxTokens, anthropicModel);
         if (!built) throw new Error('Anthropic fallback unavailable (ANTHROPIC_API_KEY_FALLBACK missing at build time)');
         return built.model;
       },
@@ -527,12 +595,21 @@ function buildTier1FallbackChain(
   return chain;
 }
 
-/** Primary chat model — Claude Sonnet 4.5 (Anthropic direct) by default,
+/** Primary chat model — Claude Sonnet 5 (Anthropic direct) by default,
  *  with transparent OpenAI fallback when Anthropic returns credit/rate/
- *  auth/overload errors (see wrapWithFallback). */
-export function getChatModel(temperature = 0.7, maxTokens = 1500, operation?: string): BaseChatModel {
+ *  auth/overload errors (see wrapWithFallback).
+ *
+ *  `opts.tier: 'simple'` picks Claude Haiku 4.5 instead on an Anthropic
+ *  primary — for short, well-specified tasks (summaries, classification-ish
+ *  checks) where Sonnet's extra quality isn't needed. */
+export function getChatModel(
+  temperature = 0.7,
+  maxTokens = 1500,
+  operation?: string,
+  opts?: { tier?: LLMTier },
+): BaseChatModel {
   const provider = config.chatProvider;
-  const modelName = MODELS[provider].chat;
+  const modelName = resolveChatTierModel(provider, opts?.tier ?? 'chat');
   if (!operation) {
     log.warn('getChatModel called without operation label — usage will not be tracked');
     return createModel(provider, modelName, temperature, maxTokens);
@@ -544,10 +621,21 @@ export function getChatModel(temperature = 0.7, maxTokens = 1500, operation?: st
   // (secondary Anthropic key, or OpenAI direct behind an Anthropic primary).
   // Wrap = patch .invoke; no cost when never triggered.
   if (provider === 'anthropic' || provider === 'openai') {
-    const chain = buildTier1FallbackChain(operation, temperature, maxTokens, provider);
+    const chain = buildTier1FallbackChain(
+      operation,
+      temperature,
+      maxTokens,
+      provider,
+      provider === 'anthropic' ? modelName : MODELS.anthropic.chat,
+    );
     if (chain.length > 0) return wrapWithFallback(tracked, chain, operation);
   }
   return tracked;
+}
+
+/** Name of the model getChatModel() resolves to (for response labels). */
+export function getChatModelName(tier: LLMTier = 'chat'): string {
+  return resolveChatTierModel(config.chatProvider, tier);
 }
 
 /** Fast/cheap model — GPT-4.1-mini (OpenAI/OpenRouter) for sentiment, classification. */
@@ -576,7 +664,13 @@ export function getExtractionModel(maxTokens = 3000, operation?: string): BaseCh
   const model = createModel(provider, modelName, 0.1, maxTokens, callbacks);
   const tracked = trackModel(model, operation, modelName);
   if (provider === 'anthropic' || provider === 'openai') {
-    const chain = buildTier1FallbackChain(operation, 0.1, maxTokens, provider);
+    const chain = buildTier1FallbackChain(
+      operation,
+      0.1,
+      maxTokens,
+      provider,
+      provider === 'anthropic' ? modelName : MODELS.anthropic.chat,
+    );
     if (chain.length > 0) return wrapWithFallback(tracked, chain, operation);
   }
   return tracked;
@@ -611,7 +705,7 @@ function describeAIError(err: any): Record<string, unknown> {
 export async function invokeStructured<T extends z.ZodTypeAny>(
   schema: T,
   messages: BaseMessage[],
-  opts?: { maxTokens?: number; temperature?: number; label?: string }
+  opts?: { maxTokens?: number; temperature?: number; label?: string; tier?: LLMTier }
 ): Promise<z.infer<T>> {
   const maxTokens = opts?.maxTokens ?? 2000;
   const temperature = opts?.temperature ?? 0.1;
@@ -619,7 +713,11 @@ export async function invokeStructured<T extends z.ZodTypeAny>(
   // Construct primary directly so caller's temperature is honoured. Using
   // getExtractionModel would hardcode 0.1, which is wrong for emails / meeting
   // briefs / signal analysis where higher variance is desirable.
-  const primaryName = MODELS[config.chatProvider].extraction;
+  // tier 'simple' → Haiku on an Anthropic primary (see getChatModel).
+  const primaryName =
+    opts?.tier === 'simple' && config.chatProvider === 'anthropic'
+      ? simpleTaskAnthropicModel()
+      : MODELS[config.chatProvider].extraction;
   const primaryProvider = providerFor(config.chatProvider);
   // method: 'functionCalling' avoids OpenAI's strict json_schema response_format,
   // which Claude (via OpenRouter or direct) historically rejected. Tool use is
@@ -640,7 +738,7 @@ export async function invokeStructured<T extends z.ZodTypeAny>(
       name: `${primaryName}#anthropic-fallback-key`,
       tags: ['anthropic-fallback'],
       build: () => {
-        const built = buildTier1AnthropicFallback(label, temperature, maxTokens);
+        const built = buildTier1AnthropicFallback(label, temperature, maxTokens, primaryName);
         if (!built) throw new Error('Anthropic fallback unavailable');
         return built.model;
       },
