@@ -266,6 +266,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       numPages = local.numPages;
       extractionStatus = local.status;
       log.info('Local text extraction finished', { documentName, status: local.status, textLength: extractedText?.length ?? 0 });
+      if (local.status === 'failed') log.warn('PDF extraction failed', { documentName });
     }
 
     // Whether there's LLM-dependent work left to do once the Document row

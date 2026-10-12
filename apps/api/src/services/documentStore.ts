@@ -148,7 +148,12 @@ export async function addFileToDeal(input: AddFileInput): Promise<AddFileResult>
   if (same) {
     const row = same as { id: string; hubspotFileId?: string | null };
     if (hubspotFileId && !row.hubspotFileId) {
-      await supabase.from('Document').update({ hubspotFileId }).eq('id', row.id);
+      const { error } = await supabase.from('Document').update({ hubspotFileId }).eq('id', row.id);
+      if (error) {
+        log.warn('Could not link HubSpot file to existing document', {
+          documentId: row.id, hubspotFileId, error: (error as { message?: string }).message,
+        });
+      }
     }
     return { outcome: 'existing', documentId: row.id };
   }
