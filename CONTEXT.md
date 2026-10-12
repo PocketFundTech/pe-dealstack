@@ -28,6 +28,7 @@ Everything that needs an outside account (AI, Google, Microsoft, Resend, Supabas
 [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 
 ## Open PRs (newest first)
+- **feat/hubspot-relationships-files:** the HubSpot import now brings deal contacts, owners → Lead Partner, the Primary company and files attached to deals (no AI; "Index N documents for AI" button). It also fixes the panel's misleading "disconnected" state (audit B12). It needs the migration and scopes listed below.
 - **#208** QA report 6 Oct — memo, UI, branding fixes.
 - **#207** "Generate teasers" button in the deal's empty state (goes with #206).
 - **#204** Granola could never connect (`validateKey` hit a nonexistent endpoint) — merge soon.
@@ -55,6 +56,10 @@ All migrations from #174 / #178 / #200 have been run. Still check [`docs/PENDING
 for the #183 period-key backfill + unique index (founder runs; the app works before and after).
 
 ## Waiting on the founder / ops
+- HubSpot relationships + files:
+  1. Run `apps/api/hubspot-relationships-files-migration.sql`.
+  2. Add `crm.objects.owners.read`, `files` and `files.ui_hidden.read` to the HubSpot Private App.
+  3. Re-run the import with Overwrite on.
 - Top up Anthropic **and** OpenAI; delete the misspelled `Antropic_api_avise` Vercel var.
 - Vercel env for Google (above); Microsoft (`MS_*`), Dropbox Sign key, Kondo API docs.
 - Email: Resend domain (SPF/DKIM/DMARC) for app email; **Supabase custom SMTP before real sign-ups** — the built-in sender

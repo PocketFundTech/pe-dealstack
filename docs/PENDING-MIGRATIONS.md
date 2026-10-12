@@ -1,3 +1,27 @@
+# ⏳ `hubspot-relationships-files-migration.sql` (2026-10-11) — PENDING (founder runs)
+
+HubSpot import brings over files attached to deals. Adds the `HubSpotFileQueue` table (deny-all RLS) and
+`Document.hubspotFileId`. Idempotent. Before it runs, imports still complete; the files row says
+"database migration pending".
+
+| # | File | Adds | Run? |
+|---|---|---|---|
+| 1 | `apps/api/hubspot-relationships-files-migration.sql` | File queue + `Document.hubspotFileId` | ⏳ |
+
+Verify (expect 3 rows, `rls_enabled = true` on the table row):
+```sql
+select 'table' as what, c.relname as name, c.relrowsecurity as rls_enabled
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relname = 'HubSpotFileQueue'
+union all
+select 'column', column_name, null from information_schema.columns
+ where table_name = 'Document' and column_name = 'hubspotFileId'
+union all
+select 'index', indexname, null from pg_indexes where indexname = 'idx_document_deal_hubspotfile';
+```
+
+---
+
 # ✅ QA batch 2 migrations (2026-10-02) — RUN AND VERIFIED 2026-10-02
 
 Both are idempotent. The code works before and after each one runs.

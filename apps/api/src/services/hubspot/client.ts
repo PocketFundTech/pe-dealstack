@@ -1,4 +1,4 @@
-import type { HubSpotRecord, HubSpotObjectType } from './types.js';
+import type { HubSpotRecord, HubSpotObjectType, HubSpotOwner, HubSpotFileMeta } from './types.js';
 import { log } from '../../utils/logger.js';
 
 const BASE = 'https://api.hubapi.com';
@@ -14,6 +14,10 @@ const MAX_RETRIES = 5;
  * clears within ~10s anyway.
  */
 const MAX_BACKOFF_MS = 10_000;
+// A hung HubSpot socket must not hold the serverless function.
+const REQUEST_TIMEOUT_MS = 15_000;
+
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export const MAX_PROPERTIES = 250;
 
@@ -37,13 +41,13 @@ export const STANDARD_PROPERTIES: Record<HubSpotObjectType, string[]> = {
   ],
   deals: [
     'dealname', 'amount', 'dealstage', 'pipeline', 'description',
-    'closedate', 'createdate', 'dealtype', 'hs_deal_stage_probability',
+    'closedate', 'createdate', 'dealtype', 'hs_deal_stage_probability', 'hubspot_owner_id',
   ],
-  notes: ['hs_note_body', 'hs_timestamp'],
-  calls: ['hs_call_title', 'hs_call_body', 'hs_timestamp', 'hs_call_duration', 'hs_call_direction'],
-  meetings: ['hs_meeting_title', 'hs_meeting_body', 'hs_meeting_start_time', 'hs_meeting_end_time', 'hs_meeting_outcome', 'hs_timestamp'],
-  emails: ['hs_email_subject', 'hs_email_text', 'hs_timestamp', 'hs_email_direction'],
-  tasks: ['hs_task_subject', 'hs_task_body', 'hs_timestamp', 'hs_task_status', 'hs_task_priority'],
+  notes: ['hs_note_body', 'hs_timestamp', 'hs_attachment_ids'],
+  calls: ['hs_call_title', 'hs_call_body', 'hs_timestamp', 'hs_call_duration', 'hs_call_direction', 'hs_attachment_ids'],
+  meetings: ['hs_meeting_title', 'hs_meeting_body', 'hs_meeting_start_time', 'hs_meeting_end_time', 'hs_meeting_outcome', 'hs_timestamp', 'hs_attachment_ids'],
+  emails: ['hs_email_subject', 'hs_email_text', 'hs_timestamp', 'hs_email_direction', 'hs_attachment_ids'],
+  tasks: ['hs_task_subject', 'hs_task_body', 'hs_timestamp', 'hs_task_status', 'hs_task_priority', 'hs_attachment_ids'],
 };
 
 /** Object types whose company association we resolve via the associations API. */
@@ -62,6 +66,21 @@ export interface TokenValidation {
   category: string | null; // HubSpot error category, e.g. MISSING_SCOPES / INVALID_AUTHENTICATION
 }
 
+/**
+ * HubSpot refused a call for lack of a scope (401/403). Optional parts of the
+ * import (owners, files) catch this and skip themselves with a note naming
+ * `scopes`, instead of failing the import.
+ */
+export class HubSpotScopeError extends Error {
+  readonly name = 'HubSpotScopeError';
+  constructor(readonly scopes: string, readonly status: number) {
+    super(`HubSpot ${status}: missing scope(s) ${scopes}`);
+  }
+}
+
+const OWNER_SCOPES = 'crm.objects.owners.read';
+const FILE_SCOPES = 'files, files.ui_hidden.read';
+
 export class HubSpotClient {
   constructor(private token: string) {}
 
@@ -71,6 +90,7 @@ export class HubSpotClient {
       try {
         res = await fetch(url, {
           headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
       } catch (err) {
         // Network blip (reset / DNS / timeout). Used to end the whole object
@@ -194,7 +214,10 @@ export class HubSpotClient {
     const params = new URLSearchParams({ limit: String(opts.limit ?? 100) });
     const props = opts.properties && opts.properties.length ? opts.properties : STANDARD_PROPERTIES[object];
     params.set('properties', props.join(','));
-    if (COMPANY_ASSOCIATED.includes(object)) params.set('associations', 'companies');
+    // Deals also need their contacts (deal↔contact links). Contacts only need
+    // their company.
+    if (object === 'deals') params.set('associations', 'companies,contacts');
+    else if (COMPANY_ASSOCIATED.includes(object)) params.set('associations', 'companies');
     // Also fetch deal associations: engagements with no resolvable contact
     // fall back to the deal's activity feed rather than being dropped.
     if (CONTACT_ASSOCIATED.includes(object)) params.set('associations', 'contacts,deals');
@@ -209,5 +232,62 @@ export class HubSpotClient {
       results: data.results ?? [],
       nextCursor: data.paging?.next?.after ?? null,
     };
+  }
+
+  /** Every owner (HubSpot user) in the portal. */
+  async listOwners(): Promise<HubSpotOwner[]> {
+    const out: HubSpotOwner[] = [];
+    let after: string | null = null;
+    do {
+      const params = new URLSearchParams({ limit: '100' });
+      if (after) params.set('after', after);
+      const res = await this.requestWithBackoff(`${BASE}/crm/v3/owners?${params.toString()}`);
+      if (res.status === 401 || res.status === 403) throw new HubSpotScopeError(OWNER_SCOPES, res.status);
+      if (!res.ok) throw new Error(`HubSpot owners list failed: ${res.status} ${await res.text()}`);
+      const data = (await res.json()) as {
+        results?: Array<{ id: string; email?: string | null; firstName?: string | null; lastName?: string | null }>;
+        paging?: { next?: { after?: string } };
+      };
+      for (const o of data.results ?? []) {
+        const name = [o.firstName, o.lastName].filter((p) => p && p.trim()).join(' ').trim();
+        out.push({ id: String(o.id), email: o.email || null, name: name || null });
+      }
+      after = data.paging?.next?.after ?? null;
+    } while (after);
+    return out;
+  }
+
+  /** File metadata, or null when HubSpot no longer has the file. */
+  async getFileMeta(fileId: string): Promise<HubSpotFileMeta | null> {
+    const res = await this.requestWithBackoff(`${BASE}/files/v3/files/${encodeURIComponent(fileId)}`);
+    if (res.status === 401 || res.status === 403) throw new HubSpotScopeError(FILE_SCOPES, res.status);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`HubSpot file ${fileId} lookup failed: ${res.status}`);
+    const f = (await res.json()) as { id: string; name?: string; extension?: string | null; size?: number | null };
+    return { id: String(f.id), name: f.name || `hubspot-file-${fileId}`, extension: f.extension || null, size: f.size ?? null };
+  }
+
+  /** A short-lived download URL for a file (CRM attachments are "hidden" files). */
+  async getFileSignedUrl(fileId: string): Promise<string> {
+    const res = await this.requestWithBackoff(`${BASE}/files/v3/files/${encodeURIComponent(fileId)}/signed-url`);
+    if (res.status === 401 || res.status === 403) throw new HubSpotScopeError(FILE_SCOPES, res.status);
+    if (!res.ok) throw new Error(`HubSpot signed URL for ${fileId} failed: ${res.status}`);
+    const data = (await res.json()) as { url?: string };
+    if (!data.url) throw new Error(`HubSpot returned no signed URL for ${fileId}`);
+    return data.url;
+  }
+
+  /** Download a signed URL. No Authorization header: the URL itself is the credential. */
+  async downloadSignedUrl(url: string, maxBytes: number): Promise<Buffer | null> {
+    // A stalled CDN must not hold the serverless function until its hard limit.
+    const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`File download failed: ${res.status}`);
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel();
+      return null;
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return buffer.length > maxBytes ? null : buffer;
   }
 }

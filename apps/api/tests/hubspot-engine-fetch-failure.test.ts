@@ -21,6 +21,11 @@ vi.mock('../src/services/hubspot/dedup.js', () => ({
 }));
 vi.mock('../src/services/hubspot/mappers.js', () => ({ mapCompany: vi.fn(), mapContact: vi.fn(), mapDeal: vi.fn() }));
 
+vi.mock('../src/services/hubspot/fileQueue.js', async (orig) => {
+  const real = await orig<typeof import('../src/services/hubspot/fileQueue.js')>();
+  return { ...real, drainFileQueue: vi.fn().mockResolvedValue({ done: true, note: null }) };
+});
+
 import { runImportBatch, resetStageLabelCache } from '../src/services/hubspot/importEngine.js';
 
 function makeChain(overrides: Record<string, unknown> = {}) {
@@ -31,6 +36,26 @@ function makeChain(overrides: Record<string, unknown> = {}) {
   };
   return Object.assign(base, overrides);
 }
+
+/**
+ * Second batch: the job is now in the files phase (empty queue). Feeds back the
+ * counts/error the first batch saved and returns the files phase's final update.
+ */
+async function finishInFilesPhase(jobId: string, saved: { objectCounts: unknown; error?: string | null }) {
+  const jobChain = makeChain({
+    maybeSingle: vi.fn().mockResolvedValue({
+      data: { id: jobId, organizationId: 'org-A', status: 'running', objectCounts: saved.objectCounts, currentObject: 'files', cursor: null, error: saved.error ?? null },
+    }),
+  });
+  const finishChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: jobId } }) });
+  let calls = 0;
+  mockFrom.mockImplementation(() => (++calls === 1 ? jobChain : finishChain));
+  expect(await runImportBatch(jobId, 'tok')).toBe(false);
+  const updates = (finishChain.update as ReturnType<typeof vi.fn>).mock.calls;
+  return updates[updates.length - 1][0] as Record<string, unknown>;
+}
+const savedBy = (chain: Record<string, unknown>) =>
+  (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as { objectCounts: unknown; error?: string | null };
 
 describe('runImportBatch — per-object-type fetch failure handling', () => {
   beforeEach(() => {
@@ -92,7 +117,7 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
         data: { id: 'job-2', organizationId: 'org-A', status: 'running', objectCounts: {}, currentObject: 'tasks', cursor: null },
       }),
     });
-    const failChain = makeChain();
+    const failChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job' } }) });
 
     let importJobCalls = 0;
     mockFrom.mockImplementation(() => {
@@ -104,8 +129,13 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
 
     const result = await runImportBatch('job-2', 'tok');
 
-    expect(result).toBe(false);
-    expect(failChain.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    // 'tasks' is no longer last: the job advances to the files phase.
+    expect(result).toBe(true);
+    expect(failChain.update).toHaveBeenCalledWith(expect.objectContaining({ currentObject: 'files', status: 'running' }));
+    // Nothing succeeded anywhere: the files phase ends the job as failed.
+    const final = await finishInFilesPhase('job-2', savedBy(failChain));
+    expect(final).toMatchObject({ status: 'failed', currentObject: null });
+    expect(String(final.error)).toContain('MISSING_SCOPES');
   });
 
   it('preserves already-accumulated counts for prior object types when skipping', async () => {
@@ -144,7 +174,7 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
         },
       }),
     });
-    const finishChain = makeChain();
+    const finishChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job' } }) });
 
     let importJobCalls = 0;
     mockFrom.mockImplementation(() => {
@@ -156,11 +186,14 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
 
     const result = await runImportBatch('job-4', 'tok');
 
-    expect(result).toBe(false);
+    expect(result).toBe(true);
     expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'completed',
+      currentObject: 'files', status: 'running',
       error: expect.stringContaining('MISSING_SCOPES'),
     }));
+    const final = await finishInFilesPhase('job-4', savedBy(finishChain));
+    expect(final).toMatchObject({ status: 'completed', currentObject: null });
+    expect(String(final.error)).toContain('MISSING_SCOPES');
   });
 
   it('still marks the job failed when the last object type fails and nothing else succeeded', async () => {
@@ -172,7 +205,7 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
         },
       }),
     });
-    const finishChain = makeChain();
+    const finishChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job' } }) });
 
     let importJobCalls = 0;
     mockFrom.mockImplementation(() => {
@@ -184,8 +217,10 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
 
     const result = await runImportBatch('job-5', 'tok');
 
-    expect(result).toBe(false);
-    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    expect(result).toBe(true);
+    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ currentObject: 'files', status: 'running' }));    const final = await finishInFilesPhase('job-5', savedBy(finishChain));
+    expect(final).toMatchObject({ status: 'failed' });
+    expect(String(final.error)).toContain('MISSING_SCOPES');
   });
 
   it('marks the job failed, not completed, when a type processed records but every write failed', async () => {
@@ -198,7 +233,7 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
         },
       }),
     });
-    const finishChain = makeChain();
+    const finishChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job' } }) });
 
     let importJobCalls = 0;
     mockFrom.mockImplementation(() => {
@@ -210,8 +245,9 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
 
     const result = await runImportBatch('job-6', 'tok');
 
-    expect(result).toBe(false);
-    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    expect(result).toBe(true);
+    expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({ currentObject: 'files', status: 'running' }));    const final = await finishInFilesPhase('job-6', savedBy(finishChain));
+    expect(final).toMatchObject({ status: 'failed' });
   });
 
   it('clears currentObject and cursor on the terminal branch, whether the job ends completed or failed', async () => {
@@ -224,7 +260,7 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
         },
       }),
     });
-    const finishChain = makeChain();
+    const finishChain = makeChain({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'job' } }) });
 
     let importJobCalls = 0;
     mockFrom.mockImplementation(() => {
@@ -237,8 +273,12 @@ describe('runImportBatch — per-object-type fetch failure handling', () => {
     await runImportBatch('job-7', 'tok');
 
     expect(finishChain.update).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'completed', currentObject: null, cursor: null,
+      status: 'running', currentObject: 'files', cursor: null,
     }));
+    // The files phase's terminal update clears currentObject and cursor.
+    expect(await finishInFilesPhase('job-7', savedBy(finishChain))).toMatchObject({
+      status: 'completed', currentObject: null, cursor: null,
+    });
   });
 });
 

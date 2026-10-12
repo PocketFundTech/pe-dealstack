@@ -19,6 +19,12 @@ export interface HubSpotJobCounts {
   total?: number | null;
   /** Of `updated`: existing Avise records linked instead of duplicated. Absent on older jobs. */
   matched?: number;
+  /** Deals: new deal↔contact links. */
+  contactLinks?: number;
+  /** Deals: deals whose HubSpot owner is their Avise Lead Partner. */
+  ownersMatched?: number;
+  /** Why records were skipped, e.g. { no_deal: 2 }. */
+  reasons?: Record<string, number>;
 }
 
 export interface HubSpotImportJob {
@@ -35,12 +41,31 @@ interface HistoryJob extends HubSpotImportJob {
   startedByName: string | null;
 }
 
-export const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "meetings", "emails", "tasks"] as const;
+export const HUBSPOT_OBJECTS = ["companies", "contacts", "deals", "notes", "calls", "meetings", "emails", "tasks", "files"] as const;
 
 /** Wait this long before showing an estimate, so it isn't based on one batch. */
 const MIN_SAMPLE_MS = 20_000;
 
 const fmt = (n: number) => n.toLocaleString();
+
+const SKIP_REASON_LABELS: Record<string, string> = {
+  no_deal: "not on a deal",
+  too_large: "too large",
+  missing_scope: "missing HubSpot scope",
+  unsupported_type: "file type Avise doesn't accept",
+  invalid_file: "failed file checks",
+  not_found: "deleted in HubSpot",
+  migration_pending: "database migration pending",
+};
+
+function skipSummary(c: HubSpotJobCounts): string | null {
+  const skipped = c.skipped ?? 0;
+  if (skipped <= 0) return null;
+  const parts = Object.entries(c.reasons ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([r, n]) => `${SKIP_REASON_LABELS[r] ?? r} (${fmt(n)})`);
+  return `${fmt(skipped)} skipped${parts.length ? `: ${parts.join(", ")}` : ""}`;
+}
 
 function imported(c: HubSpotJobCounts | undefined): number {
   return c ? c.created + c.updated : 0;
@@ -126,13 +151,21 @@ export function HubSpotImportProgress({ job, driving }: { job: HubSpotImportJob;
               <span className="text-text-main font-medium">
                 {c
                   ? `${fmt(imported(c))}${typeof t === "number" ? ` of ${fmt(t)}` : ""} imported · ${fmt(c.failed)} failed`
-                  : "—"}
+                  : obj === "files" ? "Not part of this import" : "—"}
               </span>
             </div>
             {obj === "deals" && (c?.matched ?? 0) > 0 && (
               <p className="text-[11px] text-text-muted" data-testid="hubspot-deals-matched">
                 {fmt(c!.matched!)} linked to deals already in Avise
               </p>
+            )}
+            {obj === "deals" && ((c?.contactLinks ?? 0) > 0 || (c?.ownersMatched ?? 0) > 0) && (
+              <p className="text-[11px] text-text-muted" data-testid="hubspot-deals-relations">
+                {fmt(c?.contactLinks ?? 0)} contacts linked · {fmt(c?.ownersMatched ?? 0)} owners matched as Lead Partner
+              </p>
+            )}
+            {obj === "files" && c && skipSummary(c) && (
+              <p className="text-[11px] text-text-muted" data-testid="hubspot-files-skipped">{skipSummary(c)}</p>
             )}
             {isCurrent && objPct !== null && (
               <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-gray-200">

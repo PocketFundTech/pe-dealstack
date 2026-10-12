@@ -1,15 +1,19 @@
 import { supabase } from '../../supabase.js';
 import { log } from '../../utils/logger.js';
-import { HubSpotClient } from './client.js';
+import { HubSpotClient, HubSpotScopeError } from './client.js';
 import { mapCompany, mapContact, mapDeal } from './mappers.js';
 import { mapEngagement } from './engagementMappers.js';
 import { upsertByHubspotId, upsertContactInteractionByHubspotId, upsertDealActivityByHubspotId, type ImportMode, type RecordUpsertResult } from './dedup.js';
 import { escapeIlike } from './ilike.js';
 import { loadLiveDealIndex, normaliseCompanyName, type DealMatch } from '../dealDuplicates.js';
-import type { EngagementType, HubSpotObjectType } from './types.js';
+import { linkDealContacts, loadOrgUsersByEmail, applyDealOwner, ownerLabel } from './dealRelations.js';
+import { enqueueAttachments, drainFileQueue, skipWithReason, mergeNotes } from './fileQueue.js';
+import type { EngagementType, HubSpotObjectType, HubSpotOwner, ImportCounters, ImportPhase } from './types.js';
 
-const ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals', 'notes', 'calls', 'meetings', 'emails', 'tasks'];
-const ENGAGEMENT_TYPES: EngagementType[] = ['notes', 'calls', 'meetings', 'emails', 'tasks'];
+/** HubSpot objects, in import order. Companies first: contacts and deals reference them. */
+const HUBSPOT_ORDER: HubSpotObjectType[] = ['companies', 'contacts', 'deals', 'notes', 'calls', 'meetings', 'emails', 'tasks'];
+/** Every phase of a job: the HubSpot objects, then downloading queued files. */
+const PHASES: ImportPhase[] = [...HUBSPOT_ORDER, 'files'];
 const BATCH = 100;
 
 /**
@@ -35,22 +39,16 @@ const DEAL_ACTIVITY_META: Record<EngagementType, { type: string; fallbackTitle: 
  */
 const stageLabelCache = new Map<string, Record<string, string>>();
 
+/** HubSpot owners per job (null = unavailable, e.g. missing scope). Same lifetime as stageLabelCache. */
+const ownerCache = new Map<string, Map<string, HubSpotOwner> | null>();
+
 /** Test-only: clear the cache between test cases. */
 export function resetStageLabelCache(): void {
   stageLabelCache.clear();
+  ownerCache.clear();
 }
 
-interface Counters {
-  processed: number; created: number; updated: number; failed: number; skipped: number;
-  /** Records HubSpot says this object has (for "X of Y" progress); null if unknown. */
-  total?: number | null;
-  /**
-   * Of `updated`, how many were existing Avise rows that no HubSpot record
-   * owned yet and were linked rather than duplicated (for deals: the deal a
-   * CIM upload already created). Absent on jobs stored before this existed.
-   */
-  matched?: number;
-}
+type Counters = ImportCounters;
 const emptyCounters = (): Counters => ({ processed: 0, created: 0, updated: 0, failed: 0, skipped: 0 });
 
 /** Count an upsert outcome; a `linked` row is an update that is also `matched`. */
@@ -75,12 +73,8 @@ async function loadJob(jobId: string) {
   return data as null | {
     id: string; organizationId: string; status: string;
     objectCounts: Record<string, Counters>; currentObject: string | null; cursor: string | null;
-    error?: string | null;
+    error?: string | null; startedBy?: string | null;
   };
-}
-
-async function saveJob(jobId: string, patch: Record<string, unknown>) {
-  await supabase.from('ImportJob').update(patch).eq('id', jobId);
 }
 
 /**
@@ -127,7 +121,7 @@ export async function runImportBatch(jobId: string, token: string, mode: ImportM
   const more = await runImportBatchInner(jobId, token, mode);
   // `false` means the job is done (completed/failed/cancelled) — no further
   // batches will use this jobId's cached stage labels.
-  if (!more) stageLabelCache.delete(jobId);
+  if (!more) { stageLabelCache.delete(jobId); ownerCache.delete(jobId); }
   return more;
 }
 
@@ -138,7 +132,9 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
 
   const client = new HubSpotClient(token);
   const counts = { ...job.objectCounts };
-  ORDER.forEach((o) => { if (!counts[o]) counts[o] = emptyCounters(); });
+  PHASES.forEach((o) => { if (!counts[o]) counts[o] = emptyCounters(); });
+  /** Messages for the job (missing scopes etc.), merged into ImportJob.error when saving. */
+  const notes: string[] = [];
 
   // Deals in a batch commonly share a company — a portfolio CRM has far
   // fewer companies than deals. Cache both lookups per batch so a shared
@@ -195,10 +191,34 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     return id;
   }
 
+  // HubSpot owners, once per job. A missing scope skips owner matching with a
+  // note; the rest of the import carries on.
+  async function ownersFor(): Promise<Map<string, HubSpotOwner>> {
+    if (ownerCache.has(jobId)) return ownerCache.get(jobId) ?? new Map();
+    try {
+      const map = new Map((await client.listOwners()).map((o) => [o.id, o] as const));
+      ownerCache.set(jobId, map);
+      return map;
+    } catch (err) {
+      ownerCache.set(jobId, null);
+      notes.push(err instanceof HubSpotScopeError
+        ? `deal owners: skipped — your HubSpot token is missing the ${err.scopes} scope. Add it to the Private App to fill in Lead Partners.`
+        : `deal owners: not loaded (${shortError(err)}).`);
+      return new Map();
+    }
+  }
+
+  // Avise users by email, once per batch, for owner → Lead Partner matching.
+  let orgUsers: Promise<Map<string, string>> | null = null;
+  function orgUsersFor(orgId: string) {
+    orgUsers ??= loadOrgUsersByEmail(orgId);
+    return orgUsers;
+  }
+
   // Totals for every object, fetched once per job (null = unknown, not
   // re-fetched), so the panel can show "X of Y" and an ETA from the start
   // instead of an open-ended counter (6 Oct testing: "users feel lost").
-  const missingTotals = ORDER.filter((o) => counts[o].total === undefined);
+  const missingTotals = HUBSPOT_ORDER.filter((o) => counts[o].total === undefined);
   // One at a time: HubSpot's search API has its own low rate limit (a few
   // requests/second), and firing all eight at once 429'd some of them, so
   // companies and deals showed no total (7 Oct testing).
@@ -208,9 +228,32 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     counts[o] = { ...counts[o], total };
   }
 
-  // Pick the current object (first not-yet-finished in ORDER).
-  const current = (job.currentObject as HubSpotObjectType) ?? ORDER[0];
-  const objectIndex = ORDER.indexOf(current);
+  // Pick the current object (first not-yet-finished in PHASES).
+  const current = (job.currentObject as ImportPhase) ?? PHASES[0];
+  const objectIndex = PHASES.indexOf(current);
+
+  // Final phase: download files queued during the engagement phases.
+  if (current === 'files') {
+    const { done, note } = await drainFileQueue({
+      jobId, orgId: job.organizationId, client, uploadedBy: job.startedBy ?? null, counts: counts.files,
+    });
+    if (note) notes.push(note);
+    const error = mergeNotes(job.error ?? null, notes);
+    if (!done) {
+      const { data: updated } = await supabase.from('ImportJob')
+        .update({ objectCounts: counts, currentObject: 'files', cursor: null, status: 'running', error })
+        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+      return !!updated;
+    }
+    // Nothing imported AND errors recorded (e.g. every list call 401'd) is a
+    // failure; nothing imported with no errors is just an empty portal.
+    const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
+    const status = !anySucceeded && error ? 'failed' : 'completed';
+    await supabase.from('ImportJob')
+      .update({ objectCounts: counts, currentObject: null, cursor: null, status, error, finishedAt: new Date().toISOString() })
+      .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+    return false;
+  }
 
   let page;
   let stageLabels: Record<string, string> = {};
@@ -234,34 +277,15 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
     const note = job.cursor
       ? `${current}: stopped after ${done} records (${shortError(err)}). Run the import again to pick up the rest — imported records won't be duplicated.`
       : `${current}: not imported (${shortError(err)}).`;
-    const errorSoFar = job.error ? `${job.error} | ${note}` : note;
-    // A fetch failure for ONE object type (e.g. a missing HubSpot scope for
-    // engagement objects — some portals can't even grant those scopes) must
-    // not discard records already imported for prior object types. Skip this
-    // object type and advance to the next one, mirroring the same
-    // cancel-guarded advance used below for a normally-drained page. Only
-    // fail the whole job if there's no next object type left to try.
-    const nextObject = ORDER[objectIndex + 1] ?? null;
-    if (nextObject) {
-      const { data: updated } = await supabase.from('ImportJob')
-        .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: errorSoFar })
-        .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
-      if (!updated) return false; // cancelled mid-batch
-      return true;
-    }
-    // No more object types to try. If anything else in this job succeeded
-    // (e.g. Companies/Contacts/Deals imported fine but every engagement
-    // type 403'd on a missing scope), don't report the whole job as
-    // failed — that hides a mostly-successful import behind one object
-    // type's error. The error message is preserved either way.
-    const anySucceeded = Object.values(counts).some((c) => c.created + c.updated > 0);
-    await saveJob(jobId, {
-      status: anySucceeded ? 'completed' : 'failed',
-      currentObject: null, cursor: null,
-      error: errorSoFar,
-      finishedAt: new Date().toISOString(),
-    });
-    return false;
+    const errorSoFar = mergeNotes(job.error ?? null, [...notes, note]);
+    // A fetch failure for ONE object type (e.g. a missing HubSpot scope) must
+    // not discard records already imported. Skip it and advance. The job always
+    // ends in the files phase, which decides completed/failed.
+    const nextObject = PHASES[objectIndex + 1]!;
+    const { data: updated } = await supabase.from('ImportJob')
+      .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: errorSoFar })
+      .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
+    return !!updated; // null = cancelled mid-batch
   }
 
   for (const rec of page.results) {
@@ -308,12 +332,21 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
         // the hubspotId first and only adopts the row while it's unlinked.
         const matchKey = dealMatchKey(companyName);
         const candidate = matchKey ? (await unlinkedDealIndex(job.organizationId)).get(matchKey) ?? null : null;
+        // Owner (readable) and the deal's other companies go on the HubSpot card.
+        const owner = m.ownerHubspotId ? (await ownersFor()).get(m.ownerHubspotId) ?? null : null;
+        const otherCompanyNames = await Promise.all(m.otherCompanyHubspotIds.map(async (hsId) =>
+          (await companyNameForHubspotIdCached(job.organizationId, hsId)) ?? `HubSpot company ${hsId}`));
+        const hubspotProperties = {
+          ...m.hubspotProperties,
+          ...(owner ? { hubspot_owner: ownerLabel(owner) } : {}),
+          ...(otherCompanyNames.length ? { associated_companies: otherCompanyNames.join(', ') } : {}),
+        };
         const res = await upsertByHubspotId('Deal', job.organizationId, m.hubspotId, {
           name: m.name, companyId, dealSize: m.dealSize, description: m.description,
           // Omit when unmapped: Deal.stage is NOT NULL and a null would either
           // fail the write or reset the deal to the INITIAL_REVIEW default.
           ...(m.stage ? { stage: m.stage } : {}),
-          customFields: m.customFields, hubspotProperties: m.hubspotProperties,
+          customFields: m.customFields, hubspotProperties,
         }, { column: 'name', value: m.name, adoptId: candidate?.id ?? null }, mode);
         tally(counts.deals, res);
         if (res === 'linked' && candidate) {
@@ -321,6 +354,27 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
           // deal name are both indexed).
           const index = await unlinkedDealIndex(job.organizationId);
           for (const [k, v] of index) if (v.id === candidate.id) index.delete(k);
+        }
+
+        // Contacts on the deal and owner → Lead Partner. These need the Avise
+        // deal id, and a failure here must not count the deal itself as failed.
+        try {
+          const dealId = await dealIdForHubspotId(job.organizationId, m.hubspotId);
+          if (dealId) {
+            const contactIds = (await Promise.all(
+              m.contactHubspotIds.map((hsId) => contactIdForHubspotIdCached(job.organizationId, hsId)),
+            )).filter((id): id is string => id !== null);
+            const newLinks = await linkDealContacts(dealId, contactIds);
+            if (newLinks > 0) counts.deals.contactLinks = (counts.deals.contactLinks ?? 0) + newLinks;
+
+            const ownerUserId = owner?.email ? (await orgUsersFor(job.organizationId)).get(owner.email.toLowerCase()) ?? null : null;
+            const ownerResult = await applyDealOwner({ dealId, orgId: job.organizationId, ownerUserId, mode });
+            if (ownerResult === 'set' || ownerResult === 'already') {
+              counts.deals.ownersMatched = (counts.deals.ownersMatched ?? 0) + 1;
+            }
+          }
+        } catch (err) {
+          log.warn(`[hubspot] deal ${m.hubspotId}: contacts/owner not linked: ${(err as Error).message}`);
         }
       } else {
         // One of the 5 engagement types (notes/calls/meetings/emails/tasks).
@@ -370,6 +424,27 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
             counts[current].skipped += 1;
           }
         }
+
+        // Files attached to this activity go to the deal(s) it's on — whether
+        // the activity itself landed on a contact or a deal above.
+        if (m.attachmentIds.length > 0) {
+          try {
+            const attachmentDealIds = (await Promise.all(
+              m.associatedDealHubspotIds.map((hsId) => dealIdForHubspotIdCached(job.organizationId, hsId)),
+            )).filter((id): id is string => id !== null);
+            if (attachmentDealIds.length === 0) {
+              skipWithReason(counts.files, 'no_deal', m.attachmentIds.length);
+            } else if (!(await enqueueAttachments({
+              jobId, orgId: job.organizationId, dealIds: attachmentDealIds, fileIds: m.attachmentIds, engagementId: m.hubspotId,
+            }))) {
+              skipWithReason(counts.files, 'migration_pending', m.attachmentIds.length);
+            }
+          } catch (err) {
+            log.warn(`[hubspot] attachments on ${current} ${m.hubspotId} not queued: ${(err as Error).message}`);
+            counts.files.failed += m.attachmentIds.length;
+            counts.files.processed += m.attachmentIds.length;
+          }
+        }
       }
     } catch (err) {
       counts[current].failed += 1;
@@ -383,25 +458,17 @@ async function runImportBatchInner(jobId: string, token: string, mode: ImportMod
   // cancel cannot be clobbered. If updated is null, the job was cancelled — stop.
   if (page.nextCursor) {
     const { data: updated } = await supabase.from('ImportJob')
-      .update({ objectCounts: counts, currentObject: current, cursor: page.nextCursor, status: 'running' })
+      .update({ objectCounts: counts, currentObject: current, cursor: page.nextCursor, status: 'running', error: mergeNotes(job.error ?? null, notes) })
       .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
     if (!updated) return false; // cancelled mid-batch
     return true;
   }
-  const nextObject = ORDER[objectIndex + 1] ?? null;
-  if (nextObject) {
-    const { data: updated } = await supabase.from('ImportJob')
-      .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running' })
-      .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
-    if (!updated) return false; // cancelled mid-batch
-    return true;
-  }
+  // The job always ends in the files phase, which decides completed/failed.
+  const nextObject = PHASES[objectIndex + 1]!;
   const { data: updated } = await supabase.from('ImportJob')
-    .update({ objectCounts: counts, currentObject: null, cursor: null, status: 'completed', finishedAt: new Date().toISOString() })
+    .update({ objectCounts: counts, currentObject: nextObject, cursor: null, status: 'running', error: mergeNotes(job.error ?? null, notes) })
     .eq('id', jobId).neq('status', 'cancelled').select('id').maybeSingle();
-  // If updated is null the job was cancelled — status already 'cancelled', return false.
-  void updated;
-  return false;
+  return !!updated; // null = cancelled mid-batch
 }
 
 /** HubSpot error bodies are long JSON; keep the status line for the UI. */

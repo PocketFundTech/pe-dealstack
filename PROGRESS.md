@@ -5,6 +5,67 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 106 — October 12, 2026
+
+#### Timestamp: October 12, 2026 — 14:57 IST
+
+#### Goal: make the HubSpot import complete for deals — contacts, owners, primary company, files — and stop the panel posing as "disconnected" when its status check fails.
+
+#### 1. Why
+A fact-check of the 8 Oct production import showed the counts matched HubSpot exactly (companies 4,015, contacts 4,449, deals 54). But four things never reached Avise:
+- which contacts are on which deal;
+- deal owners (so no deal had a Lead Partner);
+- files attached in HubSpot;
+- any company beyond the first per deal. That first one wasn't even necessarily HubSpot's Primary.
+
+Separately, codebase audit item B12: if the HubSpot status call failed, the panel showed the connect form as if HubSpot were disconnected.
+
+#### 2. What shipped (branch `feat/hubspot-relationships-files`)
+- **Contacts on deals:** HubSpot deal↔contact associations become `ContactDeal` links. A role a user already set is never changed. The deal page has a new **Contacts** section (`GET /api/deals/:id/contacts`).
+- **Owner → Lead Partner:**
+  - The HubSpot owner is matched by email to an Avise user in the same org.
+  - It becomes `Deal.assignedTo` plus a LEAD team row. An existing team member is promoted.
+  - Fill mode never replaces a Lead Partner set in Avise.
+  - Every deal's HubSpot card shows "HubSpot owner: Name <email>".
+- **Primary company:** the deal links to the company HubSpot marks Primary (`deal_to_company`). Other associated companies are listed on the HubSpot card.
+- **Files:**
+  - Attachments on notes, calls, meetings, emails and tasks tied to a deal are queued (`HubSpotFileQueue`).
+  - A final, time-boxed `files` phase downloads them into the deal's data room through a new shared `services/documentStore.ts#addFileToDeal`. The upload route now uses the same helpers, with no change in behaviour.
+  - Files over **25MB** are skipped as "too large" so every batch fits the serverless window. Re-runs never re-download.
+  - **No AI during import.** A new **"Index N documents for AI"** button on the deal's Documents tab indexes on click (`/api/deals/:id/documents/index-pending`).
+- **Missing scopes don't break imports:** owners and files each skip with a note naming the scope to add. Contact links and primary company need no new scope.
+- **Job status:** a job where nothing succeeded and errors occurred ends `failed`. An empty portal ends `completed`.
+- **Status fix (B12):** a failed status check now shows the real error with a Retry button.
+
+#### 3. Review fixes worth knowing
+Each task was reviewed for spec and quality, then the whole branch had a final review. That caught:
+- A files batch could overrun Vercel's 300s limit. Now: 20s budget, 45s per-file deadline, 15s per HubSpot request, 30s download timeout and the 25MB cap.
+- A failed queue write could loop forever.
+- A regression where an import with everything failing would show "completed".
+- Un-indexed documents may be `'pending'`, not NULL.
+- Attachments were re-downloaded on every re-run.
+- Before the migration, an empty portal was reported as failed.
+
+#### 4. Tests
+- API: 310 files / 2,890 tests pass; `tsc` clean.
+- Web: 621 pass; `tsc` clean.
+- The 2 failing web tests are in `AIAssistant.history.test.ts`. Node 25's built-in `localStorage` breaks them locally; they're unrelated to this branch.
+
+#### 5. Founder actions
+1. Run `apps/api/hubspot-relationships-files-migration.sql` (see `docs/PENDING-MIGRATIONS.md`). Before it runs, imports still complete and the Files row says "database migration pending".
+2. In HubSpot → Private App → Scopes, add `crm.objects.owners.read`, `files` and `files.ui_hidden.read`.
+3. Re-run the import with **Overwrite** on, so existing deals get owners and contacts.
+
+#### 6. Not done
+- Ongoing sync / write-back.
+- Files only on a contact or company.
+- Files over 25MB.
+- Emails scope correction.
+- A pipeline-stage mapping UI.
+- Two tabs driving one import can still race on the same file (rare; it leaves a failed row, not a duplicate).
+
+---
+
 ### Session 105 — October 6, 2026
 
 #### Goal: Finish the code-only follow-ups from the 1 Oct QA report and the 5 Oct testing doc (PR #203), and set up Google sign-in locally.
