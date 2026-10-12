@@ -129,6 +129,12 @@ export function classifyProviderRejection(
     QUOTA_HINTS.some((h) => lower.includes(h));
   if (isQuota) return { reason: 'quota', detail };
 
+  // Anthropic key without a workspace: a 400 invalid_request_error, but it is
+  // our configuration (missing anthropic-workspace-id header), never the user's input.
+  if (lower.includes('anthropic-workspace-id') || lower.includes('not scoped to a workspace')) {
+    return { reason: 'auth', detail };
+  }
+
   if (errType === 'authentication_error' || errType === 'permission_error' || status === 401 || status === 403) {
     return { reason: 'auth', detail };
   }

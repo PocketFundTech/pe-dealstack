@@ -1,5 +1,12 @@
 import DOMPurify from "dompurify";
 import type { MemoSection, Memo } from "./components";
+import { parseFailedSection, NOT_GENERATED_EXPORT_LINE } from "./failed-section";
+
+/** Section HTML for export; a failed-generation placeholder becomes a short neutral line, never the raw text. */
+function exportableContent(section: MemoSection, editingContent: Record<string, string>): string {
+  const content = editingContent[section.id] || section.content || "";
+  return parseFailedSection(content) ? NOT_GENERATED_EXPORT_LINE : content;
+}
 
 // ---------------------------------------------------------------------------
 // Markdown / clipboard / share helpers — ported from c1d7a4d's memo-editor.js
@@ -19,7 +26,7 @@ export function exportMemoMarkdown(
 
   sections.forEach((section, i) => {
     md += `## ${i + 1}. ${section.title}\n\n`;
-    const content = editingContent[section.id] || section.content || "";
+    const content = exportableContent(section, editingContent);
     if (content) md += htmlToMarkdown(content) + "\n\n";
   });
 
@@ -61,7 +68,7 @@ export async function exportMemoClipboard(
 ): Promise<void> {
   const text = sections
     .map((s, i) => {
-      const content = editingContent[s.id] || s.content || "";
+      const content = exportableContent(s, editingContent);
       return `${i + 1}. ${s.title}\n${htmlToMarkdown(content)}`;
     })
     .join("\n\n");
@@ -180,7 +187,7 @@ export async function exportMemoPDF(
   y += 4;
 
   for (const s of sections) {
-    const content = editingContent[s.id] || s.content || "(No content)";
+    const content = exportableContent(s, editingContent) || "(No content)";
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(13);

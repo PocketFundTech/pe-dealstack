@@ -6,7 +6,7 @@
  * jsPDF's text API (never an image-embedding API) with real section text.
  */
 import { describe, it, expect, vi } from "vitest";
-import { htmlToPlainTextWithLayout, exportMemoPDF } from "./export";
+import { htmlToPlainTextWithLayout, exportMemoClipboard, exportMemoMarkdown } from "./export";
 import type { Memo, MemoSection } from "./components";
 
 describe("htmlToPlainTextWithLayout", () => {
@@ -69,6 +69,61 @@ describe("exportMemoPDF", () => {
     expect(textCalls.some((l) => l.includes("Acme Deal"))).toBe(true);
     expect(textCalls.some((l) => l.includes("Executive Summary"))).toBe(true);
     expect(textCalls.some((l) => l.includes("Strong deal."))).toBe(true);
+    vi.doUnmock("jspdf");
+  });
+});
+
+describe("exports never include a failed-generation placeholder", () => {
+  const RAW = '[Section generation failed: 400 {"type":"error","error":{"message":"Your credit balance is too low"},"request_id":"req_x"}]';
+  const sections = [
+    { id: "s1", type: "A", title: "Good", content: "<p>Real text.</p>", sortOrder: 1 },
+    { id: "s2", type: "B", title: "Raw", content: RAW, sortOrder: 2 },
+    { id: "s3", type: "C", title: "Clean", content: "<p><em>[AI couldn't generate this section: The AI request failed.]</em></p>", sortOrder: 3 },
+  ] as MemoSection[];
+
+  it("clipboard", async () => {
+    const writeText = vi.fn();
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await exportMemoClipboard(sections, {});
+    const out = writeText.mock.calls[0][0] as string;
+    expect(out).toContain("Real text.");
+    expect(out.match(/\[Section not generated\]/g)).toHaveLength(2);
+    expect(out).not.toMatch(/request_id|credit balance|couldn't generate/);
+    vi.unstubAllGlobals();
+  });
+
+  it("markdown", async () => {
+    let blobParts: BlobPart[] = [];
+    vi.stubGlobal("Blob", class { constructor(p: BlobPart[]) { blobParts = p; } });
+    (URL as unknown as { createObjectURL: () => string }).createObjectURL = vi.fn(() => "blob:x");
+    (URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    exportMemoMarkdown({ id: "m", title: "T", projectName: "P" } as Memo, sections, {});
+    const out = String(blobParts[0]);
+    expect(out).toContain("Real text.");
+    expect(out.match(/\[Section not generated\]/g)).toHaveLength(2);
+    expect(out).not.toMatch(/request_id|credit balance|couldn't generate/);
+    vi.unstubAllGlobals();
+  });
+
+  it("pdf", async () => {
+    const textCalls: string[] = [];
+    const Fake = function () {
+      return {
+        internal: { pageSize: { getWidth: () => 210, getHeight: () => 297 } },
+        setFont: vi.fn(), setFontSize: vi.fn(), setTextColor: vi.fn(),
+        splitTextToSize: (t: string) => t.split("\n"),
+        text: (l: string) => { textCalls.push(l); },
+        addPage: vi.fn(), save: vi.fn(),
+      };
+    };
+    vi.doMock("jspdf", () => ({ jsPDF: vi.fn(Fake) }));
+    const { exportMemoPDF: pdf } = await import("./export");
+    await pdf({ id: "m", title: "T", projectName: "P" } as Memo, sections, {});
+    const out = textCalls.join("\n");
+    expect(out).toContain("Real text.");
+    expect(out.match(/\[Section not generated\]/g)).toHaveLength(2);
+    expect(out).not.toMatch(/request_id|credit balance|couldn't generate/);
     vi.doUnmock("jspdf");
   });
 });

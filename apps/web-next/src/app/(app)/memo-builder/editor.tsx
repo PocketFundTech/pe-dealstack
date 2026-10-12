@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { cn } from "@/lib/cn";
 import type { Memo, MemoSection, TableData, TableRow } from "./components";
+import { parseFailedSection, failedSectionMessage } from "./failed-section";
 
 // Allowlist-based HTML sanitization via DOMPurify. Permits only safe tags
 // and attributes — strips scripts, iframes, event handlers, javascript: URIs, etc.
@@ -270,6 +271,7 @@ function DocSection({
 }: DocSectionProps) {
   const [editing, setEditing] = useState(false);
   const hasHtml = /<[a-z][\s\S]*>/i.test(content);
+  const failed = parseFailedSection(content);
 
   return (
     <section
@@ -346,7 +348,15 @@ function DocSection({
       <div className="border-b-2 border-primary mb-3 -mt-1" />
 
       {/* Content display or editing */}
-      {editing ? (
+      {failed && !editing ? (
+        <div
+          role="status"
+          className="p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-900 flex items-start gap-2"
+        >
+          <span className="material-symbols-outlined text-[18px] mt-0.5">error</span>
+          <p>{failedSectionMessage(failed)}</p>
+        </div>
+      ) : editing ? (
         <div>
           {hasHtml && (
             <button
