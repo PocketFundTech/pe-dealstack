@@ -236,4 +236,26 @@ describe("HubSpotPanel", () => {
     expect(await screen.findByText("crm.objects.owners.read")).toBeInTheDocument();
     expect(screen.getByText("files.ui_hidden.read")).toBeInTheDocument();
   });
+
+  it("shows deal links, owners and the files row with skip reasons", async () => {
+    const job = {
+      ...RUNNING_JOB,
+      status: "completed",
+      currentObject: null,
+      objectCounts: {
+        deals: { processed: 8, created: 8, updated: 0, failed: 0, total: 8, contactLinks: 12, ownersMatched: 5 },
+        files: { processed: 6, created: 3, updated: 1, failed: 0, skipped: 2, total: 6, reasons: { no_deal: 1, too_large: 1 } },
+      },
+    };
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: true });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job });
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<HubSpotPanel onToast={() => {}} />);
+    expect(await screen.findByTestId("hubspot-deals-relations")).toHaveTextContent("12 contacts linked · 5 owners matched as Lead Partner");
+    expect(screen.getByText("4 of 6 imported · 0 failed")).toBeInTheDocument();
+    expect(screen.getByTestId("hubspot-files-skipped")).toHaveTextContent("2 skipped: not on a deal (1), too large (1)");
+  });
 });
