@@ -8,6 +8,7 @@ import type { GeneratedSection } from '../src/services/agents/memoAgent/pipeline
 const trackedClaudeMessage = vi.fn();
 vi.mock('../src/services/ai/client.js', () => ({
   trackedClaudeMessage: (...args: any[]) => trackedClaudeMessage(...args),
+  warmClaudeCache: async () => null,
   isAnthropicAvailable: () => true,
 }));
 

@@ -9,6 +9,7 @@ const trackedClaudeMessage = vi.fn();
 let anthropicAvailable = true;
 vi.mock('../src/services/ai/client.js', () => ({
   trackedClaudeMessage: (...args: any[]) => trackedClaudeMessage(...args),
+  warmClaudeCache: async () => null,
   isAnthropicAvailable: () => anthropicAvailable,
 }));
 
