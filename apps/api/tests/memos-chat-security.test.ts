@@ -23,7 +23,11 @@ vi.mock('../src/services/auditLog.js', () => ({
 vi.mock('../src/services/agents/memoAgent/index.js', () => ({
   runMemoChatAgent: vi.fn(),
 }));
-vi.mock('../src/services/llm.js', () => ({ isLLMAvailable: () => true }));
+const chatInvoke = vi.fn(async () => ({ content: '<p>injected AI content</p>' }));
+vi.mock('../src/services/llm.js', () => ({
+  isLLMAvailable: () => true,
+  getChatModel: () => ({ invoke: chatInvoke }),
+}));
 vi.mock('../src/services/firmContextService.js', () => ({ getFirmContextBlock: async () => '' }));
 vi.mock('../src/utils/aiModels.js', () => ({ MODEL_REASONING: 'mock-model' }));
 vi.mock('../src/utils/aiErrors.js', () => ({
@@ -134,7 +138,7 @@ describe('POST /api/memos/:id/sections/:sectionId/generate — F-10 cross-memo b
     // The critical contract: section update path must NOT have been invoked
     // OR if it was, it had a memoId filter.
     expect(sectionUpdateInvoked).toBe(false);
-    expect(trackedChatCompletion).not.toHaveBeenCalled();
+    expect(chatInvoke).not.toHaveBeenCalled();
     expect(res.status).toBeGreaterThanOrEqual(400);
     // Section fetch must have filtered on memoId.
     const cols = sectionFilters.map((f) => f.col);
@@ -213,7 +217,7 @@ describe('POST /api/memos/:id/sections/:sectionId/generate — F-10 cross-memo b
       .send({});
 
     expect(res.status).toBe(200);
-    expect(trackedChatCompletion).toHaveBeenCalledTimes(1);
+    expect(chatInvoke).toHaveBeenCalledTimes(1);
     expect(updateMemoIdFilter).toBe('memo-A');
   });
 });

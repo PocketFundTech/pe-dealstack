@@ -12,7 +12,9 @@ import portfolioRouter from './ai-portfolio.js';
 import aiAgentsRouter from './ai-agents.js';
 import { runDealChatAgent } from '../services/agents/dealChatAgent/index.js';
 import { runGlobalChatAgent, streamGlobalChatAgent } from '../services/agents/globalChatAgent/index.js';
-import { isLLMAvailable } from '../services/llm.js';
+import { getChatModel, isLLMAvailable } from '../services/llm.js';
+import { SystemMessage, HumanMessage } from '@langchain/core/messages';
+import { aiMessageText } from '../utils/aiMessageText.js';
 import { MODEL_REASONING, MODEL_CLASSIFICATION } from '../utils/aiModels.js';
 import { classifyAIErrorObject } from '../utils/aiErrors.js';
 
@@ -200,10 +202,10 @@ router.delete('/deals/:dealId/chat/history', async (req, res) => {
 // Query params: ?refresh=true to bypass cache
 router.post('/deals/:dealId/generate-thesis', async (req, res) => {
   try {
-    if (!isAIEnabled()) {
+    if (!isLLMAvailable()) {
       return res.status(503).json({
         error: 'AI service unavailable',
-        message: 'OpenAI API key not configured',
+        message: 'AI API key not configured',
       });
     }
 
@@ -252,17 +254,15 @@ Generate a professional investment thesis that a PE analyst would write. Be spec
 
     log.info('Generating thesis for deal', { dealId, forceRefresh });
 
-    const completion = await trackedChatCompletion('deal_analysis', {
-      model: MODEL_REASONING,
-      messages: [
-        { role: 'system', content: DEAL_ANALYSIS_SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.7,
-      max_tokens: 300,
-    });
+    // Provider-aware tier-1 model — MODEL_REASONING is a claude-* name when
+    // Anthropic is configured, which the OpenAI client can't serve.
+    const model = getChatModel(0.7, 300, 'deal_analysis');
+    const completion = await model.invoke([
+      new SystemMessage(DEAL_ANALYSIS_SYSTEM_PROMPT),
+      new HumanMessage(prompt),
+    ]);
 
-    const thesis = completion.choices[0]?.message?.content || 'Unable to generate thesis.';
+    const thesis = aiMessageText(completion.content) || 'Unable to generate thesis.';
 
     // Store in cache
     await AICache.setThesis(dealId, thesis);
