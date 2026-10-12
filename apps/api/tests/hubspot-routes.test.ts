@@ -63,6 +63,8 @@ describe('hubspot-import routes', () => {
     expect(res.body.error).toContain('crm.schemas.companies.read');
     expect(res.body.error).toContain('crm.schemas.contacts.read');
     expect(res.body.error).toContain('crm.schemas.deals.read');
+    expect(res.body.error).toContain('crm.objects.owners.read');
+    expect(res.body.error).toContain('files.ui_hidden.read');
   });
 
   it('POST /connect reports the HTTP status for other HubSpot failures', async () => {
