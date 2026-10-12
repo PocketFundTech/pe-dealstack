@@ -59,10 +59,17 @@ describe('HubSpotClient — files', () => {
     const c = new HubSpotClient('secret');
     const url = await c.getFileSignedUrl('f1');
     expect(url).toBe('https://cdn.example/signed');
-    const buf = await c.downloadSignedUrl(url);
-    expect(buf.toString()).toBe('hello');
+    const buf = await c.downloadSignedUrl(url, 1024);
+    expect(buf?.toString()).toBe('hello');
     const downloadInit = fetchMock.mock.calls[1][1] as RequestInit | undefined;
     expect(downloadInit?.headers).toBeUndefined();
+  });
+});
+
+describe('HubSpotClient — download size cap', () => {
+  it('returns null without buffering when content-length exceeds the cap', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(Buffer.from('hello'), { status: 200, headers: { 'content-length': '5000' } }));
+    expect(await new HubSpotClient('t').downloadSignedUrl('https://cdn.example/x', 100)).toBeNull();
   });
 });
 

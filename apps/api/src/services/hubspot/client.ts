@@ -14,8 +14,10 @@ const MAX_RETRIES = 5;
  * clears within ~10s anyway.
  */
 const MAX_BACKOFF_MS = 10_000;
+// A hung HubSpot socket must not hold the serverless function.
+const REQUEST_TIMEOUT_MS = 15_000;
 
-const DOWNLOAD_TIMEOUT_MS = 60_000;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export const MAX_PROPERTIES = 250;
 
@@ -88,6 +90,7 @@ export class HubSpotClient {
       try {
         res = await fetch(url, {
           headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
       } catch (err) {
         // Network blip (reset / DNS / timeout). Used to end the whole object
@@ -275,10 +278,16 @@ export class HubSpotClient {
   }
 
   /** Download a signed URL. No Authorization header: the URL itself is the credential. */
-  async downloadSignedUrl(url: string): Promise<Buffer> {
+  async downloadSignedUrl(url: string, maxBytes: number): Promise<Buffer | null> {
     // A stalled CDN must not hold the serverless function until its hard limit.
     const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`File download failed: ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel();
+      return null;
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return buffer.length > maxBytes ? null : buffer;
   }
 }

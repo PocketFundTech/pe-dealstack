@@ -12,6 +12,26 @@ import type { ImportCounters } from './types.js';
 export const MIGRATION_PENDING_NOTE =
   'files: not imported — database migration pending (apps/api/hubspot-relationships-files-migration.sql).';
 
+export const QUEUE_WRITE_NOTE =
+  'files: stopped — could not update the file queue. Run the import again to retry the remaining files.';
+
+// Imports cap files at 25MB so one file always fits the serverless batch
+// window; larger files are skipped as too_large and can be uploaded by hand.
+export const HUBSPOT_FILE_MAX_BYTES = 25 * 1024 * 1024;
+const FILE_DEADLINE_MS = 45_000;
+
+async function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${Math.round(ms / 1000)}s`)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Count `n` skipped records with `reason` (skips also count as processed). */
 export function skipWithReason(c: ImportCounters, reason: string, n = 1): void {
   if (n <= 0) return;
@@ -57,12 +77,12 @@ async function importOneFile(
   const filename = ext && !meta.name.toLowerCase().endsWith(`.${ext}`) ? `${meta.name}.${ext}` : meta.name;
   const mimeType = getExpectedMimeType(filename);
   if (!mimeType) return { status: 'skipped', reason: 'unsupported_type' };
-  const limit = FILE_SIZE_LIMITS[mimeType] ?? FILE_SIZE_LIMITS.default;
+  const limit = Math.min(FILE_SIZE_LIMITS[mimeType] ?? FILE_SIZE_LIMITS.default, HUBSPOT_FILE_MAX_BYTES);
   if (meta.size != null && meta.size > limit) return { status: 'skipped', reason: 'too_large' };
 
   const url = await client.getFileSignedUrl(row.hubspotFileId);
-  const buffer = await client.downloadSignedUrl(url);
-  if (buffer.length > limit) return { status: 'skipped', reason: 'too_large' };
+  const buffer = await client.downloadSignedUrl(url, limit);
+  if (!buffer) return { status: 'skipped', reason: 'too_large' };
 
   const res = await addFileToDeal({
     dealId: row.dealId, filename, buffer, mimeType, uploadedBy, hubspotFileId: row.hubspotFileId,
@@ -71,8 +91,15 @@ async function importOneFile(
   return { status: 'done', documentId: res.documentId, created: res.outcome === 'created' };
 }
 
-async function markRow(id: string, status: 'done' | 'skipped' | 'failed', reason: string | null, documentId: string | null) {
-  await supabase.from('HubSpotFileQueue').update({ status, reason, documentId }).eq('id', id);
+async function markRow(
+  id: string, status: 'done' | 'skipped' | 'failed', reason: string | null, documentId: string | null,
+): Promise<boolean> {
+  const { error } = await supabase.from('HubSpotFileQueue').update({ status, reason, documentId }).eq('id', id);
+  if (error) {
+    log.warn(`[hubspot] could not mark queue row ${id} ${status}: ${(error as { message?: string }).message}`);
+    return false;
+  }
+  return true;
 }
 
 function shortError(err: unknown): string {
@@ -86,12 +113,13 @@ function shortError(err: unknown): string {
  */
 export async function drainFileQueue(opts: {
   jobId: string; orgId: string; client: FileClient; uploadedBy: string | null; counts: ImportCounters;
-  budgetMs?: number; maxFiles?: number; now?: () => number;
+  budgetMs?: number; maxFiles?: number; now?: () => number; fileDeadlineMs?: number;
 }): Promise<{ done: boolean; note: string | null }> {
   const { jobId, client, uploadedBy, counts } = opts;
-  const budgetMs = opts.budgetMs ?? 60_000;
+  const budgetMs = opts.budgetMs ?? 20_000;
   const maxFiles = opts.maxFiles ?? 10;
   const now = opts.now ?? Date.now;
+  const fileDeadlineMs = opts.fileDeadlineMs ?? FILE_DEADLINE_MS;
   const started = now();
 
   if (counts.total === undefined || counts.total === null) {
@@ -113,20 +141,21 @@ export async function drainFileQueue(opts: {
   for (const row of pending) {
     if (now() - started >= budgetMs) return { done: false, note: null };
     try {
-      const out = await importOneFile(client, row, uploadedBy);
+      const out = await withDeadline(importOneFile(client, row, uploadedBy), fileDeadlineMs);
       if (out.status === 'done') {
-        await markRow(row.id, 'done', null, out.documentId);
+        if (!(await markRow(row.id, 'done', null, out.documentId))) return { done: true, note: QUEUE_WRITE_NOTE };
         if (out.created) counts.created += 1; else counts.updated += 1;
         counts.processed += 1;
       } else {
-        await markRow(row.id, 'skipped', out.reason, null);
+        if (!(await markRow(row.id, 'skipped', out.reason, null))) return { done: true, note: QUEUE_WRITE_NOTE };
         skipWithReason(counts, out.reason);
       }
     } catch (err) {
       if (err instanceof HubSpotScopeError) {
-        const { count } = await supabase
+        const { count, error: bulkErr } = await supabase
           .from('HubSpotFileQueue').update({ status: 'skipped', reason: 'missing_scope' }, { count: 'exact' })
           .eq('jobId', jobId).eq('status', 'pending');
+        if (bulkErr) log.warn(`[hubspot] could not bulk-skip queued files: ${(bulkErr as { message?: string }).message}`);
         skipWithReason(counts, 'missing_scope', count ?? 0);
         return {
           done: true,
@@ -134,7 +163,7 @@ export async function drainFileQueue(opts: {
         };
       }
       log.warn(`[hubspot] file ${row.hubspotFileId} for deal ${row.dealId} failed: ${shortError(err)}`);
-      await markRow(row.id, 'failed', shortError(err), null);
+      if (!(await markRow(row.id, 'failed', shortError(err), null))) return { done: true, note: QUEUE_WRITE_NOTE };
       counts.failed += 1;
       counts.processed += 1;
     }

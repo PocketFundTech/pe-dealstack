@@ -8,7 +8,7 @@ vi.mock('../src/utils/logger.js', () => ({ log: { info: vi.fn(), warn: vi.fn(), 
 const addFileToDeal = vi.fn();
 vi.mock('../src/services/documentStore.js', () => ({ addFileToDeal: (...a: unknown[]) => addFileToDeal(...a) }));
 
-import { enqueueAttachments, drainFileQueue, skipWithReason, mergeNotes, MIGRATION_PENDING_NOTE } from '../src/services/hubspot/fileQueue.js';
+import { enqueueAttachments, drainFileQueue, skipWithReason, mergeNotes, MIGRATION_PENDING_NOTE, QUEUE_WRITE_NOTE } from '../src/services/hubspot/fileQueue.js';
 import { HubSpotScopeError } from '../src/services/hubspot/client.js';
 import type { ImportCounters } from '../src/services/hubspot/types.js';
 
@@ -146,5 +146,44 @@ describe('drainFileQueue', () => {
     const r = await drainFileQueue({ ...base, client: client(), counts: counters(), budgetMs: 10, now: () => (t += 20) });
     expect(r).toEqual({ done: false, note: null });
     expect(addFileToDeal).toHaveBeenCalledTimes(0);
+  });
+
+  const oneRow = (op: ChainOp): ChainResult | undefined =>
+    op.table === 'HubSpotFileQueue' && op.action === 'select' && !op.selectOptions?.head
+      ? { data: [{ id: 'q1', dealId: 'd1', hubspotFileId: 'f1' }] } : { count: 1 };
+
+  it('stops with a note when the queue row cannot be updated, without counting it', async () => {
+    resolver = (op) => (op.table === 'HubSpotFileQueue' && op.action === 'update' ? { error: { message: 'boom' } } : oneRow(op));
+    const c = counters();
+    const r = await drainFileQueue({ ...base, client: client(), counts: c });
+    expect(r).toEqual({ done: true, note: QUEUE_WRITE_NOTE });
+    expect(c).toMatchObject({ created: 0, updated: 0, processed: 0, failed: 0 });
+  });
+
+  it('marks a file failed when its import exceeds the per-file deadline', async () => {
+    resolver = oneRow;
+    const c = counters();
+    await drainFileQueue({ ...base, counts: c, fileDeadlineMs: 5, client: client({ getFileMeta: vi.fn(() => new Promise(() => {})) }) });
+    expect(c).toMatchObject({ failed: 1, processed: 1 });
+    const upd = chain.calls.find((x) => x.table === 'HubSpotFileQueue' && x.action === 'update');
+    expect((upd?.payload as { status: string; reason: string }).status).toBe('failed');
+    expect((upd?.payload as { reason: string }).reason).toContain('timed out');
+  });
+
+  it('skips a file over 25MB even when under the PDF limit', async () => {
+    resolver = oneRow;
+    const cl = client({ getFileMeta: vi.fn(async () => ({ ...pdfMeta, size: 30 * 1024 * 1024 })) });
+    const c = counters();
+    await drainFileQueue({ ...base, client: cl, counts: c });
+    expect(c.reasons).toEqual({ too_large: 1 });
+    expect((cl as { getFileSignedUrl: ReturnType<typeof vi.fn> }).getFileSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('skips as too_large when the download exceeds the cap', async () => {
+    resolver = oneRow;
+    const c = counters();
+    await drainFileQueue({ ...base, client: client({ downloadSignedUrl: vi.fn(async () => null) }), counts: c });
+    expect(c.reasons).toEqual({ too_large: 1 });
+    expect(addFileToDeal).not.toHaveBeenCalled();
   });
 });
