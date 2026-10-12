@@ -8,6 +8,7 @@ import { PasteKeyModal, type PasteKeyInstructions } from "./IntegrationsSection.
 import { ProviderCard, type Integration, type ProviderCatalogEntry } from "./IntegrationsSection.providerCard";
 import { HubSpotImportHistory, HubSpotImportProgress, type HubSpotImportJob } from "./IntegrationsSection.hubspotProgress";
 import { GmailAutoDealToggle } from "./IntegrationsSection.autoDeal";
+import { HubSpotScopeHelp, HubSpotStatusError } from "./IntegrationsSection.hubspotStatus";
 
 interface InitiateAuthResponse {
   mode: "oauth" | "api_key";
@@ -257,7 +258,10 @@ interface HubSpotPanelProps {
 }
 
 export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
-  const [connected, setConnected] = useState(false);
+  // "disconnected" only when the server SAYS so — a failed check is "error"
+  // (audit B12: it used to fall back to the connect form and look disconnected).
+  const [status, setStatus] = useState<"loading" | "connected" | "disconnected" | "error">("loading");
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -294,6 +298,23 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
       pollJobOnce(jobId).catch(console.warn);
     }, 2000);
   }, [pollJobOnce]);
+
+  const fetchStatus = useCallback(
+    () =>
+      api.get<{ connected: boolean }>("/integrations/hubspot/connect")
+        .then((r) => setStatus(r.connected ? "connected" : "disconnected"))
+        .catch((err) => {
+          setStatusError(err instanceof Error && err.message ? err.message : null);
+          setStatus("error");
+        }),
+    [],
+  );
+
+  function retryStatus() {
+    setStatus("loading");
+    setStatusError(null);
+    void fetchStatus();
+  }
 
   // Keeps calling /continue until the server says there's nothing left.
   // Used both right after starting a brand-new import and when resuming one
@@ -335,9 +356,7 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
   }, []);
 
   useEffect(() => {
-    api.get<{ connected: boolean }>("/integrations/hubspot/connect")
-      .then((r) => setConnected(r.connected))
-      .catch(() => {});
+    void fetchStatus();
 
     // Re-hydrate the progress card / "last import" summary after a reload —
     // without this, a running job becomes invisible the moment the tab that
@@ -377,7 +396,7 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
     setError(null);
     try {
       const r = await api.post<{ connected: boolean }>("/integrations/hubspot/connect", { token });
-      setConnected(r.connected);
+      setStatus(r.connected ? "connected" : "disconnected");
       setToken("");
       onToast("HubSpot connected", "success");
     } catch (err) {
@@ -395,7 +414,7 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
     setBusy(true);
     try {
       await api.delete<{ connected: boolean }>("/integrations/hubspot/connect");
-      setConnected(false);
+      setStatus("disconnected");
       setJob(null);
       onToast("HubSpot disconnected", "success");
     } catch (err) {
@@ -459,7 +478,11 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
         </div>
       </div>
 
-      {!connected ? (
+      {status === "loading" ? (
+        <p className="text-sm text-text-muted">Checking your HubSpot connection…</p>
+      ) : status === "error" ? (
+        <HubSpotStatusError message={statusError} onRetry={retryStatus} />
+      ) : status === "disconnected" ? (
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-semibold text-text-secondary mb-1">
@@ -474,18 +497,7 @@ export function HubSpotPanel({ onToast }: HubSpotPanelProps) {
               disabled={busy}
               className="w-full border border-border-subtle rounded-md px-3 py-2 text-sm focus:outline-none disabled:opacity-50"
             />
-            <p className="mt-1 text-xs text-text-muted">
-              HubSpot → Settings → Integrations → Private Apps. Under Scopes, grant{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.companies.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.contacts.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.deals.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.notes.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.calls.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.meetings.read</code>,{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.emails.read</code> and{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.objects.tasks.read</code>, plus the matching{" "}
-              <code className="text-xs bg-gray-100 px-1 rounded">crm.schemas.*</code> scopes for companies, contacts and deals (needed to import your custom fields).
-            </p>
+            <HubSpotScopeHelp />
           </div>
           <button
             type="button"

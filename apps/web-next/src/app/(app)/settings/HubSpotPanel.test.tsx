@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 
 const get = vi.fn();
 const post = vi.fn();
@@ -201,5 +201,39 @@ describe("HubSpotPanel", () => {
     expect(history).toHaveTextContent("Past imports (1)");
     expect(history).toHaveTextContent("Pushkar");
     expect(history).toHaveTextContent("10 imported · 0 failed · took 42 min");
+  });
+
+  it("shows the real error and Retry when the status check fails — never the connect form", async () => {
+    let fail = true;
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") {
+        return fail ? Promise.reject(new Error("Service unavailable")) : Promise.resolve({ connected: true });
+      }
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: null });
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<HubSpotPanel onToast={() => {}} />);
+
+    expect(await screen.findByText(/Couldn.t check your HubSpot connection/i)).toBeInTheDocument();
+    expect(screen.getByText(/Service unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText("Connect HubSpot")).not.toBeInTheDocument();
+
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText(/HubSpot connected/i)).toBeInTheDocument();
+  });
+
+  it("lists the owner and file scopes in the connect help", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/integrations/hubspot/connect") return Promise.resolve({ connected: false });
+      if (path === "/integrations/hubspot/import/latest") return Promise.resolve({ job: null });
+      if (path === "/integrations/hubspot/import/history") return Promise.resolve({ jobs: [] });
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<HubSpotPanel onToast={() => {}} />);
+    expect(await screen.findByText("crm.objects.owners.read")).toBeInTheDocument();
+    expect(screen.getByText("files.ui_hidden.read")).toBeInTheDocument();
   });
 });
