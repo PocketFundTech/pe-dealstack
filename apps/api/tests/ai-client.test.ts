@@ -267,6 +267,32 @@ describe('trackedClaudeMessage', () => {
     }));
   });
 
+  it('does not treat a server-tool loop (no fallback) as declined attempts', async () => {
+    // Excel container extraction: code-execution steps arrive as several
+    // 'message' iterations of one attempt, with no model and no fallback.
+    nextFinalMessage = {
+      ...okMessage('ok'),
+      usage: {
+        input_tokens: 1200,
+        output_tokens: 340,
+        iterations: [
+          { type: 'message', input_tokens: 690, output_tokens: 175 },
+          { type: 'message', input_tokens: 2, output_tokens: 203, cache_read_input_tokens: 6_253 },
+          { type: 'message', input_tokens: 2, output_tokens: 452, cache_read_input_tokens: 7_250 },
+          { type: 'message', input_tokens: 4, output_tokens: 340 },
+        ],
+      },
+    };
+    const { trackedClaudeMessage } = await getClient();
+    await trackedClaudeMessage({
+      operation: 'financial_extraction',
+      role: 'extraction',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    });
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ status: 'success', model: 'claude-fable-5' });
+  });
+
   it('does not record a declined-before-output attempt (Anthropic does not bill it)', async () => {
     nextFinalMessage = {
       model: 'claude-opus-4-8',

@@ -127,6 +127,13 @@ interface AttemptUsage {
 function declinedAttempts(usage: unknown): AttemptUsage[] {
   const iterations = (usage as { iterations?: AttemptUsage[] | null } | undefined)?.iterations;
   if (!Array.isArray(iterations)) return [];
+  // Only a server-side fallback produces declined attempts. Without a
+  // fallback_message entry, several 'message' iterations are ONE attempt's
+  // server-tool loop (e.g. the Excel container's code-execution steps), which
+  // the top-level usage already covers — recording them again logged phantom
+  // 'blocked' rows with no model on every container extraction (found in
+  // local testing 2026-10-13).
+  if (!iterations.some((it) => it.type === 'fallback_message')) return [];
   const attempts = iterations.filter((it) => it.type === 'message' || it.type === 'fallback_message');
   return attempts.slice(0, -1).filter((it) => (it.output_tokens ?? 0) > 0);
 }
