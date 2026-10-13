@@ -30,7 +30,9 @@ import { htmlToPlainText, verifyQuotes } from './grounding.js';
 // of output) runs past 60s; the old 60s limit aborted reviews the model was
 // still writing (found in local testing 2026-10-13). The API function's
 // serverless limit is 300s (web-next app/api/[...slug]/route.ts maxDuration).
-const NDA_REVIEW_TIMEOUT_MS = 180_000;
+// A measured high-effort review took ~100s; 240s covers a long-thinking run
+// and still ends before the platform limit.
+const NDA_REVIEW_TIMEOUT_MS = 240_000;
 
 /** Longest NDA text we send. Beyond this the doc isn't an NDA. */
 const MAX_NDA_CHARS = 120_000;
@@ -51,7 +53,12 @@ const MAX_NDA_CHARS = 120_000;
 //    answer. It is a ceiling, not a target — only tokens actually generated
 //    are billed. A run that still hits it fails loudly (NdaReviewError
 //    'TRUNCATED') rather than as a JSON.parse 500.
-export const NDA_REVIEW_MAX_TOKENS = 16_000;
+//
+// Measured 2026-10-13 on a 10-clause broker NDA with the default playbook:
+// the answer was ~3.7K tokens, but high-effort thinking varied run to run
+// (~7.8K in one run, enough to hit a 16K cap in another). 32K covers that
+// variance; a typical review still bills ~11-12K output (~$0.12).
+export const NDA_REVIEW_MAX_TOKENS = 32_000;
 export const NDA_OUTPUT_LIMITS = {
   /** Findings for clauses the playbook doesn't cover (clauseKey "unmapped"). */
   maxUnmappedFindings: 4,

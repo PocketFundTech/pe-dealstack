@@ -192,7 +192,7 @@ describe('reviewNda', () => {
 
     const call = trackedClaudeMessage.mock.calls[0][0];
     expect(call.maxTokens).toBe(NDA_REVIEW_MAX_TOKENS);
-    expect(NDA_REVIEW_MAX_TOKENS).toBeGreaterThan(8000); // old cap that real reviews were hitting
+    expect(NDA_REVIEW_MAX_TOKENS).toBeGreaterThan(16000); // 8K and 16K were both hit by high-effort thinking
     expect(call.effort).toBe('high');
 
     const item = call.outputSchema.properties.findings.items.properties;
