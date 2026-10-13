@@ -26,7 +26,11 @@ import {
 } from '../../ndaPlaybookDefaults.js';
 import { htmlToPlainText, verifyQuotes } from './grounding.js';
 
-const NDA_REVIEW_TIMEOUT_MS = 60_000;
+// A high-effort review of a full NDA (thinking + up to NDA_REVIEW_MAX_TOKENS
+// of output) runs past 60s; the old 60s limit aborted reviews the model was
+// still writing (found in local testing 2026-10-13). The API function's
+// serverless limit is 300s (web-next app/api/[...slug]/route.ts maxDuration).
+const NDA_REVIEW_TIMEOUT_MS = 180_000;
 
 /** Longest NDA text we send. Beyond this the doc isn't an NDA. */
 const MAX_NDA_CHARS = 120_000;
