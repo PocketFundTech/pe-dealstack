@@ -1,7 +1,7 @@
 import { Router, type Request } from 'express';
 import { supabase } from '../supabase.js';
 import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtractor.js';
-import { runWithPendingDeal, bindDealToUsage } from '../middleware/usageContext.js';
+import { runWithPendingDeal, bindDealToUsage, pendingDealUsage, adoptPendingDealUsage } from '../middleware/usageContext.js';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
@@ -19,7 +19,7 @@ import { findExistingDocument, logDuplicateSkip } from '../services/documentDedu
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
-import { hashContent, signExtractionToken, verifyExtractionToken, wantsDuplicateCheck } from '../services/extractionToken.js';
+import { hashContent, signExtractionToken, verifyExtractionToken, extractionTokenUsage, wantsDuplicateCheck } from '../services/extractionToken.js';
 
 const router = Router();
 
@@ -287,6 +287,9 @@ async function ingestFromBuffer(
     const contentHash = req.body.extractionToken || checkDuplicates ? hashContent(buffer) : '';
     if (req.body.extractionToken) {
       aiData = verifyExtractionToken<ExtractedDealData>(req.body.extractionToken, { orgId, kind: 'upload', contentHash });
+      // The read that produced this extraction was recorded in step 1, before
+      // any deal existed — tag it with the deal this step lands in.
+      if (aiData) await adoptPendingDealUsage(extractionTokenUsage(req.body.extractionToken, { orgId, kind: 'upload', contentHash }));
       if (aiData) log.info('Ingest reusing extraction from the duplicate-check step', { documentName });
       else log.warn('Ingest: extraction token rejected — reading the document again', { documentName });
     }
@@ -415,7 +418,7 @@ async function ingestFromBuffer(
           body: {
             success: true,
             duplicateCheck: { candidates, extractedCompanyName: aiData.companyName.value ?? null },
-            extractionToken: signExtractionToken({ orgId, kind: 'upload', contentHash, data: extractionForToken }),
+            extractionToken: signExtractionToken({ orgId, kind: 'upload', contentHash, data: extractionForToken, usage: pendingDealUsage() }),
           },
         };
       }

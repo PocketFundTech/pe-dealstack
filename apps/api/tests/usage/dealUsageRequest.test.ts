@@ -27,9 +27,14 @@ vi.mock('../../src/supabase.js', () => ({
       }
       return {
         insert: insertSpy,
-        update: (patch: any) => ({
-          eq: async (_col: string, id: string) => { updateSpy(id, patch); return { error: null }; },
-        }),
+        update: (patch: any) => {
+          const filters: Record<string, string> = {};
+          const chain: any = {
+            eq: (col: string, val: string) => { filters[col] = val; return chain; },
+            then: (resolve: any) => { updateSpy(filters.id, patch, filters.organizationId); return resolve({ error: null }); },
+          };
+          return chain;
+        },
       };
     },
   },
@@ -49,7 +54,10 @@ import {
   bindDealToUsage,
   dealIdForRequest,
   getUsageContext,
+  pendingDealUsage,
+  adoptPendingDealUsage,
 } from '../../src/middleware/usageContext.js';
+import { signExtractionToken, extractionTokenUsage } from '../../src/services/extractionToken.js';
 
 const ctx = { userId: 'u1', organizationId: 'o1', source: 'test' as const };
 const DEAL = '3f2c1a9e-8b7d-4c6e-9f10-112233445566';
@@ -107,7 +115,7 @@ describe('ingest: usage recorded before the deal exists', () => {
     expect(first.metadata).not.toHaveProperty('dealId');
     expect(first.id).toEqual(expect.any(String));
     expect(updateSpy).toHaveBeenCalledTimes(1);
-    expect(updateSpy).toHaveBeenCalledWith(first.id, { metadata: expect.objectContaining({ dealId: DEAL }) });
+    expect(updateSpy).toHaveBeenCalledWith(first.id, { metadata: expect.objectContaining({ dealId: DEAL }) }, 'o1');
     expect(second.metadata.dealId).toBe(DEAL);
     expect(second).not.toHaveProperty('id');
   });
@@ -135,5 +143,54 @@ describe('ingest: usage recorded before the deal exists', () => {
   it('is a no-op without a usage context', async () => {
     await expect(bindDealToUsage(DEAL)).resolves.toBeUndefined();
     expect(await runWithPendingDeal(async () => 'ok')).toBe('ok');
+  });
+});
+
+// The duplicate-check round trip: step 1 reads the document and asks the user
+// about a possible duplicate (no deal yet); step 2 reuses that read via the
+// signed extraction token. Found in local testing 2026-10-13: step 1's rows
+// were never tagged.
+describe('duplicate-check round trip', () => {
+  const expected = { orgId: 'o1', kind: 'upload' as const, contentHash: 'h1' };
+
+  it('carries step 1 usage in the token and tags it with the deal step 2 lands in', async () => {
+    let token = '';
+    await runWithUsageContext(ctx, () =>
+      runWithPendingDeal(async () => {
+        await record('deal_ingest');
+        token = signExtractionToken({ ...expected, data: { companyName: 'Acme' }, usage: pendingDealUsage() });
+      }),
+    );
+    const [step1Row] = insertSpy.mock.calls.map((c) => c[0]).filter((r) => 'promptTokens' in r);
+    expect(updateSpy).not.toHaveBeenCalled();
+
+    await runWithUsageContext({ ...ctx, requestId: 'step-2' }, () =>
+      runWithPendingDeal(async () => {
+        await adoptPendingDealUsage(extractionTokenUsage(token, expected));
+        await bindDealToUsage(DEAL);
+      }),
+    );
+    expect(updateSpy).toHaveBeenCalledWith(step1Row.id, { metadata: expect.objectContaining({ dealId: DEAL }) }, 'o1');
+  });
+
+  it('tags adopted rows at once when the deal is already known (existing-deal path)', async () => {
+    await runWithUsageContext(ctx, () =>
+      runWithPendingDeal(async () => {
+        await bindDealToUsage(DEAL);
+        await adoptPendingDealUsage([{ id: 'row-1', metadata: { requestId: 'r1' } }]);
+      }),
+    );
+    expect(updateSpy).toHaveBeenCalledWith('row-1', { metadata: { requestId: 'r1', dealId: DEAL } }, 'o1');
+  });
+
+  it('ignores usage from a token that does not verify, and malformed rows', async () => {
+    expect(extractionTokenUsage('v1.bogus.sig', expected)).toEqual([]);
+    await runWithUsageContext(ctx, () =>
+      runWithPendingDeal(async () => {
+        await adoptPendingDealUsage([{ id: 42 }, null, 'x']);
+        await bindDealToUsage(DEAL);
+      }),
+    );
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 });

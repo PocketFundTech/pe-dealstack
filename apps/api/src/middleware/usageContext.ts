@@ -72,13 +72,46 @@ export async function bindDealToUsage(dealId: string): Promise<void> {
         const { error } = await supabase
           .from('UsageEvent')
           .update({ metadata: { ...row.metadata, dealId } })
-          .eq('id', row.id);
+          .eq('id', row.id)
+          .eq('organizationId', ctx.organizationId);
         if (error) log.warn('bindDealToUsage: tag failed', { usageEventId: row.id, error: error.message });
       } catch (err) {
         log.warn('bindDealToUsage: tag threw', { usageEventId: row.id, err });
       }
     }),
   );
+}
+
+/** Usage recorded so far in this runWithPendingDeal scope and not yet tagged. */
+export function pendingDealUsage(): Array<{ id: string; metadata: Record<string, unknown> }> {
+  return [...(getUsageContext()?.pendingDealUsage ?? [])];
+}
+
+/**
+ * Take over rows a previous request recorded before its deal existed — the
+ * duplicate-check round trip: step 1 reads the document and asks the user,
+ * step 2 reuses that read via the signed extraction token. Tagged now if
+ * this request already knows its deal, otherwise with the next
+ * bindDealToUsage. Never throws.
+ */
+export async function adoptPendingDealUsage(rows: unknown): Promise<void> {
+  const ctx = storage.getStore();
+  if (!ctx || !Array.isArray(rows)) return;
+  const valid = rows
+    .filter((r): r is { id: string; metadata: Record<string, unknown> } =>
+      !!r && typeof r === 'object'
+      && typeof (r as { id?: unknown }).id === 'string'
+      && !!(r as { metadata?: unknown }).metadata
+      && typeof (r as { metadata?: unknown }).metadata === 'object')
+    .slice(0, 50);
+  if (!valid.length) return;
+  if (ctx.dealId) {
+    const dealId = ctx.dealId;
+    ctx.pendingDealUsage = valid;
+    await bindDealToUsage(dealId);
+    return;
+  }
+  ctx.pendingDealUsage = [...(ctx.pendingDealUsage ?? []), ...valid];
 }
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
