@@ -74,7 +74,14 @@ function fieldSchema(valueType: 'string' | 'number', description: string, withSo
     // INGEST_ENGINE=claude read). The 0-100 range lives in the description.
     confidence: { type: 'number', description: 'Confidence score from 0 to 100' },
   };
-  if (withSource) props.source = { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Short verbatim snippet (or page reference) supporting the value' };
+  // `source` is a plain string, empty when there is none — NOT a nullable
+  // union. The API caps how many union-typed parameters a schema may have
+  // ("Schemas contains too many parameters with union types (20 parameters
+  // …)"): with nullable sources this schema had 20 and every deal read 400'd
+  // on both Haiku and Sonnet 5, falling back to the legacy extractor (found
+  // 2026-10-13). As plain strings it has 14, accepted by both.
+  // finalizeExtractedDealData maps '' back to null.
+  if (withSource) props.source = { type: 'string', description: 'Short verbatim snippet (or page reference) supporting the value. Empty string when there is none.' };
   return {
     type: 'object',
     properties: props,
