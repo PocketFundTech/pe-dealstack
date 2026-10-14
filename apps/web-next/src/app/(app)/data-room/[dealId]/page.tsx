@@ -33,7 +33,7 @@ import {
   applyDataRoomFilters,
   type DataRoomFilterState,
 } from "./data-room-filters";
-import { hasHighValueDoc, splitUploadFiles, type SkippedUpload } from "./upload-helpers";
+import { splitUploadFiles, type SkippedUpload } from "./upload-helpers";
 import {
   createCreateFolder,
   createDeleteFolder,
@@ -175,8 +175,9 @@ export default function DataRoomDealPage({ params }: PageProps) {
       skipped.forEach((f) => showToast(`"${f.name}" can't be uploaded: ${f.reason}`, "error"));
       return;
     }
-    // Smart default: auto-check toggle for CIM/financials/teaser documents
-    setAutoUpdateDeal(hasHighValueDoc(validFiles));
+    // Always start unchecked: auto-update is an extra AI call per PDF, so the
+    // user opts in explicitly rather than by filename guess.
+    setAutoUpdateDeal(false);
     setPendingUploadFiles(validFiles);
   };
 
