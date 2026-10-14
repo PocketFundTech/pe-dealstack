@@ -20,6 +20,25 @@ function getEmbeddingModelName(): string {
   return process.env.EMBEDDING_MODEL || 'gemini-embedding-001';
 }
 
+/** pgvector width of DocumentChunk.embedding and the search_document_chunks
+ *  RPC. gemini-embedding-001 returns 3072 dims unless told otherwise, which
+ *  made every chunk insert and every search fail against vector(768) — keep
+ *  this in lockstep with the column. (3072 isn't an option anyway: pgvector's
+ *  HNSW/IVFFlat indexes cap at 2000 dims.) */
+export function getEmbeddingDimensions(): number {
+  return Number(process.env.EMBEDDING_DIMENSIONS) || 768;
+}
+
+function assertDimensions(vector: number[] | undefined, where: string): void {
+  const expected = getEmbeddingDimensions();
+  if (vector && vector.length !== expected) {
+    throw new Error(
+      `Embedding dimension mismatch in ${where}: got ${vector.length}, column expects ${expected} ` +
+      `(EMBEDDING_MODEL=${getEmbeddingModelName()}, EMBEDDING_DIMENSIONS=${expected})`,
+    );
+  }
+}
+
 function getEmbeddingsModel(): GoogleGenerativeAIEmbeddings | null {
   if (embeddingsModel) return embeddingsModel;
   if (!process.env.GEMINI_API_KEY) {
@@ -29,6 +48,7 @@ function getEmbeddingsModel(): GoogleGenerativeAIEmbeddings | null {
   embeddingsModel = new GoogleGenerativeAIEmbeddings({
     modelName: getEmbeddingModelName(),
     apiKey: process.env.GEMINI_API_KEY,
+    outputDimensionality: getEmbeddingDimensions(),
   });
   return embeddingsModel;
 }
@@ -150,6 +170,7 @@ export async function embedDocument(
       () => model.embedDocuments(chunkTexts),
       getEmbeddingModelName(),
     );
+    assertDimensions(embeddings[0], 'embedDocument');
 
     // Delete existing chunks for this document
     await supabase
@@ -240,6 +261,7 @@ export async function searchDocumentChunks(
       () => model.embedQuery(query),
       getEmbeddingModelName(),
     );
+    assertDimensions(queryEmbedding, 'searchDocumentChunks');
     const embeddingStr = `[${queryEmbedding.join(',')}]`;
 
     const { data, error } = await supabase.rpc('search_document_chunks', {
