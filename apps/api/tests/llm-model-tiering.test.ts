@@ -53,7 +53,7 @@ vi.mock('@langchain/google-genai', () => ({
 
 const ENV_KEYS = [
   'ANTHROPIC_API_KEY', 'ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY_FALLBACK', 'OPENAI_API_KEY',
-  'OPENROUTER_API_KEY', 'LLM_CHAT_PROVIDER', 'LLM_CHAT_MODEL', 'LLM_EXTRACTION_MODEL', 'AI_FAST_MODEL',
+  'OPENROUTER_API_KEY', 'LLM_CHAT_PROVIDER', 'LLM_FAST_PROVIDER', 'LLM_CHAT_MODEL', 'LLM_EXTRACTION_MODEL', 'AI_FAST_MODEL',
 ];
 
 async function loadLLM(env: Record<string, string | undefined>) {
@@ -151,5 +151,25 @@ describe('anthropicRequestShape', () => {
     expect(anthropicRequestShape('claude-haiku-4-5', 0.2)).toEqual({ temperature: 0.2 });
     // Fable rejects an explicit disable → send neither.
     expect(anthropicRequestShape('claude-fable-5', 0.7)).toEqual({});
+  });
+
+  describe('fast provider default', () => {
+    it('is anthropic when only Anthropic keys exist (getFastModel must not throw)', async () => {
+      const llm = await loadLLM({ ANTHROPIC_API_KEY: 'sk-ant' });
+      expect(() => llm.getFastModel(0.2, 300, 'test')).not.toThrow();
+      expect(anthropicCtorArgs.length).toBe(1);
+    });
+
+    it('stays openai when an OpenAI key is present', async () => {
+      const llm = await loadLLM({ ANTHROPIC_API_KEY: 'sk-ant', OPENAI_API_KEY: 'sk-oai' });
+      llm.getFastModel(0.2, 300, 'test');
+      expect(anthropicCtorArgs.length).toBe(0);
+    });
+
+    it('LLM_FAST_PROVIDER env override wins', async () => {
+      const llm = await loadLLM({ ANTHROPIC_API_KEY: 'sk-ant', LLM_FAST_PROVIDER: 'openai' });
+      llm.getFastModel(0.2, 300, 'test');
+      expect(anthropicCtorArgs.length).toBe(0);
+    });
   });
 });
