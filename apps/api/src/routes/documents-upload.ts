@@ -26,6 +26,7 @@ import {
 } from '../integrations/googleDrive/client.js';
 import { GoogleDriveError } from '../integrations/googleDrive/types.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
+import { documentTypeFromName } from '../services/documentTypeFromName.js';
 
 const router = Router();
 
@@ -247,36 +248,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
     // FinancialStatement rows even though the data is sitting in the DB.
     let docType = req.body.type || 'OTHER';
     if (docType === 'OTHER' && documentName) {
-      const lowerName = documentName.toLowerCase();
-      const lowerMime = (mimeType ?? '').toLowerCase();
-      const looksLikeSpreadsheet =
-        lowerName.endsWith('.xlsx') ||
-        lowerName.endsWith('.xls') ||
-        lowerName.endsWith('.csv') ||
-        lowerMime.includes('spreadsheet') ||
-        lowerMime.includes('excel') ||
-        lowerMime === 'text/csv' ||
-        lowerMime === 'application/csv';
-
-      if (lowerName.includes('cim') || lowerName.includes('confidential')) docType = 'CIM';
-      else if (lowerName.includes('teaser')) docType = 'TEASER';
-      else if (
-        lowerName.includes('financial') ||
-        lowerName.includes('model') ||
-        lowerName.includes('p&l') ||
-        lowerName.includes('p_l') ||
-        lowerName.includes('income') ||
-        lowerName.includes('balance') ||
-        lowerName.includes('cashflow') ||
-        lowerName.includes('cash flow') ||
-        lowerName.includes('master sheet') ||
-        lowerName.includes('mastersheet') ||
-        looksLikeSpreadsheet
-      ) docType = 'FINANCIALS';
-      else if (lowerName.includes('legal') || lowerName.includes('dd')) docType = 'LEGAL';
-      else if (lowerName.includes('nda')) docType = 'NDA';
-      else if (lowerName.includes('loi') || lowerName.includes('letter')) docType = 'LOI';
-      else if (lowerName.includes('email') || lowerName.endsWith('.msg')) docType = 'EMAIL';
+      docType = documentTypeFromName(documentName, mimeType, 'upload');
     }
 
     // Parse optional fields

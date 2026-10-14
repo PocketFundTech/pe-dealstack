@@ -20,6 +20,7 @@ import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
 import { hashContent, signExtractionToken, verifyExtractionToken, extractionTokenUsage, wantsDuplicateCheck } from '../services/extractionToken.js';
+import { documentTypeFromName } from '../services/documentTypeFromName.js';
 
 const router = Router();
 
@@ -585,35 +586,7 @@ async function ingestFromBuffer(
     // Auto-classify by filename + mimeType. Spreadsheets default to
     // FINANCIALS so the re-extract loop in financials-extraction.ts
     // (which filters `type IN ('CIM','FINANCIALS')`) picks them up.
-    let docType = 'OTHER';
-    const lowerName = documentName.toLowerCase();
-    const lowerMime = (mimeType ?? '').toLowerCase();
-    const looksLikeSpreadsheet =
-      lowerName.endsWith('.xlsx') ||
-      lowerName.endsWith('.xls') ||
-      lowerName.endsWith('.csv') ||
-      lowerMime.includes('spreadsheet') ||
-      lowerMime.includes('excel') ||
-      lowerMime === 'text/csv' ||
-      lowerMime === 'application/csv';
-
-    if (lowerName.includes('cim') || lowerName.includes('confidential')) docType = 'CIM';
-    else if (lowerName.includes('teaser')) docType = 'TEASER';
-    else if (
-      lowerName.includes('financial') ||
-      lowerName.includes('model') ||
-      lowerName.includes('p&l') ||
-      lowerName.includes('p_l') ||
-      lowerName.includes('income') ||
-      lowerName.includes('balance') ||
-      lowerName.includes('cashflow') ||
-      lowerName.includes('cash flow') ||
-      lowerName.includes('master sheet') ||
-      lowerName.includes('mastersheet') ||
-      looksLikeSpreadsheet
-    ) docType = 'FINANCIALS';
-    else if (lowerName.includes('loi') || lowerName.includes('letter')) docType = 'LOI';
-    else if (lowerName.includes('due diligence') || lowerName.includes('dd')) docType = 'DD_REPORT';
+    const docType = documentTypeFromName(documentName, mimeType, 'ingest');
 
     // Auto-assign to a VDR folder based on document type
     let ingestFolderId: string | null = null;
