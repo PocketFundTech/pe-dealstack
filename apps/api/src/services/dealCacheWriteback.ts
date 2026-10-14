@@ -21,6 +21,7 @@
 
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
+import { parsePeriod } from '@ai-crm/shared';
 import { comparePeriodChronologically } from '../utils/periodChrono.js';
 
 // ─── Types ────────────────────────────────────────────────────
@@ -101,7 +102,12 @@ export function pickLatestForCache(
       r.periodType === 'ACTUAL' ||
       r.periodType === 'LTM',
   );
-  const candidates = historical.length > 0 ? historical : rows;
+  const pool = historical.length > 0 ? historical : rows;
+  // A label the parser rejects (a multi-year "Total" column, "Current") is
+  // not a period and must never be the deal's headline figure — it sorted
+  // as "latest" and put a 42-month total on the deal card (CSP, 14 Oct).
+  const dated = pool.filter((r) => parsePeriod(r.period) !== null);
+  const candidates = dated.length > 0 ? dated : pool;
 
   // comparePeriodChronologically sorts ASC; reverse to get newest-first.
   const sortedDesc = [...candidates].sort((a, b) =>

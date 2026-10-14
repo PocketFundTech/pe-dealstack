@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parsePeriod, comparePeriods, isFullYear } from '@ai-crm/shared';
+import { parsePeriod, comparePeriods, isFullYear, isCumulativePeriodLabel } from '@ai-crm/shared';
 
 describe('parsePeriod', () => {
   it.each([
@@ -81,5 +81,31 @@ describe('fiscal year-end hint (G13)', () => {
     const row = (period: string) => ({ statementType: 'INCOME_STATEMENT', periodType: 'HISTORICAL', period, lineItems: { revenue: 1 } });
     const data = prepareData([row('Sep 2025'), row('FY2025'), row('FY2024 (Jul 2023 - Jun 2024)')]);
     expect(data.periods).toEqual(['2024', '2025', 'Sep 2025']);
+  });
+});
+
+describe('cumulative multi-year ranges are not periods (CSP 14 Oct)', () => {
+  // A QuickBooks "Total" column summing Jan 2023 – Jun 2026 was parsed as a
+  // full FY2026, which made it the "latest year" on the deal card and the
+  // model's base period.
+  it.each([
+    'Jan 2023 - Jun 2026 (Total)',
+    'January, 2023-June, 2026 Total',
+    '2023-2026 Total',
+    'Cumulative Jan 2022 – Dec 2025',
+  ])('parsePeriod(%j) is null', (label) => {
+    expect(parsePeriod(label)).toBeNull();
+    expect(isCumulativePeriodLabel(label)).toBe(true);
+  });
+
+  it.each([
+    ['FY2025 (Apr 2024 - Mar 2025)', 'FY'],
+    ['2025 YTD Total', 'YTD'],
+    ['FY2025 (Jul 2024 - Jun 2025) Total', 'FY'],
+    ['Jan - Sep 2025', 'YTD'],
+    ['LTM Jun 2026', 'LTM'],
+  ])('%j still parses as %s', (label, kind) => {
+    expect(parsePeriod(label)?.kind).toBe(kind);
+    expect(isCumulativePeriodLabel(label)).toBe(false);
   });
 });

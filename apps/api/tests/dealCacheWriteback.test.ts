@@ -435,3 +435,14 @@ describe('refreshDealCache — fetch + pick + write chain', () => {
     expect(result?.cachedRevenue).toBeNull();
   });
 });
+
+describe('pickLatestForCache — cumulative "Total" columns (CSP 14 Oct)', () => {
+  it('never picks a multi-year Total range over the latest real fiscal year', () => {
+    const rows: IncomeStatementRow[] = [
+      baseRow({ period: '2024' }),
+      baseRow({ period: '2025' }),
+      baseRow({ period: 'Jan 2023 - Jun 2026 (Total)' }),
+    ];
+    expect(pickLatestForCache(rows)?.period).toBe('2025');
+  });
+});
