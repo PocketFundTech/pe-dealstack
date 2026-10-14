@@ -96,6 +96,9 @@ describe('runDealChatAgentStreaming bounds', () => {
     expect(errorEvent.message).not.toMatch(/\dms/);
     expect(events.find((e) => e.type === 'done')).toBeUndefined();
     expect(elapsed).toBeLessThan(2000);
+    // The ledger row says why it failed (AI cost plan H2).
+    expect(recordUsageCalls[0][1]).toBe('error');
+    expect(recordUsageCalls[0][3]).toMatch(/^timed out after \d+s$/);
   });
 
   // Batch 3: a user clicking Stop aborts the SAME external signal the
@@ -112,6 +115,7 @@ describe('runDealChatAgentStreaming bounds', () => {
     const events = await drain(gen);
     expect(events.find((e) => e.type === 'error')).toBeUndefined();
     expect(events.find((e) => e.type === 'done')).toBeUndefined();
+    expect(recordUsageCalls[0][3]).toBe('stopped by user');
   });
 
   it('stops after the iteration cap and yields an error event', async () => {
@@ -122,6 +126,7 @@ describe('runDealChatAgentStreaming bounds', () => {
     const events = await drain(runDealChatAgentStreaming({ dealId: 'd1', orgId: 'o1', message: 'hi', dealContext: '' }));
     const errorEvent = events.find((e) => e.type === 'error');
     expect(errorEvent?.message).toMatch(/maximum number of tool calls/i);
+    expect(recordUsageCalls[0][3]).toBe('tool step limit reached');
   });
 
   // Cost-accuracy (usage-cost-accuracy): message_start usage carries cache
@@ -188,5 +193,6 @@ describe('runDealChatAgentStreaming bounds', () => {
     expect(status).toBe('error');
     expect(servedModel).toBe('claude-sonnet-4-6');
     expect(usage.inputTokens).toBe(20);
+    expect(recordUsageCalls[0][3]).toBe(throwAfterIterations);
   });
 });

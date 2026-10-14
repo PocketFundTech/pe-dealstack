@@ -532,7 +532,7 @@ export async function* runDealChatAgentStreaming(
       if (iterationCount > getAgentRecursionLimit()) {
         internalController.abort();
         cleanup();
-        await recordUsage(usage, 'error', servedModel);
+        await recordUsage(usage, 'error', servedModel, 'tool step limit reached');
         yield { type: 'error', message: 'Reached the maximum number of tool calls for this response. Please try rephrasing or asking a more specific question.' };
         return;
       }
@@ -560,7 +560,12 @@ export async function* runDealChatAgentStreaming(
   } catch (error: any) {
     cleanup();
     if (internalController.signal.aborted) {
-      await recordUsage(usage, 'error', servedModel);
+      await recordUsage(
+        usage,
+        'error',
+        servedModel,
+        opts.signal?.aborted ? 'stopped by user' : `timed out after ${Math.round(timeoutMs / 1000)}s`,
+      );
       // The same internal controller aborts on both a timeout AND a
       // client-initiated Stop (opts.signal) — collapsing them into one
       // "timed out" message told a user who just clicked Stop that the
@@ -572,7 +577,7 @@ export async function* runDealChatAgentStreaming(
       }
       return;
     }
-    await recordUsage(usage, 'error', servedModel);
+    await recordUsage(usage, 'error', servedModel, error);
     captureAgentError(error, { agent: 'dealChatAgent', node: 'stream' });
     yield { type: 'error', message: classifyAIErrorObject(error).userMessage };
     return;
