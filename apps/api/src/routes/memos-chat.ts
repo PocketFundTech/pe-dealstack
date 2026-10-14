@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { supabase } from '../supabase.js';
-import { isAIEnabled, trackedChatCompletion } from '../openai.js';
+import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { log } from '../utils/logger.js';
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { runMemoChatAgent } from '../services/agents/memoAgent/index.js';
-import { isLLMAvailable } from '../services/llm.js';
+import { getChatModel, isLLMAvailable } from '../services/llm.js';
 import { MODEL_REASONING } from '../utils/aiModels.js';
+import { aiMessageText } from '../utils/aiMessageText.js';
 import { classifyAIErrorObject } from '../utils/aiErrors.js';
 import { getFirmContextBlock } from '../services/firmContextService.js';
 
@@ -63,7 +64,7 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
     const orgId = getOrgId(req);
     const { customPrompt } = generateSectionSchema.parse(req.body);
 
-    if (!isAIEnabled()) {
+    if (!isLLMAvailable()) {
       return res.status(503).json({ error: 'AI features are not enabled' });
     }
 
@@ -146,19 +147,17 @@ router.post('/:id/sections/:sectionId/generate', async (req, res) => {
 
       Please generate comprehensive, professional content appropriate for this section.`;
 
-    // Call OpenAI
-    const response = await trackedChatCompletion('memo_generation', {
-      model: MODEL_REASONING,
-      messages: [
-        { role: 'system', content: `${firmContextBlock}${MEMO_ANALYST_PROMPT}` },
-        { role: 'system', content: `Context:\n${context}` },
-        { role: 'user', content: sectionPrompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 2000,
-    });
+    // Tier-1 chat model via the provider-aware LLM layer (Claude direct when
+    // an Anthropic key is set, OpenAI otherwise, with fallback). Previously
+    // this sent MODEL_REASONING ('claude-sonnet-4-6') to the OpenAI client,
+    // which 404s every call whenever Anthropic is configured.
+    const model = getChatModel(0.7, 2000, 'memo_generation');
+    const response = await model.invoke([
+      new SystemMessage(`${firmContextBlock}${MEMO_ANALYST_PROMPT}\n\nContext:\n${context}`),
+      new HumanMessage(sectionPrompt),
+    ]);
 
-    const generatedContent = response.choices[0].message.content;
+    const generatedContent = aiMessageText(response.content);
 
     // Update section
     const { data: updatedSection, error: updateError } = await supabase

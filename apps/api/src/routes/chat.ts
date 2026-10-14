@@ -1,8 +1,10 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { supabase } from '../supabase.js';
-import { openai, isAIEnabled, trackedChatCompletion } from '../openai.js';
+import { SystemMessage, HumanMessage, AIMessage, type BaseMessage } from '@langchain/core/messages';
+import { getChatModel, isLLMAvailable } from '../services/llm.js';
 import { MODEL_REASONING } from '../utils/aiModels.js';
+import { aiMessageText } from '../utils/aiMessageText.js';
 import { SHARED_GUARDRAILS } from '../services/agents/guardrails.js';
 import { log } from '../utils/logger.js';
 import { getOrgId, verifyDealAccess, verifyConversationAccess } from '../middleware/orgScope.js';
@@ -339,8 +341,9 @@ router.post('/conversations/:id/messages', async (req: Request, res: Response, n
 
     // Generate AI response
     let aiResponseContent = '';
+    const aiAvailable = isLLMAvailable();
 
-    if (isAIEnabled() && openai) {
+    if (aiAvailable) {
       try {
         // Build context from deal data
         let contextMessage = '';
@@ -360,29 +363,29 @@ ${deal.aiThesis ? `\nAI Investment Thesis: ${deal.aiThesis}` : ''}`;
         }
 
         // Build message history
-        const messages: any[] = [
-          { role: 'system', content: DEAL_ANALYST_PROMPT + '\n' + SHARED_GUARDRAILS + contextMessage }
+        const messages: BaseMessage[] = [
+          new SystemMessage(DEAL_ANALYST_PROMPT + '\n' + SHARED_GUARDRAILS + contextMessage),
         ];
 
         // Add previous messages (last 10 for context)
         const previousMessages = conversation.ChatMessage || [];
         previousMessages.slice(-10).forEach((msg: any) => {
-          messages.push({ role: msg.role, content: msg.content });
+          if (msg.role === 'user') messages.push(new HumanMessage(msg.content));
+          else if (msg.role === 'assistant') messages.push(new AIMessage(msg.content));
         });
 
         // Add current message
-        messages.push({ role: 'user', content });
+        messages.push(new HumanMessage(content));
 
-        const completion = await trackedChatCompletion('deal_chat', {
-          model: MODEL_REASONING,
-          messages,
-          max_tokens: 4096,
-          temperature: 0.7,
-        });
+        // Provider-aware tier-1 model (Claude direct when configured). This
+        // used to pass MODEL_REASONING to the OpenAI client, which fails
+        // whenever it resolves to a claude-* name.
+        const model = getChatModel(0.7, 4096, 'deal_chat');
+        const completion = await model.invoke(messages);
 
-        aiResponseContent = completion.choices[0]?.message?.content || 'I apologize, I was unable to generate a response.';
+        aiResponseContent = aiMessageText(completion.content) || 'I apologize, I was unable to generate a response.';
       } catch (aiError) {
-        log.error('OpenAI error', aiError);
+        log.error('Deal chat LLM error', aiError);
         aiResponseContent = 'I apologize, there was an error processing your request. Please try again.';
       }
     } else {
@@ -397,7 +400,7 @@ ${deal.aiThesis ? `\nAI Investment Thesis: ${deal.aiThesis}` : ''}`;
         conversationId: id,
         role: 'assistant',
         content: aiResponseContent,
-        metadata: { model: isAIEnabled() ? MODEL_REASONING : 'fallback' }
+        metadata: { model: aiAvailable ? MODEL_REASONING : 'fallback' }
       })
       .select()
       .single();
