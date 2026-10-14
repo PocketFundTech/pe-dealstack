@@ -8,7 +8,7 @@ import {
   SectionType,
   COMPREHENSIVE_IC_SECTIONS,
 } from './prompts.js';
-import { trackedClaudeMessage, isAnthropicAvailable } from '../../ai/client.js';
+import { trackedClaudeMessage, warmClaudeCache, isAnthropicAvailable } from '../../ai/client.js';
 import { log } from '../../../utils/logger.js';
 import { captureAgentError } from '../../../utils/sentryHelpers.js';
 import { resolveTimeoutMs } from '../agentBounds.js';
@@ -22,6 +22,9 @@ import { classifyAIErrorObject } from '../../../utils/aiErrors.js';
 // budget and legitimately take longer to write. Worst case stays inside the
 // 300s function limit — 12 sections / BATCH_SIZE 3 = 4 batches x 60s + delays.
 const SECTION_TIMEOUT_MS = 60_000;
+// The cache warm-up is prefill only (no output), so it returns in seconds;
+// past this the first batch just starts without it.
+const CACHE_WARM_TIMEOUT_MS = 20_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -108,6 +111,60 @@ function makePlaceholder(
   };
 }
 
+// ─── Shared, cached deal-context prefix ──────────────────────────────────────
+// Every section request (and the warm-up) renders the same prefix up to the
+// cache breakpoint: role 'memo' (same model + effort), MEMO_SYSTEM_PROMPT,
+// then this block as the first user content block. Anything section-specific
+// goes AFTER it — a single differing byte before the breakpoint misses.
+
+function dealContextBlock(context: MemoContext) {
+  return {
+    type: 'text' as const,
+    text: `## Deal Context\n\n${formatContextForLLM(context)}`,
+    cache_control: { type: 'ephemeral' as const },
+  };
+}
+
+/** Mirrors generateSection()'s early returns: false when it would return a
+ *  placeholder without calling the model. */
+function sectionCallsModel(sectionType: SectionType, context: MemoContext): boolean {
+  const promptConfig = SECTION_PROMPTS[sectionType];
+  if (!promptConfig) return false;
+  return !(promptConfig.requiresFinancials && (!context.financials || context.financials.length === 0));
+}
+
+/**
+ * Write the deal-context cache once, before the first batch. A batch starts
+ * its sections in parallel, so without this every section in batch 1 misses
+ * and writes the same entry (1.25x each) — the ledger showed ~43 section
+ * calls reading only ~15K tokens. After the warm-up every section reads it
+ * (0.1x). Skipped when fewer than two batch-1 sections call the model (the
+ * first real call would write it anyway, so a warm-up would be a pure extra
+ * write). Best-effort: warmClaudeCache never throws; on failure or timeout
+ * the batch runs as before.
+ */
+async function warmMemoContextCache(firstBatch: SectionType[], context: MemoContext): Promise<void> {
+  if (firstBatch.filter((t) => sectionCallsModel(t, context)).length < 2) return;
+
+  const timeoutMs = resolveTimeoutMs(CACHE_WARM_TIMEOUT_MS, 'MEMO_CACHE_WARM_TIMEOUT_MS');
+  const controller = new AbortController();
+  const handle = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const result = await warmClaudeCache({
+      operation: 'memo_cache_warm',
+      role: 'memo',
+      system: MEMO_SYSTEM_PROMPT,
+      // Breakpoint on the shared context block; the placeholder after it is
+      // read during prefill but never answered, and isn't part of the entry.
+      messages: [{ role: 'user', content: [dealContextBlock(context), { type: 'text', text: 'warmup' }] }],
+      signal: controller.signal,
+    });
+    if (result) log.debug('[memoAgent/pipeline] Deal-context cache warmed', result);
+  } finally {
+    clearTimeout(handle);
+  }
+}
+
 // ─── generateSection ──────────────────────────────────────────────────────────
 
 export async function generateSection(
@@ -140,7 +197,6 @@ export async function generateSection(
 
   try {
     const sectionPrompt = customPrompt ?? promptConfig.prompt;
-    const contextText = formatContextForLLM(context);
 
     const formatInstruction =
       includeTableData || includeChartConfig
@@ -148,11 +204,12 @@ export async function generateSection(
         : '\n\nReturn your response as clean HTML only (no markdown, no code fences).';
 
     // Deal context first, as a cached block that is byte-identical for every
-    // section of this memo; the section's own instructions follow it. The
-    // other sections in the run then read the context from cache instead of
-    // re-billing it in full (it is the bulk of every section's input).
+    // section of this memo (and the warm-up); the section's own instructions
+    // follow it. The other sections in the run then read the context from
+    // cache instead of re-billing it in full (it is the bulk of every
+    // section's input).
     const userContent = [
-      { type: 'text', text: `## Deal Context\n\n${contextText}`, cache_control: { type: 'ephemeral' } },
+      dealContextBlock(context),
       { type: 'text', text: `---\n\n${sectionPrompt}${formatInstruction}` },
     ];
 
@@ -307,6 +364,9 @@ export async function* generateAllSectionsStreaming(
   log.info(`[memoAgent/pipeline] Generating ${types.length} sections in batches of ${BATCH_SIZE}`);
 
   const sections: GeneratedSection[] = [];
+
+  if (opts.signal?.aborted) return;
+  await warmMemoContextCache(types.slice(0, BATCH_SIZE), context);
 
   for (let i = 0; i < types.length; i += BATCH_SIZE) {
     if (opts.signal?.aborted) return;
@@ -477,6 +537,19 @@ export async function critiqueAndRevise(
       .join('\n\n');
     const contextText = formatContextForLLM(context);
 
+    // Deliberately NOT cached, and not sharing the sections' cache entry:
+    // a cache read needs the identical prefix on the same model AND the same
+    // effort/structured-output settings. The critique differs on all three
+    // counts that render before the deal context — its own system prompt,
+    // output_config.format (structured output injects a system prompt, so
+    // adding it invalidates the cache) and effort 'high' vs the sections'
+    // 'medium' (an effort change always invalidates the messages cache,
+    // where the context lives). Aligning would mean downgrading the quality
+    // gate's effort, which stays pinned at high. The cache-preserving
+    // per-message effort switch exists only on newer models (Opus 5/5.5,
+    // Sonnet 5.5, Fable 5.1), not the memo role's Sonnet 5. And the critique
+    // sends the context exactly once per memo (revise doesn't resend it), so
+    // marking it cacheable here would only add the 1.25x write premium.
     const critiqueTimeoutMs = resolveTimeoutMs(CRITIQUE_TIMEOUT_MS, 'MEMO_CRITIQUE_TIMEOUT_MS');
     const critiqueController = new AbortController();
     let critiqueTimeoutHandle: NodeJS.Timeout | undefined;

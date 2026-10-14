@@ -138,11 +138,15 @@ function declinedAttempts(usage: unknown): AttemptUsage[] {
   return attempts.slice(0, -1).filter((it) => (it.output_tokens ?? 0) > 0);
 }
 
-export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<ClaudeCallResult> {
-  const cfg = getModelConfig(opts.role);
-  const client = getAnthropicClient();
-  const startedAt = Date.now();
-
+/**
+ * Request body shared by trackedClaudeMessage() and warmClaudeCache(). One
+ * builder so a cache warm-up renders byte-identical model/system/tools/effort
+ * to the real calls it warms — any difference before the breakpoint misses.
+ */
+function buildClaudeRequest(
+  cfg: ReturnType<typeof getModelConfig>,
+  opts: Omit<ClaudeCallOptions, 'operation' | 'role' | 'signal'>,
+): Record<string, unknown> {
   const request: Record<string, unknown> = {
     model: cfg.model,
     max_tokens: opts.maxTokens ?? cfg.maxTokens,
@@ -173,6 +177,15 @@ export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<Cla
   // (prod incident 2026-08-14: all memo section generation down).
   // Never send `thinking`: Fable 5 rejects explicit configs; other models
   // use their defaults.
+  return request;
+}
+
+export async function trackedClaudeMessage(opts: ClaudeCallOptions): Promise<ClaudeCallResult> {
+  const cfg = getModelConfig(opts.role);
+  const client = getAnthropicClient();
+  const startedAt = Date.now();
+
+  const request = buildClaudeRequest(cfg, opts);
 
   // Awaited (not fire-and-forget): Vercel can freeze the function once the
   // response is sent, dropping an un-awaited insert. A ledger failure must
@@ -362,4 +375,79 @@ export function trackedClaudeStream(opts: ClaudeStreamOptions): ClaudeStreamHand
   };
 
   return { runner, recordUsage };
+}
+
+export type ClaudeCacheWarmOptions = Omit<ClaudeCallOptions, 'outputSchema' | 'maxTokens'>;
+
+/**
+ * Pre-warm the prompt cache: a `max_tokens: 0` request runs prefill only,
+ * writing the cache at the caller's `cache_control` breakpoint, and returns
+ * with no content and zero output tokens billed. Use it before a burst of
+ * PARALLEL calls that share a prefix — started together, each of them would
+ * otherwise miss and write the same entry; after a warm-up they all read it.
+ *
+ * Pass the same role/system/tools/effort as the calls being warmed and put
+ * the breakpoint on the last block they share (not on a placeholder after
+ * it) — the request is built by the same buildClaudeRequest(). Structured
+ * output is not accepted here: `max_tokens: 0` rejects `output_config.format`
+ * and `stream: true`, so this call is sent non-streaming (streaming is a
+ * transport option, not part of the cached prefix).
+ *
+ * Best-effort by contract: never throws. The ledger records the warm-up
+ * under `opts.operation` like any other call; returns the cache tokens
+ * written/read, or null if the call failed.
+ */
+export async function warmClaudeCache(
+  opts: ClaudeCacheWarmOptions,
+): Promise<{ cacheReadTokens: number; cacheWriteTokens: number } | null> {
+  const cfg = getModelConfig(opts.role);
+  const startedAt = Date.now();
+  const request = { ...buildClaudeRequest(cfg, opts), max_tokens: 0 };
+
+  const record = async (
+    status: 'success' | 'error',
+    model: string,
+    inTok: number,
+    cache: { cacheReadTokens: number; cacheWrite5mTokens: number; cacheWrite1hTokens: number },
+  ): Promise<void> => {
+    try {
+      await recordUsageEvent({
+        operation: opts.operation,
+        provider: 'anthropic',
+        status,
+        model,
+        promptTokens: inTok,
+        completionTokens: 0,
+        ...cache,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch {
+      /* ledger is best-effort */
+    }
+  };
+
+  try {
+    const client = getAnthropicClient();
+    const message = await client.beta.messages.create(
+      request as never,
+      opts.signal ? { signal: opts.signal } : undefined,
+    );
+    const usage = (message as { usage?: Parameters<typeof extractCacheTokens>[0] & { input_tokens?: number | null } }).usage;
+    const cache = extractCacheTokens(usage);
+    await record('success', (message as { model?: string }).model ?? cfg.model, usage?.input_tokens ?? 0, cache);
+    return {
+      cacheReadTokens: cache.cacheReadTokens,
+      cacheWriteTokens: cache.cacheWrite5mTokens + cache.cacheWrite1hTokens,
+    };
+  } catch (err) {
+    // A failed warm-up was rejected before prefill (nothing billed) or
+    // aborted; record the attempt at zero so the ledger still shows it.
+    await record('error', cfg.model, 0, { cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 });
+    log.warn('warmClaudeCache failed — continuing without a warm cache', {
+      operation: opts.operation,
+      model: cfg.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
