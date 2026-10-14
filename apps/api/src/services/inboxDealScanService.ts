@@ -26,6 +26,7 @@ import {
 import type { Integration } from '../integrations/_platform/types.js';
 import type { GmailMessageFull } from '../integrations/gmail/types.js';
 import { extractDealDataFromText } from './aiExtractor.js';
+import { classifyDealEmails } from './inboxDealClassifier.js';
 import { extractTextFromPDF } from './pdfExtractor.js';
 import {
   scoreDealSignals,
@@ -481,13 +482,52 @@ export async function scanInboxForDeals(args: {
 
   // Gate out low-signal noise before the LLM; keep a count so the widget can
   // show "N skipped as low-signal" instead of silently discarding them.
-  const toExtract = messages.filter(
+  const passedGate = messages.filter(
     (m) => (signalByMsgId.get(m.id)?.score ?? 0) >= LLM_EXTRACTION_GATE,
   );
-  const skippedLowSignal = messages.length - toExtract.length;
+  const skippedLowSignal = messages.length - passedGate.length;
   emit({
     t: 'status',
-    msg: `${toExtract.length} passed the signal gate · ${skippedLowSignal} skipped — extracting with AI…`,
+    msg: `${passedGate.length} passed the signal gate · ${skippedLowSignal} skipped — checking which are deal emails…`,
+  });
+
+  // AI pre-filter: one cheap Haiku call over every gate-passing email decides
+  // which are actually deal emails, so the expensive per-email extraction only
+  // runs on those. Emails with a deal-document attachment (CIM/teaser/IM) are
+  // always kept — their deal content may live only in the not-yet-parsed PDF.
+  // Fail open: if the check can't run (null), extract everything as before.
+  const dealIds = await classifyDealEmails(
+    passedGate.map((m) => ({
+      id: m.id,
+      subject: m.headers.Subject || '(no subject)',
+      from: m.headers.From || 'unknown',
+      body: m.body || m.snippet || '',
+      attachmentNames: m.attachments.map((a) => a.filename).filter(Boolean),
+    })),
+  );
+  const toExtract = dealIds
+    ? passedGate.filter((m) => dealIds.has(m.id) || dealAttachByMsgId.get(m.id))
+    : passedGate;
+  const filteredNotDeal = passedGate.length - toExtract.length;
+  if (dealIds) {
+    for (const m of passedGate) {
+      if (!toExtract.includes(m)) {
+        emit({ t: 'skip', subject: m.headers.Subject || '(no subject)', reason: 'not a deal email (AI pre-check)' });
+      }
+    }
+  }
+  log.info('inboxDealScan: deal-email pre-filter', {
+    orgId,
+    passedGate: passedGate.length,
+    toExtract: toExtract.length,
+    filteredNotDeal,
+    failedOpen: dealIds === null,
+  });
+  emit({
+    t: 'status',
+    msg: dealIds
+      ? `${toExtract.length} look like deal emails · ${filteredNotDeal} filtered out — extracting with AI…`
+      : `Extracting ${toExtract.length} email${toExtract.length === 1 ? '' : 's'} with AI…`,
   });
 
   // Highest-signal emails first — they get first claim on the shared PDF-work
@@ -623,6 +663,7 @@ export async function scanInboxForDeals(args: {
   log.info('inboxDealScan: complete', {
     orgId,
     candidates: candidates.length,
+    filteredNotDeal,
     ...scanProcess,
     attachmentsUnread: pdfBudget.attachmentsUnread,
   });
