@@ -25,6 +25,7 @@ import { ALLOWED_MIME_TYPES } from '../services/fileValidator.js';
 import { handleDocumentUpload } from './documents-upload.js';
 import { notifyDealTeam } from './notifications.js';
 import { checkRequestAccess, computeRequestStatus } from '../services/docRequests.js';
+import { runAsOrgSystem, runWithDealUsage } from '../middleware/usageContext.js';
 
 /**
  * Deal has NO `companyName` column — the company is a relation
@@ -213,7 +214,12 @@ router.post('/:token/items/:itemId/upload', uploadLimiter, acceptSingleFile('fil
       },
     } as unknown as Response;
 
-    await handleDocumentUpload(uploadReq, uploadRes);
+    // No signed-in user on this route, so bind the AI usage of the upload
+    // (extraction, summary, embeddings) to the requesting org and deal —
+    // otherwise recordUsageEvent skips it with "no usage context bound".
+    await runAsOrgSystem(docRequest.organizationId, 'doc-request-portal', () =>
+      runWithDealUsage(docRequest.dealId, () => handleDocumentUpload(uploadReq, uploadRes)),
+    );
 
     const result = captured as { status: number; body: any } | null;
     if (!result || result.status >= 400) {

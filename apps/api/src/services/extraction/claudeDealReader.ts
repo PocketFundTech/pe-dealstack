@@ -20,8 +20,11 @@
  * `finalizeExtractedDealData` — the deal-scoring semantics can never drift
  * between engines.
  *
- * On ANY failure this returns null and the caller falls back to the legacy
- * extractor chain — deal creation is never blocked by this engine.
+ * On a failure this returns null and the caller falls back to the legacy
+ * extractor chain — deal creation is never blocked by this engine. The one
+ * exception is the provider refusing the account itself (out of credit,
+ * spend limit, bad key): that throws AIProviderUnavailableError, because
+ * the legacy chain would only bill more calls that fail the same way.
  */
 
 import { toFile } from '@anthropic-ai/sdk';
@@ -35,6 +38,7 @@ import {
 import { getTodayIso } from '../../utils/dates.js';
 import { RAW_UNIT_SCALES } from './extractionSchema.js';
 import { wrapDocumentContent } from '../agents/guardrails.js';
+import { toAccountRejection } from '../../utils/aiErrors.js';
 
 const FILES_BETA = 'files-api-2025-04-14';
 /** Full-text cap for non-PDF inputs (Word/Excel/pasted) — no deep pass reads those. */
@@ -70,7 +74,14 @@ function fieldSchema(valueType: 'string' | 'number', description: string, withSo
     // INGEST_ENGINE=claude read). The 0-100 range lives in the description.
     confidence: { type: 'number', description: 'Confidence score from 0 to 100' },
   };
-  if (withSource) props.source = { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Short verbatim snippet (or page reference) supporting the value' };
+  // `source` is a plain string, empty when there is none — NOT a nullable
+  // union. The API caps how many union-typed parameters a schema may have
+  // ("Schemas contains too many parameters with union types (20 parameters
+  // …)"): with nullable sources this schema had 20 and every deal read 400'd
+  // on both Haiku and Sonnet 5, falling back to the legacy extractor (found
+  // 2026-10-13). As plain strings it has 14, accepted by both.
+  // finalizeExtractedDealData maps '' back to null.
+  if (withSource) props.source = { type: 'string', description: 'Short verbatim snippet (or page reference) supporting the value. Empty string when there is none.' };
   return {
     type: 'object',
     properties: props,
@@ -181,6 +192,10 @@ export async function readDealDocument(input: ClaudeDealReaderInput): Promise<Ex
       } as never)) as { id: string };
       uploadedFileId = uploaded.id;
     } catch (err) {
+      // Out of credit / bad key: stop here — the legacy fallback the caller
+      // would run next fails the same way and bills a second call.
+      const rejected = toAccountRejection(err, 'Anthropic');
+      if (rejected) throw rejected;
       log.error('claudeDealReader: file upload failed', err, { fileName });
       return null;
     }
@@ -227,6 +242,16 @@ export async function readDealDocument(input: ClaudeDealReaderInput): Promise<Ex
     if (err instanceof AIRefusalError) {
       log.warn('claudeDealReader: read refused by safety classifiers', { fileName, category: err.category });
       return null;
+    }
+    // Credit / auth rejection: surface it (routes map it to a 503 that says
+    // so) instead of returning null, which sends the caller into the legacy
+    // aiExtractor chain (Sonnet 4.6 → gpt-4o) — paid calls that fail too.
+    // Anything else (timeout, rate limit, overload, bad output) still
+    // returns null and keeps that fallback.
+    const rejected = toAccountRejection(err, 'Anthropic');
+    if (rejected) {
+      log.warn('claudeDealReader: provider rejected the account — not falling back', { fileName, reason: rejected.reason });
+      throw rejected;
     }
     log.error('claudeDealReader: extraction call failed', err, { fileName });
     return null;

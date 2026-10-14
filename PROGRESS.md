@@ -5,6 +5,28 @@ This file tracks all progress, changes, new features, updates, and bug fixes mad
 
 ---
 
+### Session 106 — October 11, 2026
+
+#### Timestamp: October 11, 2026 — 20:38 IST
+
+#### Goal: Measure every AI token the product spends, find why it costs what it does, and write down how to cut it.
+
+#### What was found
+
+- **Spend so far:** $27.86 recorded across 3,482 AI calls (6 May – 10 Oct); about $54 at list price once 785 unpriced Sonnet 4.5/4.6 calls are counted. A third of all calls failed.
+- **Last 7 days:** $0.91 recorded (200,552 tokens). Vercel logs showed a few more calls the ledger missed (broker uploads through the document-request portal run with no usage context).
+- **Nothing has succeeded since 7–8 Oct.** The replacement Anthropic key is "not scoped to a workspace" and OpenAI is out of credit.
+- **Cost per deal (estimate):** typical deal $2.40–5.08. Deal chat is the largest item ($1.00–2.40 for 20 messages) because every message re-sends the full financial statements (7–13K tokens), the system prompt, 18 tool definitions and firm context twice, and every tool step repeats it.
+- **Broken paths:** memo section AI chat, the old chat route and two `/ai` endpoints send `claude-sonnet-4-6` to the OpenAI client and always fail.
+
+#### Output
+
+- `docs/AI-COST-OPTIMIZATION-PLAN.md`: the full work list (deal chat, legacy Sonnet 4.6 defaults, memo caching, inbox scan, Fable input trimming, NDA cap, broken routes, ledger gaps), with file/line references, measurements, expected savings and how to verify each. Target: typical deal ~$1.40–3.05.
+- Live usage dashboard (Claude artifact) and two PDF reports (all-time usage; cost per feature).
+- No code changed in this session's PR.
+
+---
+
 ### Session 105 — October 6, 2026
 
 #### Goal: Finish the code-only follow-ups from the 1 Oct QA report and the 5 Oct testing doc (PR #203), and set up Google sign-in locally.

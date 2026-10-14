@@ -10,7 +10,7 @@ import { SystemMessage, HumanMessage, AIMessage } from '@langchain/core/messages
 import type { BaseMessage } from '@langchain/core/messages';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
-import { getChatModel } from './llm.js';
+import { getChatModel, getChatModelName } from './llm.js';
 import { getFirmContextBlock } from './firmContextService.js';
 import { getContactEmailSummary } from './gmailContactsService.js';
 
@@ -45,7 +45,7 @@ export async function chatAboutContact(
   history: ContactChatHistoryItem[] = [],
   authUserId?: string
 ): Promise<ContactChatResult> {
-  const modelName = 'claude-sonnet-4-6';
+  const modelName = getChatModelName();
 
   // 1. Contact fields (org-scoped).
   const { data: contact } = await supabase

@@ -582,7 +582,8 @@ function normalizeField<T>(field: any, defaultValue: T): ExtractedField<T> {
   return {
     value: field.value ?? defaultValue,
     confidence: typeof field.confidence === 'number' ? field.confidence : 0,
-    source: field.source,
+    // The Claude deal reader returns '' for "no source" (see claudeDealReader fieldSchema).
+    source: field.source === '' ? null : field.source,
   };
 }
 
@@ -594,6 +595,6 @@ function normalizeNumericField(field: any): ExtractedField<number | null> {
   return {
     value,
     confidence: typeof field.confidence === 'number' ? field.confidence : 0,
-    source: field.source,
+    source: field.source === '' ? null : field.source,
   };
 }

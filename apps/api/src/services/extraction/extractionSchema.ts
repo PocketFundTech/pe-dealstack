@@ -197,7 +197,15 @@ export const EXTRACTION_USER_INSTRUCTION = `Extract all income statement, balanc
  * columns, but a fiscal-year label like "FY26" is ambiguous without today's
  * date as an anchor.
  */
-export function buildExcelContainerInstruction(todayIso: string = getTodayIso()): string {
+export function buildExcelContainerInstruction(todayIso: string = getTodayIso(), noContentSheets: string[] = []): string {
+  // The uploaded file is never trimmed (sheet indexes are the sourcePage
+  // contract, and rewriting the workbook loses number formats / styles the
+  // model reads scale from) — the pre-scan only tells the model which tabs
+  // it can skip printing, so their cells don't ride along in every later
+  // code-execution turn.
+  const skipNote = noContentSheets.length > 0
+    ? `\n\nPRE-SCAN: these sheets hold no financial figures (almost no numbers and no financial, unit or fiscal-year wording) — you do not need to print them: ${noContentSheets.map((n) => JSON.stringify(n)).join(', ')}. Still count them when numbering sheets for sourcePage.`
+    : '';
   return `A spreadsheet file has been uploaded to your code execution environment.
 
 DATE CONTEXT — TODAY IS ${todayIso}. Use this date, not your training cutoff, to classify periods as HISTORICAL (ends on or before ${todayIso}) vs PROJECTED (ends after ${todayIso}).
@@ -208,7 +216,7 @@ Read the ACTUAL cells with Python (pandas / openpyxl) — never work from a summ
 3. Identify which sheets/ranges contain financial statements (income statement, balance sheet, cash flow) versus assumptions, schedules, or other content. Prefer tabs that hold the company's REPORTED historical statements (names like "*Source*", "BS Source", "CFS Source", "Historical", "Actuals", "QuickBooks"); extract every balance-sheet and cash-flow line from them. Never take the balance sheet or cash flow from valuation, returns, DCF, sensitivity or summary/analysis tabs when a reported statement exists. Name the sheet you used for each statement in sourceQuote.
 4. Determine unit scale and currency from cells you actually printed (titles and header rows included) — never assume them. A sheet titled or headed in crore ("INR crore", "₹ Cr") is unitScale CRORES; in lakh ("₹ lakh", "Rs. lacs") is LAKHS. Use UNITS only when the cells hold whole currency units.
 
-Then extract all income statement, balance sheet, and cash flow data into the required JSON structure. Every value must come from a cell you printed. For sourceQuote use the sheet name + cell reference + printed value (e.g. "IS!B7: 36,286"); for sourcePage use the 1-based sheet index.`;
+Then extract all income statement, balance sheet, and cash flow data into the required JSON structure. Every value must come from a cell you printed. For sourceQuote use the sheet name + cell reference + printed value (e.g. "IS!B7: 36,286"); for sourcePage use the 1-based sheet index.${skipNote}`;
 }
 
 /**

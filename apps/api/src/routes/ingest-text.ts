@@ -11,7 +11,8 @@ import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerge
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
-import { hashContent, signExtractionToken, verifyExtractionToken } from '../services/extractionToken.js';
+import { hashContent, signExtractionToken, verifyExtractionToken, extractionTokenUsage } from '../services/extractionToken.js';
+import { runWithPendingDeal, bindDealToUsage, pendingDealUsage, adoptPendingDealUsage } from '../middleware/usageContext.js';
 import type { ExtractedDealData } from '../services/aiExtractor.js';
 import { resolveUserId } from './notifications.js';
 import { findExistingDocument, logDuplicateSkip } from '../services/documentDedup.js';
@@ -39,7 +40,9 @@ const textIngestSchema = z.object({
 });
 
 // POST /api/ingest/text — Create deal from raw pasted text
-subRouter.post('/text', async (req, res) => {
+// The AI read runs before the deal exists; its usage is tagged once the
+// deal is known (AI cost plan H4).
+subRouter.post('/text', (req, res) => runWithPendingDeal(async () => {
   try {
     const orgId = getOrgId(req);
     const validation = textIngestSchema.safeParse(req.body);
@@ -54,12 +57,14 @@ subRouter.post('/text', async (req, res) => {
 
     // Step 1: Extract deal data. INGEST_ENGINE=claude uses the native reader
     // with the FULL text (200k-char window vs the legacy 20k truncation);
-    // any failure falls back to the legacy extractor — same ladder as
-    // ingest-upload.ts.
+    // any failure but an out-of-credit / bad-key rejection (503) falls back
+    // to the legacy extractor — same ladder as ingest-upload.ts.
     let aiData = null as Awaited<ReturnType<typeof extractDealDataFromText>>;
     // Second step of the duplicate check — reuse the extraction (see ingest-upload.ts).
     if (extractionToken) {
       aiData = verifyExtractionToken<ExtractedDealData>(extractionToken, { orgId, kind: 'text', contentHash });
+      // Step 1's read was recorded before any deal existed — tag it with this step's deal.
+      if (aiData) await adoptPendingDealUsage(extractionTokenUsage(extractionToken, { orgId, kind: 'text', contentHash }));
       if (!aiData) log.warn('Text ingest: extraction token rejected — extracting again');
     }
     if (!aiData && (process.env.INGEST_ENGINE || 'legacy') === 'claude') {
@@ -108,7 +113,7 @@ subRouter.post('/text', async (req, res) => {
         return res.status(200).json({
           success: true,
           duplicateCheck: { candidates, extractedCompanyName: aiData.companyName.value ?? null },
-          extractionToken: signExtractionToken({ orgId, kind: 'text', contentHash, data: extractionForToken }),
+          extractionToken: signExtractionToken({ orgId, kind: 'text', contentHash, data: extractionForToken, usage: pendingDealUsage() }),
         });
       }
     }
@@ -212,6 +217,9 @@ subRouter.post('/text', async (req, res) => {
       if (dealError) throw dealError;
       deal = newDeal;
     }
+
+    // Per-deal AI cost: tag the read above with the deal it landed in.
+    await bindDealToUsage(deal.id);
 
     // Use the text's byte length as fileSize so re-pasting the exact same
     // content matches the dedup triple. (Pasting a different snippet under
@@ -333,6 +341,6 @@ subRouter.post('/text', async (req, res) => {
     log.error('Text ingest error', error);
     res.status(500).json({ error: 'Failed to process text input' });
   }
-});
+}));
 
 export default subRouter;

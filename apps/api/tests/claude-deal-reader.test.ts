@@ -197,3 +197,47 @@ describe('hasUsablePdfText', () => {
     expect(hasUsablePdfText('a'.repeat(500), null)).toBe(false);
   });
 });
+
+// AI cost item E2: an account rejection (out of credit / bad key) must not
+// return null — null sends the ingest routes into the legacy aiExtractor
+// chain (Sonnet 4.6 → gpt-4o), paid calls that fail the same way (5 Oct).
+describe('readDealDocument — provider rejections', () => {
+  const TEXT = 'CIM: FY24 revenue of $160M, EBITDA $28M. ' + 'x'.repeat(500);
+  const outOfCredit = () => Object.assign(new Error('400 Your credit balance is too low to access the Anthropic API.'), { status: 400 });
+  const badKey = () => Object.assign(new Error('401 invalid x-api-key'), { status: 401, error: { type: 'authentication_error' } });
+
+  it('out of credit → throws AIProviderUnavailableError (quota) instead of returning null', async () => {
+    const { AIProviderUnavailableError } = await import('../src/utils/aiErrors.js');
+    throwNext = outOfCredit();
+    const read = await getReader();
+    const err = await read({ fileName: 'cim.txt', fullText: TEXT, sourceLength: TEXT.length }).catch((e) => e);
+    expect(err).toBeInstanceOf(AIProviderUnavailableError);
+    expect(err.reason).toBe('quota');
+  });
+
+  it('bad key → throws AIProviderUnavailableError (auth), also on the native-PDF upload', async () => {
+    const { AIProviderUnavailableError } = await import('../src/utils/aiErrors.js');
+    throwNext = badKey();
+    const read = await getReader();
+    const err = await read({ fileName: 'cim.txt', fullText: TEXT, sourceLength: TEXT.length }).catch((e) => e);
+    expect(err).toBeInstanceOf(AIProviderUnavailableError);
+    expect(err.reason).toBe('auth');
+
+    uploadMock.mockRejectedValueOnce(outOfCredit());
+    const uploadErr = await read({ fileBuffer: Buffer.from('%PDF'), fileName: 'scan.pdf', sourceLength: 0 }).catch((e) => e);
+    expect(uploadErr).toBeInstanceOf(AIProviderUnavailableError);
+    expect(calls).toHaveLength(1); // the upload failure never reached a model call
+  });
+
+  it('rate limit, overload and timeouts still return null (caller keeps its fallback)', async () => {
+    const read = await getReader();
+    for (const e of [
+      Object.assign(new Error('429 rate limited'), { status: 429, error: { type: 'rate_limit_error' } }),
+      Object.assign(new Error('529 Overloaded'), { status: 529 }),
+      new Error('Request timed out.'),
+    ]) {
+      throwNext = e;
+      await expect(read({ fileName: 'cim.txt', fullText: TEXT, sourceLength: TEXT.length })).resolves.toBeNull();
+    }
+  });
+});

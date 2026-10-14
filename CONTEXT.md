@@ -11,6 +11,8 @@ One Vercel project `pocket-funds-projects/pe-dealstack` serves `deals.avise.io` 
 ## 🔴 Blocking right now
 1. **AI credit.** Anthropic and OpenAI have both run out more than once (28 Sep, 1 Oct, 5 Oct). Every AI feature fails while
    either is out. Check first: `vercel logs --environment production --since 1h --query "ai_quota_exhausted"`.
+   **Since 8 Oct the new Anthropic key fails** with "not scoped to a workspace": recreate it inside a workspace in the
+   Anthropic Console and swap `ANTHROPIC_API_KEY` in Vercel. OpenAI is also out of credit (10 Oct).
 2. **Google sign-in on production.** Gmail / Google connect needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
    `APP_URL=https://app.avise.io`, `OAUTH_STATE_SECRET` and `CRON_SECRET` in Vercel (someone with Vercel access), then a
    redeploy. Works locally already. The Google app is in Testing mode (≤100 named users, reconnect every 7 days).
@@ -64,6 +66,8 @@ for the #183 period-key backfill + unique index (founder runs; the app works bef
 - After credit is back: re-extract SRM; Pushkar and Dev re-test.
 
 ## What's next (engineering)
+0. **AI cost cuts:** work through [`docs/AI-COST-OPTIMIZATION-PLAN.md`](docs/AI-COST-OPTIMIZATION-PLAN.md) one item at a time
+   (deal chat first: it is about $1.00–2.40 of a typical $2.40–5.08 deal). Draft PR `docs/ai-cost-optimization-plan`.
 1. Merge #203 / #204 / #207 / #208 once CI runs and they're tested.
 2. Kondo / LinkedIn Deal Finder (1 Oct #23) — blocked on API docs.
 3. Optional: split Google scopes so Calendar / Drive / Docs can be published without the Gmail assessment.

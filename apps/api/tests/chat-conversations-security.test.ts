@@ -25,6 +25,10 @@ vi.mock('../src/openai.js', () => ({
   isAIEnabled: () => false,
   trackedChatCompletion: vi.fn(),
 }));
+vi.mock('../src/services/llm.js', () => ({
+  isLLMAvailable: () => false,
+  getChatModel: vi.fn(),
+}));
 
 const verifyDealAccess = vi.fn();
 const verifyConversationAccess = vi.fn();

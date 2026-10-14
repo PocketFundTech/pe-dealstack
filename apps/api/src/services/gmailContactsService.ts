@@ -620,7 +620,8 @@ ${corpus}`;
   let summary = '';
   let highlights: string[] = [];
   try {
-    const model = getChatModel(0.3, SUMMARY_MAX_TOKENS, SUMMARY_OPERATION);
+    // Haiku tier: a short grounded summary of supplied emails doesn't need Sonnet.
+    const model = getChatModel(0.3, SUMMARY_MAX_TOKENS, SUMMARY_OPERATION, { tier: 'simple' });
     const result = await model.invoke([new SystemMessage(systemPrompt), new HumanMessage(humanPrompt)]);
     const text =
       typeof result.content === 'string'

@@ -24,6 +24,11 @@ import {
   formatLineItemHintBlock,
   type SheetStructureHints,
 } from './excelStructureHints.js';
+import {
+  looksLikeStatement,
+  noFinancialContentSheetsOf,
+  profileSheetContent,
+} from './excelSheetFilter.js';
 
 // Re-export the shared merge-expander so existing call sites (tests,
 // Phase-3 parallel agents) keep importing from this module without
@@ -238,6 +243,68 @@ export interface StructuredExcelResult {
   perSheetHints: { sheetName: string; hints: SheetStructureHints }[];
 }
 
+/** Legacy selection: score by name, drop SKIP_PATTERNS names. */
+function selectSheetsByName(workbook: XLSX.WorkBook): { name: string; score: number }[] {
+  // Score and sort sheets by financial relevance.
+  const scoredSheets = workbook.SheetNames
+    .map(name => ({ name, score: scoreSheet(name) }))
+    .filter(s => s.score > 0) // skip junk (score = -1)
+    .sort((a, b) => b.score - a.score); // highest score first
+
+  // If no sheets scored above junk threshold, try all non-junk sheets.
+  const sheetsToProcess = scoredSheets.length > 0
+    ? scoredSheets
+    : workbook.SheetNames
+        .filter(name => !SKIP_PATTERNS.some(re => re.test(name.trim())))
+        .map(name => ({ name, score: 10 }));
+
+  log.info('Excel extractor: sheet analysis', {
+    totalSheets: workbook.SheetNames.length,
+    scoredSheets: scoredSheets.map(s => `${s.name} (${s.score})`),
+    processing: sheetsToProcess.map(s => s.name),
+    skipped: workbook.SheetNames.filter(name => scoreSheet(name) === -1),
+  });
+
+  return sheetsToProcess;
+}
+
+/**
+ * Claude-engine selection (opts.contentAware): keep every sheet except the
+ * ones that clearly have no financial content; a SKIP_PATTERNS name is only
+ * honoured when the sheet doesn't read like a statement. Highest name score
+ * first, same as the legacy order.
+ */
+function selectSheetsByContent(workbook: XLSX.WorkBook): { name: string; score: number }[] {
+  const noContent = new Set(noFinancialContentSheetsOf(workbook));
+  const kept: { name: string; score: number }[] = [];
+  const dropped: string[] = [];
+  for (const name of workbook.SheetNames) {
+    const score = scoreSheet(name);
+    if (noContent.has(name)) {
+      dropped.push(`${name} (no financial content)`);
+      continue;
+    }
+    if (score === -1) {
+      if (!looksLikeStatement(profileSheetContent(workbook.Sheets[name], name))) {
+        dropped.push(`${name} (junk name)`);
+        continue;
+      }
+      kept.push({ name, score: 10 }); // statement rows under an odd name
+      continue;
+    }
+    kept.push({ name, score });
+  }
+  kept.sort((a, b) => b.score - a.score);
+
+  log.info('Excel extractor: sheet analysis', {
+    mode: 'content',
+    totalSheets: workbook.SheetNames.length,
+    processing: kept.map((s) => `${s.name} (${s.score})`),
+    dropped,
+  });
+  return kept;
+}
+
 /**
  * Private helper: process one workbook into the per-sheet shape both
  * `extractStructuredExcel` and `extractSheetsFromExcel` need.
@@ -261,7 +328,22 @@ interface ProcessedSheet {
   lineItemBlock: string; // formatLineItemHintBlock output (may be '')
 }
 
-function processWorkbookSheets(buffer: Buffer): ProcessedSheet[] | null {
+/**
+ * Options for the Claude extraction engine's use of the flattener.
+ *
+ * `contentAware` swaps the name-only junk filter for a content check
+ * (excelSheetFilter.ts): a sheet is left out only when it clearly holds no
+ * financial content (almost no numbers AND no financial / unit / fiscal-year
+ * wording), and a sheet whose ROWS read like a statement is kept even when
+ * its name is on SKIP_PATTERNS ("Sheet1" — every CSV —, "Dashboard",
+ * "Output"). Off by default so the legacy per-sheet classifier fan-out is
+ * unchanged.
+ */
+export interface ExcelExtractOptions {
+  contentAware?: boolean;
+}
+
+function processWorkbookSheets(buffer: Buffer, opts: ExcelExtractOptions = {}): ProcessedSheet[] | null {
   let workbook: XLSX.WorkBook;
   try {
     workbook = XLSX.read(buffer, {
@@ -280,25 +362,9 @@ function processWorkbookSheets(buffer: Buffer): ProcessedSheet[] | null {
     return null;
   }
 
-  // Score and sort sheets by financial relevance.
-  const scoredSheets = workbook.SheetNames
-    .map(name => ({ name, score: scoreSheet(name) }))
-    .filter(s => s.score > 0) // skip junk (score = -1)
-    .sort((a, b) => b.score - a.score); // highest score first
-
-  // If no sheets scored above junk threshold, try all non-junk sheets.
-  const sheetsToProcess = scoredSheets.length > 0
-    ? scoredSheets
-    : workbook.SheetNames
-        .filter(name => !SKIP_PATTERNS.some(re => re.test(name.trim())))
-        .map(name => ({ name, score: 10 }));
-
-  log.info('Excel extractor: sheet analysis', {
-    totalSheets: workbook.SheetNames.length,
-    scoredSheets: scoredSheets.map(s => `${s.name} (${s.score})`),
-    processing: sheetsToProcess.map(s => s.name),
-    skipped: workbook.SheetNames.filter(name => scoreSheet(name) === -1),
-  });
+  const sheetsToProcess = opts.contentAware
+    ? selectSheetsByContent(workbook)
+    : selectSheetsByName(workbook);
 
   const out: ProcessedSheet[] = [];
   for (const { name, score } of sheetsToProcess) {
@@ -355,8 +421,8 @@ function processWorkbookSheets(buffer: Buffer): ProcessedSheet[] | null {
  *   - NEW: walks the grid for period rows and line-item labels
  *     (excelStructureHints.ts) and emits prompt-ready hint blocks
  */
-export function extractStructuredExcel(buffer: Buffer): StructuredExcelResult | null {
-  const processed = processWorkbookSheets(buffer);
+export function extractStructuredExcel(buffer: Buffer, opts: ExcelExtractOptions = {}): StructuredExcelResult | null {
+  const processed = processWorkbookSheets(buffer, opts);
   if (!processed || processed.length === 0) {
     if (processed) log.warn('Excel extractor: no meaningful content found');
     return null;
@@ -410,8 +476,8 @@ export function extractStructuredExcel(buffer: Buffer): StructuredExcelResult | 
  * hints aren't thrown away — `extractNode.ts` does this for the LLM
  * classifier path.
  */
-export function extractTextFromExcel(buffer: Buffer): string | null {
-  const result = extractStructuredExcel(buffer);
+export function extractTextFromExcel(buffer: Buffer, opts: ExcelExtractOptions = {}): string | null {
+  const result = extractStructuredExcel(buffer, opts);
   return result ? result.text : null;
 }
 

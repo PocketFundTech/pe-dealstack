@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { supabase } from '../supabase.js';
 import { extractDealDataFromText, ExtractedDealData } from '../services/aiExtractor.js';
+import { runWithPendingDeal, bindDealToUsage, pendingDealUsage, adoptPendingDealUsage } from '../middleware/usageContext.js';
 import { embedDocument } from '../rag.js';
 import { log } from '../utils/logger.js';
 import { captureAgentError } from '../utils/sentryHelpers.js';
@@ -18,7 +19,7 @@ import { findExistingDocument, logDuplicateSkip } from '../services/documentDedu
 import { runAfterResponse } from '../utils/afterResponse.js';
 import { emitWebhookEvent } from '../services/outboundWebhooks.js';
 import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
-import { hashContent, signExtractionToken, verifyExtractionToken, wantsDuplicateCheck } from '../services/extractionToken.js';
+import { hashContent, signExtractionToken, verifyExtractionToken, extractionTokenUsage, wantsDuplicateCheck } from '../services/extractionToken.js';
 
 const router = Router();
 
@@ -135,7 +136,15 @@ async function uploadDocumentToStorage(
   return { filePath };
 }
 
-export async function runIngestFromBuffer(
+export function runIngestFromBuffer(
+  input: IngestBufferInput,
+): Promise<{ status: number; body: unknown }> {
+  // The AI read that decides which deal this document creates or joins runs
+  // before the deal exists; its usage is tagged once the deal is known.
+  return runWithPendingDeal(() => ingestFromBuffer(input));
+}
+
+async function ingestFromBuffer(
   input: IngestBufferInput,
 ): Promise<{ status: number; body: unknown }> {
   const { buffer, mimeType, documentName, fileSize, req } = input;
@@ -156,6 +165,7 @@ export async function runIngestFromBuffer(
       if (!dealAccess) {
         return { status: 404, body: { error: 'Deal not found' } };
       }
+      await bindDealToUsage(targetDealId);
       concurrentUploadPromise = uploadDocumentToStorage(targetDealId, documentName, buffer, mimeType);
     }
 
@@ -277,6 +287,9 @@ export async function runIngestFromBuffer(
     const contentHash = req.body.extractionToken || checkDuplicates ? hashContent(buffer) : '';
     if (req.body.extractionToken) {
       aiData = verifyExtractionToken<ExtractedDealData>(req.body.extractionToken, { orgId, kind: 'upload', contentHash });
+      // The read that produced this extraction was recorded in step 1, before
+      // any deal existed — tag it with the deal this step lands in.
+      if (aiData) await adoptPendingDealUsage(extractionTokenUsage(req.body.extractionToken, { orgId, kind: 'upload', contentHash }));
       if (aiData) log.info('Ingest reusing extraction from the duplicate-check step', { documentName });
       else log.warn('Ingest: extraction token rejected — reading the document again', { documentName });
     }
@@ -284,9 +297,11 @@ export async function runIngestFromBuffer(
 
     // INGEST_ENGINE=claude — native full-document read (whole PDF via the
     // Files API; full text for other formats). Returns the exact
-    // ExtractedDealData shape, so everything downstream is unchanged. Any
+    // ExtractedDealData shape, so everything downstream is unchanged. A
     // failure falls through to the legacy chain below — deal creation is
-    // never blocked by the new engine.
+    // never blocked by the new engine — except an out-of-credit / bad-key
+    // rejection, which throws AIProviderUnavailableError (503 below) rather
+    // than paying the legacy chain to fail the same way.
     if (!reusedExtraction && isClaudeIngestEnabled()) {
       const { readDealDocument, hasUsablePdfText } = await import('../services/extraction/claudeDealReader.js');
       aiData = await readDealDocument({
@@ -405,7 +420,7 @@ export async function runIngestFromBuffer(
           body: {
             success: true,
             duplicateCheck: { candidates, extractedCompanyName: aiData.companyName.value ?? null },
-            extractionToken: signExtractionToken({ orgId, kind: 'upload', contentHash, data: extractionForToken }),
+            extractionToken: signExtractionToken({ orgId, kind: 'upload', contentHash, data: extractionForToken, usage: pendingDealUsage() }),
           },
         };
       }
@@ -559,6 +574,10 @@ export async function runIngestFromBuffer(
       const uploadResult = await uploadDocumentToStorage(deal.id, documentName, buffer, mimeType);
       fileUrl = uploadResult.filePath;
     }
+
+    // Per-deal AI cost: tag the read above (and everything from here on,
+    // including the after-response work) with the deal it landed in.
+    await bindDealToUsage(deal.id);
 
     // Step 6: Create document record with confidence data
     log.debug('Step 6: Creating document record');

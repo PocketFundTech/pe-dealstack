@@ -11,7 +11,8 @@ import { mergeIntoExistingDeal, getIconForIndustry } from '../services/dealMerge
 import { AuditLog } from '../services/auditLog.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { findLiveDealForCompany, findDuplicateCandidates } from '../services/dealDuplicates.js';
-import { hashContent, signExtractionToken, verifyExtractionToken } from '../services/extractionToken.js';
+import { hashContent, signExtractionToken, verifyExtractionToken, extractionTokenUsage } from '../services/extractionToken.js';
+import { runWithPendingDeal, bindDealToUsage, pendingDealUsage, adoptPendingDealUsage } from '../middleware/usageContext.js';
 import type { ExtractedDealData } from '../services/aiExtractor.js';
 import { formatValueWithUnit } from './ingest-shared.js';
 import { resolveUserId } from './notifications.js';
@@ -45,7 +46,9 @@ interface UrlExtraction {
 }
 
 // POST /api/ingest/url — Research company from website URL (scrapes multiple pages)
-subRouter.post('/url', async (req, res) => {
+// The AI read runs before the deal exists; its usage is tagged once the
+// deal is known (AI cost plan H4).
+subRouter.post('/url', (req, res) => runWithPendingDeal(async () => {
   try {
     const orgId = getOrgId(req);
     const validation = urlResearchSchema.safeParse(req.body);
@@ -74,6 +77,8 @@ subRouter.post('/url', async (req, res) => {
       ? verifyExtractionToken<UrlExtraction>(extractionToken, { orgId, kind: 'url', contentHash })
       : null;
     if (extractionToken && !reused) log.warn('URL ingest: extraction token rejected — researching again');
+    // Step 1's research was recorded before any deal existed — tag it with this step's deal.
+    if (reused) await adoptPendingDealUsage(extractionTokenUsage(extractionToken, { orgId, kind: 'url', contentHash }));
 
     let researchText: string;
     let scrapedPages: string[];
@@ -160,7 +165,7 @@ subRouter.post('/url', async (req, res) => {
         return res.status(200).json({
           success: true,
           duplicateCheck: { candidates, extractedCompanyName: companyName },
-          extractionToken: signExtractionToken({ orgId, kind: 'url', contentHash, data: extractionForToken }),
+          extractionToken: signExtractionToken({ orgId, kind: 'url', contentHash, data: extractionForToken, usage: pendingDealUsage() }),
         });
       }
     }
@@ -261,6 +266,9 @@ subRouter.post('/url', async (req, res) => {
       if (dealError) throw dealError;
       deal = newDeal;
     }
+
+    // Per-deal AI cost: tag the read above with the deal it landed in.
+    await bindDealToUsage(deal.id);
 
     // Generate formatted Deal Overview and store as document
     const overviewSections: string[] = [];
@@ -432,6 +440,6 @@ subRouter.post('/url', async (req, res) => {
     log.error('URL research error', error);
     res.status(500).json({ error: 'Failed to research company' });
   }
-});
+}));
 
 export default subRouter;

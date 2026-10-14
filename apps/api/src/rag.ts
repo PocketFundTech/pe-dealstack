@@ -20,6 +20,25 @@ function getEmbeddingModelName(): string {
   return process.env.EMBEDDING_MODEL || 'gemini-embedding-001';
 }
 
+/** pgvector width of DocumentChunk.embedding and the search_document_chunks
+ *  RPC. gemini-embedding-001 returns 3072 dims unless told otherwise, which
+ *  made every chunk insert and every search fail against vector(768) — keep
+ *  this in lockstep with the column. (3072 isn't an option anyway: pgvector's
+ *  HNSW/IVFFlat indexes cap at 2000 dims.) */
+export function getEmbeddingDimensions(): number {
+  return Number(process.env.EMBEDDING_DIMENSIONS) || 768;
+}
+
+function assertDimensions(vector: number[] | undefined, where: string): void {
+  const expected = getEmbeddingDimensions();
+  if (vector && vector.length !== expected) {
+    throw new Error(
+      `Embedding dimension mismatch in ${where}: got ${vector.length}, column expects ${expected} ` +
+      `(EMBEDDING_MODEL=${getEmbeddingModelName()}, EMBEDDING_DIMENSIONS=${expected})`,
+    );
+  }
+}
+
 function getEmbeddingsModel(): GoogleGenerativeAIEmbeddings | null {
   if (embeddingsModel) return embeddingsModel;
   if (!process.env.GEMINI_API_KEY) {
@@ -29,6 +48,7 @@ function getEmbeddingsModel(): GoogleGenerativeAIEmbeddings | null {
   embeddingsModel = new GoogleGenerativeAIEmbeddings({
     modelName: getEmbeddingModelName(),
     apiKey: process.env.GEMINI_API_KEY,
+    outputDimensionality: getEmbeddingDimensions(),
   });
   return embeddingsModel;
 }
@@ -57,7 +77,14 @@ export function chunkText(text: string, maxTokens: number = 500, overlap: number
   }
 
   const estimateTokens = (s: string) => Math.ceil(s.length / 4);
-  const sentences = text.split(/(?<=[.!?])\s+/);
+  // Spreadsheets and table-heavy PDFs have few sentence endings, so one
+  // "sentence" can be tens of thousands of characters — a 266K-char workbook
+  // came out as 2 chunks, far over the embedding model's ~2,048-token input
+  // limit, and the whole document failed to embed (found 2026-10-13). Cap
+  // every piece at maxTokens before packing.
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .flatMap((s) => splitOversized(s, maxTokens * 4));
 
   const chunks: Chunk[] = [];
   let currentChunk = '';
@@ -89,6 +116,22 @@ export function chunkText(text: string, maxTokens: number = 500, overlap: number
   }
 
   return chunks;
+}
+
+/** Split a piece longer than maxChars at line breaks, then spaces, then hard. */
+function splitOversized(piece: string, maxChars: number): string[] {
+  if (piece.length <= maxChars) return [piece];
+  const out: string[] = [];
+  let rest = piece;
+  while (rest.length > maxChars) {
+    let cut = rest.lastIndexOf('\n', maxChars);
+    if (cut < maxChars / 2) cut = rest.lastIndexOf(' ', maxChars);
+    if (cut < maxChars / 2) cut = maxChars;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) out.push(rest);
+  return out;
 }
 
 function getOverlapText(text: string, targetTokens: number): string {
@@ -150,6 +193,7 @@ export async function embedDocument(
       () => model.embedDocuments(chunkTexts),
       getEmbeddingModelName(),
     );
+    assertDimensions(embeddings[0], 'embedDocument');
 
     // Delete existing chunks for this document
     await supabase
@@ -240,6 +284,7 @@ export async function searchDocumentChunks(
       () => model.embedQuery(query),
       getEmbeddingModelName(),
     );
+    assertDimensions(queryEmbedding, 'searchDocumentChunks');
     const embeddingStr = `[${queryEmbedding.join(',')}]`;
 
     const { data, error } = await supabase.rpc('search_document_chunks', {

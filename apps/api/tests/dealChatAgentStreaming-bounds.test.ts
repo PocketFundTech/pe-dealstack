@@ -96,6 +96,9 @@ describe('runDealChatAgentStreaming bounds', () => {
     expect(errorEvent.message).not.toMatch(/\dms/);
     expect(events.find((e) => e.type === 'done')).toBeUndefined();
     expect(elapsed).toBeLessThan(2000);
+    // The ledger row says why it failed (AI cost plan H2).
+    expect(recordUsageCalls[0][1]).toBe('error');
+    expect(recordUsageCalls[0][3]).toMatch(/^timed out after \d+s$/);
   });
 
   // Batch 3: a user clicking Stop aborts the SAME external signal the
@@ -112,6 +115,7 @@ describe('runDealChatAgentStreaming bounds', () => {
     const events = await drain(gen);
     expect(events.find((e) => e.type === 'error')).toBeUndefined();
     expect(events.find((e) => e.type === 'done')).toBeUndefined();
+    expect(recordUsageCalls[0][3]).toBe('stopped by user');
   });
 
   it('stops after the iteration cap and yields an error event', async () => {
@@ -122,6 +126,20 @@ describe('runDealChatAgentStreaming bounds', () => {
     const events = await drain(runDealChatAgentStreaming({ dealId: 'd1', orgId: 'o1', message: 'hi', dealContext: '' }));
     const errorEvent = events.find((e) => e.type === 'error');
     expect(errorEvent?.message).toMatch(/maximum number of tool calls/i);
+    expect(recordUsageCalls[0][3]).toBe('tool step limit reached');
+  });
+
+  // AI cost plan A3: at most 5 model calls per answer (4 tool rounds + the
+  // answer) — every call re-sends the whole context.
+  it('allows 5 model calls and stops at the 6th', async () => {
+    const step = [{ type: 'content_block_delta', delta: { type: 'text_delta', text: 'x' } }];
+    const { runDealChatAgentStreaming } = await import('../src/services/agents/dealChatAgent/index.js');
+    nextRunnerIterations = Array.from({ length: 5 }, () => step);
+    const ok = await drain(runDealChatAgentStreaming({ dealId: 'd1', orgId: 'o1', message: 'hi', dealContext: '' }));
+    expect(ok.find((e) => e.type === 'error')).toBeUndefined();
+    nextRunnerIterations = Array.from({ length: 6 }, () => step);
+    const capped = await drain(runDealChatAgentStreaming({ dealId: 'd1', orgId: 'o1', message: 'hi', dealContext: '' }));
+    expect(capped.find((e) => e.type === 'error')?.message).toMatch(/maximum number of tool calls/i);
   });
 
   // Cost-accuracy (usage-cost-accuracy): message_start usage carries cache
@@ -188,5 +206,6 @@ describe('runDealChatAgentStreaming bounds', () => {
     expect(status).toBe('error');
     expect(servedModel).toBe('claude-sonnet-4-6');
     expect(usage.inputTokens).toBe(20);
+    expect(recordUsageCalls[0][3]).toBe(throwAfterIterations);
   });
 });

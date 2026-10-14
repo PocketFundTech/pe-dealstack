@@ -13,6 +13,7 @@ import { log } from '../../utils/logger.js';
 import { validateStatements } from '../financialValidator.js';
 import type { ClassificationResult } from '../financialClassifier.js';
 import { extractTextFromExcel } from '../excelFinancialExtractor.js';
+import { findNoFinancialContentSheets } from '../excelSheetFilter.js';
 import { trackedClaudeMessage, getAnthropicClient, AIRefusalError } from '../ai/client.js';
 import {
   EXTRACTION_JSON_SCHEMA,
@@ -183,7 +184,14 @@ export async function extractWithClaude(
       });
     }
   }
-  return runExtraction(input, 'standard', signal);
+  try {
+    return await runExtraction(input, 'standard', signal);
+  } catch (err) {
+    // Same reason the container branch wraps it: the extract node fails the
+    // run with this message ("credits are exhausted", "API key rejected")
+    // instead of "Extraction failed: 400 {…}" plus a Sentry event.
+    throw toProviderUnavailable(err, 'Anthropic') ?? err;
+  }
 }
 
 async function runExtraction(
@@ -213,7 +221,7 @@ async function runExtraction(
     // container path is for. The no-text-layer marker keeps storeNode's
     // source-match confidence scoring from penalizing unmatched quotes
     // (same convention as the native-PDF path).
-    const excelText = extractTextFromExcel(fileBuffer);
+    const excelText = extractTextFromExcel(fileBuffer, { contentAware: true });
     rawText = excelText && excelText.trim().length >= 50
       ? excelText
       : `${CLAUDE_NATIVE_PDF_MARKER} ${fileName} — spreadsheet read natively in code-execution container; no local text conversion`;
@@ -235,9 +243,18 @@ async function runExtraction(
     documentBlocks = [{ type: 'container_upload', file_id: uploaded.id }];
     extraBetas = [FILES_BETA];
     tools = [CODE_EXECUTION_TOOL];
-    baseInstruction = buildExcelContainerInstruction(getTodayIso());
+    // The file goes up whole; tabs that clearly hold nothing to extract
+    // (cover, read-me, chart-only, empty shells) are only named in the
+    // instruction so the model doesn't print them — see excelSheetFilter.ts.
+    const noContentSheets = findNoFinancialContentSheets(fileBuffer);
+    if (noContentSheets.length > 0) {
+      log.info('claudeEngine: container pre-scan — sheets with no financial content', { fileName, noContentSheets });
+    }
+    baseInstruction = buildExcelContainerInstruction(getTodayIso(), noContentSheets);
   } else if (fileType === 'excel') {
-    const excelText = extractTextFromExcel(fileBuffer);
+    // Content-aware: drops only sheets with no financial content, and keeps
+    // statement rows under odd tab names ("Sheet1", "Dashboard").
+    const excelText = extractTextFromExcel(fileBuffer, { contentAware: true });
     if (!excelText || excelText.trim().length < 50) {
       log.warn('claudeEngine: excel file has no readable data', { fileName });
       return null;

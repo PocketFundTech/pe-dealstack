@@ -157,7 +157,8 @@ export async function suggestContactFollowUp(
   ].join('\n');
 
   try {
-    const model = getChatModel(0.3, 220, 'contactFollowUpSuggester');
+    // Haiku tier: a 3-field structured suggestion (days, action, reason).
+    const model = getChatModel(0.3, 220, 'contactFollowUpSuggester', { tier: 'simple' });
     const structured = await model
       .withStructuredOutput(suggestionSchema, {
         method: 'functionCalling',

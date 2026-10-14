@@ -9,7 +9,7 @@
 //   tier 4  GPT-4.1-nano (OpenRouter) / GPT-4.1-nano (direct)   → sentiment, routing
 //
 // Routing strategy (post-OpenRouter-deprecation for tier 1):
-//   - Tier 1 prefers Anthropic direct (claude-sonnet-4-6) via @langchain/anthropic
+//   - Tier 1 prefers Anthropic direct (claude-sonnet-5) via @langchain/anthropic
 //     when ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN is set. Falls back to OpenAI
 //     direct ('gpt-4.1') when only OPENAI_API_KEY is set. Falls back to OpenRouter
 //     ('anthropic/claude-sonnet-4.6') only when no Anthropic or OpenAI credentials
@@ -39,7 +39,11 @@ export const AI_MODELS = {
   TIER1:
     process.env.LLM_TIER1_MODEL ||
     (hasAnthropic
-      ? 'claude-sonnet-4-6'
+      // Matches services/llm.ts MODELS.anthropic.chat (the model the
+      // LangChain tier-1 path actually calls). Mostly a label here: the
+      // OpenAI-SDK callers of MODEL_REASONING (trackedChatCompletion) can't
+      // serve a bare Claude id on either model.
+      ? 'claude-sonnet-5'
       : useOpenRouter
         ? 'anthropic/claude-sonnet-4.6'
         : 'gpt-4.1'),

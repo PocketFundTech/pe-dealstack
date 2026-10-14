@@ -16,6 +16,12 @@ vi.mock('../src/utils/logger.js', () => ({
 const extractDealDataFromText = vi.fn();
 vi.mock('../src/services/aiExtractor.js', () => ({ extractDealDataFromText }));
 
+const readDealDocument = vi.fn();
+vi.mock('../src/services/extraction/claudeDealReader.js', () => ({
+  readDealDocument: (...a: unknown[]) => readDealDocument(...a),
+  hasUsablePdfText: () => true,
+}));
+
 vi.mock('../src/services/dealMerger.js', () => ({
   mergeIntoExistingDeal: vi.fn(),
   getIconForIndustry: () => 'briefcase',
@@ -106,5 +112,59 @@ describe('ingest routes surface provider rejection as 503', () => {
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('AI_PROVIDER_UNAVAILABLE');
     expect(res.body.reason).toBe('quota');
+  });
+});
+
+// AI cost item E2: with INGEST_ENGINE=claude, a credit / auth rejection from
+// the Claude deal reader ends the request with the 503 — the legacy
+// aiExtractor chain (Sonnet 4.6 → gpt-4o) is never paid to fail the same way.
+describe('ingest routes: claude deal reader rejected for credit/auth → no legacy fallback', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    process.env.INGEST_ENGINE = 'claude';
+    const { AIProviderUnavailableError } = await import('../src/utils/aiErrors.js');
+    readDealDocument.mockRejectedValue(new AIProviderUnavailableError('Anthropic', { reason: 'quota', detail: 'Your credit balance is too low' }));
+  });
+
+  it('POST /api/ingest → 503, legacy extractor not called', async () => {
+    const { default: router } = await import('../src/routes/ingest-upload.js');
+    const app = express();
+    app.use((req: any, _res, next) => { req.user = { id: 'u1', organizationId: 'org-A' }; next(); });
+    app.use('/api/ingest', router);
+
+    const res = await request(app)
+      .post('/api/ingest')
+      .attach('file', Buffer.from(TEXT), { filename: 'teaser.txt', contentType: 'text/plain' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.reason).toBe('quota');
+    expect(readDealDocument).toHaveBeenCalledTimes(1);
+    expect(extractDealDataFromText).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/ingest/text → 503, legacy extractor not called', async () => {
+    const { default: router } = await import('../src/routes/ingest-text.js');
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res, next) => { req.user = { id: 'u1', organizationId: 'org-A' }; next(); });
+    app.use('/api/ingest', router);
+
+    const res = await request(app).post('/api/ingest/text').send({ text: TEXT });
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('AI_PROVIDER_UNAVAILABLE');
+    expect(extractDealDataFromText).not.toHaveBeenCalled();
+  });
+
+  it('a reader that just returns null (timeout, bad output) still falls back to the legacy extractor', async () => {
+    readDealDocument.mockResolvedValue(null);
+    const { default: router } = await import('../src/routes/ingest-text.js');
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res, next) => { req.user = { id: 'u1', organizationId: 'org-A' }; next(); });
+    app.use('/api/ingest', router);
+
+    await request(app).post('/api/ingest/text').send({ text: TEXT });
+    expect(extractDealDataFromText).toHaveBeenCalledTimes(1);
   });
 });
