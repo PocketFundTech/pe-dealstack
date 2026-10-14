@@ -122,7 +122,7 @@ describe('makeUsageHandler — Anthropic cache-token split', () => {
       generations: [[{ message: { usage_metadata: { input_tokens: 10, output_tokens: 5 } } }]],
     });
 
-    expect(recordUsageEvent.mock.calls[0][0].model).toBe('claude-sonnet-4-6');
+    expect(recordUsageEvent.mock.calls[0][0].model).toBe('claude-sonnet-5');
     expect(recordUsageEvent.mock.calls[0][0].cacheReadTokens).toBe(0);
     expect(recordUsageEvent.mock.calls[0][0].cacheWrite5mTokens).toBe(0);
   });
