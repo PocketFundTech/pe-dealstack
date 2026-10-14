@@ -187,6 +187,20 @@ describe('POST /api/deals/:dealId/nda-reviews', () => {
     expect(res.status).toBe(422);
   });
 
+  it('maps a truncated review to 502 with a clear, retryable message', async () => {
+    reviewNda.mockRejectedValue(
+      new NdaReviewError('The review was cut off before it finished. Please try again.', 'TRUNCATED', 502),
+    );
+    const app = await buildApp();
+    const res = await request(app)
+      .post('/api/deals/deal-1/nda-reviews')
+      .attach('file', Buffer.from('x'), 'nda.pdf');
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('TRUNCATED');
+    expect(res.body.error).toContain('try again');
+  });
+
   it('maps a timeout to 504', async () => {
     reviewNda.mockRejectedValue(new Error('NDA review timed out after 60000ms'));
     const app = await buildApp();
