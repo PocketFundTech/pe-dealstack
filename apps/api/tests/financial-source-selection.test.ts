@@ -167,3 +167,31 @@ describe('restatements beat the figures they correct (G14)', () => {
     expect(compareSources({ ...restatedLabel, sourceKind: 'model_derived' } as never, original as never)).toBeLessThan(0);
   });
 });
+
+describe('selectSourceStatements keeps projections (CSP 14 Oct)', () => {
+  it('salvages PROJECTED periods from a dropped model-derived statement when the reported one has none', async () => {
+    const { selectSourceStatements } = await import('../src/services/financialSourceSelection.js');
+    const period = (p: string, periodType: 'HISTORICAL' | 'PROJECTED', revenue: number) =>
+      ({ period: p, periodType, confidence: 90, lineItems: { revenue } });
+    const reported = {
+      statementType: 'INCOME_STATEMENT' as const, unitScale: 'MILLIONS' as const, currency: 'USD',
+      sheetName: 'Consolidated IS', sourceKind: 'source_statement' as const,
+      periods: [period('2024', 'HISTORICAL', 3.249), period('2025', 'HISTORICAL', 12.468)],
+    };
+    const derived = {
+      statementType: 'INCOME_STATEMENT' as const, unitScale: 'MILLIONS' as const, currency: 'USD',
+      sheetName: 'Annual Summary + Projections', sourceKind: 'model_derived' as const,
+      periods: [
+        period('2025', 'HISTORICAL', 12.468),        // duplicate of the reported row — must still drop
+        period('H2 2026 (P)', 'PROJECTED', 7.911),
+        period('FY 2027 (P)', 'PROJECTED', 18.069),
+      ],
+    };
+    const { statements, dropped } = selectSourceStatements([reported, derived], 'Financials.xlsx');
+    const periods = statements.flatMap((s) => s.periods.map((p) => p.period));
+    expect(periods).toContain('H2 2026 (P)');
+    expect(periods).toContain('FY 2027 (P)');
+    expect(periods.filter((p) => p === '2025')).toHaveLength(1);
+    expect(dropped.join(' ')).toMatch(/Annual Summary/);
+  });
+});

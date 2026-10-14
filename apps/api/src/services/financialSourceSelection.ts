@@ -96,14 +96,26 @@ export function selectSourceStatements(
   docName: string | null | undefined,
 ): { statements: ClassifiedStatement[]; dropped: string[] } {
   const kindOf = (s: ClassifiedStatement) => resolveSourceKind(s.sourceKind, s.sheetName, docName);
-  const typesWithSource = new Set(statements.filter((s) => kindOf(s) === 'source_statement').map((s) => s.statementType));
+  const sources = statements.filter((s) => kindOf(s) === 'source_statement');
+  const typesWithSource = new Set(sources.map((s) => s.statementType));
+  const periodKey = (label: string) => parsePeriod(label)?.canonicalKey ?? label.trim().toLowerCase();
   const dropped: string[] = [];
-  const kept = statements.filter((s) => {
+  const kept: ClassifiedStatement[] = [];
+  for (const s of statements) {
     if (kindOf(s) === 'model_derived' && typesWithSource.has(s.statementType)) {
       dropped.push(`${s.statementType}${s.sheetName ? ` (${s.sheetName})` : ''}`);
-      return false;
+      // The reported statement rarely carries the forecast: keep the model's
+      // PROJECTED periods it doesn't have, or a workbook's whole forecast
+      // disappears with its summary tab (CSP, 14 Oct 2026 — H2 2026, FY2026E,
+      // FY2027 were silently lost).
+      const have = new Set(
+        sources.filter((r) => r.statementType === s.statementType).flatMap((r) => r.periods.map((p) => periodKey(p.period))),
+      );
+      const projected = s.periods.filter((p) => p.periodType === 'PROJECTED' && !have.has(periodKey(p.period)));
+      if (projected.length > 0) kept.push({ ...s, periods: projected });
+      continue;
     }
-    return true;
-  });
+    kept.push(s);
+  }
   return { statements: kept.map((s) => ({ ...s, sourceKind: kindOf(s) })), dropped };
 }
