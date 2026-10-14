@@ -32,6 +32,7 @@ const runDealChatAgentStreaming = vi.fn();
 vi.mock('../src/services/agents/dealChatAgent/index.js', () => ({ runDealChatAgent, runDealChatAgentStreaming }));
 
 let currentUserRow: Record<string, unknown> | null = null;
+let orgSettings: Record<string, unknown> = {};
 
 function tableMock() {
   return (table: string) => {
@@ -46,7 +47,7 @@ function tableMock() {
       };
     }
     if (table === 'Organization') {
-      return { select: () => ({ eq: () => ({ single: async () => ({ data: { settings: {} } }) }) }) };
+      return { select: () => ({ eq: () => ({ single: async () => ({ data: { settings: orgSettings } }) }) }) };
     }
     if (table === 'FinancialStatement') {
       return { select: () => ({ eq: () => ({ order: () => ({ order: async () => ({ data: [], error: null }) }) }) }) };
@@ -79,6 +80,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockSupabase.from.mockImplementation(tableMock());
   delete process.env.DEAL_CHAT_ENGINE;
+  orgSettings = {};
 });
 
 describe('deal chat — current user identity', () => {
@@ -105,5 +107,34 @@ describe('deal chat — current user identity', () => {
     currentUserRow = null;
     const ctx = await sentDealContext();
     expect(ctx).not.toMatch(/You are assisting/i);
+  });
+});
+
+// AI cost plan A2 / A5.
+describe('deal chat — context size', () => {
+  const firmProfile = { firmName: 'Pocket Fund', description: 'Buys Indian SMBs.' };
+
+  it('sends the raw firm profile only when there is no synthesized firm context', async () => {
+    currentUserRow = null;
+    orgSettings = { firmProfile };
+    expect(await sentDealContext()).toContain('Firm: Pocket Fund');
+  });
+
+  it('drops the raw firm profile when the agent already sends the synthesized firm context', async () => {
+    currentUserRow = null;
+    orgSettings = { firmProfile, firmContext: { text: 'Pocket Fund buys Indian SMBs…', generatedAt: '2026-10-01' } };
+    const ctx = await sentDealContext();
+    expect(ctx).not.toContain('YOUR FIRM CONTEXT');
+    expect(ctx).not.toContain('Firm: Pocket Fund');
+  });
+
+  it('passes the last 6 messages of history, not 10', async () => {
+    currentUserRow = null;
+    runDealChatAgent.mockResolvedValue({ response: 'ok', model: 'test' });
+    const history = Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
+    const app = await buildApp();
+    await request(app).post('/api/deals/deal-1/chat').send({ message: 'next', history });
+    const sent = runDealChatAgent.mock.calls[0][0].history;
+    expect(sent.map((h: any) => h.content)).toEqual(['m6', 'm7', 'm8', 'm9', 'm10', 'm11']);
   });
 });

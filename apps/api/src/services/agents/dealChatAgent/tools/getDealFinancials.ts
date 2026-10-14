@@ -20,7 +20,8 @@ import { z } from 'zod';
 import { supabase } from '../../../../supabase.js';
 import { log } from '../../../../utils/logger.js';
 import { correctMistaggedUnitScale, formatDealHeadline, formatFinancialValue, type UnitScale } from '../../../../utils/financialFormat.js';
-import { periodOrdinal } from '@ai-crm/shared';
+import { periodOrdinal, parsePeriod } from '@ai-crm/shared';
+import { buildFinancialMarkdown } from '../financialContext.js';
 
 // Chronological sort key for period strings the extractor emits:
 //   "Sep '25", "Sep 2025", "Sep-25", "May 2025", "Q1 2025", "FY2024",
@@ -50,16 +51,54 @@ function periodSortKey(period: string | null | undefined): number {
   return periodOrdinal(period) ?? 0;
 }
 
-export const inputSchema = z.object({});
+const STATEMENT_TYPES = ['INCOME_STATEMENT', 'BALANCE_SHEET', 'CASH_FLOW'] as const;
+
+export const inputSchema = z.object({
+  statementType: z.enum(STATEMENT_TYPES).optional(),
+  periods: z.array(z.string().max(60)).max(24).optional(),
+});
+
+/** Most periods returned as full tables when the caller didn't name any. */
+const MAX_DETAIL_PERIODS = 8;
+
+/** "FY23" matches "FY2023" and "FY2023 (Jan - Dec 2023)"; plain substring otherwise. */
+function periodMatches(label: string, wanted: string): boolean {
+  const a = label.toLowerCase().trim();
+  const b = wanted.toLowerCase().trim();
+  if (a === b || a.includes(b)) return true;
+  const pa = parsePeriod(label);
+  const pb = parsePeriod(wanted);
+  return !!pa && !!pb && pa.canonicalKey === pb.canonicalKey;
+}
 
 export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
   return {
     type: 'custom' as const,
     name: 'get_deal_financials',
-    description: 'Fetch extracted financial statements and deal-level metrics (revenue, EBITDA, IRR, MoM). Use when user asks about financials, numbers, revenue trends, or analysis.',
-    input_schema: { type: 'object', properties: {} },
-    parse: (input: unknown) => inputSchema.parse(input),
-    run: async () => {
+    description:
+      'Fetch extracted financial statements. With no arguments: every period\'s revenue and EBITDA plus deal-level metrics (IRR, MoM). ' +
+      'With statementType and/or periods: the full line items (COGS, opex, D&A, balance sheet, cash flow…) for those. ' +
+      'Use it for any number not in the financial summary you already have.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        statementType: {
+          type: 'string',
+          enum: [...STATEMENT_TYPES],
+          description: 'Return full line items for this statement only.',
+        },
+        periods: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Period labels to return full line items for, e.g. ["FY2023", "FY2024"]. Omit for the latest periods.',
+        },
+      },
+    },
+    parse: (input: unknown) => inputSchema.parse(input ?? {}),
+    run: async (input: z.infer<typeof inputSchema> = {}) => {
+      if (input.statementType || input.periods?.length) {
+        return fetchLineItems(dealId, input);
+      }
       try {
         // Fetch ALL statements (active + inactive/needs_review) so chat sees
         // what the user sees. Column names MUST match the Prisma schema:
@@ -174,4 +213,48 @@ export function makeGetDealFinancialsTool(dealId: string, _orgId: string) {
       }
     },
   };
+}
+
+/** Full line-item tables for the requested statement / periods, newest periods last. */
+async function fetchLineItems(dealId: string, input: z.infer<typeof inputSchema>): Promise<string> {
+  try {
+    let query = supabase
+      .from('FinancialStatement')
+      .select('statementType, period, lineItems, unitScale, currency')
+      .eq('dealId', dealId);
+    if (input.statementType) query = query.eq('statementType', input.statementType);
+    const { data, error } = await query;
+    if (error) {
+      log.error('getDealFinancials tool: line-item select failed', { dealId, error });
+      return `Error fetching financial statements: ${error.message}. Treat as a transient backend failure.`;
+    }
+    let rows = (data ?? []).sort((a, b) => periodSortKey(a.period) - periodSortKey(b.period));
+    if (!rows.length) return 'No financial statements extracted for this deal yet.';
+
+    const notes: string[] = [];
+    if (input.periods?.length) {
+      const wanted = input.periods;
+      rows = rows.filter((r) => wanted.some((w) => periodMatches(r.period, w)));
+      if (!rows.length) {
+        const available = [...new Set((data ?? []).map((r) => r.period))].join(', ');
+        return `No statements for ${wanted.join(', ')}. Periods on file: ${available}.`;
+      }
+    } else {
+      // Keep a tool result from turning into the 7–13K-token dump the chat
+      // context no longer carries: latest periods per statement only.
+      const byType = new Map<string, typeof rows>();
+      for (const r of rows) byType.set(r.statementType, [...(byType.get(r.statementType) ?? []), r]);
+      rows = [];
+      for (const [type, list] of byType) {
+        if (list.length > MAX_DETAIL_PERIODS) {
+          notes.push(`${type}: showing the latest ${MAX_DETAIL_PERIODS} of ${list.length} periods — pass periods to see others.`);
+        }
+        rows.push(...list.slice(-MAX_DETAIL_PERIODS));
+      }
+    }
+    return [buildFinancialMarkdown(rows), ...notes].join('\n');
+  } catch (error) {
+    log.error('getDealFinancials tool error', error);
+    return 'Error fetching financial data.';
+  }
 }

@@ -45,6 +45,38 @@ const noopEmit: ToolEmit = () => {};
  * path) so the two live readers work here too; see the call site in
  * dealChatAgent/index.ts's runDealChatAgentStreaming.
  */
+/**
+ * Read-only tools whose output goes straight back into the conversation —
+ * and is re-sent on every later tool step of the turn. A document search or
+ * an email pull can return tens of thousands of characters; cap them so one
+ * call can't balloon a message (AI cost plan A3). Tools whose result carries
+ * a side effect or a chart spec are left alone.
+ */
+const TOOL_RESULT_CAP_CHARS = 16_000;
+const CAPPED_TOOLS = new Set([
+  'search_documents',
+  'get_deal_financials',
+  'compare_deals',
+  'get_deal_activity',
+  'web_search',
+  'get_analysis_summary',
+  'list_documents',
+  'get_recent_emails_for_deal',
+  'get_upcoming_meetings_for_deal',
+]);
+
+export function capToolResult<T extends { name: string; run: (...args: any[]) => any }>(tool: T): T {
+  if (!CAPPED_TOOLS.has(tool.name)) return tool;
+  return {
+    ...tool,
+    run: async (...args: any[]) => {
+      const out = await tool.run(...args);
+      if (typeof out !== 'string' || out.length <= TOOL_RESULT_CAP_CHARS) return out;
+      return `${out.slice(0, TOOL_RESULT_CAP_CHARS)}\n\n[Result truncated: ${out.length - TOOL_RESULT_CAP_CHARS} more characters not shown. Ask for something narrower if the answer isn't above.]`;
+    },
+  };
+}
+
 export function getDealChatTools(dealId: string, orgId: string, emit: ToolEmit, userId?: string) {
   return [
     makeSearchDocumentsTool(dealId, orgId),
@@ -67,7 +99,7 @@ export function getDealChatTools(dealId: string, orgId: string, emit: ToolEmit, 
     // barrel's ordering exactly (order is load-bearing, see file header).
     makeGetRecentEmailsForDealTool(dealId, orgId, userId),
     makeGetUpcomingMeetingsForDealTool(dealId, orgId, userId),
-  ];
+  ].map(capToolResult);
 }
 
 /**

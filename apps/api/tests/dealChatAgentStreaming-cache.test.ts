@@ -56,11 +56,11 @@ describe('deal chat streaming — prompt caching', () => {
     const [stable, deal] = opts.system;
 
     // Stable block: firm context + instructions + guardrails, cached.
-    expect(stable.cache_control).toEqual({ type: 'ephemeral' });
+    expect(stable.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
     expect(stable.text.startsWith('=== FIRM CONTEXT ===\nPocket Fund invests in Indian SMBs.')).toBe(true);
 
     // Per-deal block: cached too, so every tool-loop step and follow-up reads it.
-    expect(deal.cache_control).toEqual({ type: 'ephemeral' });
+    expect(deal.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
     expect(deal.text).toBe('Current Deal Context:\nDeal: Nino Burgers\nStage: INITIAL_REVIEW\n\nDeal ID: deal-1\nOrganization ID: org-1');
   });
 
