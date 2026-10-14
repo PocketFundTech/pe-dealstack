@@ -469,6 +469,18 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
             debugDownloading={debugDownloading}
             onDownloadDebug={handleDownloadDebug}
           />
+          {/* Let the user extract ONE file instead of the bulk run over every
+              spreadsheet + CIM (which is the expensive path). */}
+          <DealFinancialsReextractList
+            dealId={dealId}
+            allDocs={dealDocs}
+            extracting={extracting}
+            extractingDocId={extractingDocId}
+            removingDocId={removingDocId}
+            onReextract={(docId, docName) => handleExtract(docId, docName)}
+            onRemove={handleRemoveByDocument}
+            summaryLabel="Extract a single document"
+          />
         </FinancialShell>
       </>
     );
