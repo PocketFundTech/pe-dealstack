@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { supabase } from '../../supabase.js';
 import { log } from '../../utils/logger.js';
 import { getUsageContext } from '../../middleware/usageContext.js';
@@ -116,7 +117,12 @@ export async function recordUsageEvent(input: RecordUsageEventInput): Promise<vo
 
     const credits = await getCreditsForOperation(input.operation);
 
+    // Recorded before the deal exists (runWithPendingDeal): give the row a
+    // known id so bindDealToUsage can tag it once the deal is created.
+    const pendingId = ctx.pendingDealUsage && !ctx.dealId ? randomUUID() : undefined;
+
     const row = {
+      ...(pendingId ? { id: pendingId } : {}),
       userId: ctx.userId,
       organizationId: ctx.organizationId,
       operation: input.operation,
@@ -150,6 +156,8 @@ export async function recordUsageEvent(input: RecordUsageEventInput): Promise<vo
         code: error.code,
         operation: input.operation,
       });
+    } else if (pendingId) {
+      ctx.pendingDealUsage?.push({ id: pendingId, metadata: row.metadata });
     }
 
     // Customer-visible AI inference audit trail. One row per successful AI

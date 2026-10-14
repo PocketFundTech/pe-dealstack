@@ -35,6 +35,14 @@ interface TokenClaims<T> {
   hash: string;
   exp: number;
   data: T;
+  /** Usage rows the first step recorded before a deal existed (see usageContext pendingDealUsage). */
+  u?: PendingUsageRow[];
+}
+
+/** A UsageEvent row awaiting its deal tag — carried across the duplicate-check round trip. */
+export interface PendingUsageRow {
+  id: string;
+  metadata: Record<string, unknown>;
 }
 
 let processFallbackKey: Buffer | null = null;
@@ -85,6 +93,8 @@ export function signExtractionToken<T>(params: {
   data: T;
   now?: number;
   ttlMs?: number;
+  /** AI usage recorded for this extraction before its deal existed, so the second step can tag it. */
+  usage?: PendingUsageRow[];
 }): string {
   const claims: TokenClaims<T> = {
     v: 1,
@@ -93,6 +103,7 @@ export function signExtractionToken<T>(params: {
     hash: params.contentHash,
     exp: (params.now ?? Date.now()) + (params.ttlMs ?? EXTRACTION_TOKEN_TTL_MS),
     data: params.data,
+    ...(params.usage?.length ? { u: params.usage } : {}),
   };
   const payload = b64url(zlib.deflateRawSync(Buffer.from(JSON.stringify(claims), 'utf8')));
   const sig = b64url(crypto.createHmac('sha256', getKey()).update(payload).digest());
@@ -107,6 +118,22 @@ export function verifyExtractionToken<T>(
   token: unknown,
   expected: { orgId: string; kind: ExtractionKind; contentHash: string; now?: number },
 ): T | null {
+  return verifyClaims<T>(token, expected)?.data ?? null;
+}
+
+/** The pending usage rows carried by a valid token ([] when none or invalid). */
+export function extractionTokenUsage(
+  token: unknown,
+  expected: { orgId: string; kind: ExtractionKind; contentHash: string; now?: number },
+): PendingUsageRow[] {
+  const rows = verifyClaims(token, expected)?.u;
+  return Array.isArray(rows) ? rows : [];
+}
+
+function verifyClaims<T>(
+  token: unknown,
+  expected: { orgId: string; kind: ExtractionKind; contentHash: string; now?: number },
+): TokenClaims<T> | null {
   if (typeof token !== 'string' || !token || token.length > MAX_TOKEN_CHARS) return null;
   const parts = token.split('.');
   if (parts.length !== 3 || parts[0] !== 'v1') return null;
@@ -122,7 +149,7 @@ export function verifyExtractionToken<T>(
     if (claims.kind !== expected.kind) return null;
     if (claims.hash !== expected.contentHash) return null;
     if (typeof claims.exp !== 'number' || claims.exp < (expected.now ?? Date.now())) return null;
-    return claims.data ?? null;
+    return claims;
   } catch (err) {
     log.warn('extractionToken: could not verify token', { err: err instanceof Error ? err.message : String(err) });
     return null;
