@@ -104,3 +104,22 @@ describe('implausibleReturnsNote — model sanity guard', () => {
     expect(implausibleReturnsNote(summary(null, null))).toBeNull();
   });
 });
+
+describe('implausibleReturnsNote — negative returns (CSP 14 Oct)', () => {
+  // A cumulative 42-month "Total" used as the base period produced
+  // MoM -28.7x and Exit EV -$191.9m; the guard only looked for HIGH returns.
+  it('warns when the multiple or exit value is negative', () => {
+    const note = implausibleReturnsNote({
+      exitRevenue: 0, exitEbitda: -38.4, exitEv: -191.9, entryEv: 22.4, equity: 11.6, irr: null, mom: -28.67,
+    });
+    expect(note).not.toBeNull();
+    expect(note).toMatch(/negative/i);
+    expect(note).toMatch(/base period/i);
+  });
+
+  it('stays silent on a healthy case with a positive exit', () => {
+    expect(implausibleReturnsNote({
+      exitRevenue: 50, exitEbitda: 12, exitEv: 96, entryEv: 38, equity: 19, irr: 0.25, mom: 2.8,
+    })).toBeNull();
+  });
+});

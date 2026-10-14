@@ -153,8 +153,22 @@ const IMPLAUSIBLE_IRR = 1; // 100%
 const IMPLAUSIBLE_MOM = 20;
 
 /** A panel / workbook warning when the case's returns are too high to be real. */
-export function implausibleReturnsNote(summary: Pick<CaseSummary, 'irr' | 'mom'>): string | null {
-  const { irr, mom } = summary;
+export function implausibleReturnsNote(summary: Pick<CaseSummary, 'irr' | 'mom' | 'exitEv'>): string | null {
+  const { irr, mom, exitEv } = summary;
+  // Below zero is as impossible as above 100%: a 42-month "Total" column used
+  // as the base period produced MoM -28.7x and Exit EV -$191.9m (CSP, 14 Oct).
+  const negative = (mom !== null && mom < 0) || exitEv < 0;
+  if (negative) {
+    const figures = [
+      mom !== null ? `${mom.toFixed(1)}x MoM` : null,
+      exitEv < 0 ? `$${exitEv.toFixed(1)}m exit EV` : null,
+    ].filter(Boolean).join(' and ');
+    return (
+      `These returns are negative (${figures}), which cannot be right for a buyout — check the source financials before relying on them. ` +
+      `The usual cause is a wrong base period (a cumulative or multi-year total read as the latest year) or a wrong EBITDA sign; ` +
+      `see the Validation Flags on the Financial Statements panel.`
+    );
+  }
   const irrBad = irr !== null && irr > IMPLAUSIBLE_IRR;
   const momBad = mom !== null && mom > IMPLAUSIBLE_MOM;
   if (!irrBad && !momBad) return null;
