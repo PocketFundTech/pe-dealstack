@@ -107,3 +107,25 @@ describe('RAG embedding dimensions', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 });
+
+// Spreadsheet-style text has few sentence endings; sentence-only splitting
+// produced chunks far over the embedding model's input limit, so whole
+// workbooks failed to embed (2026-10-13: 177 of 368 documents).
+describe('chunkText caps chunk size on text without sentence breaks', () => {
+  it('splits a 266K-char table dump into chunks within the token budget', async () => {
+    const { chunkText } = await import('../src/rag.js');
+    const row = 'Revenue 1,234,567 2,345,678 3,456,789 | COGS 456,789 567,890 678,901\n';
+    const text = row.repeat(3800); // ~266K chars, no ". " anywhere
+    const chunks = chunkText(text, 500);
+    expect(chunks.length).toBeGreaterThan(100);
+    for (const c of chunks) expect(c.content.length).toBeLessThanOrEqual(2000);
+    expect(chunks.map((c) => c.content).join(' ').length).toBeGreaterThan(text.length * 0.95);
+  });
+
+  it('still packs normal prose by sentence', async () => {
+    const { chunkText } = await import('../src/rag.js');
+    const chunks = chunkText('First sentence. Second sentence! Third one?', 500);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe('First sentence. Second sentence! Third one?');
+  });
+});
