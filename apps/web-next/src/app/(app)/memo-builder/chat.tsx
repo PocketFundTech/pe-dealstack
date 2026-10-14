@@ -48,7 +48,7 @@ export function MemoChat({
 
   return (
     <aside
-      className="shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-hidden"
+      className="shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-hidden max-[1439px]:absolute max-[1439px]:right-0 max-[1439px]:inset-y-0 max-[1439px]:z-30 max-[1439px]:max-w-[92%]"
       style={{ width: "400px", boxShadow: "-4px 0 24px -12px rgba(0,0,0,0.1)" }}
     >
       {/* Header — matches legacy AI panel header */}

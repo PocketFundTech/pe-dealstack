@@ -4,6 +4,26 @@ import { LegalDocsPanel } from "@/components/memo-builder/LegalDocsPanel";
 import { cn } from "@/lib/cn";
 import type { MemoSection } from "./components";
 
+/**
+ * Honest compliance status: only claim anything about citations when there
+ * is generated content to check. Sections that failed to generate (empty, or
+ * showing a placeholder) don't count.
+ */
+export function complianceMessage(sections: MemoSection[]): string {
+  const generated = sections.filter(
+    (s) => s.aiGenerated && !s.hasPlaceholder && (s.content ?? "").trim().length > 0,
+  );
+  if (generated.length === 0) {
+    return "No generated sections yet — nothing to verify.";
+  }
+  const withCitations = generated.filter((s) => (s.citations?.length ?? 0) > 0);
+  if (withCitations.length === 0) {
+    return "Generated sections have no citations — nothing to verify.";
+  }
+  const total = withCitations.reduce((n, s) => n + (s.citations?.length ?? 0), 0);
+  return `${total} citation${total === 1 ? "" : "s"} across ${withCitations.length} of ${generated.length} generated section${generated.length === 1 ? "" : "s"}. Review sources before sharing.`;
+}
+
 interface MemoOutlineSidebarProps {
   sections: MemoSection[];
   activeSection: string | null;
@@ -115,8 +135,8 @@ export function MemoOutlineSidebar({
             <span className="material-symbols-outlined text-[16px]">verified_user</span>
             <span>Compliance Check</span>
           </div>
-          <p className="text-[11px] text-primary/70">
-            All citations are verified against the data room.
+          <p className="text-[11px] text-primary/70" data-testid="compliance-status">
+            {complianceMessage(sections)}
           </p>
         </div>
 

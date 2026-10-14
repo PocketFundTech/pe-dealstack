@@ -24,7 +24,7 @@ vi.mock('../src/services/agents/memoAgent/index.js', () => ({
 
 const updateSpy = vi.fn(() => ({ eq: async () => ({ error: null }) }));
 const insertSpy = vi.fn(async () => ({ error: null }));
-let existingSectionRows: Array<{ id: string; type: string; title: string }> = [];
+let existingSectionRows: Array<{ id: string; type: string; title: string; content?: string | null }> = [];
 
 function tableMock() {
   return (table: string) => {
@@ -153,6 +153,66 @@ describe('POST /api/memos/:id/generate-all — SSE', () => {
 
     expect(insertSpy).not.toHaveBeenCalled();
     expect(updateSpy).toHaveBeenCalledTimes(3);
+  });
+
+  // Several generator types normalize onto the SAME DB type (Quality of
+  // Earnings -> FINANCIAL_PERFORMANCE, Value Creation Plan -> VALUE_CREATION,
+  // Exit Analysis -> EXIT_STRATEGY). Matching by type alone made both
+  // generated sections target the first row, so the second template row never
+  // got its content (and on a memo with no rows, a stray extra row appeared).
+  it('routes colliding normalized types to their own rows by title', async () => {
+    existingSectionRows = [
+      { id: 'row-fin', type: 'FINANCIAL_PERFORMANCE', title: 'Financial Performance' },
+      { id: 'row-qoe', type: 'FINANCIAL_PERFORMANCE', title: 'Quality of Earnings' },
+    ];
+    const updatedIds: string[] = [];
+    updateSpy.mockImplementation((() => ({ eq: async (_c: string, id: string) => { updatedIds.push(id); return { error: null }; } })) as any);
+    generateAllSectionsStreaming.mockReturnValue((async function* () {
+      yield { type: 'section_complete', sectionType: 'FINANCIAL_PERFORMANCE', section: { type: 'FINANCIAL_PERFORMANCE', title: 'Financial Performance', content: 'fin', aiGenerated: true }, index: 1, total: 2 };
+      yield { type: 'section_complete', sectionType: 'QUALITY_OF_EARNINGS', section: { type: 'QUALITY_OF_EARNINGS', title: 'Quality of Earnings', content: 'qoe', aiGenerated: true }, index: 2, total: 2 };
+    })());
+
+    const app = await buildApp();
+    await request(app).post('/api/memos/memo-1/generate-all').send({});
+
+    expect(insertSpy).not.toHaveBeenCalled();
+    expect(updatedIds.sort()).toEqual(['row-fin', 'row-qoe']);
+  });
+
+  it('inserts each colliding-type section once on a memo with no rows, never twice', async () => {
+    existingSectionRows = [];
+    generateAllSectionsStreaming.mockReturnValue((async function* () {
+      yield { type: 'done', context: {}, sections: [
+        { type: 'FINANCIAL_PERFORMANCE', title: 'Financial Performance', content: 'fin', aiGenerated: true, sortOrder: 1 },
+        { type: 'QUALITY_OF_EARNINGS', title: 'Quality of Earnings', content: 'qoe', aiGenerated: true, sortOrder: 2 },
+        { type: 'QUALITY_OF_EARNINGS', title: 'Quality of Earnings', content: 'qoe again', aiGenerated: true, sortOrder: 3 },
+      ] };
+    })());
+
+    const app = await buildApp();
+    await request(app).post('/api/memos/memo-1/generate-all').send({});
+
+    const inserted = (insertSpy.mock.calls as any[][]).flatMap((c) => c[0]);
+    expect(inserted.map((r: any) => r.title).sort()).toEqual(['Financial Performance', 'Quality of Earnings']);
+  });
+
+  it('writes to the copy with real content when a memo already has an exact duplicate row', async () => {
+    existingSectionRows = [
+      { id: 'dup-empty', type: 'EXIT_STRATEGY', title: 'Exit Analysis', content: '' },
+      { id: 'dup-real', type: 'EXIT_STRATEGY', title: 'Exit Analysis', content: 'old real content' },
+    ];
+    const updatedIds: string[] = [];
+    updateSpy.mockImplementation((() => ({ eq: async (_c: string, id: string) => { updatedIds.push(id); return { error: null }; } })) as any);
+    generateAllSectionsStreaming.mockReturnValue((async function* () {
+      yield { type: 'done', context: {}, sections: [
+        { type: 'EXIT_ANALYSIS', title: 'Exit Analysis', content: 'new', aiGenerated: true, sortOrder: 1 },
+      ] };
+    })());
+
+    const app = await buildApp();
+    await request(app).post('/api/memos/memo-1/generate-all').send({});
+
+    expect(updatedIds).toEqual(['dup-real']);
   });
 
   it('returns 503 JSON (not SSE) when Anthropic is unavailable, without opening a stream', async () => {

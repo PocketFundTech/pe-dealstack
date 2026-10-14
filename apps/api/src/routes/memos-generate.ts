@@ -10,7 +10,7 @@ import { getOrgId } from '../middleware/orgScope.js';
 import { generateAllSectionsStreaming, GeneratedSection } from '../services/agents/memoAgent/index.js';
 import { isAnthropicAvailable } from '../services/ai/client.js';
 import { classifyAIErrorObject } from '../utils/aiErrors.js';
-import { GENERATOR_TYPE_TO_DB_TYPE, memoSectionKey } from './memos-schemas.js';
+import { GENERATOR_TYPE_TO_DB_TYPE, findExistingSection } from './memos-schemas.js';
 
 const router = Router();
 
@@ -22,13 +22,13 @@ const router = Router();
 async function persistGeneratedSections(memoId: string, generated: GeneratedSection[]) {
   const { data: existingRows } = await supabase
     .from('MemoSection')
-    .select('id, type, title')
+    .select('id, type, title, content')
     .eq('memoId', memoId);
-  const existingByKey = new Map<string, { id: string }>();
-  for (const row of existingRows || []) {
-    const key = memoSectionKey(row.type, row.title);
-    if (!existingByKey.has(key)) existingByKey.set(key, { id: row.id });
-  }
+  const rows = existingRows || [];
+  // Rows already written to in this call — two generated sections must never
+  // land on the same row, and one section is never written twice.
+  const claimed = new Set<string>();
+  const seen = new Set<string>();
 
   let completed = 0;
   // PostgrestFilterBuilder is PromiseLike (thenable), not a real Promise.
@@ -53,9 +53,14 @@ async function persistGeneratedSections(memoId: string, generated: GeneratedSect
     // Creation Plan, Exit Analysis) never matched its existing row, so a
     // second, duplicate row was inserted for it on every "Generate all".
     const normalizedType = GENERATOR_TYPE_TO_DB_TYPE[gen.type] || gen.type;
-    const key = memoSectionKey(normalizedType, gen.title);
-    const existing = existingByKey.get(key);
+    // De-duplicate by section type+title: a repeated generated section (or a
+    // memo carrying two identical rows) must produce ONE write, not two.
+    const dedupeKey = `${normalizedType}:${gen.title.trim().toLowerCase()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const existing = findExistingSection(rows, normalizedType, gen.title, claimed);
     if (existing) {
+      claimed.add(existing.id);
       updatePromises.push(
         supabase.from('MemoSection').update(updateData).eq('id', existing.id)
       );

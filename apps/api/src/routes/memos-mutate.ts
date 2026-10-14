@@ -17,7 +17,7 @@ import {
   SCREENING_NOTE_SECTIONS,
 } from '../services/agents/memoAgent/index.js';
 import { isAnthropicAvailable } from '../services/ai/client.js';
-import { createMemoSchema, updateMemoSchema, SECTION_TYPE_MAP, GENERATOR_TYPE_TO_DB_TYPE, memoSectionKey } from './memos-schemas.js';
+import { createMemoSchema, updateMemoSchema, SECTION_TYPE_MAP, GENERATOR_TYPE_TO_DB_TYPE, findExistingSection } from './memos-schemas.js';
 
 const router = Router();
 
@@ -165,15 +165,10 @@ router.post('/', async (req, res) => {
         // updates by primary key — the N+1 existence-check selects are gone.
         const { data: existingRows } = await supabase
           .from('MemoSection')
-          .select('id, type, title')
+          .select('id, type, title, content')
           .eq('memoId', memo.id);
-        const existingByKey = new Map<string, { id: string }>();
-        for (const row of existingRows || []) {
-          // First match wins; multiple CUSTOM rows are intentionally not matched
-          // (the original code's .single() would have errored on duplicates too).
-          const key = memoSectionKey(row.type, row.title);
-          if (!existingByKey.has(key)) existingByKey.set(key, { id: row.id });
-        }
+        const existingRowList = existingRows || [];
+        const claimedIds = new Set<string>();
 
         let completed = 0;
         const errors: string[] = [];
@@ -187,8 +182,9 @@ router.post('/', async (req, res) => {
           // and Exit Analysis never found their existing row and silently
           // never got their generated content attached.
           const normalizedType = GENERATOR_TYPE_TO_DB_TYPE[gen.type] || gen.type;
-          const existingSection = existingByKey.get(memoSectionKey(normalizedType, gen.title));
+          const existingSection = findExistingSection(existingRowList, normalizedType, gen.title, claimedIds);
           if (existingSection) {
+            claimedIds.add(existingSection.id);
             const updateData: any = {
               content: gen.content,
               aiGenerated: gen.aiGenerated,
