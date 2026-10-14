@@ -57,8 +57,8 @@ subRouter.post('/text', (req, res) => runWithPendingDeal(async () => {
 
     // Step 1: Extract deal data. INGEST_ENGINE=claude uses the native reader
     // with the FULL text (200k-char window vs the legacy 20k truncation);
-    // any failure falls back to the legacy extractor — same ladder as
-    // ingest-upload.ts.
+    // any failure but an out-of-credit / bad-key rejection (503) falls back
+    // to the legacy extractor — same ladder as ingest-upload.ts.
     let aiData = null as Awaited<ReturnType<typeof extractDealDataFromText>>;
     // Second step of the duplicate check — reuse the extraction (see ingest-upload.ts).
     if (extractionToken) {

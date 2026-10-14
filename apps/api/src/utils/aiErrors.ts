@@ -150,6 +150,24 @@ export function toProviderUnavailable(err: unknown, provider: string): AIProvide
 }
 
 /**
+ * Like toProviderUnavailable, but only for rejections of the ACCOUNT itself
+ * — out of credit / spend limit ('quota') or a bad / revoked key ('auth').
+ * Those fail every call on the account, so a backup extraction path that
+ * re-asks (another model, the legacy chain) only adds paid calls that fail
+ * the same way (5 Oct: Fable out of credit fell through to Sonnet 4.6 then
+ * GPT, $0.20–0.60 per file, and failed too). Rate limits and overload are
+ * transient and return null here, so callers keep their fallback for them.
+ */
+export function toAccountRejection(err: unknown, provider: string): AIProviderUnavailableError | null {
+  if (err instanceof AIProviderUnavailableError) {
+    return err.reason === 'quota' || err.reason === 'auth' ? err : null;
+  }
+  const rejection = classifyProviderRejection(err);
+  if (!rejection || (rejection.reason !== 'quota' && rejection.reason !== 'auth')) return null;
+  return new AIProviderUnavailableError(provider, rejection);
+}
+
+/**
  * Classify an unknown error (Error object or string) into a structured
  * HTTP response descriptor. Handles UserBlockedError as a 403 so callers
  * don't need to import enforcement.ts themselves.
