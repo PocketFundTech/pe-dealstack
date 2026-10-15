@@ -1,3 +1,4 @@
+import { isPrintedSubtotalKey } from '../utils/printedSubtotal.js';
 import { log } from '../utils/logger.js';
 import type { ClassifiedStatement, UnitScale } from './financialClassifier.js';
 import { TOLERANCE_LARGE, TOLERANCE_SMALL } from './agents/financialAgent/config.js';
@@ -471,7 +472,7 @@ function checkChildrenSum(
     const total = lineItems[parent];
     if (typeof total !== 'number' || total === 0) continue;
     // Direct children only: cogs_sand, not cogs_sand_fine (a grandchild) or a standard key.
-    const children = keys.filter((k) => k.startsWith(`${parent}_`) && !k.endsWith('_pct')
+    const children = keys.filter((k) => k.startsWith(`${parent}_`) && !k.endsWith('_pct') && !isPrintedSubtotalKey(k, parent)
       && !keys.some((other) => other !== k && other.startsWith(`${parent}_`) && k.startsWith(`${other}_`)));
     if (children.length < 2) continue;
     const sum = children.reduce((acc, k) => acc + (lineItems[k] as number), 0);

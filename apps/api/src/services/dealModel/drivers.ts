@@ -46,17 +46,58 @@ export function seedPeriodIndices(history: HistoricalRow[], cat: LineCatalogue):
   return full.length ? full : withRev;
 }
 
-/** Revenue growth seed — trailing CAGR over the real span of years, clamped. */
-export function seedRevenueGrowth(history: HistoricalRow[], cat: LineCatalogue): number {
+// A year-on-year jump above this is a step change (an acquisition, a
+// re-basing), not a growth rate to project forward.
+const STEP_CHANGE_GROWTH = 100;
+
+interface GrowthSeed { growthPct: number; stepChanges: Array<{ period: string; growthPct: number }> }
+
+/**
+ * Revenue growth seed — compound annual growth over the real span of years,
+ * leaving out step-change years, clamped. CSP's 2025 (+284% on an
+ * acquisition) made the plain 2022→2025 CAGR 59% (capped at 30%): Base 51%
+ * IRR against ~15% in the buyer's own LBO (15 Oct 2026).
+ */
+export function seedRevenueGrowthDetail(history: HistoricalRow[], cat: LineCatalogue): GrowthSeed {
   const idx = seedPeriodIndices(history, cat);
   const full = idx.every((i) => isFullYearRow(history[i])) && idx.length > 0;
-  if (idx.length < 2) return 5;
-  const first = idx[0];
-  const last = idx[idx.length - 1];
+  if (idx.length < 2) return { growthPct: 5, stepChanges: [] };
   const fy = (i: number) => withPeriodMeta(history[i]).fiscalYear ?? null;
-  const span = full && fy(first) !== null && fy(last) !== null ? fy(last)! - fy(first)! : idx.length - 1;
-  const derived = cagrPct(cat.periods[first].values.revenue, cat.periods[last].values.revenue, span);
-  return derived === null ? 5 : Math.max(MIN_SEEDED_GROWTH, Math.min(MAX_SEEDED_GROWTH, derived));
+  const rev = (i: number) => cat.periods[i].values.revenue;
+  let logSum = 0;
+  let years = 0;
+  const stepChanges: GrowthSeed['stepChanges'] = [];
+  for (let k = 1; k < idx.length; k++) {
+    const a = idx[k - 1];
+    const b = idx[k];
+    const span = full && fy(a) !== null && fy(b) !== null ? fy(b)! - fy(a)! : 1;
+    if (span <= 0 || rev(a) <= 0 || rev(b) <= 0) continue;
+    const annual = (Math.pow(rev(b) / rev(a), 1 / span) - 1) * 100;
+    if (annual > STEP_CHANGE_GROWTH) {
+      stepChanges.push({ period: history[b].period, growthPct: round(annual, 1) });
+      continue;
+    }
+    logSum += Math.log(rev(b) / rev(a));
+    years += span;
+  }
+  const derived = years > 0 ? (Math.exp(logSum / years) - 1) * 100 : null;
+  const growthPct = derived === null ? 5 : Math.max(MIN_SEEDED_GROWTH, Math.min(MAX_SEEDED_GROWTH, derived));
+  return { growthPct, stepChanges };
+}
+
+export function seedRevenueGrowth(history: HistoricalRow[], cat: LineCatalogue): number {
+  return seedRevenueGrowthDetail(history, cat).growthPct;
+}
+
+/** The model note when a step-change year was left out of the growth seed. */
+export function growthSeedNote(history: HistoricalRow[], cat: LineCatalogue): string | null {
+  const { growthPct, stepChanges } = seedRevenueGrowthDetail(history, cat);
+  if (stepChanges.length === 0) return null;
+  const jumps = stepChanges.map((s) => `${s.period} (+${s.growthPct.toFixed(0)}%)`).join(', ');
+  return (
+    `Revenue growth is seeded at ${growthPct.toFixed(1)}% a year from the other years: ${jumps} is treated as a step change ` +
+    `(e.g. an acquisition), not a growth rate to project forward. Edit the growth on each case if you expect it to continue.`
+  );
 }
 
 export function inputLines(lines: ModelLine[]): ModelLine[] {

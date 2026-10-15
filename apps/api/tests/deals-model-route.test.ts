@@ -624,3 +624,44 @@ describe('GET /api/deals/:dealId/model/cases — CSP paid run, 15 Oct (real stor
     expect(res.body.base.ebitda).toBeCloseTo(3.647, 2);
   });
 });
+
+describe('GET /api/deals/:dealId/model/cases — growth seed ignores a step-change year (CSP, 15 Oct)', () => {
+  // 2025 revenue jumped 284% on an acquisition. Seeding growth from the
+  // 2022→2025 CAGR (59%, capped at 30%) put Base at 51% IRR / 7.9x, against
+  // ~15% in the buyer's own LBO. Organic years: +8.8%, −2.9% → ~2.8%/yr.
+  it('seeds revenue growth from the years without a step change, and says so', async () => {
+    const { readFileSync } = await import('fs');
+    statements = JSON.parse(readFileSync(new URL('./fixtures/csp-paid-run-statements.json', import.meta.url), 'utf8'));
+    dealRow = { ...dealRow, name: 'Community Solar Platform', dealSize: null, ebitda: 2.5 };
+    const res = await request(await buildApp()).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    const base = res.body.cases.find((c: { case: string }) => c.case === 'Base');
+    const growth = Object.values(base.assumptions.lineDrivers as Record<string, { method: string; values: number[] }>)
+      .filter((d) => d.method === 'GROWTH').map((d) => d.values[0]);
+    expect(growth.length).toBeGreaterThan(0);
+    for (const g of growth) expect(g).toBeCloseTo(2.8, 0);
+    expect(res.body.warnings.join(' ')).toMatch(/step change/i);
+    expect(res.body.warnings.join(' ')).toMatch(/2025/);
+    expect(base.summary.irr).toBeLessThan(0.35);
+  });
+});
+
+describe('GET /api/deals/:dealId/model/cases — deal record holds REPORTED EBITDA (CSP, 15 Oct)', () => {
+  // The CIM read stored reported EBITDA (2.50); the model runs on Adjusted
+  // (3.65 = 2.50 + 1.15 addbacks). That is consistent, not a 31% mismatch.
+  it('does not flag a mismatch when the deal record equals the reported EBITDA', async () => {
+    const { readFileSync } = await import('fs');
+    statements = JSON.parse(readFileSync(new URL('./fixtures/csp-paid-run-statements.json', import.meta.url), 'utf8'));
+    dealRow = { ...dealRow, name: 'Community Solar Platform', dealSize: null, ebitda: 2.5 };
+    const res = await request(await buildApp()).get('/api/deals/deal-1/model/cases');
+    expect(res.body.warnings.join(' ')).not.toMatch(/differs from the base-period EBITDA/);
+  });
+
+  it('still flags a deal record that matches neither reported nor adjusted EBITDA', async () => {
+    const { readFileSync } = await import('fs');
+    statements = JSON.parse(readFileSync(new URL('./fixtures/csp-paid-run-statements.json', import.meta.url), 'utf8'));
+    dealRow = { ...dealRow, dealSize: null, ebitda: 6.1 };
+    const res = await request(await buildApp()).get('/api/deals/deal-1/model/cases');
+    expect(res.body.warnings.join(' ')).toMatch(/differs from the base-period EBITDA/);
+  });
+});

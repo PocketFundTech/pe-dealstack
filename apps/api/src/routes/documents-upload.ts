@@ -1,3 +1,4 @@
+import { uploadActivityDescription } from './documents-upload-activity.js';
 import { Router, type Request, type Response } from 'express';
 import { supabase } from '../supabase.js';
 import { z } from 'zod';
@@ -518,12 +519,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
       }
 
       // Log activity
-      let activityDescription = `${docType} document uploaded`;
-      if (extractedText && aiExtractedData) {
-        activityDescription = `${docType} document uploaded, processed (${numPages} pages), and AI-analyzed`;
-      } else if (extractedText) {
-        activityDescription = `${docType} document uploaded and processed (${numPages} pages extracted)`;
-      }
+      const activityDescription = uploadActivityDescription(docType, numPages, Boolean(extractedText), Boolean(extractedText && aiExtractedData));
 
       // Activity row is a nice-to-have for the timeline — if its schema drifts
       // or the insert fails for any other reason, we should NOT fail the
@@ -569,7 +565,7 @@ export async function handleDocumentUpload(req: Request, res: Response) {
           notifyDealTeam(
             dealId, 'DOCUMENT_UPLOADED',
             `New document uploaded: ${documentName}`,
-            aiExtractedData ? `AI-analyzed (${numPages} pages)` : undefined,
+            aiExtractedData ? (typeof numPages === 'number' && numPages > 0 ? `AI-analyzed (${numPages} pages)` : 'AI-analyzed') : undefined,
             internalId || undefined
           );
         }).catch(err => log.error('Notification error (doc upload)', err));

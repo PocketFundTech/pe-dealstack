@@ -29,6 +29,8 @@ export interface EntrySeedInput {
   dealEbitda: number | null;
   /** Base-period EBITDA the model will use, when it comes from the statements. */
   statementsEbitda: number | null;
+  /** The base period's REPORTED EBITDA when the model runs on Adjusted (addbacks line). */
+  statementsReportedEbitda?: number | null;
   entrySource: BaseColumn['entrySource'];
 }
 
@@ -39,12 +41,17 @@ export interface EntrySeed {
   warnings: string[];
 }
 
-export function entrySeed({ impliedMultiple, dealEbitda, statementsEbitda, entrySource }: EntrySeedInput): EntrySeed {
+export function entrySeed({ impliedMultiple, dealEbitda, statementsEbitda, statementsReportedEbitda, entrySource }: EntrySeedInput): EntrySeed {
   // Entry EBITDA is the deal record's own (the statements have none): the
   // record's multiple and EBITDA belong together.
   if (entrySource !== 'base') return { evMultiple: impliedMultiple, warnings: [] };
   const gap = ebitdaGap(statementsEbitda, dealEbitda);
   if (gap === null || gap < EBITDA_GAP_THRESHOLD) return { evMultiple: impliedMultiple, warnings: [] };
+  // The record holds REPORTED EBITDA (e.g. read from a CIM) while the model
+  // runs on Adjusted: consistent, not a mismatch (CSP: 2.50 vs 3.65, 15 Oct).
+  // A multiple quoted on reported EBITDA still can't be applied to Adjusted.
+  const reportedGap = ebitdaGap(statementsReportedEbitda ?? null, dealEbitda);
+  if (reportedGap !== null && reportedGap < EBITDA_GAP_THRESHOLD) return { evMultiple: null, warnings: [] };
 
   const warnings = [
     `The deal record's EBITDA (${dealEbitda!.toFixed(2)}) differs from the base-period EBITDA in the statements ` +
