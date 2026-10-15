@@ -569,3 +569,23 @@ describe('deal-record units (G15)', () => {
     expect(a.unitScale).toBe('MILLIONS');
   });
 });
+
+describe('GET /api/deals/:dealId/model/cases — stale cumulative "Total" row (CSP 15 Oct replay)', () => {
+  // The real rows stored on 14 Oct, before #245: 2022–2025 plus a 42-month
+  // "Jan 2023 - Jun 2026 (Total)" row. Replayed through the merged code the
+  // base period was right (2025A) but its EBITDA came out 7.88 instead of
+  // ~2.50: the Total row's account lines leaked into the model.
+  it('ignores a row whose period is not a reporting period', async () => {
+    const { readFileSync } = await import('fs');
+    statements = JSON.parse(readFileSync(new URL('./fixtures/csp-stale-statements.json', import.meta.url), 'utf8'));
+    dealRow = { ...dealRow, name: 'Community Solar Platform', dealSize: null, ebitda: 2.5 };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    expect(res.body.history.map((h: { period: string }) => h.period)).toEqual(['2022', '2023', '2024', '2025']);
+    expect(res.body.base.label).toBe('2025A');
+    expect(res.body.base.ebitda).toBeCloseTo(2.497, 2);
+    const base = res.body.cases.find((c: { case: string }) => c.case === 'Base');
+    expect(base.summary.mom).toBeGreaterThan(0);
+  });
+});

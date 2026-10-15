@@ -15,7 +15,7 @@
 // destroy trust in the model faster than a wrong one.
 
 import { z } from 'zod';
-import { parsePeriod, comparePeriods, inferFiscalYearEndMonth, type PeriodKind } from '@ai-crm/shared';
+import { isCumulativePeriodLabel, parsePeriod, comparePeriods, inferFiscalYearEndMonth, type PeriodKind } from '@ai-crm/shared';
 import { comparePeriodChronologically } from '../../utils/periodChrono.js';
 import { computeDerivedFields } from '../financialDerivations.js';
 import type { LineDriver } from '@ai-crm/shared';
@@ -109,7 +109,11 @@ export interface NormalisedFinancials {
  */
 export function normaliseStatements(statements: StatementLike[]): NormalisedFinancials {
   const historical = statements.filter(
-    (s) => s.isActive !== false && (s.periodType ?? 'HISTORICAL') !== 'PROJECTED',
+    (s) => s.isActive !== false && (s.periodType ?? 'HISTORICAL') !== 'PROJECTED'
+      // A stored "Total" column summing several years (rows saved before the
+      // extraction fix) is not a period: its account lines leaked into the
+      // base year and put CSP's base EBITDA at 7.88 instead of 2.50.
+      && !isCumulativePeriodLabel(s.period),
   );
   const usable = historical.filter((s) => s.statementType === 'INCOME_STATEMENT');
 
