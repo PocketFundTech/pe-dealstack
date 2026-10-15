@@ -195,3 +195,23 @@ describe('selectSourceStatements keeps projections (CSP 14 Oct)', () => {
     expect(dropped.join(' ')).toMatch(/Annual Summary/);
   });
 });
+
+describe('runDeepPass drops cumulative "Total" periods (CSP 14 Oct, post-cache)', () => {
+  // The extraction cache stores the normalized classification, so a cache hit
+  // from before the normalizer fix still carries the 42-month Total period.
+  it('never stores a multi-year Total period, whatever the classifier returned', async () => {
+    const period = (p: string, revenue: number) => ({ period: p, periodType: 'HISTORICAL' as const, confidence: 90, lineItems: { revenue } });
+    const classification: ClassificationResult = {
+      statements: [{
+        statementType: 'INCOME_STATEMENT', unitScale: 'MILLIONS', currency: 'USD',
+        sheetName: 'Consolidated IS', sourceKind: 'source_statement',
+        periods: [period('2024', 3.249), period('2025', 12.468), period('Jan 2023 - Jun 2026 (Total)', 21.418)],
+      }],
+      overallConfidence: 90,
+      warnings: [],
+    } as ClassificationResult;
+    const result = await runDeepPass({ text: '', dealId: 'd1', documentId: 'doc-cim', classification });
+    expect(active().map((r) => r.period).sort()).toEqual(['2024', '2025']);
+    expect(result.warnings.join('\n')).toMatch(/Skipped cumulative column "Jan 2023 - Jun 2026 \(Total\)"/);
+  });
+});
