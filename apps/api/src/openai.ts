@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import { wrapOpenAI } from 'langsmith/wrappers/openai';
 import { traceable } from 'langsmith/traceable';
 import { log } from './utils/logger.js';
-import { OPENROUTER_BASE_URL, OPENROUTER_HEADERS, isOpenRouterEnabled } from './utils/aiModels.js';
+import { OPENROUTER_BASE_URL, OPENROUTER_HEADERS, isOpenRouterEnabled, isAnthropicEnabled } from './utils/aiModels.js';
 import { recordUsageEvent } from './services/usage/trackedLLM.js';
 import { enforceUserGate, UserBlockedError } from './services/usage/enforcement.js';
 import { withCircuitBreaker } from './services/aiCircuitBreaker.js';
@@ -75,7 +75,12 @@ const useOpenRouter = isOpenRouterEnabled();
 const apiKey = useOpenRouter ? openRouterKey : openAIKey;
 
 if (!apiKey) {
-  log.warn('No LLM API key set (OPENROUTER_API_KEY / OPENAI_API_KEY), AI features disabled');
+  if (isAnthropicEnabled()) {
+    // Anthropic-only deployment: the OpenAI client is intentionally unused.
+    log.debug('No OPENAI_API_KEY / OPENROUTER_API_KEY set; using Anthropic only');
+  } else {
+    log.warn('No LLM API key set (OPENROUTER_API_KEY / OPENAI_API_KEY), AI features disabled');
+  }
 }
 
 // LangSmith tracing: when enabled, wrap the OpenAI singletons once so every

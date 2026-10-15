@@ -294,3 +294,36 @@ describe('toClassificationResult — Indian crore/lakh scales (Northwind regress
     }
   });
 });
+
+describe('toClassificationResult — cumulative "Total" columns (CSP 14 Oct)', () => {
+  it('drops a multi-year Total period with a visible warning and keeps the real periods', async () => {
+    const toClassificationResult = await getNormalize();
+    const raw = fixture();
+    raw.statements[0].periods.push({
+      period: 'Jan 2023 - Jun 2026 (Total)',
+      periodType: 'HISTORICAL',
+      confidence: 90,
+      lineItems: [{ name: 'revenue', value: 21418, sourcePage: 1, sourceQuote: 'Total for Income 21,418,461' }],
+    });
+    const result = toClassificationResult(raw);
+    expect(result.statements[0].periods.map((p) => p.period)).toEqual(['2023']);
+    expect(result.warnings.join('\n')).toMatch(/Skipped cumulative column "Jan 2023 - Jun 2026 \(Total\)"/);
+  });
+
+  it('drops the whole statement when every period was cumulative', async () => {
+    const toClassificationResult = await getNormalize();
+    const raw = fixture();
+    raw.statements[0].periods = [{
+      period: '2023-2026 Total', periodType: 'HISTORICAL', confidence: 90,
+      lineItems: [{ name: 'revenue', value: 1, sourcePage: 1, sourceQuote: 'x' }],
+    }];
+    expect(toClassificationResult(raw).statements).toHaveLength(0);
+  });
+});
+
+describe('extraction prompt — cumulative columns (CSP 14 Oct)', () => {
+  it('tells the model not to emit Total / cumulative columns', async () => {
+    const { buildExtractionSystemPrompt } = await import('../src/services/extraction/extractionSchema.js');
+    expect(buildExtractionSystemPrompt('2026-10-14')).toMatch(/do not emit[^.]*(total|cumulative)/i);
+  });
+});

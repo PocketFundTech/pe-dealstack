@@ -55,6 +55,7 @@ function protectedKeysFor(parent: string | null | undefined): ReadonlySet<string
     ...Object.entries(LINE_ITEM_ALIASES).filter(([, target]) => target !== parent).map(([alias]) => alias),
   ]);
 }
+import { isCumulativePeriodLabel } from '@ai-crm/shared';
 import type { ExtractionResponse, RawStatement } from './extractionSchema.js';
 
 export const SCALE_TO_MILLIONS: Record<RawStatement['unitScale'], number> = {
@@ -131,7 +132,13 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
       warnings.push(`${stmt.statementType}: currency is ${stmt.currency} — values NOT converted to USD`);
     }
 
-    const periods = stmt.periods.map((p) => {
+    const periods = stmt.periods.flatMap((p) => {
+      // A "Total" column summing several fiscal periods is not a period:
+      // stored as one it became the deal's latest year (CSP, 14 Oct 2026).
+      if (isCumulativePeriodLabel(p.period)) {
+        warnings.push(`Skipped cumulative column "${p.period}" — it sums several fiscal periods and is not a reporting period`);
+        return [];
+      }
       const folded = foldPeriodLineItems(p.lineItems, factor);
       const { normalized, warnings: itemWarnings } = validateLineItems(stmt.statementType, folded);
       warnings.push(...itemWarnings.map((w) => `${stmt.statementType} ${p.period}: ${w}`));
@@ -144,13 +151,17 @@ export function toClassificationResult(raw: ExtractionResponse): ClassificationR
       }
       // Cash outflows (capex, repayments, distributions…) stored ≤ 0.
       if (stmt.statementType === 'CASH_FLOW') warnings.push(...normalizeCashFlowSigns(normalized, p.period));
-      return {
+      return [{
         period: p.period,
         periodType: p.periodType,
         confidence: Math.max(0, Math.min(100, Math.round(p.confidence))),
         lineItems: normalized as Record<string, number | null>,
-      };
+      }];
     });
+    if (periods.length === 0) {
+      warnings.push(`${stmt.statementType}${stmt.sheetName ? ` (${stmt.sheetName})` : ''}: no reporting periods left after skipping cumulative columns — statement omitted`);
+      continue;
+    }
 
     statements.push({
       statementType: stmt.statementType,

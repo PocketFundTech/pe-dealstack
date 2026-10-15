@@ -74,6 +74,35 @@ function findYear(upper: string): number | null {
   return null;
 }
 
+/**
+ * A label that sums SEVERAL fiscal periods — a QuickBooks "Total" column
+ * ("Jan 2023 - Jun 2026 (Total)", "2023-2026 Total") or an explicit
+ * multi-year range. It is not a period: treated as one it reads as the
+ * latest full year and takes over the deal card and the model base
+ * (Community Solar Platform, 14 Oct 2026). "2025 YTD Total" and a 12-month
+ * "FY2025 (Apr 2024 - Mar 2025)" are single periods and stay.
+ */
+export function isCumulativePeriodLabel(label: string | null | undefined): boolean {
+  if (!label) return false;
+  const u = label.trim().toUpperCase();
+  const tokens = monthTokens(u);
+  const last = tokens[tokens.length - 1];
+  if (tokens.length >= 2 && last.year != null) {
+    const first = tokens[0];
+    const startYear = first.year ?? (first.month <= last.month ? last.year : last.year - 1);
+    const span = last.year * 12 + last.month - (startYear * 12 + first.month) + 1;
+    if (span > 24) return true;
+    // An explicit single-period range ("FY2025 (Jul 2024 - Jun 2025) Total")
+    // is that period, whatever else the label says.
+    if (span >= 1) return false;
+  }
+  if (/\b(TOTAL|CUMULATIVE)\b/.test(u)) {
+    const years = new Set((u.match(/\b(?:19|20)\d{2}\b/g) ?? []));
+    if (years.size >= 2) return true;
+  }
+  return false;
+}
+
 export interface ParsePeriodOptions {
   /**
    * The company's fiscal year-end month (1-12), for labels that don't state
@@ -92,6 +121,7 @@ export function parsePeriod(label: string | null | undefined, opts: ParsePeriodO
   if (!label) return null;
   const s = label.trim();
   if (!s) return null;
+  if (isCumulativePeriodLabel(s)) return null;
   const u = s.toUpperCase();
 
   const isYtd = /\bYTD\b/.test(u);

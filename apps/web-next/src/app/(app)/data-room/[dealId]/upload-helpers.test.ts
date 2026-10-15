@@ -28,3 +28,10 @@ describe("splitUploadFiles", () => {
     ]);
   });
 });
+
+describe("auto-update default", () => {
+  it("does not pre-tick 'auto-update deal' from filenames (it costs an extra AI call per PDF)", async () => {
+    const helpers = (await import("./upload-helpers")) as Record<string, unknown>;
+    expect(helpers.hasHighValueDoc).toBeUndefined();
+  });
+});

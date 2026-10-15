@@ -161,3 +161,17 @@ describe('workbook entry values (D2)', () => {
     expect(wb.getWorksheet(SHEETS.historicals)!.getRow(reg.pl.row.ebitda).getCell(2).value ?? null).toBeNull();
   });
 });
+
+describe('selectBasePeriod — cumulative "Total" columns (CSP 14 Oct)', () => {
+  it('bases the model on the last real fiscal year, not a 42-month Total', () => {
+    const CSP = [
+      is('2023', { revenue: 3.346, ebitda: 1.016 }),
+      is('2024', { revenue: 3.249, ebitda: 0.793 }),
+      is('2025', { revenue: 12.468, ebitda: 3.647 }),
+      is('Jan 2023 - Jun 2026 (Total)', { revenue: 21.418, ebitda: 4.473 }),
+    ];
+    const base = selectBasePeriod(normaliseStatements(CSP).rows)!;
+    expect(base.row.period).toBe('2025');
+    expect(base.row.revenue).toBeCloseTo(12.468, 3);
+  });
+});

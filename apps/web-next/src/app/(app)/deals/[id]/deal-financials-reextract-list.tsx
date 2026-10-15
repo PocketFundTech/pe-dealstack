@@ -64,6 +64,9 @@ interface DealFinancialsReextractListProps {
   /** Per-doc "remove all extracted statements" handler. Parent owns the
    *  API call, toast, and refetch. */
   onRemove: (docId: string, docName: string) => Promise<void> | void;
+  /** Summary heading. Defaults to the re-extract wording; the empty state
+   *  (nothing extracted yet) passes "Extract a single document". */
+  summaryLabel?: string;
 }
 
 /**
@@ -84,6 +87,7 @@ export function DealFinancialsReextractList({
   removingDocId,
   onReextract,
   onRemove,
+  summaryLabel = "Re-extract a single document",
 }: DealFinancialsReextractListProps) {
   // Local state for the per-doc remove confirmation modal — uses the shared
   // ConfirmDialog primitive (audit C4: no native confirm()).
@@ -110,7 +114,7 @@ export function DealFinancialsReextractList({
       <details className="mb-4 rounded-lg border border-gray-100 bg-gray-50/60">
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-gray-500 hover:text-gray-800 select-none flex items-center gap-1.5">
           <span className="material-symbols-outlined text-sm">description</span>
-          Re-extract a single document
+          {summaryLabel}
           <span className="text-gray-400 font-normal">
             ({financialCount} financial doc{financialCount === 1 ? "" : "s"}
             {otherCount > 0 ? `, ${otherCount} other` : ""})

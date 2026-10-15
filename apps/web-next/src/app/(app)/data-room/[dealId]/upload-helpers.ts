@@ -27,18 +27,3 @@ export function splitUploadFiles(files: File[]): { valid: File[]; skipped: Skipp
   }
   return { valid, skipped };
 }
-
-// Returns true if at least one of the given files looks like a high-value
-// CIM/teaser/financial/model document. Used to auto-check the
-// "auto-update deal" toggle in the upload-confirmation modal.
-export function hasHighValueDoc(files: File[]): boolean {
-  return files.some((f) => {
-    const name = f.name.toLowerCase();
-    return (
-      name.includes("cim") ||
-      name.includes("teaser") ||
-      name.includes("financial") ||
-      name.includes("model")
-    );
-  });
-}

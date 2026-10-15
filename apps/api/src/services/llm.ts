@@ -49,13 +49,18 @@ interface LLMConfig {
 //      or api.openai.com depending on OPENROUTER_API_KEY presence — see
 //      createOpenAIModel below).
 // The fast provider stays on 'openai' by default since Anthropic's haiku
-// pricing isn't economical for tier-3/4 traffic and the user only flagged
-// tier 1 routing.
+// pricing isn't economical for tier-3/4 traffic -- UNLESS Anthropic is the only
+// configured vendor (no OpenAI/OpenRouter key), where 'openai' would just throw
+// in every getFastModel caller. LLM_FAST_PROVIDER always wins.
 const config: LLMConfig = {
   chatProvider:
     (process.env.LLM_CHAT_PROVIDER as LLMProvider) ||
     (isAnthropicEnabled() ? 'anthropic' : 'openai'),
-  fastProvider: (process.env.LLM_FAST_PROVIDER as LLMProvider) || 'openai',
+  fastProvider:
+    (process.env.LLM_FAST_PROVIDER as LLMProvider) ||
+    (isAnthropicEnabled() && !process.env.OPENAI_API_KEY && !process.env.OPENROUTER_API_KEY
+      ? 'anthropic'
+      : 'openai'),
   embeddingProvider: 'gemini',
 };
 
