@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL', 'AI_INGEST_MODEL', 'AI_CHAT_EFFORT', 'AI_MEMO_EFFORT'] as const;
+const ENV_KEYS = ['AI_EXTRACTION_MODEL', 'AI_CHAT_MODEL', 'AI_FAST_MODEL', 'AI_MEMO_MODEL', 'AI_INGEST_MODEL', 'AI_CHAT_EFFORT', 'AI_MEMO_EFFORT', 'AI_EXTRACTION_EFFORT'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => { for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
@@ -117,3 +117,15 @@ describe('getModelConfig', () => {
     expect(getModelConfig('chat').effort).toBeUndefined();
   });
 });
+
+describe('AI_EXTRACTION_EFFORT (fix J)', () => {
+  it('lets ops lower extraction effort without a deploy; default stays the model default', async () => {
+    const { getModelConfig } = await getModels();
+    expect(getModelConfig('extraction').effort).toBeUndefined();
+    process.env.AI_EXTRACTION_EFFORT = 'medium';
+    expect(getModelConfig('extraction').effort).toBe('medium');
+    process.env.AI_EXTRACTION_EFFORT = 'turbo';
+    expect(getModelConfig('extraction').effort).toBeUndefined();
+  });
+});
+

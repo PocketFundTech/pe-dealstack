@@ -16,3 +16,9 @@ describe('claudeExtractionCacheTier', () => {
     expect(EXTRACTION_SCHEMA_VERSION).not.toBe('v1');
   });
 });
+
+describe('schema version after the monthly-aggregation prompt rules (fix J)', () => {
+  it('is v5 so results cached under the per-month prompt are never reused', () => {
+    expect(EXTRACTION_SCHEMA_VERSION).toBe('v5');
+  });
+});

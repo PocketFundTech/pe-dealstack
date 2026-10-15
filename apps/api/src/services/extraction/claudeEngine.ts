@@ -194,6 +194,10 @@ export async function extractWithClaude(
   }
 }
 
+// After this much of a run, a repair pass can't finish inside the 240s/280s
+// per-document budget (fix J, 15 Oct 2026).
+const REPAIR_DEADLINE_MS = 150_000;
+
 async function runExtraction(
   input: ClaudeEngineInput,
   mode: 'standard' | 'container',
@@ -201,6 +205,7 @@ async function runExtraction(
 ): Promise<ClaudeEngineResult | null> {
   const { fileBuffer, fileName, fileType } = input;
   const usage = { inputTokens: 0, outputTokens: 0 };
+  const startedAt = Date.now();
 
   // ── Build the document content block ─────────────────────────────
   let documentBlocks: ContentBlock[];
@@ -304,6 +309,7 @@ async function runExtraction(
   };
 
   const callEngine = async (extraInstruction?: string): Promise<ClassificationResult | null> => {
+    const callStartedAt = Date.now();
     try {
       const res = await trackedClaudeMessage({
         operation: 'financial_extraction',
@@ -345,7 +351,20 @@ async function runExtraction(
         });
         return null;
       }
-      return parseAndNormalize(res.text);
+      const parsed = parseAndNormalize(res.text);
+      // Where the time goes: nothing was logged between "text extracted" and
+      // the 280s abandonment on the CSP workbook (15 Oct 2026).
+      log.info('claudeEngine: extraction call finished', {
+        fileName,
+        mode,
+        pass: extraInstruction ? 'repair' : 'first',
+        durationMs: Date.now() - callStartedAt,
+        outputTokens: res.usage.outputTokens,
+        statements: parsed?.statements.length ?? 0,
+        periods: parsed?.statements.reduce((n, st) => n + st.periods.length, 0) ?? 0,
+        lineItems: parsed?.statements.reduce((n, st) => n + st.periods.reduce((m, p) => m + Object.keys(p.lineItems).length, 0), 0) ?? 0,
+      });
+      return parsed;
     } catch (err) {
       if (err instanceof AIRefusalError) {
         // Survived the server-side fallback chain — content outcome, not a bug.
@@ -369,6 +388,20 @@ async function runExtraction(
     // ── Pass 2 (max one): repair only if deterministic checks fail ────
     const firstFailures = failureSummaries(first);
     if (firstFailures.length === 0) {
+      return { classification: first, rawText, repairUsed: false, usage };
+    }
+
+    // A repair pass resends the document and regenerates the failed
+    // statements; on a run that already took most of the per-document
+    // budget it only converts a repairable result into a timeout.
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs > REPAIR_DEADLINE_MS) {
+      log.warn('claudeEngine: validator failures but no time for a repair pass', {
+        fileName, failures: firstFailures.length, elapsedMs, deadlineMs: REPAIR_DEADLINE_MS,
+      });
+      first.warnings.push(
+        `Repair pass skipped: ${Math.round(elapsedMs / 1000)}s of the extraction budget already used — ${firstFailures.length} validation issue(s) left for review`,
+      );
       return { classification: first, rawText, repairUsed: false, usage };
     }
 

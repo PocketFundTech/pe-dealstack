@@ -451,3 +451,25 @@ describe('extractWithClaude — spreadsheet container mode', () => {
     expect(calls[1].tools).toBeDefined();
   });
 });
+
+describe('extractWithClaude — time budget (fix J, 15 Oct)', () => {
+  it('skips the repair pass when the first call already used more than 150s, and says so', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-15T05:13:00Z'));
+    try {
+      const client = await import('../src/services/ai/client.js');
+      (client.trackedClaudeMessage as any).mockImplementationOnce(async (opts: any) => {
+        calls.push(opts);
+        vi.setSystemTime(Date.now() + 160_000); // the model call took 160s
+        return { text: threeStatementJson({ incomeRevenue: 100, totalEquity: 30, includeCashFlow: false }), model: 'claude-fable-5', stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 50 } };
+      });
+      const { extractWithClaude } = await import('../src/services/extraction/claudeEngine.js');
+      const result = await extractWithClaude({ fileBuffer: Buffer.from('%PDF'), fileName: 'slow.pdf', fileType: 'pdf' });
+      expect(calls).toHaveLength(1); // the balance sheet is inconsistent, but no repair call was made
+      expect(result?.repairUsed).toBe(false);
+      expect(result?.classification.warnings.join('\n')).toMatch(/Repair pass skipped/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
