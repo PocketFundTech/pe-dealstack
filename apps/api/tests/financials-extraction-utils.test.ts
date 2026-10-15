@@ -85,3 +85,15 @@ describe('buildResultWarnings', () => {
     expect(warnings).toEqual([]);
   });
 });
+
+describe('docBudgetMs', () => {
+  // A single-document request has the whole 300s function to itself; the
+  // CSP workbook takes 218–252s in Fable container mode and lost a coin
+  // flip against the 240s multi-doc budget (15 Oct 2026).
+  it('gives a single-document request 280s and keeps 240s per doc in bulk modes', async () => {
+    const { docBudgetMs } = await import('../src/routes/financials-extraction-utils.js');
+    expect(docBudgetMs('single')).toBe(280_000);
+    expect(docBudgetMs('all_financials')).toBe(240_000);
+    expect(docBudgetMs('all')).toBe(240_000);
+  });
+});

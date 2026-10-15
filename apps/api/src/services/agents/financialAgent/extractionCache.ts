@@ -22,6 +22,10 @@ import { log } from '../../../utils/logger.js';
 import type { ClassificationResult } from '../../financialClassifier.js';
 import type { ExtractionSource } from './state.js';
 
+// Failures are WARNINGS: for 14 days in production nothing was ever cached
+// (the table had not been created) and nobody knew, so every re-extract paid
+// full price (15 Oct 2026). A miss or an expiry is normal and stays at debug.
+
 // 30-day TTL: extraction results for an unchanged document are valid
 // effectively forever. 30 days protects against schema/prompt evolution while
 // still capturing 99%+ of re-extraction traffic.
@@ -85,7 +89,7 @@ export async function getCachedExtraction(
       .maybeSingle();
 
     if (error) {
-      log.debug('FinancialExtractionCache lookup error', { error: error.message });
+      log.warn('FinancialExtractionCache lookup error', { error: error.message });
       return null;
     }
 
@@ -117,7 +121,7 @@ export async function getCachedExtraction(
       .eq('id', data.id)
       .then((res) => {
         if (res.error) {
-          log.debug('FinancialExtractionCache hitCount update failed', {
+          log.warn('FinancialExtractionCache hitCount update failed', {
             error: res.error.message,
           });
         }
@@ -132,7 +136,7 @@ export async function getCachedExtraction(
 
     return data.result as CachedExtractionResult;
   } catch (err) {
-    log.debug('FinancialExtractionCache lookup threw', {
+    log.warn('FinancialExtractionCache lookup threw', {
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
@@ -175,7 +179,7 @@ export async function putCachedExtraction(
       );
 
     if (error) {
-      log.debug('FinancialExtractionCache upsert failed', { error: error.message });
+      log.warn('FinancialExtractionCache upsert failed', { error: error.message });
       return false;
     }
 
@@ -187,7 +191,7 @@ export async function putCachedExtraction(
     });
     return true;
   } catch (err) {
-    log.debug('FinancialExtractionCache upsert threw', {
+    log.warn('FinancialExtractionCache upsert threw', {
       error: err instanceof Error ? err.message : String(err),
     });
     return false;

@@ -100,3 +100,15 @@ describe('extractNode — AbortSignal plumbing to claudeEngine', () => {
     vi.doUnmock('../src/services/agents/financialAgent/extractionCache.js');
   });
 });
+
+describe('runFinancialAgent — explicit timeoutMs (single-document budget)', () => {
+  it('honours a caller-supplied timeoutMs instead of the 240s default', async () => {
+    runWithAgentBoundsMock.mockClear();
+    const { runFinancialAgent } = await import('../src/services/agents/financialAgent/index.js');
+    await runFinancialAgent({
+      dealId: 'deal-1', fileBuffer: Buffer.from('x'), fileName: 'Financials.xlsx', fileType: 'excel' as const,
+      timeoutMs: 280_000,
+    });
+    expect(runWithAgentBoundsMock.mock.calls[0][1].timeoutMs).toBe(280_000);
+  });
+});

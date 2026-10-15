@@ -21,7 +21,7 @@ import { downloadFileBuffer, extractStoragePath } from '../utils/storage.js';
 import { maybeScoreAfterExtraction } from '../services/agents/dealScorecard/index.js';
 import { maybeReactivateAfterExtraction } from '../services/agents/dealReactivation/index.js';
 import { isBackgroundAiEnabled } from '../services/usage/aiOnDemand.js';
-import { isFinancialDoc, buildResultWarnings } from './financials-extraction-utils.js';
+import { isFinancialDoc, buildResultWarnings, docBudgetMs } from './financials-extraction-utils.js';
 import { publicErrorMessage } from '../utils/aiErrors.js';
 import { setDocExtraction, getRunProgress } from '../services/extractionProgress.js';
 
@@ -122,6 +122,8 @@ async function processOneDoc(
   orgId: string,
   /** Multi-doc: wait for a slot until this time (epoch ms) instead of skipping. */
   slotDeadline?: number,
+  /** Wall-clock budget for this document; the agent's own timeout follows it. */
+  budgetMs?: number,
 ): Promise<PerDocResult> {
   const baseName = doc.name ?? 'document';
   const fail = (status: 'failed' | 'skipped_no_slot' | 'pending', error: string): PerDocResult => ({
@@ -146,6 +148,7 @@ async function processOneDoc(
       fileName: baseName,
       fileType: detectFileType(doc.mimeType, doc.name),
       organizationId: orgId,
+      timeoutMs: budgetMs,
     });
     return {
       id: doc.id,
@@ -341,9 +344,10 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
     // timeout fires we mark that doc 'timeout' and let the others continue.
     const perDoc: PerDocResult[] = [];
 
-    // Per-doc time budget. 240s leaves ~60s headroom under Vercel's 300s
-    // hard limit for response serialization, slot release, etc.
-    const PER_DOC_BUDGET_MS = 240_000;
+    // Per-doc time budget (docBudgetMs): 240s in bulk modes leaves ~60s
+    // headroom under Vercel's 300s hard limit for the other documents and
+    // response serialization; a single-document request gets 280s.
+    const PER_DOC_BUDGET_MS = docBudgetMs(effectiveMode);
     // Whole-request budget for the multi-doc queue, and the least time a doc
     // needs left to be worth starting (most finish in 30-90s; the cache
     // makes a re-sent doc near-instant).
@@ -375,7 +379,7 @@ router.post('/deals/:dealId/financials/extract', async (req, res) => {
           });
         }, budgetMs);
       });
-      return Promise.race([processOneDoc(doc, dealId, orgId, slotDeadline), timeoutPromise])
+      return Promise.race([processOneDoc(doc, dealId, orgId, slotDeadline, budgetMs), timeoutPromise])
         .finally(() => { if (timeoutHandle) clearTimeout(timeoutHandle); });
     };
 
