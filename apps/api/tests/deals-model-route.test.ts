@@ -609,3 +609,18 @@ describe('GET /api/deals/:dealId/model/cases — Adjusted EBITDA (founder decisi
     expect(res.body.warnings.join(' ')).toMatch(/Adjusted EBITDA/);
   });
 });
+
+describe('GET /api/deals/:dealId/model/cases — CSP paid run, 15 Oct (real stored rows)', () => {
+  // The final paid extraction stored 2022–2025, 2026 YTD and three projected
+  // periods. The model based on 2025A but its EBITDA came out 9.03 instead
+  // of the Adjusted 3.65 — 5.38 (exactly 2025 COGS) too high.
+  it('bases on 2025A with Adjusted EBITDA 3.65', async () => {
+    const { readFileSync } = await import('fs');
+    statements = JSON.parse(readFileSync(new URL('./fixtures/csp-paid-run-statements.json', import.meta.url), 'utf8'));
+    dealRow = { ...dealRow, name: 'Community Solar Platform', dealSize: null, ebitda: 2.5 };
+    const res = await request(await buildApp()).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    expect(res.body.base.label).toBe('2025A');
+    expect(res.body.base.ebitda).toBeCloseTo(3.647, 2);
+  });
+});

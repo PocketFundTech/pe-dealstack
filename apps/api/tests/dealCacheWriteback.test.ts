@@ -461,3 +461,26 @@ describe('buildCacheRecord — Adjusted EBITDA drives the card (founder decision
     expect(rec.cachedEbitda).toBe(20_000_000);
   });
 });
+
+describe('pickLatestForCache — a partial year is not "Revenue (LTM)" (CSP paid run, 15 Oct)', () => {
+  it('prefers the latest full fiscal year over a newer 6-month YTD', () => {
+    const rows: IncomeStatementRow[] = [
+      baseRow({ period: '2024', lineItems: { revenue: 3.249, ebitda: 0.495 } }),
+      baseRow({ period: '2025', lineItems: { revenue: 12.468, ebitda: 2.497, adjusted_ebitda: 3.647 } }),
+      baseRow({ period: '2026 YTD (Jan - Jun 2026)', lineItems: { revenue: 5.795, ebitda: 1.051 } }),
+    ];
+    expect(pickLatestForCache(rows)?.period).toBe('2025');
+  });
+
+  it('prefers an LTM period over an older full year', () => {
+    const rows: IncomeStatementRow[] = [
+      baseRow({ period: '2025' }),
+      baseRow({ period: 'LTM Jun 2026', periodType: 'LTM' }),
+    ];
+    expect(pickLatestForCache(rows)?.period).toBe('LTM Jun 2026');
+  });
+
+  it('still falls back to a partial year when that is all there is', () => {
+    expect(pickLatestForCache([baseRow({ period: '2026 YTD (Jan - Jun 2026)' })])?.period).toBe('2026 YTD (Jan - Jun 2026)');
+  });
+});

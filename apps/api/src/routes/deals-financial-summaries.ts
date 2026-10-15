@@ -25,6 +25,7 @@ import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
 import { getOrgId } from '../middleware/orgScope.js';
 import { comparePeriodChronologically } from '../utils/periodChrono.js';
+import { preferFullYear } from '../services/dealCacheWriteback.js';
 
 const router = Router();
 
@@ -115,7 +116,7 @@ router.get('/financial-summaries', async (req, res) => {
           r.periodType === 'ACTUAL' ||
           r.periodType === 'LTM',
       );
-      const candidates = historical.length > 0 ? historical : dealRows;
+      const candidates = preferFullYear(historical.length > 0 ? historical : dealRows);
 
       // comparePeriodChronologically sorts ASC; reverse to get newest.
       const sortedDesc = [...candidates].sort((a, b) =>

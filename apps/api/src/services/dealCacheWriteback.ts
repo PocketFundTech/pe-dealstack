@@ -76,6 +76,21 @@ export interface DealCacheRecord {
 // ─── Picking logic ────────────────────────────────────────────
 
 /**
+ * The headline is "Revenue (LTM)": a full fiscal year or an LTM period, never
+ * a newer partial year. CSP's 6-month "2026 YTD" ($5.8M) displaced FY2025
+ * ($12.5M) on the card (15 Oct 2026). Falls back to all rows when no full
+ * year exists.
+ */
+export function preferFullYear<T extends { period?: string | null; periodType?: string | null }>(rows: T[]): T[] {
+  const full = rows.filter((r) => {
+    if (r.periodType === 'LTM') return true;
+    const p = parsePeriod(r.period);
+    return !!p && (p.kind === 'FY' || p.kind === 'LTM') && p.months === 12;
+  });
+  return full.length > 0 ? full : rows;
+}
+
+/**
  * Pick the chronologically-latest period that carries the headline
  * numbers, with progressive fallbacks. Mirrors the picker in
  * routes/deals-financial-summaries.ts so the bulk endpoint and the
@@ -107,7 +122,7 @@ export function pickLatestForCache(
   // not a period and must never be the deal's headline figure — it sorted
   // as "latest" and put a 42-month total on the deal card (CSP, 14 Oct).
   const dated = pool.filter((r) => parsePeriod(r.period) !== null);
-  const candidates = dated.length > 0 ? dated : pool;
+  const candidates = preferFullYear(dated.length > 0 ? dated : pool);
 
   // comparePeriodChronologically sorts ASC; reverse to get newest-first.
   const sortedDesc = [...candidates].sort((a, b) =>
