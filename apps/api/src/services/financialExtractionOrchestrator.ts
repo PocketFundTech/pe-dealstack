@@ -1,3 +1,4 @@
+import { isCumulativePeriodLabel } from '@ai-crm/shared';
 import { supabase } from '../supabase.js';
 import { extractDealDataFromText, ExtractedDealData } from './aiExtractor.js';
 import { classifyFinancials, ClassificationResult, ClassifiedStatement } from './financialClassifier.js';
@@ -138,6 +139,21 @@ async function runDeepPassUnlocked(
     (dealDocs ?? []).map((d) => [d.id as string, d as { type?: string | null; mimeType?: string | null; name?: string | null }]),
   );
   const incomingDoc = input.documentId ? docMetaById.get(input.documentId) : undefined;
+
+  // A "Total" column summing several fiscal periods is not a period. The
+  // normalizer already skips it, but the extraction cache stores the
+  // normalized result, so a cache hit from before that fix still carries
+  // it — and stored as a period it became the deal's latest year
+  // (Community Solar Platform, 14 Oct 2026). Guard here, after the cache.
+  for (const stmt of classification.statements) {
+    const kept = stmt.periods.filter((p) => {
+      if (!isCumulativePeriodLabel(p.period)) return true;
+      classification.warnings.push(`Skipped cumulative column "${p.period}" — it sums several fiscal periods and is not a reporting period`);
+      return false;
+    });
+    stmt.periods = kept;
+  }
+  classification.statements = classification.statements.filter((s) => s.periods.length > 0);
 
   // One document can hold the same statement twice — the reported tab and a
   // valuation tab. Keep the reported one; merging would union the model's
