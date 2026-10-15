@@ -11,7 +11,14 @@ import {
   type UnitScale,
 } from "@/lib/formatters";
 import { comparePeriodChronologically } from "./deal-financials-period-scope";
-import { financialsKey } from "./deal-financials-constants";
+import { financialsKey, validationKey, VALIDATION_FLAGS_ANCHOR } from "./deal-financials-constants";
+import {
+  headlineTrustGate,
+  confidenceBand,
+  confidenceReason,
+  reviewItemCount,
+  type TrustCheck,
+} from "./deal-financials-trust";
 import { STAGE_LABELS } from "@/lib/constants";
 import { useApiQuery } from "@/lib/useApiQuery";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -216,6 +223,13 @@ export function DealMetadataRow({ deal }: { deal: DealDetail }) {
 // Financial Metrics Row (Deal Size, Revenue, EBITDA, EBITDA Margin)
 // ---------------------------------------------------------------------------
 
+function scrollToValidationFlags() {
+  if (typeof document === "undefined") return;
+  document.getElementById(VALIDATION_FLAGS_ANCHOR)?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+const GATED_TILE_KEYS = new Set(["revenue", "ebitda", "ebitdaMargin"]);
+
 export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
   // Headline metrics on the deal page header. Read precedence
   // (`pickHeadlineMetrics`):
@@ -250,6 +264,14 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
   // flicker on the EBITDA Margin card especially. Suppressed entirely when
   // the cache is populated since we don't need the fallback fetch.
   const statementLoading = !cacheHit && financialsQuery.isLoading;
+
+  // Trust gate: never show a headline figure the validator marked as an ERROR
+  // for the period this card displays. Shares the validation cache key with
+  // deal-financials.tsx (which writes through) and FinancialStatusBadge.
+  const validationQuery = useApiQuery<{ checks?: TrustCheck[] }>(
+    deal.id && deal.cachedPeriod ? validationKey(deal.id) : null,
+  );
+  const trustGate = headlineTrustGate(validationQuery.data?.checks, deal.cachedPeriod);
 
   const latestIncome = useMemo<IncomeStatementRow | null>(() => {
     if (cacheHit) return null;
@@ -361,7 +383,7 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
       extra: (() => {
         const dealSizeActual = toActualDollars(deal.dealSize, "MILLIONS");
         const ebitdaActual = toActualDollars(headline.ebitda, headline.unitScale);
-        if (!dealSizeActual || !ebitdaActual) return undefined;
+        if (trustGate.gated || !dealSizeActual || !ebitdaActual) return undefined;
         return `~${(dealSizeActual / ebitdaActual).toFixed(1)}x EBITDA Multiple`;
       })(),
     },
@@ -421,14 +443,27 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
               // so the card doesn't pop when real data arrives.
               <Skeleton.Line width={84} height={20} />
             ) : (
-              <span className="text-xl font-bold text-text-main leading-none tabular-nums">{m.formatted}</span>
+              trustGate.gated && GATED_TILE_KEYS.has(m.key) ? (
+                <span className="text-base font-bold text-amber-700 leading-none">Needs review</span>
+              ) : (
+                <span className="text-xl font-bold text-text-main leading-none tabular-nums">{m.formatted}</span>
+              )
             )}
+
             {!m.loading && m.badge && (
               <span className="text-[10px] font-bold text-secondary bg-secondary-light border border-secondary/20 px-1.5 py-0.5 rounded">
                 {m.badge}
               </span>
             )}
           </div>
+          {!m.loading && trustGate.gated && GATED_TILE_KEYS.has(m.key) && (
+            <p className="text-[10px] text-amber-700 font-medium mt-1.5">
+              {trustGate.reason}{" "}
+              <button type="button" onClick={scrollToValidationFlags} className="underline font-semibold">
+                See Validation Flags
+              </button>
+            </p>
+          )}
           {!m.loading && m.extra && <p className="text-[10px] text-text-muted font-medium mt-1.5">{m.extra}</p>}
           {/* Visual confidence indicators -- matches legacy mini charts.
               Suppressed during load so the mini-bar / margin bar don't render
@@ -437,7 +472,7 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
           {m.loading && (m.key === "revenue" || m.key === "ebitdaMargin") && (
             <div className="h-8 mt-2 w-full" aria-hidden="true" />
           )}
-          {!m.loading && m.key === "revenue" && (
+          {!m.loading && !(trustGate.gated && GATED_TILE_KEYS.has(m.key)) && m.key === "revenue" && (
             <div className="h-8 mt-2 w-full flex items-end gap-1 opacity-80">
               <div className="flex-1 bg-secondary/60 h-[40%] rounded-t-sm" />
               <div className="flex-1 bg-secondary/60 h-[50%] rounded-t-sm" />
@@ -446,7 +481,7 @@ export function FinancialMetricsRow({ deal }: { deal: DealDetail }) {
               <div className="flex-1 bg-secondary h-[80%] rounded-t-sm" />
             </div>
           )}
-          {!m.loading && m.key === "ebitdaMargin" && marginPct != null && (
+          {!m.loading && !(trustGate.gated && GATED_TILE_KEYS.has(m.key)) && m.key === "ebitdaMargin" && marginPct != null && (
             <div className="h-8 mt-2 w-full flex items-center">
               <div className="w-full h-2 bg-border-subtle rounded-full overflow-hidden">
                 <div
@@ -546,6 +581,7 @@ export function FinancialStatusBadge({ dealId }: { dealId: string }) {
     }
   }, [financialsQuery.error]);
 
+  const validationQuery = useApiQuery<{ checks?: TrustCheck[] }>(dealId ? validationKey(dealId) : null);
   const statements = Array.isArray(financialsQuery.data) ? financialsQuery.data : [];
   const status: "loading" | "none" | "data" = financialsQuery.isLoading
     ? "loading"
@@ -571,18 +607,27 @@ export function FinancialStatusBadge({ dealId }: { dealId: string }) {
     );
   }
 
-  // Has data -- show confidence badge
+  // Has data -- show the single confidence number (the composite persisted
+  // on each row). Amber/red states say why, in plain words, and link to the
+  // Validation Flags; the bare word "low" is never shown.
+  const band = confidenceBand(avgConfidence);
   const [cls, dotColor] =
-    avgConfidence >= 80
+    band === "green"
       ? ["bg-emerald-50 text-emerald-700 border-emerald-200", "#059669"]
-      : avgConfidence >= 50
+      : band === "amber"
         ? ["bg-amber-50 text-amber-700 border-amber-200", "#d97706"]
         : ["bg-red-50 text-red-600 border-red-200", "#dc2626"];
+  const itemCount = reviewItemCount(validationQuery.data?.checks);
+  const reason = confidenceReason(avgConfidence, itemCount);
 
   return (
-    <span className={cn("inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold border cursor-pointer transition-opacity hover:opacity-80", cls)}>
+    <span
+      role={reason ? "button" : undefined}
+      onClick={reason ? scrollToValidationFlags : undefined}
+      className={cn("inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold border cursor-pointer transition-opacity hover:opacity-80", cls)}
+    >
       <span className="inline-block rounded-full" style={{ width: 5, height: 5, background: dotColor }} />
-      {avgConfidence}% Confidence
+      {avgConfidence}%{reason ? ` \u00b7 ${reason}` : " Confidence"}
     </span>
   );
 }

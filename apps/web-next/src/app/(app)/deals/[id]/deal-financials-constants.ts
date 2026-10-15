@@ -52,3 +52,14 @@ export const TAB_CONFIG: { key: StatementType; label: string; icon: string }[] =
   { key: "BALANCE_SHEET", label: "Balance Sheet", icon: "account_balance" },
   { key: "CASH_FLOW", label: "Cash Flow", icon: "payments" },
 ];
+
+// Shared useApiQuery cache key for GET /deals/:id/financials/validation.
+// deal-financials.tsx fetches it directly and writes through to this key so
+// the header (confidence badge, trust gate) reads the same result.
+export function validationKey(dealId: string): string {
+  return `/deals/${dealId}/financials/validation`;
+}
+
+// DOM id of the Validation Flags panel, used by "Needs review" / "N items to
+// review" links to scroll to it.
+export const VALIDATION_FLAGS_ANCHOR = "validation-flags";
