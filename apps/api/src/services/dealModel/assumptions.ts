@@ -14,6 +14,7 @@
 // points the user edits, and a number that moves between runs would
 // destroy trust in the model faster than a wrong one.
 
+import { isPrintedSubtotalKey } from '../../utils/printedSubtotal.js';
 import { z } from 'zod';
 import { isCumulativePeriodLabel, parsePeriod, comparePeriods, inferFiscalYearEndMonth, type PeriodKind } from '@ai-crm/shared';
 import { comparePeriodChronologically } from '../../utils/periodChrono.js';
@@ -93,6 +94,8 @@ function num(value: unknown): number | undefined {
 function r3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
+
+const SUBTOTAL_PARENTS = ['revenue', 'cogs', 'sga', 'rd', 'other_opex', 'total_opex', 'da', 'interest_expense', 'other_income', 'other_expense', 'tax'];
 
 export interface NormalisedFinancials {
   rows: HistoricalRow[];
@@ -191,6 +194,12 @@ export function normaliseStatements(statements: StatementLike[]): NormalisedFina
         const n = scaled(v);
         if (n !== undefined && !/(_pct|_ratio|_multiple)$/.test(k)) lines[k] = n;
       }
+      // Printed subtotals of accounts ("Total for 4000 …") are not accounts:
+      // as model lines they were summed with their own children.
+      for (const k of Object.keys(lines)) {
+        if (SUBTOTAL_PARENTS.some((p) => isPrintedSubtotalKey(k, p))) delete lines[k];
+      }
+
       // Adjusted EBITDA (founder decision 15 Oct 2026): the addbacks enter
       // as their own operating-cost line, so EBITDA is Adjusted in the
       // history AND every projected year, and the user can edit or remove
