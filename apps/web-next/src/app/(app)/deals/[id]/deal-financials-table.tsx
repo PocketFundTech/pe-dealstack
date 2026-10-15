@@ -25,7 +25,7 @@ export function FinancialShell({ children, avgConfidence, reviewCount = 0, curre
         className="w-full flex items-center gap-2.5 cursor-pointer"
         style={{ backgroundColor: "#003366", padding: "14px 20px", borderRadius: collapsed ? "10px" : "10px 10px 0 0", border: "none" }}>
         <span className="material-symbols-outlined text-white text-[20px]">table_chart</span>
-        <span className="text-white text-[13px] font-bold uppercase tracking-wider" style={{ letterSpacing: "0.05em" }}>
+        <span className="text-white text-[13px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ letterSpacing: "0.05em" }}>
           Financial Statements
         </span>
         <div className="ml-auto flex items-center gap-2">
@@ -33,10 +33,10 @@ export function FinancialShell({ children, avgConfidence, reviewCount = 0, curre
             <span className="text-[10px] font-semibold text-white/70 bg-white/10 px-2 py-0.5 rounded-full">{currency}</span>
           )}
           {avgConfidence != null && (
-            <span className={cn("text-[10px] font-semibold px-2 py-0.5 rounded-full",
-              confidenceBand(avgConfidence) === "green" ? "bg-emerald-400/20 text-emerald-200"
-              : confidenceBand(avgConfidence) === "amber" ? "bg-amber-400/20 text-amber-200"
-              : "bg-red-400/20 text-red-200")}>
+            <span className={cn("text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap",
+              confidenceBand(avgConfidence) === "green" ? "bg-emerald-100 text-emerald-800"
+              : confidenceBand(avgConfidence) === "amber" ? "bg-amber-100 text-amber-900"
+              : "bg-red-100 text-red-800")}>
               {avgConfidence}% confidence{confidenceReason(avgConfidence, reviewCount) ? ` \u00b7 ${confidenceReason(avgConfidence, reviewCount)}` : ""}
             </span>
           )}
