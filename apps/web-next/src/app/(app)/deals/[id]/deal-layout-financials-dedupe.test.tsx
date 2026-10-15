@@ -60,7 +60,7 @@ describe("FinancialMetricsRow + FinancialStatusBadge (shared /financials key)", 
 
     await waitFor(() => expect(screen.getByText(/92% Confidence/)).toBeInTheDocument());
 
-    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls.filter((c) => c[0] === financialsKey(DEAL_ID))).toHaveLength(1);
     expect(get).toHaveBeenCalledWith(financialsKey(DEAL_ID));
   });
 
@@ -99,7 +99,7 @@ describe("FinancialMetricsRow + FinancialStatusBadge (shared /financials key)", 
       </>,
     );
     await waitFor(() => expect(screen.getByText(/92% Confidence/)).toBeInTheDocument());
-    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls.filter((c) => c[0] === financialsKey(DEAL_ID))).toHaveLength(1);
 
     // deal-financials.tsx writes fresh statements straight into this cache
     // key after a successful extraction instead of just invalidating it.
@@ -107,8 +107,8 @@ describe("FinancialMetricsRow + FinancialStatusBadge (shared /financials key)", 
       { ...statements[0], extractionConfidence: 55 },
     ]);
 
-    await waitFor(() => expect(screen.getByText(/55% Confidence/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/^55%/)).toBeInTheDocument());
     // Still just the one original GET -- the mutation didn't trigger a fetch.
-    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls.filter((c) => c[0] === financialsKey(DEAL_ID))).toHaveLength(1);
   });
 });

@@ -82,6 +82,20 @@ function scoreClaudeNativePdfSource(sourceValue: string): number {
  * extractions (rawText = real converted Excel text) still use
  * scoreSourceMatch normally, as do all legacy (gpt4o/azure/vision) sources.
  */
+/**
+ * One confidence number: stamp the composite score on every stored period,
+ * capped at the model's own per-period score (a period the model was unsure
+ * about never reads higher than the model said). Pure; does not mutate input.
+ */
+export function applyCompositeConfidence<
+  S extends { periods: Array<{ confidence: number }> },
+>(statements: S[], composite: number): S[] {
+  return statements.map((st) => ({
+    ...st,
+    periods: st.periods.map((p) => ({ ...p, confidence: Math.min(p.confidence, composite) })),
+  }));
+}
+
 export function computeSourceMatchAvg(
   statements: ClassifiedStatement[],
   rawText: string,
@@ -391,7 +405,11 @@ export async function storeNode(
       text: rawText,
       dealId,
       documentId: documentId ?? undefined,
-      classification: classificationToStore,
+      classification: {
+        ...classificationToStore,
+        statements: applyCompositeConfidence(classificationToStore.statements, compositeScore),
+        overallConfidence: compositeScore,
+      },
       extractionSource,
     });
 
@@ -440,6 +458,7 @@ export async function storeNode(
       statementIds: result.statementIds,
       periodsStored: result.periodsStored,
       hasConflicts: result.hasConflicts,
+      overallConfidence: compositeScore,
       status: 'completed',
       steps,
     };

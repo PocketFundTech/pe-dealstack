@@ -8,12 +8,13 @@ import { comparePeriodChronologically } from "./deal-financials-period-scope";
 import { SUBTOTAL_KEYS, type StatementType } from "./deal-financials-constants";
 import { buildStatementRows, hideEmptyRows, UNCLASSIFIED_KEY } from "./deal-financials-layout";
 import { ConfidenceBadge, fmtMoney, fmtPct, isPctKey } from "./deal-financials-formatters";
+import { confidenceBand, confidenceReason } from "./deal-financials-trust";
 import { type ConflictGroup } from "./deal-financials-conflicts";
 
 // --- Shell wrapper (header + border) ---
 
-export function FinancialShell({ children, avgConfidence, currency, collapsed, onToggle, onFullscreen }: {
-  children: React.ReactNode; avgConfidence?: number | null; currency?: string;
+export function FinancialShell({ children, avgConfidence, reviewCount = 0, currency, collapsed, onToggle, onFullscreen }: {
+  children: React.ReactNode; avgConfidence?: number | null; reviewCount?: number; currency?: string;
   collapsed?: boolean; onToggle?: () => void; onFullscreen?: () => void;
 }) {
   return (
@@ -33,10 +34,10 @@ export function FinancialShell({ children, avgConfidence, currency, collapsed, o
           )}
           {avgConfidence != null && (
             <span className={cn("text-[10px] font-semibold px-2 py-0.5 rounded-full",
-              avgConfidence >= 80 ? "bg-emerald-400/20 text-emerald-200"
-              : avgConfidence >= 50 ? "bg-amber-400/20 text-amber-200"
+              confidenceBand(avgConfidence) === "green" ? "bg-emerald-400/20 text-emerald-200"
+              : confidenceBand(avgConfidence) === "amber" ? "bg-amber-400/20 text-amber-200"
               : "bg-red-400/20 text-red-200")}>
-              {avgConfidence}% confidence
+              {avgConfidence}% confidence{confidenceReason(avgConfidence, reviewCount) ? ` \u00b7 ${confidenceReason(avgConfidence, reviewCount)}` : ""}
             </span>
           )}
           <span

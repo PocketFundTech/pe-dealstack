@@ -1,5 +1,6 @@
 "use client";
 
+import { reviewItemCount } from "./deal-financials-trust";
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { api, NotFoundError } from "@/lib/api";
@@ -30,6 +31,7 @@ const BalanceSheetChart = dynamic(
 import {
   TAB_CONFIG,
   financialsKey,
+  validationKey,
   type ChartType,
   type StatementType,
 } from "./deal-financials-constants";
@@ -126,6 +128,8 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
 
       if (validData.status === "fulfilled" && validData.value?.checks) {
         setServerValidation(validData.value);
+        // Write-through so the header badge + trust gate read the same result.
+        mutateApiCache(validationKey(dealId), validData.value);
       } else {
         setServerValidation(null);
       }
@@ -491,7 +495,7 @@ export function FinancialStatementsPanel({ dealId, onFullscreen }: { dealId: str
   return (
     <>
       {extractionModal}
-      <FinancialShell avgConfidence={avgConfidence} currency={detectedCurrency} collapsed={collapsed} onToggle={toggleCollapsed} onFullscreen={onFullscreen}>
+      <FinancialShell avgConfidence={avgConfidence} reviewCount={reviewItemCount(validationFlags)} currency={detectedCurrency} collapsed={collapsed} onToggle={toggleCollapsed} onFullscreen={onFullscreen}>
         {/* Validation flags — collapsible amber/red warning card (mirrors legacy flagHtml) */}
         <ValidationFlagsPanel flags={validationFlags} />
 

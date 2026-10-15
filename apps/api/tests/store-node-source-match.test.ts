@@ -56,3 +56,24 @@ describe('computeSourceMatchAvg', () => {
     expect(computeSourceMatchAvg([], 'some real text')).toBe(20);
   });
 });
+
+describe('applyCompositeConfidence (single confidence number)', () => {
+  it('stamps the composite on every period, never above the period model score', async () => {
+    const { applyCompositeConfidence } = await getStoreNode();
+    const statements = [
+      {
+        statementType: 'INCOME_STATEMENT' as const,
+        unitScale: 'MILLIONS' as const,
+        currency: 'USD',
+        periods: [
+          { period: '2023', periodType: 'HISTORICAL' as const, confidence: 95, lineItems: {} },
+          { period: '2024', periodType: 'HISTORICAL' as const, confidence: 60, lineItems: {} },
+        ],
+      },
+    ];
+    const out = applyCompositeConfidence(statements, 73);
+    expect(out[0].periods.map((p) => p.confidence)).toEqual([73, 60]);
+    // input not mutated
+    expect(statements[0].periods[0].confidence).toBe(95);
+  });
+});

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { type FinancialStatement } from "./deal-financials-charts";
+import { VALIDATION_FLAGS_ANCHOR } from "./deal-financials-constants";
 
 export interface ValidationCheck {
   check: string;
@@ -90,7 +91,7 @@ export function ValidationFlagsPanel({ flags }: { flags: ValidationCheck[] }) {
   const hasErrors = errorFlags.length > 0;
 
   return (
-    <div className="mb-4 rounded-lg border overflow-hidden border-amber-200 bg-amber-50">
+    <div id={VALIDATION_FLAGS_ANCHOR} className="mb-4 rounded-lg border overflow-hidden border-amber-200 bg-amber-50">
       <button
         onClick={() => setOpen((p) => !p)}
         className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left transition-colors hover:bg-amber-100/50"
