@@ -119,3 +119,17 @@ export function isFinancialDoc(d: {
   if (m === 'application/pdf' && FINANCIAL_STATEMENT_FILENAME_PATTERN.test(d.name ?? '')) return true;
   return false;
 }
+
+/**
+ * Time budget for one document's extraction, by request mode.
+ *
+ * Bulk modes run documents in parallel and must leave ~60s of the 300s
+ * function limit for the others to finish and the response to serialise.
+ * A single-document request has the function to itself: the CSP financials
+ * workbook takes 218–252s in Fable container mode and lost a coin flip
+ * against the 240s bulk budget (15 Oct 2026).
+ */
+export function docBudgetMs(mode: 'single' | 'all_financials' | 'all'): number {
+  return mode === 'single' ? 280_000 : 240_000;
+}
+

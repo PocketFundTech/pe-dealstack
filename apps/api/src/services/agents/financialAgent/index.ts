@@ -54,6 +54,8 @@ export interface FinancialAgentInput {
   maxRetries?: number;
   /** Bypass the FinancialExtractionCache and re-run LLM extraction even on hit */
   forceExtraction?: boolean;
+  /** Wall-clock bound for the whole run; defaults to FINANCIAL_AGENT_TIMEOUT_MS (the bulk per-doc budget). */
+  timeoutMs?: number;
 }
 
 export interface FinancialAgentResult {
@@ -108,7 +110,7 @@ export async function runFinancialAgent(
           config,
         ),
       {
-        timeoutMs: FINANCIAL_AGENT_TIMEOUT_MS,
+        timeoutMs: input.timeoutMs ?? FINANCIAL_AGENT_TIMEOUT_MS,
         recursionLimit: FINANCIAL_AGENT_RECURSION_LIMIT,
         envVar: 'FINANCIAL_AGENT_TIMEOUT_MS',
         label: 'Financial agent',
