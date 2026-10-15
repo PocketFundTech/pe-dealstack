@@ -589,3 +589,23 @@ describe('GET /api/deals/:dealId/model/cases — stale cumulative "Total" row (C
     expect(base.summary.mom).toBeGreaterThan(0);
   });
 });
+
+describe('GET /api/deals/:dealId/model/cases — Adjusted EBITDA (founder decision 15 Oct)', () => {
+  it('models on Adjusted EBITDA via an addbacks line, history and projections alike', async () => {
+    const is = (period: string, revenue: number, cogs: number, opex: number, ebitda: number, adj: number) => ({
+      statementType: 'INCOME_STATEMENT', period, periodType: 'HISTORICAL', currency: 'USD', unitScale: 'MILLIONS', isActive: true,
+      lineItems: { revenue, cogs, total_opex: opex, ebitda, adjusted_ebitda: adj },
+    });
+    statements = [
+      is('2024', 3.249, 1.019, 1.735, 0.495, 0.793),
+      is('2025', 12.468, 5.378, 4.593, 2.497, 3.647),
+    ];
+    dealRow = { ...dealRow, dealSize: null, ebitda: 3.647 };
+    const app = await buildApp();
+    const res = await request(app).get('/api/deals/deal-1/model/cases');
+    expect(res.status).toBe(200);
+    expect(res.body.base.ebitda).toBeCloseTo(3.647, 2);
+    expect(res.body.lines.some((l: { key: string }) => l.key === 'total_opex_ebitda_addbacks')).toBe(true);
+    expect(res.body.warnings.join(' ')).toMatch(/Adjusted EBITDA/);
+  });
+});

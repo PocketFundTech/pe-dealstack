@@ -58,3 +58,13 @@ describe('GET /api/deals/financial-summaries', () => {
     expect(res.body.summaries['deal-1']).toMatchObject({ latestPeriod: '2025', revenue: 12.468, ebitda: 3.647 });
   });
 });
+
+describe('GET /api/deals/financial-summaries — Adjusted EBITDA (15 Oct)', () => {
+  it('reports adjusted EBITDA and its margin when present', async () => {
+    deals = [{ id: 'deal-1' }];
+    statements = [{ ...row('2025', 12.468, 2.497), lineItems: { revenue: 12.468, ebitda: 2.497, adjusted_ebitda: 3.647 } }];
+    const res = await request(await app()).get('/api/deals/financial-summaries?dealIds=deal-1');
+    expect(res.body.summaries['deal-1'].ebitda).toBe(3.647);
+    expect(res.body.summaries['deal-1'].ebitdaMargin).toBeCloseTo(29.3, 1);
+  });
+});

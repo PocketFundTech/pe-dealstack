@@ -26,6 +26,7 @@ import { supabase } from '../supabase.js';
 import { getOrgId, verifyDealAccess } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import {
+  adjustedEbitdaNote,
   normaliseStatements,
   resolveAssumptions,
   assumptionsSchema,
@@ -363,6 +364,7 @@ router.get('/:dealId/model', async (req, res) => {
         ...seedWarnings(entry.seed, saved),
         ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values),
         ...returnsSanityNotes(inputs, catalogue, entry, cases.Base),
+        ...[adjustedEbitdaNote(inputs.history)].filter((n): n is string => n !== null),
       ],
       currency: inputs.currency,
       unitScale: 'MILLIONS',
@@ -406,6 +408,7 @@ router.get('/:dealId/model/cases', async (req, res) => {
         ...seedWarnings(entry.seed, saved),
         ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values),
         ...returnsSanityNotes(inputs, catalogue, entry, cases.Base),
+        ...[adjustedEbitdaNote(inputs.history)].filter((n): n is string => n !== null),
       ],
       currency: inputs.currency,
       unitScale: 'MILLIONS',

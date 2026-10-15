@@ -332,11 +332,26 @@ describe('extraction prompt — monthly tabs and raw accounts (fix J, 15 Oct)', 
   // After "report only the individual periods" the model emitted a period
   // per month (42 of them) and the CSP workbook blew the 240s and 280s
   // budgets; on 14 Oct, with one Total column, it took 218s.
-  it('never asks for one period per month, and says to aggregate months into fiscal years', async () => {
+  it('never asks for one period per month, and aggregates months only where no annual column exists', async () => {
     const { buildExtractionSystemPrompt } = await import('../src/services/extraction/extractionSchema.js');
     const p = buildExtractionSystemPrompt('2026-10-15');
     expect(p).toMatch(/never emit one period per month/i);
-    expect(p).toMatch(/aggregate the months into fiscal years/i);
+    expect(p).toMatch(/aggregating those months/i);
     expect(p).toMatch(/raw accounts[^.]*never for monthly/i);
+  });
+});
+
+describe('extraction prompt — Reported vs Adjusted EBITDA, monthly entity scope (pre-final-run, 15 Oct)', () => {
+  it('names adjusted_ebitda in the vocabulary and keeps ebitda as reported', async () => {
+    const { buildExtractionSystemPrompt } = await import('../src/services/extraction/extractionSchema.js');
+    const p = buildExtractionSystemPrompt('2026-10-15');
+    expect(p).toMatch(/ebitda, adjusted_ebitda/);
+    expect(p).toMatch(/ebitda is EBITDA as reported[^.]*before/i);
+    expect(p).toMatch(/adjusted_ebitda[^.]*(addbacks|normali)/i);
+  });
+
+  it('uses monthly columns only for periods no annual column covers', async () => {
+    const { buildExtractionSystemPrompt } = await import('../src/services/extraction/extractionSchema.js');
+    expect(buildExtractionSystemPrompt('2026-10-15')).toMatch(/only for periods that no annual[^.]*column covers/i);
   });
 });

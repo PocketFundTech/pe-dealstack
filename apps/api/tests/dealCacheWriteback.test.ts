@@ -446,3 +446,18 @@ describe('pickLatestForCache — cumulative "Total" columns (CSP 14 Oct)', () =>
     expect(pickLatestForCache(rows)?.period).toBe('2025');
   });
 });
+
+describe('buildCacheRecord — Adjusted EBITDA drives the card (founder decision 15 Oct)', () => {
+  it('uses adjusted_ebitda for the cached EBITDA and margin when the row has it', async () => {
+    const { buildCacheRecord } = await import('../src/services/dealCacheWriteback.js');
+    const rec = buildCacheRecord(baseRow({ period: '2025', lineItems: { revenue: 12.468, ebitda: 2.497, adjusted_ebitda: 3.647 } }), '2026-10-15T00:00:00Z');
+    expect(rec.cachedEbitda).toBe(3_647_000);
+    expect(rec.cachedEbitdaMargin).toBeCloseTo(29.3, 1);
+  });
+
+  it('falls back to reported ebitda when there is no adjusted figure', async () => {
+    const { buildCacheRecord } = await import('../src/services/dealCacheWriteback.js');
+    const rec = buildCacheRecord(baseRow({ period: '2025', lineItems: { revenue: 100, ebitda: 20 } }), '2026-10-15T00:00:00Z');
+    expect(rec.cachedEbitda).toBe(20_000_000);
+  });
+});
