@@ -327,3 +327,16 @@ describe('extraction prompt — cumulative columns (CSP 14 Oct)', () => {
     expect(buildExtractionSystemPrompt('2026-10-14')).toMatch(/do not emit[^.]*(total|cumulative)/i);
   });
 });
+
+describe('extraction prompt — monthly tabs and raw accounts (fix J, 15 Oct)', () => {
+  // After "report only the individual periods" the model emitted a period
+  // per month (42 of them) and the CSP workbook blew the 240s and 280s
+  // budgets; on 14 Oct, with one Total column, it took 218s.
+  it('never asks for one period per month, and says to aggregate months into fiscal years', async () => {
+    const { buildExtractionSystemPrompt } = await import('../src/services/extraction/extractionSchema.js');
+    const p = buildExtractionSystemPrompt('2026-10-15');
+    expect(p).toMatch(/never emit one period per month/i);
+    expect(p).toMatch(/aggregate the months into fiscal years/i);
+    expect(p).toMatch(/raw accounts[^.]*never for monthly/i);
+  });
+});

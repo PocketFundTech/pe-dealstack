@@ -58,7 +58,7 @@ const MAX_TOKENS: Record<AiRole, number> = {
  * folder insights) and memo section drafting hold quality at medium while
  * thinking — billed as output — drops. The memo critique/revise pass and
  * extraction keep `high`.
- * Env overrides (no deploy): AI_CHAT_EFFORT / AI_MEMO_EFFORT=high.
+ * Env overrides (no deploy): AI_CHAT_EFFORT / AI_MEMO_EFFORT=high, AI_EXTRACTION_EFFORT=medium.
  */
 const EFFORT_DEFAULTS: Partial<Record<AiRole, AiEffort>> = {
   chat: 'medium',
@@ -67,6 +67,9 @@ const EFFORT_DEFAULTS: Partial<Record<AiRole, AiEffort>> = {
 const EFFORT_ENV: Partial<Record<AiRole, string>> = {
   chat: 'AI_CHAT_EFFORT',
   memo: 'AI_MEMO_EFFORT',
+  // No default (model default = high); an ops lever when a workbook keeps
+  // running into the per-document time budget (fix J, 15 Oct 2026).
+  extraction: 'AI_EXTRACTION_EFFORT',
 };
 const EFFORTS: readonly AiEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 

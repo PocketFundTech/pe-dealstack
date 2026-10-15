@@ -27,7 +27,7 @@ import { getTodayIso } from '../../utils/dates.js';
  *   per-line-item parent (raw accounts nest under standard keys), other
  *   income / expense keys, contra-revenue negative.
  */
-export const EXTRACTION_SCHEMA_VERSION = 'v4';
+export const EXTRACTION_SCHEMA_VERSION = 'v5';
 
 /** Extraction-cache tier for the Claude engine: the model plus the schema version. */
 export function claudeExtractionCacheTier(model: string): string {
@@ -175,9 +175,9 @@ Rules:
 - Cash-flow sign convention: cash outflows (capex, acquisitions, debt repayment, dividends, owner/shareholder distributions, share buybacks) are NEGATIVE; inflows positive. This is the one other exception to "exactly as printed": a printed "(1,300)" or "1,300" under a use-of-cash line is -1300.
 - Percentages (names ending _pct) are reported as percent numbers (e.g. 42.5), never fractions — the one exception to "exactly as printed": convert a printed decimal fraction (0.425) to its percent equivalent (42.5).
 - Every line item needs sourcePage (1-based) and a short verbatim sourceQuote when the value is visible in the document; use null only when genuinely unavailable.
-- One period entry per fiscal period column. Projected periods keep their suffix (e.g. "2025E"). Do NOT emit Total, cumulative or all-period columns that sum several fiscal periods (e.g. a "Total" column after 42 monthly columns, "2023-2026 Total"): report only the individual periods.
+- One period entry per fiscal period column (years, quarters, halves, YTD, LTM). Projected periods keep their suffix (e.g. "2025E"). Monthly tabs: NEVER emit one period per month. If the document has annual or quarterly statements, take the figures from those; if a statement exists only as monthly columns, aggregate the months into fiscal years (and the latest partial year as a YTD period, e.g. "2026 YTD (Jan - Jun 2026)") and say in warnings which months were aggregated. Do NOT emit Total, cumulative or all-period columns that sum several fiscal periods (e.g. a "Total" column after 42 monthly columns, "2023-2026 Total").
 - If a statement type is absent, omit it and add a warning.
-- Raw accounts (QuickBooks-style lines such as "Sand COS", "Fly Ash COS", "Discounts", "Insurance", "Goodwill amortization") are reported as their own line items AND get a parent: the standard key they roll up into (cogs, revenue, total_opex, da, other_income, …). Standard lines and subtotals have parent null. Also report the rolled-up parent total under its standard key when the document prints one. Taxes & licenses, payroll taxes and permits are operating expenses (total_opex), not income tax.
+- Raw accounts (QuickBooks-style lines such as "Sand COS", "Fly Ash COS", "Discounts", "Insurance", "Goodwill amortization") are reported as their own line items — only for annual, quarterly, YTD or LTM periods, never for monthly columns, and skip accounts that are blank or zero in every period — AND get a parent: the standard key they roll up into (cogs, revenue, total_opex, da, other_income, …). Standard lines and subtotals have parent null. Also report the rolled-up parent total under its standard key when the document prints one. Taxes & licenses, payroll taxes and permits are operating expenses (total_opex), not income tax.
 - Signs: revenue positive; contra-revenue (discounts, refunds, returns, allowances) NEGATIVE; costs, D&A, interest and tax positive; other income positive, other expense positive.
 - For every statement set sourceKind: "source_statement" when it is the company's reported statement, "model_derived" when it comes from a valuation, LBO, DCF, returns, sensitivity or summary/analysis output. Set sheetName to the spreadsheet tab it came from (null for PDFs). When the document has both for the same statement type, return only the source_statement version.`;
 }
