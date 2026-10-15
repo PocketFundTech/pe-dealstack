@@ -224,7 +224,7 @@ const limiter = rateLimit({
 
 ```typescript
 const allowedOrigins = [
-  'https://pe-os.onrender.com',
+  'https://app.avise.io',
   'http://localhost:3000',
   'http://localhost:5173',
 ];
