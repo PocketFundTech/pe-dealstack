@@ -68,3 +68,12 @@ describe('GET /api/deals/financial-summaries — Adjusted EBITDA (15 Oct)', () =
     expect(res.body.summaries['deal-1'].ebitdaMargin).toBeCloseTo(29.3, 1);
   });
 });
+
+describe('GET /api/deals/financial-summaries — partial year (15 Oct)', () => {
+  it('shows the latest full year, not a newer 6-month YTD', async () => {
+    deals = [{ id: 'deal-1' }];
+    statements = [row('2025', 12.468, 2.497), row('2026 YTD (Jan - Jun 2026)', 5.795, 1.051)];
+    const res = await request(await app()).get('/api/deals/financial-summaries?dealIds=deal-1');
+    expect(res.body.summaries['deal-1'].latestPeriod).toBe('2025');
+  });
+});

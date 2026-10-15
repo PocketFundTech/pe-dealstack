@@ -151,7 +151,10 @@ function applyRemainders(pv: PeriodValues, s: Structure, included: Set<string>) 
   for (const p of s.remainders) {
     const comps = sumComponents(p, s, included).filter((k) => !k.endsWith(REMAINDER_SUFFIX));
     const present = comps.filter((k) => v[k] !== undefined);
-    if (v[p] === undefined || present.length === 0) continue;
+    if (v[p] === undefined) continue;
+    // A year that prints only the total (no accounts) is all remainder —
+    // skipping it made the SUM line 0: CSP's 2025 COGS vanished because
+    // only the monthly 2026 YTD carried COGS accounts (15 Oct 2026).
     v[`${p}${REMAINDER_SUFFIX}`] = r3(v[p] - present.reduce((t, k) => t + v[k], 0));
   }
 }
@@ -197,7 +200,7 @@ export function buildLineCatalogue(history: HistoricalRow[]): LineCatalogue {
     const comps = sumComponents(p, s, included);
     const off = periods.some(({ values: v }) => {
       const present = comps.filter((k) => v[k] !== undefined);
-      return v[p] !== undefined && present.length > 0
+      return v[p] !== undefined
         && Math.abs(v[p] - present.reduce((t, k) => t + v[k], 0)) > EPS;
     });
     if (off) s.remainders.add(p);
