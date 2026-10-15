@@ -1,7 +1,7 @@
 # Avise API Documentation
 
 **Version:** v0.1.0
-**Base URL:** `https://pe-os.onrender.com/api` (Production)
+**Base URL:** `https://app.avise.io/api` (Production)
 **Local:** `http://localhost:3001/api`
 
 ---
@@ -621,7 +621,7 @@ Future support for webhooks on:
 
 ### JavaScript/TypeScript
 ```typescript
-const response = await fetch('https://pe-os.onrender.com/api/deals', {
+const response = await fetch('https://app.avise.io/api/deals', {
   headers: {
     'Authorization': `Bearer ${accessToken}`,
     'Content-Type': 'application/json'
@@ -632,13 +632,13 @@ const deals = await response.json();
 
 ### cURL
 ```bash
-curl -X GET "https://pe-os.onrender.com/api/deals" \
+curl -X GET "https://app.avise.io/api/deals" \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ### File Upload
 ```bash
-curl -X POST "https://pe-os.onrender.com/api/deals/DEAL_ID/documents" \
+curl -X POST "https://app.avise.io/api/deals/DEAL_ID/documents" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -F "file=@document.pdf" \
   -F "type=CIM"

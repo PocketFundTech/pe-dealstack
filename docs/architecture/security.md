@@ -73,7 +73,7 @@ QA team's manual checklist: [`docs/ORG-ISOLATION-TEST-CHECKLIST.md`](../ORG-ISOL
 
 Origin allowlist + Vercel preview-domain regex. Sources:
 
-- `https://pe-os.onrender.com`, `https://pe-dealstack.vercel.app`, `https://pe-dealstack-nextjs.vercel.app`, `https://lmmos.ai`, `https://www.lmmos.ai`
+- `https://app.avise.io`, `https://pe-dealstack.vercel.app`, `https://pe-dealstack-nextjs.vercel.app`, `https://lmmos.ai`, `https://www.lmmos.ai`
 - `previewOriginRegex = /^https:\/\/pe-dealstack(-nextjs)?-[a-z0-9-]+\.vercel\.app$/`
 - Anything in `ALLOWED_ORIGINS` env var (comma-separated)
 - localhost ports in dev only

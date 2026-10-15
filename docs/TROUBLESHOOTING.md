@@ -35,7 +35,7 @@ cp apps/api/.env.example apps/api/.env
 
 **Symptom:** `Access-Control-Allow-Origin` errors in console.
 
-**Cause:** The API only allows requests from whitelisted origins: `http://localhost:3000`, `http://localhost:5173`, and `https://pe-os.onrender.com`.
+**Cause:** The API only allows requests from whitelisted origins: `http://localhost:3000`, `http://localhost:5173`, and `https://app.avise.io`.
 
 **Fix:** If you're running the frontend on a different port, add it to the CORS config in `apps/api/src/index.ts`.
 

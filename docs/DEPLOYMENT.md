@@ -1,7 +1,9 @@
 # Avise Deployment Runbook
 
+> **⚠️ Obsolete (Oct 2026).** This describes the old Render deployment (`pe-os`), which is being decommissioned — see [`RENDER-DECOMMISSION.md`](RENDER-DECOMMISSION.md). Production runs on **Vercel**: project `pe-dealstack`, served at **https://app.avise.io** (and `deals.avise.io`); frontend and API deploy together from `main`. Keep this file only as history.
+
 **Platform:** Render.com
-**Production URL:** https://pe-os.onrender.com
+**Production URL:** https://app.avise.io
 
 ---
 
@@ -125,10 +127,10 @@ Pushes to the `main` branch trigger automatic deployments.
 
 ```bash
 # Fast health check (used by Render)
-curl https://pe-os.onrender.com/health
+curl https://app.avise.io/health
 
 # Comprehensive readiness check
-curl https://pe-os.onrender.com/health/ready
+curl https://app.avise.io/health/ready
 ```
 
 **`/health` response:**
