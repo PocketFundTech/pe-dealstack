@@ -36,6 +36,7 @@ import {
   type ResolvedAssumptions,
 } from '../services/dealModel/assumptions.js';
 import { buildModelWorkbook } from '../services/dealModel/workbook.js';
+import { growthSeedNote } from '../services/dealModel/drivers.js';
 import { selectBasePeriod } from '../services/dealModel/basePeriod.js';
 import { buildLineCatalogue, baseColumnValues, evaluateLine } from '../services/dealModel/lineCatalogue.js';
 import {
@@ -206,6 +207,7 @@ function entryContext(inputs: LoadedDeal, catalogue: Catalogue) {
     impliedMultiple: inputs.deal.evMultiple,
     dealEbitda: inputs.deal.ebitdaMillions,
     statementsEbitda: baseCol.entrySource === 'base' ? evaluateLine(catalogue.lines, baseCol.values, 'ebitda') : null,
+    statementsReportedEbitda: base?.row.reportedEbitda ?? null,
     entrySource: baseCol.entrySource,
   });
   return { base, baseCol, seed };
@@ -365,6 +367,7 @@ router.get('/:dealId/model', async (req, res) => {
         ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values),
         ...returnsSanityNotes(inputs, catalogue, entry, cases.Base),
         ...[adjustedEbitdaNote(inputs.history)].filter((n): n is string => n !== null),
+        ...[growthSeedNote(inputs.history, catalogue)].filter((n): n is string => n !== null),
       ],
       currency: inputs.currency,
       unitScale: 'MILLIONS',
@@ -409,6 +412,7 @@ router.get('/:dealId/model/cases', async (req, res) => {
         ...scenarioSeedNotes(saved, cases.Base, catalogue.lines, entry.baseCol.values),
         ...returnsSanityNotes(inputs, catalogue, entry, cases.Base),
         ...[adjustedEbitdaNote(inputs.history)].filter((n): n is string => n !== null),
+        ...[growthSeedNote(inputs.history, catalogue)].filter((n): n is string => n !== null),
       ],
       currency: inputs.currency,
       unitScale: 'MILLIONS',
