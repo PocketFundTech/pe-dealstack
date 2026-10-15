@@ -54,7 +54,7 @@ const LABELS: Record<string, string> = {
   da: 'D&A', ebit: 'EBIT', interest_expense: 'Interest expense', other_income: 'Other income',
   other_expense: 'Other expense', ebt: 'EBT', tax: 'Tax', net_income: 'Net income',
 };
-const ACRONYMS = new Set(['cos', 'cogs', 'sga', 'ppe', 'hr', 'it', 'gst', 'vat', 'llc', 'ltd']);
+const ACRONYMS = new Set(['cos', 'cogs', 'sga', 'ppe', 'hr', 'it', 'gst', 'vat', 'llc', 'ltd', 'ebitda']);
 
 function childLabel(key: string, parent: string): string {
   if (key === `${parent}${REMAINDER_SUFFIX}`) return 'Other (unallocated)';

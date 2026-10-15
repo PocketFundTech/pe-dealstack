@@ -115,7 +115,7 @@ export function pickLatestForCache(
   );
 
   const latestWithBoth = sortedDesc.find(
-    (r) => r.lineItems?.revenue != null && r.lineItems?.ebitda != null,
+    (r) => r.lineItems?.revenue != null && (r.lineItems?.ebitda ?? r.lineItems?.adjusted_ebitda) != null,
   );
   if (latestWithBoth) return latestWithBoth;
 
@@ -165,13 +165,16 @@ export function buildCacheRecord(
   const li = row.lineItems ?? {};
   const unitScale = row.unitScale ?? 'ACTUALS';
   const cachedRevenue = toActualDollars(li.revenue ?? null, unitScale);
-  const cachedEbitda = toActualDollars(li.ebitda ?? null, unitScale);
+  // Adjusted EBITDA is the headline when the statement has it (founder
+  // decision 15 Oct 2026, PE convention); reported EBITDA otherwise.
+  const headlineEbitda = li.adjusted_ebitda ?? li.ebitda ?? null;
+  const cachedEbitda = toActualDollars(headlineEbitda, unitScale);
 
   let cachedEbitdaMargin: number | null = null;
   // Margin is scale-free, so compute from the raw (un-converted) line
   // items. Prefer the explicit pct field when present.
   const rev = li.revenue;
-  const ebd = li.ebitda;
+  const ebd = headlineEbitda;
   if (
     rev != null &&
     ebd != null &&

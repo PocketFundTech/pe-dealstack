@@ -132,7 +132,7 @@ router.get('/financial-summaries', async (req, res) => {
       // both numbers (so the implied margin always makes sense).
       const latestWithBoth = sortedDesc.find(
         (r) =>
-          r.lineItems?.revenue != null && r.lineItems?.ebitda != null,
+          r.lineItems?.revenue != null && (r.lineItems?.ebitda ?? r.lineItems?.adjusted_ebitda) != null,
       );
       const latestWithRevenue = sortedDesc.find(
         (r) => r.lineItems?.revenue != null,
@@ -149,7 +149,8 @@ router.get('/financial-summaries', async (req, res) => {
 
       const li = latest.lineItems ?? {};
       const revenue = li.revenue ?? null;
-      const ebitda = li.ebitda ?? null;
+      // Adjusted EBITDA is the headline when present (founder decision 15 Oct).
+      const ebitda = li.adjusted_ebitda ?? li.ebitda ?? null;
 
       // Margin: prefer the explicit ebitda_margin_pct line item when
       // present, else compute from revenue/ebitda (both in the same

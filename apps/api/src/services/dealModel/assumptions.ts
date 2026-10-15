@@ -69,6 +69,10 @@ export interface HistoricalRow {
   ebitdaDerived?: boolean;
   /** Balance sheet + cash flow items for the same period (fix plan E3), in millions. */
   balance?: BalanceItems;
+  /** Reported EBITDA when the row was lifted to Adjusted (millions). */
+  reportedEbitda?: number;
+  /** Adjusted minus reported EBITDA — the "EBITDA addbacks" line, positive (millions). */
+  ebitdaAddbacks?: number;
 }
 
 interface StatementLike {
@@ -186,6 +190,25 @@ export function normaliseStatements(statements: StatementLike[]): NormalisedFina
       for (const [k, v] of Object.entries(li)) {
         const n = scaled(v);
         if (n !== undefined && !/(_pct|_ratio|_multiple)$/.test(k)) lines[k] = n;
+      }
+      // Adjusted EBITDA (founder decision 15 Oct 2026): the addbacks enter
+      // as their own operating-cost line, so EBITDA is Adjusted in the
+      // history AND every projected year, and the user can edit or remove
+      // the line. adjusted_ebitda itself is never a model line.
+      const adjusted = scaled(li.adjusted_ebitda);
+      delete lines.adjusted_ebitda;
+      if (adjusted !== undefined && row.ebitda !== undefined && adjusted > row.ebitda) {
+        const addbacks = r3(adjusted - row.ebitda);
+        lines.total_opex_ebitda_addbacks = -addbacks;
+        if (lines.total_opex !== undefined) lines.total_opex = r3(lines.total_opex - addbacks);
+        if (row.opex !== undefined) row.opex = r3(row.opex - addbacks);
+        row.reportedEbitda = row.ebitda;
+        row.ebitda = adjusted;
+        lines.ebitda = adjusted;
+        row.ebitdaAddbacks = addbacks;
+      } else if (adjusted !== undefined && row.ebitda === undefined) {
+        row.ebitda = adjusted;
+        lines.ebitda = adjusted;
       }
       row.lines = lines;
 
@@ -420,3 +443,15 @@ export function resolveAssumptions(
   merged.unitScale = 'MILLIONS';
   return merged;
 }
+
+/** The model note when it runs on Adjusted EBITDA (addbacks line present). */
+export function adjustedEbitdaNote(history: HistoricalRow[]): string | null {
+  const last = [...history].reverse().find((r) => typeof r.ebitdaAddbacks === 'number' && r.ebitdaAddbacks > 0);
+  if (!last || typeof last.reportedEbitda !== 'number') return null;
+  return (
+    `The model uses Adjusted EBITDA: in ${last.period} reported EBITDA of ${last.reportedEbitda.toFixed(2)}m plus ` +
+    `addbacks of ${last.ebitdaAddbacks!.toFixed(2)}m gives ${(last.reportedEbitda + last.ebitdaAddbacks!).toFixed(2)}m. ` +
+    `The addbacks are the "EBITDA addbacks" operating line — edit or remove it to model on reported EBITDA.`
+  );
+}
+
