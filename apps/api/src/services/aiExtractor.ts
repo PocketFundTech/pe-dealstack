@@ -309,6 +309,10 @@ export async function extractDealDataFromText(
 ): Promise<ExtractedDealData | null> {
   if (!isLLMAvailable()) {
     log.warn('AI extraction skipped: no LLM provider configured');
+    // A deploy with no AI key is a configuration problem, not the document's.
+    if (options.throwOnProviderError) {
+      throw new AIProviderUnavailableError('AI provider', { reason: 'auth', detail: 'no LLM provider configured' });
+    }
     return null;
   }
 

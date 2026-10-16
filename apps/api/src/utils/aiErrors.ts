@@ -77,10 +77,11 @@ const QUOTA_HINTS = [
   'organization is restricted',
 ];
 
-// Key-configuration errors Anthropic returns as a 400 invalid_request_error
-// rather than a 401 — 11 Oct: a key not tied to a workspace failed every
-// call, and ingest told users their CIM had "no deal information".
-const AUTH_HINTS = ['not scoped to a workspace', 'anthropic-workspace-id'];
+// Key-configuration errors that arrive without a 401: Anthropic returns an
+// unscoped key as a 400 invalid_request_error (11 Oct), and a deploy with no
+// key at all throws a plain Error from getAnthropicClient (16 Oct, Render).
+// Unclassified, ingest told users their CIM had "no deal information".
+const AUTH_HINTS = ['not scoped to a workspace', 'anthropic-workspace-id', 'anthropic_api_key / anthropic_oauth_token is not set'];
 
 function providerUnavailableMessage(provider: string, reason?: ProviderRejectionReason): string {
   switch (reason) {
