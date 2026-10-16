@@ -40,6 +40,19 @@ describe('classifyProviderRejection', () => {
     expect(classifyProviderRejection({ status: 400, message: 'credit balance is too low' })?.reason).toBe('quota');
   });
 
+  // 11 Oct + 16 Oct: a key not tied to an Anthropic workspace comes back as a
+  // 400 invalid_request_error. Unclassified, the ingest route told users their
+  // CIM had "no deal information" when the key was the problem.
+  it('recognises an Anthropic key not scoped to a workspace as an auth rejection', async () => {
+    const { classifyProviderRejection, toAccountRejection } = await import('../src/utils/aiErrors.js');
+    const unscoped = Object.assign(
+      new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header."}}'),
+      { status: 400, error: { type: 'error', error: { type: 'invalid_request_error' } } },
+    );
+    expect(classifyProviderRejection(unscoped)?.reason).toBe('auth');
+    expect(toAccountRejection(unscoped, 'Anthropic')?.statusCode).toBe(503);
+  });
+
   it('returns null for document / schema errors', async () => {
     const { classifyProviderRejection } = await import('../src/utils/aiErrors.js');
     expect(classifyProviderRejection(new Error('Zod parse failed'))).toBeNull();

@@ -77,12 +77,17 @@ const QUOTA_HINTS = [
   'organization is restricted',
 ];
 
+// Key-configuration errors Anthropic returns as a 400 invalid_request_error
+// rather than a 401 — 11 Oct: a key not tied to a workspace failed every
+// call, and ingest told users their CIM had "no deal information".
+const AUTH_HINTS = ['not scoped to a workspace', 'anthropic-workspace-id'];
+
 function providerUnavailableMessage(provider: string, reason?: ProviderRejectionReason): string {
   switch (reason) {
     case 'quota':
       return `AI service (${provider}) rejected the request: API credits are exhausted. This is a billing/configuration issue on our side, not a problem with your document — please contact your administrator.`;
     case 'auth':
-      return `AI service (${provider}) rejected the request: the API key is invalid or missing. This is a configuration issue on our side, not a problem with your document — please contact your administrator.`;
+      return `AI service (${provider}) rejected the request: the API key is invalid, missing, or not set up for this account. This is a configuration issue on our side, not a problem with your document — please contact your administrator.`;
     case 'rate_limit':
       return `AI service (${provider}) is rate-limiting requests. Please wait a moment and try again.`;
     case 'overloaded':
@@ -129,7 +134,13 @@ export function classifyProviderRejection(
     QUOTA_HINTS.some((h) => lower.includes(h));
   if (isQuota) return { reason: 'quota', detail };
 
-  if (errType === 'authentication_error' || errType === 'permission_error' || status === 401 || status === 403) {
+  if (
+    errType === 'authentication_error' ||
+    errType === 'permission_error' ||
+    status === 401 ||
+    status === 403 ||
+    AUTH_HINTS.some((h) => lower.includes(h))
+  ) {
     return { reason: 'auth', detail };
   }
   if (errType === 'overloaded_error' || status === 529) return { reason: 'overloaded', detail };
