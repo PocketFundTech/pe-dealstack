@@ -13,10 +13,11 @@ vi.mock('../src/utils/logger.js', () => ({
 }));
 
 const invoke = vi.fn();
+const llm = vi.hoisted(() => ({ available: true }));
 vi.mock('../src/services/llm.js', () => {
   const model = { withStructuredOutput: () => ({ invoke }) };
   return {
-    isLLMAvailable: () => true,
+    isLLMAvailable: () => llm.available,
     getExtractionModel: () => model,
     getModel: () => model,
     getChatProviderName: () => 'anthropic/claude-sonnet-4-6',
@@ -40,6 +41,27 @@ describe('classifyProviderRejection', () => {
     expect(classifyProviderRejection({ status: 400, message: 'credit balance is too low' })?.reason).toBe('quota');
   });
 
+  // 11 Oct + 16 Oct: a key not tied to an Anthropic workspace comes back as a
+  // 400 invalid_request_error. Unclassified, the ingest route told users their
+  // CIM had "no deal information" when the key was the problem.
+  it('recognises an Anthropic key not scoped to a workspace as an auth rejection', async () => {
+    const { classifyProviderRejection, toAccountRejection } = await import('../src/utils/aiErrors.js');
+    const unscoped = Object.assign(
+      new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header."}}'),
+      { status: 400, error: { type: 'error', error: { type: 'invalid_request_error' } } },
+    );
+    expect(classifyProviderRejection(unscoped)?.reason).toBe('auth');
+    expect(toAccountRejection(unscoped, 'Anthropic')?.statusCode).toBe(503);
+  });
+
+  // 16 Oct (Render deploy): no ANTHROPIC_API_KEY at all. getAnthropicClient's
+  // plain Error went unclassified and ingest reported "no deal information".
+  it('recognises a missing Anthropic key as an auth rejection', async () => {
+    const { classifyProviderRejection } = await import('../src/utils/aiErrors.js');
+    const missing = new Error('ANTHROPIC_API_KEY / ANTHROPIC_OAUTH_TOKEN is not set — AI features unavailable');
+    expect(classifyProviderRejection(missing)?.reason).toBe('auth');
+  });
+
   it('returns null for document / schema errors', async () => {
     const { classifyProviderRejection } = await import('../src/utils/aiErrors.js');
     expect(classifyProviderRejection(new Error('Zod parse failed'))).toBeNull();
@@ -51,6 +73,20 @@ describe('extractDealDataFromText provider rejection', () => {
   beforeEach(() => {
     invoke.mockReset();
     invoke.mockRejectedValue(quotaError);
+  });
+
+  it('throws reason=auth when no AI provider is configured and asked to surface rejections', async () => {
+    const { extractDealDataFromText } = await import('../src/services/aiExtractor.js');
+    llm.available = false;
+    try {
+      await expect(extractDealDataFromText(TEXT)).resolves.toBeNull();
+      await expect(extractDealDataFromText(TEXT, { throwOnProviderError: true })).rejects.toMatchObject({
+        statusCode: 503,
+        reason: 'auth',
+      });
+    } finally {
+      llm.available = true;
+    }
   });
 
   it('returns null by default (background callers keep today\'s contract)', async () => {
