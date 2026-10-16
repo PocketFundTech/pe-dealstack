@@ -1,0 +1,16 @@
+import type { Answers, Step, TextField, ListField, MoneyField, BoolField } from './types';
+export const STEPS: [Step, string][];
+export const OPTIONS: Record<'buyerType' | 'teamSize' | 'sectorsInclude' | 'geographies' | 'features' | 'hardExclusions' | 'transactionTypes' | 'timeline' | 'fundingStage' | 'ownerTransition' | 'sources' | 'dealVolume' | 'firstFocus', string[]>;
+export const EXAMPLES: { label: string; text: string }[];
+export const RANGE_FIELDS: MoneyField[];
+export const ARRAY_FIELDS: ListField[];
+export const STRING_FIELDS: TextField[];
+export const BOOL_FIELDS: BoolField[];
+export function emptyAnswers(): Answers;
+export function normalizeAnswers(input?: Partial<Answers>): Answers;
+export function validWebsite(value: string): boolean;
+export function validateStep(step: Step, answers: Answers): string;
+export function validateAll(answers: Answers): { step: Step; error: string } | null;
+export function rangeLabel(min: number | null, max: number | null, currency: string): string;
+export function suggestedName(answers: Answers): string;
+export function briefText(answers: Answers): string;

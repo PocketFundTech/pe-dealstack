@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useUser } from "@/providers/UserProvider";
 
+import { EXPIRY_OPTIONS, expiryPayload, localDateInput } from "./api-key-expiry";
+
 interface ApiKey {
   id: string;
   name: string;
@@ -20,25 +22,18 @@ interface Props {
   onToast: (message: string, type: "success" | "error" | "info") => void;
 }
 
-const EXPIRY_OPTIONS: { label: string; days: number | null }[] = [
-  { label: "Never", days: null },
-  { label: "30 days", days: 30 },
-  { label: "90 days", days: 90 },
-  { label: "1 year", days: 365 },
-];
-
 const SCOPE_OPTIONS: { label: string; value: "full" | "read_only"; hint: string }[] = [
   { label: "Full access", value: "full", hint: "Can read and write — create, edit and delete data" },
   { label: "Read-only", value: "read_only", hint: "Can only read data — any write request is refused" },
 ];
 
 function formatDate(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+  return iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : "";
 }
 
-function keyStatus(k: ApiKey): { label: string; className: string } {
+function keyStatus(k: ApiKey, now: number): { label: string; className: string } {
   if (k.revokedAt) return { label: "Revoked", className: "bg-gray-100 text-text-secondary" };
-  if (k.expiresAt && new Date(k.expiresAt).getTime() <= Date.now())
+  if (k.expiresAt && new Date(k.expiresAt).getTime() <= now)
     return { label: "Expired", className: "bg-amber-50 text-amber-700" };
   return { label: "Active", className: "bg-emerald-50 text-emerald-700" };
 }
@@ -51,7 +46,11 @@ export function ApiKeysSection({ onToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [expiryDays, setExpiryDays] = useState<number | null>(null);
+  const [expiry, setExpiry] = useState("never");
+  const [expiryDate, setExpiryDate] = useState("");
+  const [expiryTime, setExpiryTime] = useState("23:59");
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const [scope, setScope] = useState<"full" | "read_only">("full");
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -86,7 +85,7 @@ export function ApiKeysSection({ onToast }: Props) {
     try {
       const res = await api.post<{ apiKey: ApiKey; key: string }>("/api-keys", {
         name: name.trim(),
-        expiresInDays: expiryDays,
+        ...expiryPayload(expiry, expiryDate, expiryTime),
         scope,
       });
       setNewKey(res.key);
@@ -193,7 +192,7 @@ export function ApiKeysSection({ onToast }: Props) {
               </div>
             )}
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex flex-wrap items-end gap-3">
               <label className="flex-1 text-sm">
                 <span className="block text-text-secondary mb-1">Key name</span>
                 <input
@@ -222,17 +221,25 @@ export function ApiKeysSection({ onToast }: Props) {
               <label className="text-sm">
                 <span className="block text-text-secondary mb-1">Expires</span>
                 <select
-                  value={expiryDays ?? ""}
-                  onChange={(e) => setExpiryDays(e.target.value ? Number(e.target.value) : null)}
+                  value={expiry}
+                  onChange={(e) => setExpiry(e.target.value)}
                   className="rounded-lg border border-border-subtle px-3 py-2 text-sm bg-white"
                 >
                   {EXPIRY_OPTIONS.map((o) => (
-                    <option key={o.label} value={o.days ?? ""}>
+                    <option key={o.label} value={o.value}>
                       {o.label}
                     </option>
                   ))}
                 </select>
               </label>
+              {expiry === "custom" && <>
+                <label className="text-sm"><span className="block text-text-secondary mb-1">Expiry date</span>
+                  <input type="date" value={expiryDate} min={localDateInput()} onChange={e => setExpiryDate(e.target.value)} className="rounded-lg border border-border-subtle px-3 py-2 text-sm" />
+                </label>
+                <label className="text-sm"><span className="block text-text-secondary mb-1">Expiry time</span>
+                  <input type="time" value={expiryTime} onChange={e => setExpiryTime(e.target.value)} className="rounded-lg border border-border-subtle px-3 py-2 text-sm" />
+                </label>
+              </>}
               <button
                 type="button"
                 onClick={createKey}
@@ -242,6 +249,7 @@ export function ApiKeysSection({ onToast }: Props) {
                 {creating ? "Creating…" : "Create key"}
               </button>
             </div>
+            {expiry === "custom" && <p className="text-xs text-text-secondary">Uses your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}). For a quick test, pick today and a time a few minutes ahead. Requests are rejected from that exact time.</p>}
             <p className="text-xs text-text-secondary">
               {SCOPE_OPTIONS.find((o) => o.value === scope)?.hint}. Give a less-trusted tool (a BI dashboard, a
               reporting script) a read-only key so it can never create, edit or delete anything in Avise.
@@ -270,7 +278,7 @@ export function ApiKeysSection({ onToast }: Props) {
                 </thead>
                 <tbody>
                   {keys.map((k) => {
-                    const status = keyStatus(k);
+                    const status = keyStatus(k, now);
                     return (
                       <tr key={k.id} className="border-b border-border-subtle/40">
                         <td className="py-2 font-medium text-text-main">{k.name}</td>

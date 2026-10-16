@@ -122,3 +122,35 @@ describe('GET /api/api-keys scope', () => {
     expect(res.body.apiKeys.every((k: { scope: string }) => k.scope === 'full')).toBe(true);
   });
 });
+
+describe('API key expiry persistence', () => {
+  it('stores a specific timezone-aware instant as UTC', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2030-01-01T00:00:00Z'));
+    try {
+      state.insertResults = [{ data: { id: 'k1', scope: 'full' }, error: null }];
+      const res = await request(app()).post('/api/api-keys').send({name:'Calendar test',expiresAt:'2030-01-01T05:31:00+05:30'});
+      expect(res.status).toBe(201);
+      expect(state.insertedRows[0].expiresAt).toBe('2030-01-01T00:01:00.000Z');
+    } finally { now.mockRestore(); }
+  });
+  it.each([
+    {expiresAt:'not-a-date'}, {expiresAt:'2030-02-30T12:00:00Z'},
+    {expiresAt:'2030-01-01T00:00:00Z'}, {expiresAt:'2029-12-31T23:59:59Z'},
+    {expiresAt:'2050-01-01T00:00:00Z'}, {expiresAt:'2030-02-01T00:00:00Z',expiresInDays:30},
+    {expiresInDays:0}, {expiresInDays:-1}, {expiresInDays:1.5},
+  ])('rejects invalid or ambiguous expiry %j without inserting', async expiry => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2030-01-01T00:00:00Z'));
+    try {
+      const res=await request(app()).post('/api/api-keys').send({name:'Invalid',...expiry});
+      expect(res.status).toBe(400);expect(state.insertedRows).toHaveLength(0);
+    } finally { now.mockRestore(); }
+  });
+  it.each([1,7,30,90,365])('persists the %i-day preset', async days => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2030-01-01T00:00:00Z'));
+    try {
+      state.insertResults=[{data:{id:'k1',scope:'full'},error:null}];
+      const res=await request(app()).post('/api/api-keys').send({name:'Preset',expiresInDays:days});
+      expect(res.status).toBe(201);expect(Date.parse(String(state.insertedRows[0].expiresAt))-Date.now()).toBe(days*86_400_000);
+    } finally { now.mockRestore(); }
+  });
+});

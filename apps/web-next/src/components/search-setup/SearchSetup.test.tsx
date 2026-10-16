@@ -1,0 +1,66 @@
+import { beforeEach, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+const mocks=vi.hoisted(()=>({post:vi.fn(),replace:vi.fn(),invalidate:vi.fn()}));
+vi.mock('@/lib/api',()=>({api:{post:mocks.post}}));
+vi.mock('next/navigation',()=>({useRouter:()=>({replace:mocks.replace})}));
+vi.mock('@/lib/useApiQuery',()=>({invalidateApiCache:mocks.invalidate}));
+import { SearchSetup } from './SearchSetup';
+import { emptyAnswers } from './schema.js';
+import type { Answers, SetupResponse, Step } from './types';
+const base:SetupResponse={searchProfile:null,brief:''};
+const completed=():Answers=>({...emptyAnswers(),thesis:'Profitable B2B services with recurring revenue.',firmName:'Northstar Search',website:'northstar.example',buyerType:'M&A Advisor',sectorOpen:true,locationFlexible:true,sizeFlexible:true,transactionTypes:['Open to structure'],timeline:'Actively reviewing deals',fundingStage:'Capital committed',firstFocus:'Screen incoming deals',searchName:'Northstar search'});
+const resume=(step:Step,answers=completed()):SetupResponse=>({...base,searchSetup:{status:'draft',draft:{answers,step,touched:[]},updatedAt:'2026-01-01'}});
+beforeEach(()=>{vi.clearAllMocks();sessionStorage.clear();mocks.post.mockResolvedValue({});});
+const next=()=>fireEvent.click(screen.getByRole('button',{name:/^Continue/}));
+it('completes all nine steps, enforces required fields, and sends context directly to Dealstack',async()=>{
+ render(<SearchSetup initial={base} storageKey="test-setup"/>);
+ expect(screen.getByText(/These 9 steps/)).toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:'Try an example'}));next();
+ next();expect(screen.getByRole('alert')).toHaveTextContent('Enter your firm name');
+ fireEvent.click(screen.getByRole('button',{name:'M&A Advisor'}));
+ fireEvent.change(screen.getByLabelText('Firm / team name'),{target:{value:'Northstar Search'}});
+ next();expect(screen.getByRole('alert')).toHaveTextContent('Enter a valid firm website');
+ fireEvent.change(screen.getByLabelText('Firm website'),{target:{value:'northstar.example'}});next();next();
+ fireEvent.change(screen.getByLabelText('Search countries'),{target:{value:'Bhutan'}});
+ expect(screen.getByRole('button',{name:'Bhutan',hidden:true})).toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:'Bhutan',hidden:true}));next();next();
+ fireEvent.click(screen.getByRole('button',{name:'Other'}));next();expect(screen.getByRole('alert')).toHaveTextContent('short sentence');
+ fireEvent.change(screen.getByLabelText('Other criteria'),{target:{value:'Long-term customer contracts.'}});next();
+ fireEvent.click(screen.getByRole('button',{name:'Open to structure'}));next();expect(screen.getByRole('alert')).toHaveTextContent('search is today');
+ fireEvent.change(screen.getByLabelText('Where is the search today?'),{target:{value:'Actively reviewing deals'}});next();expect(screen.getByRole('alert')).toHaveTextContent('capital readiness');
+ fireEvent.change(screen.getByLabelText('Capital readiness'),{target:{value:'Capital committed'}});next();
+ fireEvent.click(screen.getByRole('button',{name:'Screen incoming deals'}));next();
+ fireEvent.click(screen.getByRole('button',{name:/Save and open workspace/}));
+ await waitFor(()=>expect(mocks.replace).toHaveBeenCalledWith('/dashboard'));
+ expect(mocks.post).toHaveBeenCalledWith('/firm-context/search-preset',{answers:expect.objectContaining({buyerType:'M&A Advisor',geographies:['United States','Canada','Bhutan'],otherCriteria:'Long-term customer contracts.',firmName:'Northstar Search'})});
+ expect(sessionStorage.getItem('test-setup')).toBeNull();expect(mocks.invalidate).toHaveBeenCalledWith('/users/me');
+});
+it('skips immediately, preserving the current draft without applying a profile',async()=>{
+ render(<SearchSetup initial={base} storageKey="test-setup"/>);
+ fireEvent.change(screen.getByLabelText('Tell us about your search'),{target:{value:'Still exploring'}});
+ fireEvent.click(screen.getByRole('button',{name:'Skip for now'}));
+ await waitFor(()=>expect(mocks.replace).toHaveBeenCalledWith('/dashboard'));
+ expect(mocks.post).toHaveBeenCalledWith('/firm-context/search-setup/skip',expect.objectContaining({answers:expect.objectContaining({thesis:'Still exploring'})}));
+ expect(mocks.post.mock.calls.some(([path])=>path==='/firm-context/search-preset')).toBe(false);
+});
+it('restores the saved server step and keeps failed completion editable for retry',async()=>{
+ mocks.post.mockRejectedValueOnce(new Error('Could not save settings'));
+ render(<SearchSetup initial={resume('review')} storageKey="test-setup" fromSettings/>);
+ fireEvent.click(screen.getByRole('button',{name:/Save and open workspace/}));
+ await screen.findByText('Could not save settings');expect(mocks.replace).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:/Save and open workspace/}));
+ await waitFor(()=>expect(mocks.replace).toHaveBeenCalledWith('/settings#section-search-profile'));
+});
+it('keeps skip failures on the form instead of losing the draft',async()=>{
+ mocks.post.mockRejectedValue(new Error('Connection unavailable'));
+ render(<SearchSetup initial={base} storageKey="test-setup"/>);
+ fireEvent.click(screen.getByRole('button',{name:'Skip for now'}));
+ await screen.findByText('Connection unavailable');expect(mocks.replace).not.toHaveBeenCalled();
+});
+it('autosaves the draft and restores browser edits made just before a refresh',async()=>{
+ const rendered=render(<SearchSetup initial={base} storageKey="test-setup"/>);
+ fireEvent.change(screen.getByLabelText('Tell us about your search'),{target:{value:'A healthcare acquisition search in India.'}});
+ await waitFor(()=>expect(mocks.post).toHaveBeenCalledWith('/firm-context/search-setup/draft',expect.objectContaining({step:'brief'})));
+ rendered.unmount();render(<SearchSetup initial={base} storageKey="test-setup"/>);
+ expect(screen.getByLabelText('Tell us about your search')).toHaveValue('A healthcare acquisition search in India.');
+});

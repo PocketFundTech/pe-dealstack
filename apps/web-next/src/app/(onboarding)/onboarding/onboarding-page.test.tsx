@@ -26,7 +26,7 @@ vi.mock("@/app/(app)/deal-intake/components", () => ({ authFetchRaw: vi.fn() }))
 vi.mock("@/components/layout/Logo", () => ({ Logo: () => null }));
 
 import { ApiError } from "@/lib/api";
-import OnboardingPage from "./page";
+import OnboardingPage from "./legacy-onboarding";
 
 function statusWith(context: Record<string, unknown> | null = null, steps: Record<string, boolean> = {}) {
   return { welcomeShown: false, checklistDismissed: false, steps, context };

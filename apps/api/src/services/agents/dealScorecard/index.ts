@@ -14,6 +14,8 @@ import { analyzeFinancials } from '../../analysis/index.js';
 import { getConcentrationFacts } from '../../analysis/customerConcentrationReader.js';
 import { log } from '../../../utils/logger.js';
 
+import { searchPresetContext } from '../../searchPreset.js';
+
 const SCORECARD_TIMEOUT_MS = 30_000;
 
 export class CriteriaNotConfiguredError extends Error {
@@ -63,6 +65,7 @@ Layer 1 — general quality (qualityScore 0-100): revenue durability/recurrence,
 Layer 2 — thesis fit (thesisFitScore 0-100): how well the deal matches the firm's stated criteria (sectors, size bounds, hard exclusions, thesis).
 
 Rules:
+- Current Firm Criteria take precedence over overlapping imported search-profile fields. Preferences are not hard exclusions. Do not compare values in different currencies without an explicit conversion; flag missing FX rather than inventing it.
 - Score ONLY from the data provided. Never invent numbers or facts. If financial data is missing, say so explicitly in a reason and keep the quality score conservative.
 - Every NO_GO verdict must include at least one "miss" reason tied to a specific criterion (e.g. "outside size range: $28M vs the firm's $5-15M max").
 - "hit" = criterion satisfied, "miss" = criterion violated, "flag" = quality concern not tied to a criterion.
@@ -78,7 +81,9 @@ async function loadCriteria(orgId: string): Promise<Record<string, unknown> | nu
     .single();
   if (error) throw error;
   const settings = (data?.settings || {}) as Record<string, any>;
-  return settings.dealCriteria ?? null;
+  if (!settings.dealCriteria) return null;
+  const searchContext = searchPresetContext(settings);
+  return searchContext ? { ...settings.dealCriteria, additionalSearchContext: searchContext } : settings.dealCriteria;
 }
 
 export async function scoreDeal(dealId: string, orgId: string): Promise<Scorecard> {

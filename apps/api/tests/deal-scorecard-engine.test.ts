@@ -170,3 +170,15 @@ describe('maybeScoreAfterExtraction', () => {
     expect(persistedScorecard).toBeNull();
   });
 });
+
+it('carries imported preferences and target markets into scorecard context', async () => {
+  statements=[];
+  orgSettings.searchProfile={updatedAt:new Date().toISOString(),answers:{thesis:'Profitable services businesses in Japan.',firmName:'Example Search',website:'https://example.com',buyerType:'Advisor',sectorsInclude:['Business services'],geographies:['Japan'],timeline:'Actively reviewing deals',fundingStage:'Capital committed',features:['Other'],otherCriteria:'Long-term contracts',currency:'GBP',ebitdaMin:1,ebitdaMax:3}};
+  trackedClaudeMessage.mockResolvedValue(verdict());
+  const {scoreDeal}=await getEngine();await scoreDeal('deal-1','org-1');
+  const call=trackedClaudeMessage.mock.calls[0][0];
+  expect(call.messages[0].content).toContain('Long-term contracts');
+  expect(call.messages[0].content).toContain('Japan');
+  expect(call.messages[0].content).toContain('GBP 1–3 million');
+  expect(call.system).toContain('Do not compare values in different currencies');
+});

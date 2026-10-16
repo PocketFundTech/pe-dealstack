@@ -18,6 +18,7 @@ export interface FirmProfileAccess {
   invited: boolean;
   firmProfileSet: boolean;
   canEditFirmProfile: boolean;
+  searchSetupStatus?: 'draft' | 'skipped' | 'complete';
 }
 
 interface AuthUserLike {
@@ -58,7 +59,9 @@ export async function getFirmProfileAccess(
     !firmProfileSet ||
     (!createdBy && !invitedMetadata);
 
-  return { role, isFounder, invited, firmProfileSet, canEditFirmProfile };
+  const setupStatus = org?.settings?.searchSetup?.status;
+  const searchSetupStatus = ['draft','skipped','complete'].includes(setupStatus) ? setupStatus : undefined;
+  return { role, isFounder, invited, firmProfileSet, canEditFirmProfile, searchSetupStatus };
 }
 
 export const FIRM_PROFILE_LOCKED = {

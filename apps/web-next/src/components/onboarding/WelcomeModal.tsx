@@ -11,6 +11,7 @@ interface OnboardingStatus {
   welcomeShown?: boolean;
   checklistDismissed?: boolean;
   steps?: Record<string, boolean>;
+  context?: { searchSetupStatus?: string; invited?: boolean; isAdmin?: boolean };
 }
 
 export function WelcomeModal() {
@@ -33,6 +34,7 @@ export function WelcomeModal() {
       try {
         const status = await api.get<OnboardingStatus>("/onboarding/status");
         if (cancelled) return;
+        if (status.context?.isAdmin && !status.context.invited && ['complete','skipped'].includes(status.context.searchSetupStatus || '')) return;
 
         // New flow — if user hasn't seen the welcome, hasn't dismissed the
         // checklist, and has no completed steps yet, send them to /onboarding.

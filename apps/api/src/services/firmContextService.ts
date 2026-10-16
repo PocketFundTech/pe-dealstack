@@ -21,6 +21,8 @@ import { formatFinancialValue } from '../utils/financialFormat.js';
 import { getTodayIso } from '../utils/dates.js';
 import { stripMarkdown } from '../utils/plainText.js';
 
+import { searchPresetContext } from './searchPreset.js';
+
 const SETTINGS_KEY = 'firmContext';
 
 // Usage-tracking operation label. Reuse 'deal_analysis' so firm-context
@@ -310,6 +312,7 @@ export async function generateFirmContext(orgId: string): Promise<FirmContext> {
   // Gather every source independently — one failing never fails the whole run.
   const results = await Promise.all([
     Promise.resolve(gatherFirmProfile(settings)),
+    Promise.resolve(searchPresetContext(settings) ? {label:'Search setup',text:searchPresetContext(settings)} : null),
     Promise.resolve(gatherFirmTeaser(settings)),
     gatherDealPipeline(orgId),
     gatherChatThemes(orgId),
@@ -395,6 +398,7 @@ export async function saveFirmContext(orgId: string, text: string): Promise<void
  * else ''. Consumers guard the empty string and inject nothing when absent.
  */
 export async function getFirmContextBlock(orgId: string): Promise<string> {
-  const ctx = await getFirmContext(orgId);
-  return ctx?.text ?? '';
+  const settings = await readSettings(orgId);
+  const ctx = settings[SETTINGS_KEY] as FirmContext | undefined;
+  return [ctx?.text || '', searchPresetContext(settings)].filter(Boolean).join('\n\n');
 }

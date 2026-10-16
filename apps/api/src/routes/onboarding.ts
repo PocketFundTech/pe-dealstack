@@ -152,6 +152,7 @@ async function getOnboardingContext(req: Request, orgId: string) {
       isFounder: access.isFounder,
       firmProfileSet: access.firmProfileSet,
       canEditFirmProfile: access.canEditFirmProfile,
+      searchSetupStatus: access.searchSetupStatus,
     };
   } catch (err) {
     log.warn('onboarding: context lookup failed', { error: err instanceof Error ? err.message : String(err) });
