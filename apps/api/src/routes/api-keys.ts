@@ -5,6 +5,8 @@ import { getOrgId } from '../middleware/orgScope.js';
 import { generateApiKey, isMissingColumnError } from '../services/apiKeyService.js';
 import { log } from '../utils/logger.js';
 
+import { apiKeyExpirySchema, apiKeyExpiresAt } from '../services/apiKeyExpiry.js';
+
 const router = Router();
 
 const PUBLIC_FIELDS = 'id, name, scope, keyPrefix, lastFour, createdAt, lastUsedAt, expiresAt, revokedAt, userId' as const;
@@ -12,11 +14,10 @@ const PUBLIC_FIELDS_NO_SCOPE = 'id, name, keyPrefix, lastFour, createdAt, lastUs
 
 const createSchema = z.object({
   name: z.string().trim().min(1, 'Give the key a name, e.g. "n8n — deal intake"').max(80),
-  expiresInDays: z.number().int().min(1).max(3650).nullable().optional(),
   // 'read_only' can only GET — safe to hand to a less-trusted tool (a BI
   // dashboard, a reporting script) that has no business writing to Avise.
   scope: z.enum(['full', 'read_only']).default('full'),
-});
+}).and(apiKeyExpirySchema);
 
 // Managing keys is admin-only, and only from a signed-in session — a leaked
 // key must not be able to mint more keys or revoke the owner's other keys.
@@ -72,8 +73,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     if (!owner) return res.status(404).json({ error: 'Your user record was not found. Sign out and back in, then retry.' });
 
     const { key, keyHash, keyPrefix, lastFour } = generateApiKey();
-    const days = parsed.data.expiresInDays;
-    const expiresAt = days ? new Date(Date.now() + days * 86_400_000).toISOString() : null;
+    const expiresAt = apiKeyExpiresAt(parsed.data);
     const baseRow = { organizationId: orgId, userId: owner.id, name: parsed.data.name, keyHash, keyPrefix, lastFour, expiresAt };
 
     let { data, error } = await supabase

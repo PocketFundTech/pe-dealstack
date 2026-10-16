@@ -16,6 +16,7 @@ import { type PrefsState } from "./PreferencesSection";
 import { ProfileSection, type UserProfile } from "./ProfileSection";
 import { NotificationsSection, DEFAULT_NOTIFICATION_PREFS } from "./NotificationsSection";
 import { TeamSection } from "./TeamSection";
+import { SearchPresetSection } from "./SearchPresetSection";
 import { FirmContextSection } from "./FirmContextSection";
 import { FirmProfileSection } from "./FirmProfileSection";
 import { CriteriaSection } from "./CriteriaSection";
@@ -35,6 +36,7 @@ const NAV_SECTIONS = [
   { id: "security", label: "Security", icon: "shield" },
   { id: "notifications", label: "Notifications", icon: "notifications" },
   { id: "team", label: "Team", icon: "group" },
+  { id: "search-profile", label: "Search Profile", icon: "manage_search" },
   { id: "firm-context", label: "Firm Context", icon: "menu_book" },
   { id: "firm-profile", label: "Firm Profile", icon: "domain" },
   { id: "criteria", label: "Investment Criteria", icon: "grading" },
@@ -87,6 +89,7 @@ function parsePrefs(raw: UserProfile["preferences"]): {
 // ─── Page ───────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
+  const [presetRevision, setPresetRevision] = useState(0);
   const { user, refetch: refetchUser } = useUser();
   // Outreach Pipeline settings only apply to orgs allowed to use Outreach at
   // all — re-check here the same way apps/outreach/page.tsx and the sidebar
@@ -344,11 +347,13 @@ export default function SettingsPage() {
 
           <TeamSection onToast={showToast} />
 
-          <FirmContextSection />
+          <SearchPresetSection onApplied={() => setPresetRevision(value => value + 1)} />
 
-          <FirmProfileSection />
+          <FirmContextSection key={`context-${presetRevision}`} />
 
-          <CriteriaSection />
+          <FirmProfileSection key={`profile-${presetRevision}`} />
+
+          <CriteriaSection key={`criteria-${presetRevision}`} />
 
           <FirmTeaserSection />
 

@@ -14,7 +14,10 @@ import { getOrgId } from '../middleware/orgScope.js';
 import { log } from '../utils/logger.js';
 import { publicErrorMessage } from '../utils/aiErrors.js';
 
+import searchPresetRouter from './firm-search-preset.js';
+
 const router = Router();
+router.use(searchPresetRouter);
 
 const saveBodySchema = z.object({
   text: z.string(),

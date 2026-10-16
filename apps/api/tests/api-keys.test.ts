@@ -176,3 +176,25 @@ describe('enforceApiKeyScope middleware', () => {
     expect(next).toHaveBeenCalled();
   });
 });
+
+describe('API key expiry cutoff', () => {
+  it('accepts before expiry, then rejects the same key at and after expiry without a cache delay', async () => {
+    const cutoff=Date.parse('2030-01-01T12:00:00Z');
+    maybeSingle.mockResolvedValue({data:keyRow({expiresAt:new Date(cutoff).toISOString()}),error:null});
+    const clock=vi.spyOn(Date,'now');
+    try {
+      for(const [offset,allowed] of [[-1,true],[0,false],[1,false]] as const){
+        clock.mockReturnValue(cutoff+offset);
+        const {req,res,next}=ctx({authorization:'Bearer avise_sk_expiry_test'});
+        await authMiddleware(req,res,next);
+        if(allowed)expect(next).toHaveBeenCalledOnce();
+        else{expect(res.status).toHaveBeenCalledWith(401);expect(next).not.toHaveBeenCalled();}
+      }
+    } finally {clock.mockRestore();}
+  });
+  it('fails closed on corrupt stored expiry',async()=>{
+    maybeSingle.mockResolvedValue({data:keyRow({expiresAt:'invalid'}),error:null});
+    const {req,res,next}=ctx({'x-api-key':'avise_sk_bad_expiry'});
+    await authMiddleware(req,res,next);expect(res.status).toHaveBeenCalledWith(401);expect(next).not.toHaveBeenCalled();
+  });
+});

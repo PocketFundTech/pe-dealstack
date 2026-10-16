@@ -8,6 +8,7 @@
  *   - A key acts as the admin who created it, inside that admin's org. It stops
  *     working when revoked, expired, or when that user is deactivated or moves org.
  */
+import { isApiKeyExpired } from './apiKeyExpiry.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { supabase } from '../supabase.js';
 import { log } from '../utils/logger.js';
@@ -107,7 +108,7 @@ export async function resolveApiKey(key: string): Promise<AuthUser | null> {
     return null;
   }
   if (!data || data.revokedAt) return null;
-  if (data.expiresAt && new Date(data.expiresAt).getTime() <= Date.now()) return null;
+  if (isApiKeyExpired(data.expiresAt)) return null;
 
   const owner = data.user;
   if (!owner?.authId || owner.isActive === false) return null;

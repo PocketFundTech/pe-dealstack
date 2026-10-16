@@ -183,4 +183,36 @@ describe('GET /api/data-rooms/summary', () => {
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Failed to load data room summary' });
   });
+
+  it('chunks `.in()` lookups so an org with hundreds of deals does not overflow the URL', async () => {
+    const deals = Array.from({ length: 250 }, (_, i) => ({ id: `deal-${i}` }));
+    const chunkSizes: number[] = [];
+
+    mockSupabase.from.mockImplementation((tbl: string) => {
+      if (tbl === 'Deal') return { select: () => ({ eq: () => ({ is: () => Promise.resolve({ data: deals, error: null }) }) }) };
+      if (tbl === 'Folder') {
+        return {
+          select: () => ({
+            in: (_col: string, ids: string[]) => {
+              chunkSizes.push(ids.length);
+              return Promise.resolve({
+                data: ids.map((dealId) => ({ id: `f-${dealId}`, name: 'Financials', dealId })),
+                error: null,
+              });
+            },
+          }),
+        };
+      }
+      return table([], { awaitAfter: ['in'] });
+    });
+
+    const app = await buildApp('org-A');
+    const res = await request(app).get('/api/data-rooms/summary');
+
+    expect(res.status).toBe(200);
+    expect(Math.max(...chunkSizes)).toBeLessThanOrEqual(100);
+    expect(chunkSizes.length).toBe(3);
+    expect(Object.keys(res.body.rooms)).toHaveLength(250);
+    expect(res.body.rooms['deal-249'].folders).toEqual([{ id: 'f-deal-249', name: 'Financials', fileCount: 0 }]);
+  });
 });

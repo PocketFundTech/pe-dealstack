@@ -62,6 +62,7 @@ export interface OnboardingContext {
   isFounder?: boolean;
   firmProfileSet?: boolean;
   canEditFirmProfile?: boolean;
+  searchSetupStatus?: 'draft' | 'skipped' | 'complete';
 }
 
 /** Tasks to show: invited teammates get the shortened (no firm task) list. */

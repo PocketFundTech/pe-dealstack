@@ -169,7 +169,7 @@ if (!READ_ONLY) {
     }
     const big = new FormData();
     big.append('file', new Blob([Buffer.alloc(5 * 1024 * 1024, 0x20)], { type: 'application/pdf' }), 'too-big.pdf');
-    await call('POST', `/api/deals/${dealId}/documents`, { form: big, expect: 413, note: '5 MB body is over the 4.5 MB limit' });
+    await call('POST', `/api/deals/${dealId}/documents`, { form: big, expect: [400, 413], note: '5 MB body rejected (413 from the Vercel platform limit, 400 from magic-byte validation locally)' });
     await call('POST', '/api/uploads/sign', { body: { fileName: 'big.pdf', contentType: 'application/pdf', size: 6_000_000, purpose: 'data-room', dealId } });
 
     const task = await call('POST', '/api/tasks', { body: { title: `${TAG} task`, dealId, priority: 'HIGH' }, expect: 201 });

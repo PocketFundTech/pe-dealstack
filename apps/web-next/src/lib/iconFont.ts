@@ -37,7 +37,7 @@ export const ICON_NAMES = [
   "keyboard_arrow_down", "keyboard_arrow_up", "label", "language", "leaderboard", "light",
   "light_mode", "lightbulb", "link", "link_off", "list", "list_alt", "local_fire_department",
   "local_shipping", "lock", "lock_clock", "lock_person", "lock_reset", "login", "logout", "mail",
-  "mail_lock", "manage_accounts", "margin", "mark_email_read", "memory", "menu", "menu_book",
+  "mail_lock", "manage_accounts", "manage_search", "margin", "mark_email_read", "memory", "menu", "menu_book",
   "merge_type", "message", "mic", "mobile", "mode", "money_off", "monitor_heart", "monitoring",
   "more", "more_horiz", "more_vert", "move", "move_to_inbox", "news", "not_interested", "note",
   "notes", "notifications", "notifications_active", "notifications_off", "open_in_full",
